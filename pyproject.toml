@@ -1,0 +1,72 @@
+[project]
+name = "clipwright"
+version = "0.1.0"
+description = "FFmpeg/OTIO をラップする MCP サーバー群。映像編集ワークフローを AI エージェントから操作できるプリミティブを提供する。"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "satoh-y-0323", email = "shoma.papa.0323@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "mcp[cli]>=1.27.2",
+    "opentimelineio>=0.18",
+    "pydantic>=2",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.19,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.1.0",
+    "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
+    "pytest-mock>=3.15.1",
+    "ruff>=0.15.16",
+]
+
+# --- Ruff ---
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = []
+
+[tool.ruff.format]
+# ruff formatter のデフォルトで OK
+
+# --- mypy ---
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_any_generics = true
+
+# opentimelineio はスタブなし・mypy strict で ignore
+[[tool.mypy.overrides]]
+module = "opentimelineio.*"
+ignore_missing_imports = true
+
+# --- pytest ---
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers -q"
+markers = [
+    "integration: ffmpeg/ffprobe 実バイナリを必要とする統合テスト",
+    "slow: 実行時間が長いテスト",
+]
+
+# --- coverage ---
+[tool.coverage.run]
+source = ["clipwright"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
