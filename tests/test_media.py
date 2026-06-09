@@ -419,14 +419,17 @@ class TestInspectMediaFileNotFound:
         ファイル存在確認は ffprobe 探索より先に行うことで、
         ユーザーへの feedback を早める。
         """
-        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
+        mock_resolve = mocker.patch(
+            "clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe"
+        )
 
         with pytest.raises(ClipwrightError) as exc_info:
             inspect_media("/nonexistent/video.mp4")
 
-        # FILE_NOT_FOUND が先に飛ぶ場合は resolve_tool が呼ばれないパターンも許容する
-        # ただし必ず FILE_NOT_FOUND コードであること
+        # ファイル検証は resolve_tool より先に行われるため、ファイル不在時は
+        # resolve_tool が呼ばれずに FILE_NOT_FOUND が送出される（NR3-L-1）
         assert exc_info.value.code == ErrorCode.FILE_NOT_FOUND
+        mock_resolve.assert_not_called()
 
 
 class TestInspectMediaDependencyMissing:

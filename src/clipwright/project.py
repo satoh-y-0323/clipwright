@@ -169,11 +169,8 @@ def find_project(start_dir: str) -> str:
 
     raise ClipwrightError(
         code=ErrorCode.PROJECT_NOT_FOUND,
-        message=f"clipwright.json が見つかりません: {start_dir} から上位へ探索しました",
-        hint=(
-            f"init_project でプロジェクトを初期化してから再実行してください"
-            f"（探索開始: .../{start_path.name}）。"
-        ),
+        message=f"clipwright.json が見つかりません（探索開始: {start_path.name}）",
+        hint="init_project でプロジェクトを初期化してから再実行してください。",
     )
 
 

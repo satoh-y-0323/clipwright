@@ -146,9 +146,10 @@ def _parse_ffprobe_json(path: str, stdout: str) -> MediaInfo:
     try:
         data = json.loads(stdout)
     except json.JSONDecodeError as exc:
+        # パーサ内部エラー文字列は露出させず汎用メッセージに統一する（R3-L-02）
         raise ClipwrightError(
             code=ErrorCode.PROBE_FAILED,
-            message=f"ffprobe の出力が有効な JSON ではありません: {exc}",
+            message="ffprobe の出力が有効な JSON ではありません。",
             hint="入力ファイルが有効なメディアファイルか確認してください。",
         ) from exc
 
