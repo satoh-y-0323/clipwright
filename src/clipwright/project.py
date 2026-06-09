@@ -11,7 +11,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -28,6 +31,31 @@ _SCHEMA_VERSION = "1.0"
 
 # サブディレクトリ一覧（init_project で必ず作成・再作成する）
 _SUBDIRS = ("sources", "artifacts", "outputs")
+
+
+# ===========================================================================
+# 内部ヘルパー
+# ===========================================================================
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """テキストをアトミックに書き込む（temp → os.replace）。
+
+    同一ディレクトリに一時ファイルを作成してから os.replace で置き換えることで、
+    書き込み途中の中断によるファイル破損を防ぐ。クロスデバイス移動を避けるため
+    一時ファイルは destination と同一ディレクトリに作成する。
+    """
+    dir_path = path.parent
+    fd, tmp_path = tempfile.mkstemp(dir=str(dir_path), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp_path, str(path))
+    except Exception:
+        # 書き込み失敗時は一時ファイルを削除して例外を伝播させる
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
 
 
 # ===========================================================================
@@ -55,6 +83,12 @@ def init_project(
       - サブディレクトリの存在を保証する（消えていれば再作成）
       - 既存の sources / artifacts / outputs / timeline.otio は削除・上書きしない
       - timeline.otio が欠落している場合のみ空 timeline を生成する
+
+    脅威モデル:
+      この関数は任意のパスにディレクトリを作成・初期化できる。
+      信頼された呼び出し元（ローカル MCP クライアント・開発者スクリプト等）を前提とし、
+      悪意ある外部入力に対するサンドボックスは持たない。
+      呼び出し元が project_dir の妥当性を事前に検証する責任を負う。
     """
     proj = Path(project_dir)
     manifest_path = proj / _MANIFEST_FILENAME
@@ -87,9 +121,9 @@ def init_project(
         "created_at": datetime.now(UTC).isoformat(),
         "settings": {},
     }
-    manifest_path.write_text(
+    _atomic_write_text(
+        manifest_path,
         json.dumps(manifest, ensure_ascii=False, indent=2),
-        encoding="utf-8",
     )
 
     # timeline.otio 生成（force=True かつ既存がある場合はスキップ）
@@ -107,9 +141,21 @@ def find_project(start_dir: str) -> str:
     """start_dir から上位ディレクトリへ遡って clipwright.json を探索する。
 
     見つかった場合は clipwright.json があるディレクトリのパス（str）を返す。
+    start_dir がディレクトリでない場合は ClipwrightError(INVALID_INPUT)。
     ルートまで辿っても見つからない場合は ClipwrightError(PROJECT_NOT_FOUND)。
     """
-    current = Path(start_dir).resolve()
+    start_path = Path(start_dir)
+    if not start_path.is_dir():
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=f"start_dir はディレクトリである必要があります: {start_dir}",
+            hint=(
+                "存在するディレクトリのパスを指定してください。"
+                f"指定されたパス '{start_path.name}' はディレクトリではありません。"
+            ),
+        )
+
+    current = start_path.resolve()
 
     while True:
         if (current / _MANIFEST_FILENAME).exists():
@@ -121,12 +167,13 @@ def find_project(start_dir: str) -> str:
             break
         current = parent
 
+    safe_dir_name = Path(start_dir).name
     raise ClipwrightError(
         code=ErrorCode.PROJECT_NOT_FOUND,
         message=f"clipwright.json が見つかりません: {start_dir} から上位へ探索しました",
         hint=(
-            "init_project でプロジェクトを初期化してから再実行してください。"
-            f"探索開始ディレクトリ: {start_dir}"
+            f"init_project でプロジェクトを初期化してから再実行してください"
+            f"（探索開始: .../{safe_dir_name}）。"
         ),
     )
 
@@ -153,13 +200,14 @@ def load_manifest(project_dir: str) -> dict[str, Any]:
 
 
 def save_manifest(project_dir: str, manifest: dict[str, Any]) -> None:
-    """マニフェストをプロジェクトディレクトリに書き込む。
+    """マニフェストをプロジェクトディレクトリにアトミックに書き込む。
 
-    既存の clipwright.json を上書きする。
+    temp → os.replace パターンで書き込むことで、書き込み途中の中断による
+    clipwright.json の破損を防ぐ（M-3 対応）。
     manifest は dict（JSON にシリアライズ可能な型のみ使用すること）。
     """
     manifest_path = Path(project_dir) / _MANIFEST_FILENAME
-    manifest_path.write_text(
+    _atomic_write_text(
+        manifest_path,
         json.dumps(manifest, ensure_ascii=False, indent=2),
-        encoding="utf-8",
     )

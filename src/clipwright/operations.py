@@ -9,7 +9,7 @@ apply_operations が all-or-nothing でタイムラインに適用する。
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 import opentimelineio as otio
 from pydantic import BaseModel, Field
@@ -33,6 +33,8 @@ class AddClipOp(BaseModel):
     """クリップをトラックに追加するオペレーション。
 
     track はフラット index（0=V1, 1=A1）。
+    metadata: OTIO メタデータは任意キー・任意値の辞書のため Any を使用。
+    将来的なサイズ・ネスト上限の検討は別タスクとする。
     """
 
     op: Literal["add_clip"]
@@ -40,7 +42,7 @@ class AddClipOp(BaseModel):
     media: MediaRef
     source_range: TimeRangeModel
     name: str | None = None
-    metadata: dict | None = None  # type: ignore[type-arg]
+    metadata: dict[str, Any] | None = None
 
 
 class AddGapOp(BaseModel):
@@ -59,6 +61,8 @@ class AddMarkerOp(BaseModel):
 
     track はフラット index（0=V1, 1=A1）。
     clip の存在を要求しない（空トラックも成功）。
+    metadata: OTIO メタデータは任意キー・任意値の辞書のため Any を使用。
+    将来的なサイズ・ネスト上限の検討は別タスクとする。
     """
 
     op: Literal["add_marker"]
@@ -66,7 +70,7 @@ class AddMarkerOp(BaseModel):
     marked_range: TimeRangeModel
     name: str
     color: str | None = None
-    metadata: dict | None = None  # type: ignore[type-arg]
+    metadata: dict[str, Any] | None = None
 
 
 # 判別共用体（discriminator="op"）

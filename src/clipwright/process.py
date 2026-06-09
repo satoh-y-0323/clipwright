@@ -21,7 +21,11 @@ def resolve_tool(name: str, env_var: str | None = None) -> str:
     """外部ツールの実行ファイルパスを解決して返す。
 
     解決順: PATH（shutil.which）→ env_var 環境変数のパス → DEPENDENCY_MISSING。
-    env_var で指定したパスはファイルとして存在する必要がある。
+    env_var で指定したパスはファイルとして存在し、かつ実行可能である必要がある。
+    実行可能性は os.access(path, os.X_OK) で確認する。これにより、
+    ファイルが存在しても実行権限がない場合に subprocess が Permission Denied で
+    失敗するリスクを事前に防ぐ（[SR-V-001] F-05 対応）。
+    実行不可の場合は env を採用せず DEPENDENCY_MISSING へフォールバックする。
 
     Args:
         name: ツール名（例: "ffprobe"）。
@@ -42,17 +46,17 @@ def resolve_tool(name: str, env_var: str | None = None) -> str:
     if env_var is not None:
         env_path = os.environ.get(env_var)
         if env_path is not None:
-            if os.path.isfile(env_path):
+            if os.path.isfile(env_path) and os.access(env_path, os.X_OK):
                 return env_path
-            # 環境変数は設定されているがファイルが存在しない
+            # 環境変数は設定されているがファイルが存在しないか実行不可
             raise ClipwrightError(
                 code=ErrorCode.DEPENDENCY_MISSING,
                 message=(
                     f"{name} が見つかりません"
-                    f"（{env_var}={env_path} は存在しないファイルです）"
+                    f"（{env_var}={env_path} は存在しないか実行不可なファイルです）"
                 ),
                 hint=(
-                    f"{env_var} に有効な実行ファイルのフルパスを設定するか、"
+                    f"{env_var} に有効な実行可能ファイルのフルパスを設定するか、"
                     f"{name} を PATH の通ったディレクトリに配置してください。"
                     + _INSTALL_HINT
                 ),

@@ -69,6 +69,7 @@ class TestResolveToolEnvFallback:
         mocker.patch("shutil.which", return_value=None)
         mocker.patch.dict("os.environ", {"CLIPWRIGHT_FFPROBE": "/env/ffprobe.exe"})
         mocker.patch("os.path.isfile", return_value=True)
+        mocker.patch("os.access", return_value=True)
 
         result = resolve_tool("ffprobe", env_var="CLIPWRIGHT_FFPROBE")
 

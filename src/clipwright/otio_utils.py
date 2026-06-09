@@ -9,10 +9,12 @@ from __future__ import annotations
 import contextlib
 import os
 import tempfile
+from pathlib import Path
 from typing import Any
 
 import opentimelineio as otio
 
+from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.schemas import (
     MediaRef,
     RationalTimeModel,
@@ -46,12 +48,25 @@ def new_timeline(name: str) -> otio.schema.Timeline:
 def load_timeline(path: str) -> otio.schema.Timeline:
     """OTIO ファイルを読み込んで Timeline を返す。
 
-    読み込み失敗は例外をそのまま伝播させる（呼び出し元が ClipwrightError に変換）。
+    読み込み失敗・型不整合は ClipwrightError(OTIO_ERROR) に変換して送出する（L-3）。
+    生の OTIO 例外は呼び出し元（server 層）に届かない設計にする（L-1 / F-07 / L-3）。
     """
-    result = otio.adapters.read_from_file(path)
-    assert isinstance(result, otio.schema.Timeline), (
-        f"OTIO ファイルが Timeline ではありません: {type(result)}"
-    )
+    try:
+        result = otio.adapters.read_from_file(path)
+    except otio.exceptions.OTIOError as exc:
+        raise ClipwrightError(
+            code=ErrorCode.OTIO_ERROR,
+            message=f"OTIO ファイルの読み込みに失敗しました: {Path(path).name}",
+            hint="有効な .otio タイムラインファイルを指定してください。",
+        ) from exc
+
+    if not isinstance(result, otio.schema.Timeline):
+        result_type = type(result).__name__
+        raise ClipwrightError(
+            code=ErrorCode.OTIO_ERROR,
+            message=f"OTIO ファイルが Timeline 形式ではありません: {result_type}",
+            hint="有効な .otio タイムラインファイルを指定してください。",
+        )
     return result
 
 
@@ -164,6 +179,13 @@ def set_clipwright_metadata(obj: Any, data: dict[str, Any]) -> None:
     """OTIO オブジェクトの metadata["clipwright"] 配下にデータを設定する（規約 §4.3）。
 
     他キーを汚染しない。上書き時は clipwright キー全体を置換する。
+
+    部分更新が必要な場合は get_clipwright_metadata で取得した dict を更新してから
+    再設定する（L-5）。使用例:
+
+        existing = get_clipwright_metadata(obj)
+        existing["confidence"] = 0.95
+        set_clipwright_metadata(obj, existing)
     """
     obj.metadata["clipwright"] = data
 
@@ -193,6 +215,7 @@ def summarize_timeline(timeline: otio.schema.Timeline) -> dict[str, Any]:
       - marker_count: int
       - total_duration: RationalTimeModel（§13.5 DC-AM-002 再）
       - markers: list[dict] — [{name, time, kind}] 全件
+      - warnings: list[str] — duration 取得失敗等の非致命的警告（M-4）
 
     total_duration の算出規則（§13.5 DC-AM-002 再）:
       - 全トラック長の最大（合算ではない）
@@ -202,6 +225,7 @@ def summarize_timeline(timeline: otio.schema.Timeline) -> dict[str, Any]:
     clip_count = 0
     gap_count = 0
     markers: list[dict[str, Any]] = []
+    warnings: list[str] = []
 
     # グローバル rate 決定: V1 の最初のクリップから rate を取得
     global_rate = _resolve_global_rate(timeline)
@@ -215,9 +239,11 @@ def summarize_timeline(timeline: otio.schema.Timeline) -> dict[str, Any]:
             elif isinstance(item, otio.schema.Gap):
                 gap_count += 1
 
-        # トラックの duration（秒）を算出
-        track_dur = _track_duration_sec(track)
+        # トラックの duration（秒）を算出（OTIO 例外発生時は warnings に記録）
+        track_dur, warn = _track_duration_sec(track)
         track_durations_sec.append(track_dur)
+        if warn is not None:
+            warnings.append(warn)
 
         # トラック自身の markers を収集
         for marker in track.markers:
@@ -249,6 +275,7 @@ def summarize_timeline(timeline: otio.schema.Timeline) -> dict[str, Any]:
         "marker_count": marker_count,
         "total_duration": total_duration,
         "markers": markers,
+        "warnings": warnings,
     }
 
 
@@ -268,16 +295,21 @@ def _resolve_global_rate(timeline: otio.schema.Timeline) -> float:
     return 1000.0
 
 
-def _track_duration_sec(track: otio.schema.Track) -> float:
+def _track_duration_sec(track: otio.schema.Track) -> tuple[float, str | None]:
     """トラックの合計 duration を秒で返す。
 
     OTIO Track の duration() を使う。クリップが0件なら 0.0。
+    OTIO 例外発生時は (0.0, 警告メッセージ) を返す（M-4）。
+    正常時は (秒数, None) を返す。
     """
     try:
         dur = track.duration()
-        return float(dur.to_seconds())
-    except Exception:
-        return 0.0
+        return float(dur.to_seconds()), None
+    except otio.exceptions.OTIOError as exc:
+        warn_msg = (
+            f"トラック '{track.name}' の duration 取得に失敗しました: {exc}"
+        )
+        return 0.0, warn_msg
 
 
 def _marker_to_dict(marker: otio.schema.Marker) -> dict[str, Any]:

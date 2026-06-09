@@ -34,6 +34,7 @@ try:
         clipwright_write_timeline,
         mcp,
     )
+
     _SERVER_AVAILABLE = True
 except (ImportError, ModuleNotFoundError):
     _SERVER_AVAILABLE = False
@@ -297,7 +298,7 @@ class TestInspectMedia:
             result = clipwright_inspect_media(path=sample_media)
 
         hint = result["error"]["hint"]
-        assert ("Gyan.FFmpeg" in hint or "CLIPWRIGHT_FFPROBE" in hint), (
+        assert "Gyan.FFmpeg" in hint or "CLIPWRIGHT_FFPROBE" in hint, (
             "hint に Gyan.FFmpeg または CLIPWRIGHT_FFPROBE の記述があること"
         )
 
@@ -350,8 +351,7 @@ class TestReadTimeline:
         result = clipwright_read_timeline(project_dir=project_dir)
         _assert_tool_result(result)
         artifact_paths = [
-            a["path"] if isinstance(a, dict) else a.path
-            for a in result["artifacts"]
+            a["path"] if isinstance(a, dict) else a.path for a in result["artifacts"]
         ]
         assert any("timeline.otio" in p for p in artifact_paths), (
             "artifacts に timeline.otio パスが含まれること"
@@ -718,8 +718,7 @@ class TestWriteTimeline:
         )
         _assert_tool_result(result)
         artifact_paths = [
-            a["path"] if isinstance(a, dict) else a.path
-            for a in result["artifacts"]
+            a["path"] if isinstance(a, dict) else a.path for a in result["artifacts"]
         ]
         assert any("timeline.otio" in p for p in artifact_paths), (
             "write 成功後の artifacts に timeline.otio が含まれること"

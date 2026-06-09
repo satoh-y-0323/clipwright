@@ -36,8 +36,8 @@ class TestErrorCodeMembers:
             "PROJECT_NOT_FOUND",
             "PROJECT_EXISTS",
             "UNSUPPORTED_OPERATION",
-            "INTERNAL",           # §13.1 DC-AM-002 で追加
-            "TRACK_NOT_FOUND",    # §13.1 DC-AS-003 で追加
+            "INTERNAL",  # §13.1 DC-AM-002 で追加
+            "TRACK_NOT_FOUND",  # §13.1 DC-AS-003 で追加
         ],
     )
     def test_member_exists(self, name: str) -> None:
