@@ -723,3 +723,243 @@ class TestWriteTimeline:
         assert any("timeline.otio" in p for p in artifact_paths), (
             "write 成功後の artifacts に timeline.otio が含まれること"
         )
+
+
+# ===========================================================================
+# M-2: clipwright_inspect_media の resolve_tool 二重呼び出し排除テスト
+# ===========================================================================
+
+
+class TestInspectMediaResolveToolCallCount:
+    """M-2 fixing: server.py の先行 resolve_tool 呼び出しが削除されていることを
+    モックの呼び出し回数で固定する。
+
+    修正後の設計:
+      - server.py は _inspect_media が送出する ClipwrightError(DEPENDENCY_MISSING)
+        をそのままエンベロープに変換する
+      - process.resolve_tool は media.py 内で1回だけ呼ばれる
+      - server.py から直接 resolve_tool を呼ぶコードは存在しない
+    """
+
+    def test_dependency_missing_from_inspect_media_returns_error_envelope(
+        self, sample_media: str
+    ) -> None:
+        """M-2: _inspect_media が送出する DEPENDENCY_MISSING が
+        server.py でそのままエンベロープに変換されること（正しい経路での Red 確認用）。
+
+        server.py の先行 resolve_tool を削除した後も、
+        _inspect_media 内部の resolve_tool 失敗がエンベロープに伝播することを固定。
+        """
+        from clipwright.errors import ClipwrightError as _CWE
+        from clipwright.errors import ErrorCode as _EC
+
+        # server モジュール内の _inspect_media を直接パッチ
+        with patch("clipwright.server._inspect_media") as mock_inspect:
+            mock_inspect.side_effect = _CWE(
+                _EC.DEPENDENCY_MISSING,
+                "ffprobe が見つかりません",
+                "winget install Gyan.FFmpeg で導入してください",
+            )
+            result = clipwright_inspect_media(path=sample_media)
+
+        # DEPENDENCY_MISSING エンベロープが返ること
+        _assert_tool_error_result(result, "DEPENDENCY_MISSING")
+        # hint が引き継がれること（server.py が ClipwrightError の hint を使うこと）
+        assert "winget" in result["error"]["hint"], (
+            "hint に winget の記述が引き継がれること"
+        )
+
+    def test_resolve_tool_not_called_directly_from_server_on_success_path(
+        self, sample_media: str
+    ) -> None:
+        """M-2: 正常系でも server.py が resolve_tool を直接呼ばないこと。
+
+        _inspect_media をモックして成功を返す場合、
+        server.py の先行 resolve_tool 呼び出しがあれば call_count >= 1 になる。
+        server.py から resolve_tool を直接呼ばない設計なら call_count == 0。
+        """
+        from clipwright.schemas import MediaInfo, RationalTimeModel
+
+        mock_media_info = MediaInfo(
+            path=sample_media,
+            container="mp4",
+            duration=RationalTimeModel(value=90.0, rate=30.0),
+            streams=[],
+        )
+        with (
+            patch("clipwright.process.resolve_tool") as mock_resolve,
+            patch("clipwright.media.inspect_media", return_value=mock_media_info),
+        ):
+            result = clipwright_inspect_media(path=sample_media)
+
+        # 正常エンベロープが返ること
+        _assert_tool_result(result)
+        # server.py から直接 resolve_tool を呼んでいなければ call_count == 0
+        assert mock_resolve.call_count == 0, (
+            f"server.py が resolve_tool を直接呼び出している"
+            f"（call_count={mock_resolve.call_count}）。"
+            "server.py からの先行 resolve_tool 呼び出しを削除してください。"
+        )
+
+
+# ===========================================================================
+# F-06: read_timeline / write_timeline の exc 露出防止テスト
+# ===========================================================================
+
+
+class TestTimelineExcMessageNotExposed:
+    """F-06 fixing: read_timeline / write_timeline の except ブロックで
+    {exc} の内容（内部パス等）が message に含まれないことを固定する。
+
+    otio_utils.load_timeline が L-3 対応で ClipwrightError に変換するようになったため、
+    通常の OTIO ファイルエラーは ClipwrightError パスを通る。
+    しかし server.py の except Exception as exc パスに非 OTIO 例外が到達した場合も
+    汎用メッセージを返し、{exc} の内容を露出しないことを保証する。
+    """
+
+    def _setup_project(self, tmp_path: Path, name: str = "test") -> str:
+        """テスト用プロジェクトを初期化して project_dir を返す。"""
+        project_dir = str(tmp_path / "proj")
+        clipwright_init_project(project_dir=project_dir, name=name)
+        return project_dir
+
+    def test_read_timeline_otio_error_message_does_not_contain_exc_detail(
+        self, tmp_path: Path
+    ) -> None:
+        """F-06: read_timeline でファイル読み込み失敗時に
+        message に生の例外文字列（内部パス等）が含まれないこと。
+
+        load_timeline が ClipwrightError を送出する場合（L-3 対応済み）、
+        server.py は exc.message のみを使い {exc} を message に含めない設計。
+        ClipwrightError.message には内部パスが入らない（ファイル名のみ）ことを確認する。
+        """
+        self._setup_project(tmp_path)
+        # 無効なコンテンツの .otio ファイルを作成
+        bad_otio_path = tmp_path / "proj" / "bad.otio"
+        bad_otio_path.write_text(
+            "INVALID OTIO CONTENT - C:\\Users\\satoh\\secrets\\internal\\path.txt",
+            encoding="utf-8",
+        )
+
+        result = clipwright_read_timeline(timeline_path=str(bad_otio_path))
+
+        # ok=False で OTIO_ERROR が返ること
+        _assert_tool_error_result(result, "OTIO_ERROR")
+        message = result["error"]["message"]
+        # 内部パス文字列（C:\Users\satoh 等）が message に含まれないこと
+        assert "satoh" not in message, (
+            f"message に内部パス（satoh）が含まれている: {message!r}"
+        )
+        assert "secrets" not in message, (
+            f"message に内部パス（secrets）が含まれている: {message!r}"
+        )
+        assert "internal" not in message, (
+            f"message に内部パス（internal）が含まれている: {message!r}"
+        )
+
+    def test_read_timeline_non_otio_exception_message_is_generic(
+        self, tmp_path: Path
+    ) -> None:
+        """F-06: read_timeline で非 OTIO 例外が発生した場合も
+        message に {exc} の内容が含まれないこと（汎用メッセージを返すこと）。
+
+        server.py の except Exception as exc パスが汎用メッセージを返すことを固定する。
+        """
+        project_dir = self._setup_project(tmp_path)
+
+        # load_timeline が非 OTIO 例外（RuntimeError）を送出するようにモック
+        sensitive_detail = "C:\\Users\\satoh\\AppData\\internal_db_connection_string"
+        with patch(
+            "clipwright.server.load_timeline",
+            side_effect=RuntimeError(f"internal error: {sensitive_detail}"),
+        ):
+            result = clipwright_read_timeline(project_dir=project_dir)
+
+        _assert_tool_error_result(result, "OTIO_ERROR")
+        message = result["error"]["message"]
+        # {exc} の内容が message に含まれないこと
+        assert sensitive_detail not in message, (
+            f"message に RuntimeError の詳細（{sensitive_detail!r}）が含まれている: "
+            f"{message!r}"
+        )
+        assert "internal error" not in message, (
+            f"message に RuntimeError の内容（'internal error'）が含まれている: "
+            f"{message!r}"
+        )
+
+    def test_write_timeline_non_otio_exception_message_is_generic(
+        self, tmp_path: Path
+    ) -> None:
+        """F-06: write_timeline で非 OTIO 例外が発生した場合も
+        message に {exc} の内容が含まれないこと（汎用メッセージを返すこと）。
+
+        write_timeline の except Exception パスが汎用メッセージを返すことを固定。
+        """
+        project_dir = self._setup_project(tmp_path)
+
+        sensitive_detail = "C:\\Users\\satoh\\AppData\\project_file_secret.otio"
+        with patch(
+            "clipwright.server.load_timeline",
+            side_effect=RuntimeError(f"load failed: {sensitive_detail}"),
+        ):
+            result = clipwright_write_timeline(
+                project_dir=project_dir, operations=[], validate_only=False
+            )
+
+        _assert_tool_error_result(result, "OTIO_ERROR")
+        message = result["error"]["message"]
+        # {exc} の内容が message に含まれないこと
+        assert sensitive_detail not in message, (
+            f"message に RuntimeError の詳細（{sensitive_detail!r}）が含まれている: "
+            f"{message!r}"
+        )
+        assert "load failed" not in message, (
+            f"message に RuntimeError の内容（'load failed'）が含まれている: "
+            f"{message!r}"
+        )
+
+    def test_read_timeline_error_message_is_fixed_generic_string(
+        self, tmp_path: Path
+    ) -> None:
+        """F-06: read_timeline の OTIO エラー時 message が定型の汎用文字列であること。
+
+        message は固定フォーマットを持ち、可変の例外詳細を含まないことを確認する。
+        """
+        project_dir = self._setup_project(tmp_path)
+
+        with patch(
+            "clipwright.server.load_timeline",
+            side_effect=RuntimeError("unexpected internal detail xyz"),
+        ):
+            result = clipwright_read_timeline(project_dir=project_dir)
+
+        _assert_tool_error_result(result, "OTIO_ERROR")
+        message = result["error"]["message"]
+        hint = result["error"]["hint"]
+        # message は可変の例外詳細を含まないこと
+        assert "unexpected internal detail xyz" not in message, (
+            f"message に生の例外メッセージが含まれている: {message!r}"
+        )
+        # hint が空でないこと（アクション可能な内容）
+        assert len(hint) > 0, "hint は空でないこと"
+
+    def test_write_timeline_error_hint_is_actionable(self, tmp_path: Path) -> None:
+        """F-06: write_timeline の OTIO エラー時 hint が定型文であること。"""
+        project_dir = self._setup_project(tmp_path)
+
+        with patch(
+            "clipwright.server.load_timeline",
+            side_effect=RuntimeError("unexpected detail abc"),
+        ):
+            result = clipwright_write_timeline(
+                project_dir=project_dir, operations=[], validate_only=False
+            )
+
+        _assert_tool_error_result(result, "OTIO_ERROR")
+        hint = result["error"]["hint"]
+        message = result["error"]["message"]
+        # 生の例外メッセージが含まれないこと
+        assert "unexpected detail abc" not in message, (
+            f"message に生の例外メッセージが含まれている: {message!r}"
+        )
+        assert len(hint) > 0, "hint はアクション可能な文字列であること"
