@@ -22,7 +22,6 @@ share/python-wheels/
 
 # uv
 .venv/
-uv.lock
 
 # mypy
 .mypy_cache/
@@ -59,6 +58,7 @@ Thumbs.db
 # Claude Code / C3 ランタイム生成物
 .claude/state/
 .claude/hooks/__pycache__/
+.claude/worktrees/
 
 # プロジェクト生成物（テスト用 tmp は pytest が管理）
 outputs/
