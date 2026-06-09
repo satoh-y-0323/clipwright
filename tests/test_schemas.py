@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 # --- Import（schemas.py 未実装のため ImportError が発生する → Red） ---
 from clipwright.schemas import (
@@ -30,7 +31,6 @@ from clipwright.schemas import (
     from_otio_time,
     to_otio_time,
 )
-
 
 # ===========================================================================
 # RationalTimeModel
@@ -121,7 +121,9 @@ class TestMediaRef:
             start_time=RationalTimeModel(value=0.0, rate=30.0),
             duration=RationalTimeModel(value=90.0, rate=30.0),
         )
-        ref = MediaRef(target_url="/path/to/video.mp4", name="clip1", available_range=rng)
+        ref = MediaRef(
+            target_url="/path/to/video.mp4", name="clip1", available_range=rng
+        )
         assert ref.name == "clip1"
         assert ref.available_range is not None
         assert ref.available_range.duration.value == 90.0
@@ -187,7 +189,7 @@ class TestToolResult:
 
     def test_ok_cannot_be_false(self) -> None:
         """ok=False を設定できない（Literal[True]）。"""
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             ToolResult(ok=False, summary="should fail")  # type: ignore[arg-type]
 
 
@@ -216,19 +218,23 @@ class TestToolErrorResult:
 
     def test_ok_is_false(self) -> None:
         """ok フィールドは常に False。"""
-        err = ToolError(code="INVALID_INPUT", message="不正入力", hint="修正してください")
+        err = ToolError(
+            code="INVALID_INPUT", message="不正入力", hint="修正してください"
+        )
         result = ToolErrorResult(error=err)
         assert result.ok is False
 
     def test_ok_cannot_be_true(self) -> None:
         """ok=True を設定できない（Literal[False]）。"""
         err = ToolError(code="INVALID_INPUT", message="x", hint="y")
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             ToolErrorResult(ok=True, error=err)  # type: ignore[arg-type]
 
     def test_error_structure(self) -> None:
         """error フィールドに ToolError が格納される。"""
-        err = ToolError(code="PROBE_FAILED", message="パース失敗", hint="ffprobe を確認")
+        err = ToolError(
+            code="PROBE_FAILED", message="パース失敗", hint="ffprobe を確認"
+        )
         result = ToolErrorResult(error=err)
         assert result.error.code == "PROBE_FAILED"
 
@@ -243,7 +249,9 @@ class TestStreamInfo:
 
     def test_video_stream(self) -> None:
         """映像ストリームのフィールドを持てる。"""
-        s = StreamInfo(index=0, codec_type="video", codec_name="h264", width=1920, height=1080)
+        s = StreamInfo(
+            index=0, codec_type="video", codec_name="h264", width=1920, height=1080
+        )
         assert s.codec_type == "video"
         assert s.width == 1920
 
@@ -302,7 +310,9 @@ class TestOperationError:
 
     def test_construct(self) -> None:
         """index / code / message を持てる。"""
-        oe = OperationError(index=2, code="TRACK_NOT_FOUND", message="track 5 が存在しません")
+        oe = OperationError(
+            index=2, code="TRACK_NOT_FOUND", message="track 5 が存在しません"
+        )
         assert oe.index == 2
         assert oe.code == "TRACK_NOT_FOUND"
         assert oe.message == "track 5 が存在しません"
@@ -339,7 +349,9 @@ class TestValidationReport:
 
     def test_invalid_report(self) -> None:
         """不正 op がある場合は valid=False・applied_count=0。"""
-        err = OperationError(index=1, code="TRACK_NOT_FOUND", message="track 5 が存在しません")
+        err = OperationError(
+            index=1, code="TRACK_NOT_FOUND", message="track 5 が存在しません"
+        )
         report = ValidationReport(
             valid=False,
             operation_count=3,

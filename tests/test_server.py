@@ -1,27 +1,30 @@
 """test_server.py — server.py（FastMCP 4 ツール）の Red テスト。
 
-server.py は未実装のため、全テストが「機能未実装による失敗」で Red になることを想定する。
+server.py は未実装のため、全テストが「機能未実装による失敗」で
+Red になることを想定する。
 テスト観点:
   - 各ツールの成功時 ToolResult 形・失敗時 ToolErrorResult 形（エンベロープ契約）
   - MCP annotations が §7 表どおり付与されていること
   - read_timeline: project_dir / timeline_path の排他必須・marker truncation 閾値 50
   - write_timeline: operations の追記セマンティクス・validate_only・ValidationReport
-  - inspect_media: ffprobe 不在時（モック）に DEPENDENCY_MISSING エンベロープ + Windows hint
+  - inspect_media: ffprobe 不在時（モック）に DEPENDENCY_MISSING エンベロープ
+    + Windows hint
 """
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 
-# ---- 未実装のモジュールを import（Red フェーズ: ModuleNotFoundError または ImportError が期待挙動）
+# ---- 未実装のモジュールを import
+# （Red フェーズ: ModuleNotFoundError または ImportError が期待挙動）
 # server.py が存在しないため、下記 import は失敗する。
 # テストを構造化するため、pytestmark や try/except を使わずに直接 import し、
-# 各テストクラス / 関数で ImportError/AttributeError が発生することを明示的にチェックする。
+# 各テストクラス / 関数で ImportError/AttributeError が発生することを
+# 明示的にチェックする。
 
 try:
     from clipwright.server import (
@@ -96,21 +99,23 @@ class TestMcpAnnotations:
     def _get_tool_annotations(self, tool_name: str) -> dict[str, Any]:
         """mcp オブジェクトから tool の annotations を取得する。
 
-        FastMCP の内部 API（_tool_manager.tools）を参照する。
-        実装によっては _tools や get_tools() 経由になる可能性があるため、
-        存在するアクセス方法を試みる。
+        FastMCP の公開 API（_tool_manager.get_tool）を使用する。
         """
-        # FastMCP 1.27+ の内部 API
-        tools = mcp._tool_manager.tools  # type: ignore[attr-defined]
-        assert tool_name in tools, f"ツール {tool_name} が mcp に登録されていること"
-        return tools[tool_name].annotations or {}
+        tool = mcp._tool_manager.get_tool(tool_name)  # type: ignore[attr-defined]
+        assert tool is not None, f"ツール {tool_name} が mcp に登録されていること"
+        return tool.annotations or {}
 
     def test_clipwright_init_project_annotations(self) -> None:
-        """init_project: readOnly:false / destructive:false / idempotent:false / openWorld:false。"""
+        """init_project: readOnly:false / destructive:false
+        / idempotent:false / openWorld:false。"""
         ann = self._get_tool_annotations("clipwright_init_project")
         assert ann.readOnlyHint is False, "init_project は読み取り専用でない"
-        assert ann.destructiveHint is False, "init_project は非破壊（ユーザーデータ削除なし）"
-        assert ann.idempotentHint is False, "init_project は冪等でない（再実行で PROJECT_EXISTS）"
+        assert ann.destructiveHint is False, (
+            "init_project は非破壊（ユーザーデータ削除なし）"
+        )
+        assert ann.idempotentHint is False, (
+            "init_project は冪等でない（再実行で PROJECT_EXISTS）"
+        )
         assert ann.openWorldHint is False, "init_project は外部リソースにアクセスしない"
 
     def test_clipwright_inspect_media_annotations(self) -> None:
@@ -119,7 +124,9 @@ class TestMcpAnnotations:
         assert ann.readOnlyHint is True, "inspect_media は読み取り専用"
         assert ann.destructiveHint is False, "inspect_media は非破壊"
         assert ann.idempotentHint is True, "inspect_media は冪等（同じ入力に同じ結果）"
-        assert ann.openWorldHint is False, "inspect_media は外部リソースにアクセスしない"
+        assert ann.openWorldHint is False, (
+            "inspect_media は外部リソースにアクセスしない"
+        )
 
     def test_clipwright_read_timeline_annotations(self) -> None:
         """read_timeline: readOnly:true / destructive:false / idempotent:true。"""
@@ -132,7 +139,9 @@ class TestMcpAnnotations:
         """write_timeline: readOnly:false / destructive:false / idempotent:false。"""
         ann = self._get_tool_annotations("clipwright_write_timeline")
         assert ann.readOnlyHint is False, "write_timeline は書き込みあり"
-        assert ann.destructiveHint is False, "write_timeline は非破壊（追記セマンティクス）"
+        assert ann.destructiveHint is False, (
+            "write_timeline は非破壊（追記セマンティクス）"
+        )
         assert ann.idempotentHint is False, "write_timeline は冪等でない"
 
 
@@ -147,7 +156,9 @@ class TestInitProject:
     def test_success_returns_tool_result(self, tmp_path: Path) -> None:
         """正常系: ToolResult 形でプロジェクトを作成する。"""
         project_dir = str(tmp_path / "my_project")
-        result = clipwright_init_project(project_dir=project_dir, name="テストプロジェクト")
+        result = clipwright_init_project(
+            project_dir=project_dir, name="テストプロジェクト"
+        )
         _assert_tool_result(result)
 
     def test_success_creates_manifest(self, tmp_path: Path) -> None:
@@ -162,12 +173,16 @@ class TestInitProject:
         clipwright_init_project(project_dir=project_dir, name="test")
         assert (tmp_path / "proj" / "timeline.otio").exists()
 
-    def test_success_artifacts_contain_manifest_and_timeline(self, tmp_path: Path) -> None:
+    def test_success_artifacts_contain_manifest_and_timeline(
+        self, tmp_path: Path
+    ) -> None:
         """正常系: artifacts に manifest と timeline のパスが含まれること。"""
         project_dir = str(tmp_path / "proj")
         result = clipwright_init_project(project_dir=project_dir, name="test")
         _assert_tool_result(result)
-        artifact_paths = [a["path"] if isinstance(a, dict) else a.path for a in result["artifacts"]]
+        artifact_paths = [
+            a["path"] if isinstance(a, dict) else a.path for a in result["artifacts"]
+        ]
         assert any("clipwright.json" in p for p in artifact_paths), (
             "artifacts に clipwright.json が含まれること"
         )
@@ -176,7 +191,8 @@ class TestInitProject:
         )
 
     def test_duplicate_project_returns_error(self, tmp_path: Path) -> None:
-        """異常系: 既存プロジェクトに force=False で再 init するとエラーエンベロープを返す。"""
+        """異常系: 既存プロジェクトに force=False で再 init すると
+        エラーエンベロープを返す。"""
         project_dir = str(tmp_path / "proj")
         clipwright_init_project(project_dir=project_dir, name="test")
         # 2回目
@@ -187,11 +203,14 @@ class TestInitProject:
         """正常系: force=True で既存プロジェクトを再 init するとエラーにならない。"""
         project_dir = str(tmp_path / "proj")
         clipwright_init_project(project_dir=project_dir, name="test")
-        result = clipwright_init_project(project_dir=project_dir, name="test", force=True)
+        result = clipwright_init_project(
+            project_dir=project_dir, name="test", force=True
+        )
         _assert_tool_result(result)
 
     def test_force_does_not_overwrite_existing_timeline(self, tmp_path: Path) -> None:
-        """正常系: force=True でも既存 timeline.otio は上書きしない（非破壊 §13.2 DC-AM-007）。"""
+        """正常系: force=True でも既存 timeline.otio は上書きしない
+        （非破壊 §13.2 DC-AM-007）。"""
         project_dir = str(tmp_path / "proj")
         clipwright_init_project(project_dir=project_dir, name="test")
         # timeline.otio に sentinel を書き込む
@@ -240,10 +259,13 @@ class TestInspectMedia:
 
         process.resolve_tool をモックして ffprobe が見つからない状況を再現する。
         """
+        from clipwright.errors import ClipwrightError as _CWE
+        from clipwright.errors import ErrorCode as _EC
+
         with patch(
             "clipwright.process.resolve_tool",
-            side_effect=__import__("clipwright.errors", fromlist=["ClipwrightError"]).ClipwrightError(
-                __import__("clipwright.errors", fromlist=["ErrorCode"]).ErrorCode.DEPENDENCY_MISSING,
+            side_effect=_CWE(
+                _EC.DEPENDENCY_MISSING,
                 "ffprobe が見つかりません",
                 "winget install Gyan.FFmpeg で導入してください",
             ),
@@ -259,7 +281,8 @@ class TestInspectMedia:
     def test_dependency_missing_hint_is_actionable(
         self, tmp_path: Path, sample_media: str
     ) -> None:
-        """異常系: DEPENDENCY_MISSING の hint に Gyan.FFmpeg または CLIPWRIGHT_FFPROBE の記述があること。"""
+        """異常系: DEPENDENCY_MISSING の hint に Gyan.FFmpeg または
+        CLIPWRIGHT_FFPROBE の記述があること。"""
         from clipwright.errors import ClipwrightError, ErrorCode
 
         with patch(
@@ -267,7 +290,8 @@ class TestInspectMedia:
             side_effect=ClipwrightError(
                 ErrorCode.DEPENDENCY_MISSING,
                 "ffprobe が見つかりません",
-                "winget install Gyan.FFmpeg で導入するか CLIPWRIGHT_FFPROBE に設定してください",
+                "winget install Gyan.FFmpeg で導入するか"
+                " CLIPWRIGHT_FFPROBE に設定してください",
             ),
         ):
             result = clipwright_inspect_media(path=sample_media)
@@ -284,7 +308,8 @@ class TestInspectMedia:
 
 
 class TestReadTimeline:
-    """clipwright_read_timeline ツールのエンベロープ契約・排他入力・marker truncation を検証する。"""
+    """clipwright_read_timeline ツールのエンベロープ契約・排他入力・
+    marker truncation を検証する。"""
 
     def _setup_project(self, tmp_path: Path, name: str = "test") -> str:
         """テスト用プロジェクトを初期化して project_dir を返す。"""
@@ -308,7 +333,8 @@ class TestReadTimeline:
         _assert_tool_result(result)
 
     def test_data_contains_summary_fields(self, tmp_path: Path) -> None:
-        """正常系: data に clip_count / gap_count / marker_count / total_duration が含まれること。"""
+        """正常系: data に clip_count / gap_count / marker_count / total_duration
+        が含まれること。"""
         project_dir = self._setup_project(tmp_path)
         result = clipwright_read_timeline(project_dir=project_dir)
         _assert_tool_result(result)
@@ -334,12 +360,14 @@ class TestReadTimeline:
     # --- 排他入力検証（§13.2 DC-AS-004）---
 
     def test_both_inputs_missing_returns_invalid_input(self, tmp_path: Path) -> None:
-        """異常系: project_dir も timeline_path も指定しない → INVALID_INPUT（§13.2 DC-AS-004）。"""
+        """異常系: project_dir も timeline_path も指定しない
+        → INVALID_INPUT（§13.2 DC-AS-004）。"""
         result = clipwright_read_timeline()
         _assert_tool_error_result(result, "INVALID_INPUT")
 
     def test_both_inputs_provided_returns_invalid_input(self, tmp_path: Path) -> None:
-        """異常系: project_dir と timeline_path を両方指定 → INVALID_INPUT（§13.2 DC-AS-004）。"""
+        """異常系: project_dir と timeline_path を両方指定
+        → INVALID_INPUT（§13.2 DC-AS-004）。"""
         project_dir = self._setup_project(tmp_path)
         timeline_path = str(Path(project_dir) / "timeline.otio")
         result = clipwright_read_timeline(
@@ -347,6 +375,26 @@ class TestReadTimeline:
             timeline_path=timeline_path,
         )
         _assert_tool_error_result(result, "INVALID_INPUT")
+
+    def test_timeline_path_non_otio_extension_returns_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """異常系: timeline_path に .otio 以外を渡すと PATH_NOT_ALLOWED
+        （F-02 パストラバーサル対策）。"""
+        # 実際にファイルを作成して拡張子のみ検証されることを確認
+        txt_path = tmp_path / "secrets.txt"
+        txt_path.write_text("dummy")
+        result = clipwright_read_timeline(timeline_path=str(txt_path))
+        _assert_tool_error_result(result, "PATH_NOT_ALLOWED")
+
+    def test_timeline_path_json_extension_returns_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """異常系: timeline_path に .json を渡しても PATH_NOT_ALLOWED になる。"""
+        json_path = tmp_path / "data.json"
+        json_path.write_text("{}")
+        result = clipwright_read_timeline(timeline_path=str(json_path))
+        _assert_tool_error_result(result, "PATH_NOT_ALLOWED")
 
     # --- marker truncation（§13.2 DC-AS-004 / §13.5 DC-AM-001）---
 
@@ -368,7 +416,8 @@ class TestReadTimeline:
         )
 
     def test_markers_above_threshold_returns_truncated(self, tmp_path: Path) -> None:
-        """正常系: marker > 50 件のとき data.markers を省略し markers_truncated=true を返す（§13.5 DC-AM-001）。
+        """正常系: marker > 50 件のとき data.markers を省略し
+        markers_truncated=true を返す（§13.5 DC-AM-001）。
 
         write_timeline で 51 件のマーカーを事前に追加してから read_timeline を呼ぶ。
         """
@@ -400,13 +449,16 @@ class TestReadTimeline:
             "marker > 50 のとき data.markers_truncated=True が必要"
         )
         assert "marker_count" in data, "marker > 50 のとき data.marker_count が必要"
-        assert data["marker_count"] == 51, f"marker_count=51 であること（実際: {data.get('marker_count')}）"
+        assert data["marker_count"] == 51, (
+            f"marker_count=51 であること（実際: {data.get('marker_count')}）"
+        )
         assert "markers" not in data or data.get("markers") is None, (
             "marker > 50 のとき data.markers は省略または None"
         )
 
     def test_markers_exactly_at_threshold_returns_list(self, tmp_path: Path) -> None:
-        """境界値: marker = 50 件のとき data.markers にリストが返る（≤50 は list 返却）。"""
+        """境界値: marker = 50 件のとき data.markers にリストが返る
+        （≤50 は list 返却）。"""
         project_dir = self._setup_project(tmp_path)
         ops = [
             {
@@ -429,7 +481,9 @@ class TestReadTimeline:
         result = clipwright_read_timeline(project_dir=project_dir)
         _assert_tool_result(result)
         data = result["data"]
-        assert "markers" in data, "marker = 50 のとき data.markers キーが必要（≤50 は list 返却）"
+        assert "markers" in data, (
+            "marker = 50 のとき data.markers キーが必要（≤50 は list 返却）"
+        )
         assert isinstance(data["markers"], list), "data.markers は list"
         assert not data.get("markers_truncated", False), (
             "marker = 50 のとき markers_truncated は False または未設定"
@@ -442,7 +496,8 @@ class TestReadTimeline:
 
 
 class TestWriteTimeline:
-    """clipwright_write_timeline ツールのエンベロープ契約・追記セマンティクス・validate_only を検証する。"""
+    """clipwright_write_timeline ツールのエンベロープ契約・追記セマンティクス・
+    validate_only を検証する。"""
 
     def _setup_project(self, tmp_path: Path, name: str = "test") -> str:
         """テスト用プロジェクトを初期化して project_dir を返す。"""
@@ -461,7 +516,8 @@ class TestWriteTimeline:
         _assert_tool_result(result)
 
     def test_data_contains_validation_report(self, tmp_path: Path) -> None:
-        """正常系: data に ValidationReport 相当のフィールドが含まれること（§13.1 DC-AM-003）。"""
+        """正常系: data に ValidationReport 相当のフィールドが含まれること
+        （§13.1 DC-AM-003）。"""
         project_dir = self._setup_project(tmp_path)
         result = clipwright_write_timeline(
             project_dir=project_dir, operations=[], validate_only=False
@@ -495,7 +551,8 @@ class TestWriteTimeline:
         assert data.get("applied_count") == 1, "applied_count=1 であること"
 
     def test_validate_only_does_not_apply(self, tmp_path: Path) -> None:
-        """正常系: validate_only=True のとき applied_count=0 で timeline に書き込まない（§13.1 DC-AM-003）。"""
+        """正常系: validate_only=True のとき applied_count=0 で
+        timeline に書き込まない（§13.1 DC-AM-003）。"""
         project_dir = self._setup_project(tmp_path)
         timeline_path = Path(project_dir) / "timeline.otio"
         mtime_before = timeline_path.stat().st_mtime
@@ -516,7 +573,9 @@ class TestWriteTimeline:
         )
         _assert_tool_result(result)
         data = result["data"]
-        assert data.get("valid") is True, "validate_only=True でも valid=True であること"
+        assert data.get("valid") is True, (
+            "validate_only=True でも valid=True であること"
+        )
         assert data.get("applied_count") == 0, (
             "validate_only=True のとき applied_count=0 であること"
         )
@@ -525,8 +584,11 @@ class TestWriteTimeline:
             "validate_only=True では timeline.otio が更新されないこと"
         )
 
-    def test_additive_semantics_preserves_existing_content(self, tmp_path: Path) -> None:
-        """正常系: 追記セマンティクス — 2 回目の write_timeline で既存内容が消えない（§13.2 DC-AM-001）。"""
+    def test_additive_semantics_preserves_existing_content(
+        self, tmp_path: Path
+    ) -> None:
+        """正常系: 追記セマンティクス — 2 回目の write_timeline で
+        既存内容が消えない（§13.2 DC-AM-001）。"""
         project_dir = self._setup_project(tmp_path)
 
         # 1 回目: marker_1 を追加
@@ -571,25 +633,19 @@ class TestWriteTimeline:
         )
 
     def test_invalid_op_returns_validation_error(self, tmp_path: Path) -> None:
-        """異常系: 不正な op を渡すと ok=False か valid=False の ValidationReport を返す。
+        """異常系: 不正な op を渡すと ok=False の
+        INVALID_INPUT エラーエンベロープを返す。
 
+        Pydantic 検証失敗（不正な op 種別等）は入力スキーマ違反であるため
+        ok=False / error.code=INVALID_INPUT として返す（§6.4 契約）。
         all-or-nothing: 1 件でも不正なら適用しない（§13.1 DC-AM-004）。
-        注: server.py が Pydantic 検証エラーをエンベロープに変換するか
-        ValidationReport(valid=False) で返すかの実装判断を確認する。
         """
         project_dir = self._setup_project(tmp_path)
         bad_ops = [{"op": "unknown_op", "track": 0}]
         result = clipwright_write_timeline(
             project_dir=project_dir, operations=bad_ops, validate_only=False
         )
-        # INVALID_INPUT エラーエンベロープ OR ValidationReport(valid=False) のどちらかを許容
-        if result.get("ok") is False:
-            assert "error" in result, "ok=False のとき error キーが必要"
-        else:
-            # ToolResult だが valid=False の ValidationReport
-            assert result["data"].get("valid") is False, (
-                "不正 op のとき ValidationReport.valid=False であること"
-            )
+        _assert_tool_error_result(result, "INVALID_INPUT")
 
     def test_all_or_nothing_on_invalid_op(self, tmp_path: Path) -> None:
         """異常系: 複数 op のうち1件でも不正なら全件適用しない（§13.1 DC-AM-004）。"""
@@ -632,7 +688,7 @@ class TestWriteTimeline:
                 "name": "marker_bad",
             },
         ]
-        result = clipwright_write_timeline(
+        clipwright_write_timeline(
             project_dir=project_dir, operations=ops_mixed, validate_only=False
         )
 

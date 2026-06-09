@@ -32,7 +32,6 @@ from clipwright.project import (
     save_manifest,
 )
 
-
 # ===========================================================================
 # init_project — 正常系
 # ===========================================================================
@@ -96,7 +95,8 @@ class TestInitProjectSuccess:
         assert (proj / "timeline.otio").is_file()
 
     def test_timeline_has_v1_track(self, tmp_project: Path) -> None:
-        """timeline.otio に V1（Video）トラックが含まれる（§13.1 DC-AS-003 / §13.5）。"""
+        """timeline.otio に V1（Video）トラックが含まれる
+        （§13.1 DC-AS-003 / §13.5）。"""
         import opentimelineio as otio
 
         proj = tmp_project / "myproject"
@@ -109,7 +109,8 @@ class TestInitProjectSuccess:
         assert video_tracks[0].name == "V1"
 
     def test_timeline_has_a1_track(self, tmp_project: Path) -> None:
-        """timeline.otio に A1（Audio）トラックが含まれる（§13.1 DC-AS-003 / §13.5）。"""
+        """timeline.otio に A1（Audio）トラックが含まれる
+        （§13.1 DC-AS-003 / §13.5）。"""
         import opentimelineio as otio
 
         proj = tmp_project / "myproject"
@@ -227,7 +228,6 @@ class TestInitProjectForce:
 
     def test_force_preserves_existing_timeline(self, tmp_project: Path) -> None:
         """force=True でも既存の timeline.otio は上書き・削除しない（非破壊）。"""
-        import opentimelineio as otio
 
         proj = tmp_project / "myproject"
         init_project(str(proj), name="myproject")

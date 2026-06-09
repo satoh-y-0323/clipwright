@@ -29,9 +29,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from clipwright.errors import ClipwrightError, ErrorCode
-from clipwright.media import inspect_media  # noqa: E402 — media.py 未実装で ImportError（Red）
+from clipwright.media import (
+    inspect_media,  # noqa: E402 — media.py 未実装で ImportError（Red）
+)
 from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo
-
 
 # ===========================================================================
 # ヘルパー: ffprobe が返す JSON ペイロードを構築する
@@ -249,7 +250,8 @@ class TestRateDecisionRule:
     def test_fractional_avg_frame_rate_parsed_correctly(
         self, mocker: MagicMock, tmp_path
     ) -> None:
-        """avg_frame_rate が分数形式（例: "24000/1001"）でも正しく rate に変換されること。
+        """avg_frame_rate が分数形式（例: "24000/1001"）でも
+        正しく rate に変換されること。
 
         24000/1001 ≈ 23.976 fps
         """
@@ -307,7 +309,8 @@ class TestRateDecisionRule:
     def test_first_video_stream_rate_used_when_multiple_video_streams(
         self, mocker: MagicMock, tmp_path
     ) -> None:
-        """複数映像ストリームがある場合、第1映像（index 最小）の avg_frame_rate が採用されること。"""
+        """複数映像ストリームがある場合、第1映像（index 最小）の
+        avg_frame_rate が採用されること。"""
         media_file = tmp_path / "multi.mp4"
         media_file.write_bytes(b"dummy")
 
@@ -404,12 +407,13 @@ class TestInspectMediaFileNotFound:
     def test_file_not_found_before_resolve_tool_is_called(
         self, mocker: MagicMock
     ) -> None:
-        """ファイル検証はパス検証の前に行われること（resolve_tool より先に FILE_NOT_FOUND）。
+        """ファイル検証はパス検証の前に行われること
+        （resolve_tool より先に FILE_NOT_FOUND）。
 
         ファイル存在確認は ffprobe 探索より先に行うことで、
         ユーザーへの feedback を早める。
         """
-        mock_resolve = mocker.patch(
+        mocker.patch(
             "clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe"
         )
 
@@ -628,7 +632,8 @@ class TestInspectMediaRunInvocation:
         assert str(media_file) in cmd
 
     def test_ffprobe_resolved_with_env_var(self, mocker: MagicMock, tmp_path) -> None:
-        """resolve_tool が "ffprobe" と "CLIPWRIGHT_FFPROBE" で呼ばれること（ADR-3）。"""
+        """resolve_tool が "ffprobe" と "CLIPWRIGHT_FFPROBE" で
+        呼ばれること（ADR-3）。"""
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
@@ -669,7 +674,8 @@ class TestInspectMediaIntegration:
         """
         if ffprobe_path is None:
             pytest.skip(
-                "ffprobe が見つかりません（CLIPWRIGHT_FFPROBE が未設定で PATH 上にもない）。"
+                "ffprobe が見つかりません"
+                "（CLIPWRIGHT_FFPROBE が未設定で PATH 上にもない）。"
             )
 
         result = inspect_media(sample_media)
@@ -688,7 +694,8 @@ class TestInspectMediaIntegration:
         """
         if ffprobe_path is None:
             pytest.skip(
-                "ffprobe が見つかりません（CLIPWRIGHT_FFPROBE が未設定で PATH 上にもない）。"
+                "ffprobe が見つかりません"
+                "（CLIPWRIGHT_FFPROBE が未設定で PATH 上にもない）。"
             )
 
         result = inspect_media(sample_media)
@@ -705,7 +712,8 @@ class TestInspectMediaIntegration:
         """生成 mp4 に video / audio ストリームが含まれること。"""
         if ffprobe_path is None:
             pytest.skip(
-                "ffprobe が見つかりません（CLIPWRIGHT_FFPROBE が未設定で PATH 上にもない）。"
+                "ffprobe が見つかりません"
+                "（CLIPWRIGHT_FFPROBE が未設定で PATH 上にもない）。"
             )
 
         result = inspect_media(sample_media)
@@ -725,7 +733,8 @@ class TestInspectMediaIntegration:
         """
         if ffprobe_path is None:
             pytest.skip(
-                "ffprobe が見つかりません（CLIPWRIGHT_FFPROBE が未設定で PATH 上にもない）。"
+                "ffprobe が見つかりません"
+                "（CLIPWRIGHT_FFPROBE が未設定で PATH 上にもない）。"
             )
 
         result = inspect_media(sample_media)
@@ -741,7 +750,8 @@ class TestInspectMediaIntegration:
         """MediaInfo.path が入力パスと一致すること（統合）。"""
         if ffprobe_path is None:
             pytest.skip(
-                "ffprobe が見つかりません（CLIPWRIGHT_FFPROBE が未設定で PATH 上にもない）。"
+                "ffprobe が見つかりません"
+                "（CLIPWRIGHT_FFPROBE が未設定で PATH 上にもない）。"
             )
 
         result = inspect_media(sample_media)

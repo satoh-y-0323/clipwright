@@ -223,10 +223,10 @@ def summarize_timeline(timeline: otio.schema.Timeline) -> dict[str, Any]:
         for marker in track.markers:
             markers.append(_marker_to_dict(marker))
 
-    # クリップに付いた markers も収集（track.markers に加えてクリップ内 markers も対象）
+    # Clip に付いた markers も収集（Track は1ループ目で収集済みのため除外）
     for track in timeline.tracks:
         for item in track:
-            if hasattr(item, "markers"):
+            if isinstance(item, otio.schema.Clip):
                 for marker in item.markers:
                     markers.append(_marker_to_dict(marker))
 

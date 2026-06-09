@@ -22,7 +22,6 @@ import pytest
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.process import resolve_tool, run
 
-
 # ===========================================================================
 # resolve_tool — PATH 優先 → env フォールバック → DEPENDENCY_MISSING
 # ===========================================================================
@@ -221,7 +220,8 @@ class TestRunSuccess:
         assert _call_kwargs.get("timeout") == 30.0
 
     def test_default_timeout_is_set(self, mocker: MagicMock) -> None:
-        """timeout 引数を省略しても何らかのデフォルト timeout が設定される（無制限禁止）。"""
+        """timeout 引数を省略しても何らかのデフォルト timeout が
+        設定される（無制限禁止）。"""
         mock_cp = CompletedProcess(
             args=["ffprobe"], returncode=0, stdout="", stderr=""
         )
@@ -330,7 +330,8 @@ class TestRunSubprocessTimeout:
     def test_timeout_not_wrapped_as_subprocess_failed(
         self, mocker: MagicMock
     ) -> None:
-        """TimeoutExpired は SUBPROCESS_FAILED ではなく SUBPROCESS_TIMEOUT として送出される。"""
+        """TimeoutExpired は SUBPROCESS_FAILED ではなく
+        SUBPROCESS_TIMEOUT として送出される。"""
         mocker.patch(
             "subprocess.run",
             side_effect=subprocess.TimeoutExpired(cmd=["ffprobe"], timeout=10.0),

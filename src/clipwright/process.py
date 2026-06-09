@@ -111,11 +111,13 @@ def run(
         ) from exc
 
     if result.returncode != 0:
+        # stderr は先頭 200 文字・改行除去の要約に絞る（詳細パス情報の漏洩防止）
+        stderr_summary = result.stderr[:200].replace("\n", " ").strip()
         raise ClipwrightError(
             code=ErrorCode.SUBPROCESS_FAILED,
             message=(
                 f"コマンドが終了コード {result.returncode} で失敗しました:"
-                f" {result.stderr}"
+                f" {stderr_summary}"
             ),
             hint="コマンドの引数・入力ファイルパス・ツールのバージョンを確認してください。",
         )

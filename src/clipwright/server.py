@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp.tools.tool_manager import ToolManager as _ToolManager
 from mcp.types import ToolAnnotations
 from pydantic import Field, TypeAdapter, ValidationError
 
@@ -34,14 +33,6 @@ from clipwright.schemas import Artifact
 
 # FastMCP インスタンス（名前 = MCP サーバー名）
 mcp = FastMCP("clipwright")
-
-# ToolManager に tools プロパティを追加するシム。
-# FastMCP 1.27+ では内部属性が _tools（アンダースコア付き）のため、
-# test_server.py が参照する mcp._tool_manager.tools を有効にする。
-if not hasattr(_ToolManager, "tools"):
-    _ToolManager.tools = property(  # type: ignore[attr-defined]
-        lambda self: self._tools
-    )
 
 # marker truncation 閾値（§13.2 DC-AS-004）
 _MARKER_THRESHOLD = 50
@@ -264,7 +255,21 @@ def clipwright_read_timeline(
     if project_dir is not None:
         resolved_path = str(Path(project_dir) / "timeline.otio")
     else:
-        resolved_path = str(timeline_path)
+        # timeline_path 直接指定: .otio 拡張子ホワイトリスト検証（パストラバーサル対策）
+        resolved = Path(str(timeline_path)).resolve()
+        if resolved.suffix != ".otio":
+            return error_result(
+                ErrorCode.PATH_NOT_ALLOWED,
+                f"timeline_path は .otio ファイルを指定してください: {resolved.name}",
+                ".otio 拡張子のファイルパスを指定してください。",
+            )
+        if not resolved.is_file():
+            return error_result(
+                ErrorCode.FILE_NOT_FOUND,
+                f"timeline_path が存在しません: {resolved.name}",
+                "有効な .otio ファイルのパスを指定してください。",
+            )
+        resolved_path = str(resolved)
 
     try:
         timeline = load_timeline(resolved_path)
@@ -408,17 +413,18 @@ def clipwright_write_timeline(
             )
 
     if parse_errors:
-        # Pydantic 検証失敗 → ValidationReport(valid=False) で ok_result に包む
-        # テストが ok=False か valid=False のどちらも許容しているため ok_result を選択
-        report_data: dict[str, Any] = {
-            "valid": False,
-            "operation_count": len(operations),
-            "applied_count": 0,
-            "errors": parse_errors,
-        }
-        return ok_result(
-            f"operations の検証に失敗しました: {len(parse_errors)} 件のエラー",
-            data=report_data,
+        # Pydantic 検証失敗（不正な op 種別等）→ 入力スキーマ違反
+        # ok=False の error_result で返す（§6.4 契約）
+        first_err = parse_errors[0]
+        hint_detail = first_err.get("message", "")
+        return error_result(
+            ErrorCode.INVALID_INPUT,
+            f"operations の入力検証に失敗しました: {len(parse_errors)} 件のエラー",
+            (
+                f"対応 op は add_clip / add_gap / add_marker のみです。{hint_detail}"
+                if hint_detail
+                else "対応 op は add_clip / add_gap / add_marker のみです。"
+            ),
         )
 
     # apply_operations（all-or-nothing / validate_only 対応）

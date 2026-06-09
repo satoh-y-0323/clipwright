@@ -30,7 +30,6 @@ from clipwright.operations import (
     apply_operations,
 )
 
-
 # ===========================================================================
 # AddClipOp（判別共用体メンバー）
 # ===========================================================================
@@ -217,7 +216,6 @@ class TestOperationUnion:
         """op='add_clip' を持つ dict は AddClipOp として parse される。"""
         from pydantic import TypeAdapter
 
-        from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
 
         adapter: TypeAdapter[Operation] = TypeAdapter(Operation)
         data = {
@@ -263,7 +261,8 @@ class TestOperationUnion:
         assert isinstance(op, AddMarkerOp)
 
     def test_unknown_op_raises(self) -> None:
-        """未知の op 値は Pydantic の ValidationError になる（UNSUPPORTED_OPERATION 相当）。"""
+        """未知の op 値は Pydantic の ValidationError になる
+        （UNSUPPORTED_OPERATION 相当）。"""
         from pydantic import TypeAdapter, ValidationError
 
         adapter: TypeAdapter[Operation] = TypeAdapter(Operation)
@@ -323,7 +322,11 @@ class TestApplyOperationsSuccess:
         path = str(tmp_path / "tl.otio")
         save_timeline(tl, path)
 
-        ops = [AddGapOp(op="add_gap", track=0, duration=RationalTimeModel(value=30.0, rate=30.0))]
+        ops = [
+            AddGapOp(
+                op="add_gap", track=0, duration=RationalTimeModel(value=30.0, rate=30.0)
+            )
+        ]
         report = apply_operations(tl, ops, validate_only=False)
         assert isinstance(report, ValidationReport)
         assert report.valid is True
@@ -336,7 +339,6 @@ class TestApplyOperationsSuccess:
             MediaRef,
             RationalTimeModel,
             TimeRangeModel,
-            ValidationReport,
         )
 
         tl = new_timeline("multi_ops")
@@ -375,7 +377,11 @@ class TestApplyOperationsSuccess:
     def test_apply_marker_to_empty_track_succeeds(self, tmp_path: Path) -> None:
         """空トラックへの add_marker は成功する（§13.5 DC-GP-001 再）。"""
         from clipwright.otio_utils import new_timeline, save_timeline
-        from clipwright.schemas import RationalTimeModel, TimeRangeModel, ValidationReport
+        from clipwright.schemas import (
+            RationalTimeModel,
+            TimeRangeModel,
+            ValidationReport,
+        )
 
         tl = new_timeline("empty_marker")
         path = str(tmp_path / "tl.otio")
@@ -407,8 +413,12 @@ class TestApplyOperationsSuccess:
         save_timeline(tl, path)
 
         ops = [
-            AddGapOp(op="add_gap", track=0, duration=RationalTimeModel(value=10.0, rate=30.0)),
-            AddGapOp(op="add_gap", track=1, duration=RationalTimeModel(value=10.0, rate=30.0)),
+            AddGapOp(
+                op="add_gap", track=0, duration=RationalTimeModel(value=10.0, rate=30.0)
+            ),
+            AddGapOp(
+                op="add_gap", track=1, duration=RationalTimeModel(value=10.0, rate=30.0)
+            ),
         ]
         report = apply_operations(tl, ops, validate_only=False)
         assert report.operation_count == 2
@@ -527,7 +537,11 @@ class TestApplyOperationsAllOrNothing:
 
     def test_partial_invalid_applies_nothing(self, tmp_path: Path) -> None:
         """1 op でも不正なら timeline にクリップが追加されない。"""
-        from clipwright.otio_utils import load_timeline, new_timeline, save_timeline, summarize_timeline
+        from clipwright.otio_utils import (
+            new_timeline,
+            save_timeline,
+            summarize_timeline,
+        )
         from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
 
         tl = new_timeline("all_or_nothing")
@@ -560,7 +574,11 @@ class TestApplyOperationsAllOrNothing:
 
     def test_all_valid_applies_all(self, tmp_path: Path) -> None:
         """全 op が有効なら全て適用される。"""
-        from clipwright.otio_utils import new_timeline, save_timeline, summarize_timeline
+        from clipwright.otio_utils import (
+            new_timeline,
+            save_timeline,
+            summarize_timeline,
+        )
         from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
 
         tl = new_timeline("all_valid")
@@ -608,7 +626,11 @@ class TestApplyOperationsValidateOnly:
         path = str(tmp_path / "tl.otio")
         save_timeline(tl, path)
 
-        ops = [AddGapOp(op="add_gap", track=0, duration=RationalTimeModel(value=30.0, rate=30.0))]
+        ops = [
+            AddGapOp(
+                op="add_gap", track=0, duration=RationalTimeModel(value=30.0, rate=30.0)
+            )
+        ]
         report = apply_operations(tl, ops, validate_only=True)
         assert report.valid is True
 
@@ -621,20 +643,32 @@ class TestApplyOperationsValidateOnly:
         path = str(tmp_path / "tl.otio")
         save_timeline(tl, path)
 
-        ops = [AddGapOp(op="add_gap", track=0, duration=RationalTimeModel(value=30.0, rate=30.0))]
+        ops = [
+            AddGapOp(
+                op="add_gap", track=0, duration=RationalTimeModel(value=30.0, rate=30.0)
+            )
+        ]
         report = apply_operations(tl, ops, validate_only=True)
         assert report.applied_count == 0
 
     def test_validate_only_does_not_modify_timeline(self, tmp_path: Path) -> None:
         """validate_only=True なら timeline に変更が加わらない。"""
-        from clipwright.otio_utils import new_timeline, save_timeline, summarize_timeline
+        from clipwright.otio_utils import (
+            new_timeline,
+            save_timeline,
+            summarize_timeline,
+        )
         from clipwright.schemas import RationalTimeModel
 
         tl = new_timeline("no_modify")
         path = str(tmp_path / "tl.otio")
         save_timeline(tl, path)
 
-        ops = [AddGapOp(op="add_gap", track=0, duration=RationalTimeModel(value=30.0, rate=30.0))]
+        ops = [
+            AddGapOp(
+                op="add_gap", track=0, duration=RationalTimeModel(value=30.0, rate=30.0)
+            )
+        ]
         apply_operations(tl, ops, validate_only=True)
         summary = summarize_timeline(tl)
         assert summary["gap_count"] == 0  # timeline は変更なし
@@ -669,8 +703,12 @@ class TestApplyOperationsValidateOnly:
         save_timeline(tl, path)
 
         ops = [
-            AddGapOp(op="add_gap", track=0, duration=RationalTimeModel(value=10.0, rate=30.0)),
-            AddGapOp(op="add_gap", track=1, duration=RationalTimeModel(value=10.0, rate=30.0)),
+            AddGapOp(
+                op="add_gap", track=0, duration=RationalTimeModel(value=10.0, rate=30.0)
+            ),
+            AddGapOp(
+                op="add_gap", track=1, duration=RationalTimeModel(value=10.0, rate=30.0)
+            ),
         ]
         report = apply_operations(tl, ops, validate_only=True)
         assert report.operation_count == 2
@@ -765,10 +803,12 @@ class TestApplyOperationsTrackIndex:
 
 
 class TestApplyOperationsMarkerOnTrack:
-    """AddMarkerOp が track（item=Track）に marker を付与する契約（§13.5 DC-GP-001 再）。"""
+    """AddMarkerOp が track（item=Track）に marker を付与する契約
+    （§13.5 DC-GP-001 再）。"""
 
     def test_marker_added_to_track_not_clip(self, tmp_path: Path) -> None:
-        """AddMarkerOp の marker は track.markers に追加される（clip.markers ではない）。"""
+        """AddMarkerOp の marker は track.markers に追加される
+        （clip.markers ではない）。"""
         from clipwright.otio_utils import new_timeline, save_timeline
         from clipwright.schemas import RationalTimeModel, TimeRangeModel
 
@@ -794,7 +834,8 @@ class TestApplyOperationsMarkerOnTrack:
         assert video_track.markers[0].name == "track_marker"
 
     def test_marker_on_empty_track_valid(self, tmp_path: Path) -> None:
-        """空トラックへの AddMarkerOp は valid=True・applied_count=1（§13.5 DC-GP-001 再）。"""
+        """空トラックへの AddMarkerOp は valid=True・applied_count=1
+        （§13.5 DC-GP-001 再）。"""
         from clipwright.otio_utils import new_timeline, save_timeline
         from clipwright.schemas import RationalTimeModel, TimeRangeModel
 

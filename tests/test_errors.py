@@ -14,7 +14,6 @@ import pytest
 # --- Import（errors.py 未実装のため ImportError が発生する → Red） ---
 from clipwright.errors import ClipwrightError, ErrorCode
 
-
 # ===========================================================================
 # ErrorCode — 必須メンバー存在確認
 # ===========================================================================
@@ -140,7 +139,7 @@ class TestClipwrightError:
 
     def test_also_catchable_as_exception(self) -> None:
         """Exception としても捕捉できる。"""
-        with pytest.raises(Exception):
+        with pytest.raises(ClipwrightError):
             raise ClipwrightError(
                 code=ErrorCode.INTERNAL,
                 message="予期しないエラー",
@@ -182,7 +181,10 @@ class TestClipwrightError:
         err = ClipwrightError(
             code=ErrorCode.DEPENDENCY_MISSING,
             message="ffprobe が見つかりません",
-            hint="winget install Gyan.FFmpeg で導入し、シェルを再起動するか CLIPWRIGHT_FFPROBE に実行ファイルのフルパスを設定してください",
+            hint=(
+                "winget install Gyan.FFmpeg で導入し、シェルを再起動するか"
+                " CLIPWRIGHT_FFPROBE に実行ファイルのフルパスを設定してください"
+            ),
         )
         # hint が空でないこと（アクション可能であることが必須・§4 規約）
         assert len(err.hint) > 0

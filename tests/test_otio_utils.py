@@ -34,7 +34,6 @@ from clipwright.otio_utils import (
     summarize_timeline,
 )
 
-
 # ===========================================================================
 # new_timeline（§13.5 DC-AS-001 フラット index / トラック順）
 # ===========================================================================
@@ -156,7 +155,6 @@ class TestAddClip:
 
     def test_adds_clip_to_track(self) -> None:
         """add_clip でトラックにクリップが1件追加される。"""
-        import opentimelineio as otio
 
         from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
 
@@ -188,7 +186,6 @@ class TestAddClip:
 
     def test_clip_name_optional(self) -> None:
         """name 引数でクリップ名を指定できる。"""
-        import opentimelineio as otio
 
         from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
 
@@ -250,7 +247,6 @@ class TestAddGap:
 
     def test_adds_gap_to_track(self) -> None:
         """add_gap でトラックにギャップが1件追加される。"""
-        import opentimelineio as otio
 
         from clipwright.schemas import RationalTimeModel
 
@@ -415,7 +411,6 @@ class TestClipwrightMetadata:
 
     def test_can_set_metadata_on_clip(self) -> None:
         """Clip オブジェクトにも set/get できる。"""
-        import opentimelineio as otio
 
         from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
 
@@ -474,7 +469,8 @@ class TestSummarizeTimeline:
         assert dur.value == 0.0
 
     def test_empty_timeline_duration_rate_is_video_rate(self) -> None:
-        """V1 トラックがある場合、total_duration の rate は V1 の rate（§13.5 DC-AM-002 再）。
+        """V1 トラックがある場合、total_duration の rate は V1 の rate
+        （§13.5 DC-AM-002 再）。
 
         空 timeline に V1 が存在するが内容がない場合も video rate を採用する。
         ただし空クリップの場合は V1 の rate を決定できないため 1000.0 もあり得る。
@@ -490,7 +486,9 @@ class TestSummarizeTimeline:
         """summarize_timeline の返り値は必須キーを全て含む。"""
         tl = new_timeline("keys_check")
         summary = summarize_timeline(tl)
-        for key in ("clip_count", "gap_count", "marker_count", "total_duration", "markers"):
+        for key in (
+            "clip_count", "gap_count", "marker_count", "total_duration", "markers"
+        ):
             assert key in summary, f"必須キー {key!r} が返り値に含まれない"
 
     def test_clip_count_increments(self) -> None:
@@ -597,7 +595,8 @@ class TestSummarizeTimeline:
         assert dur.value == pytest.approx(90.0, rel=1e-6)
 
     def test_total_duration_rate_from_video_track(self) -> None:
-        """V1 にクリップがある場合、total_duration の rate は V1 の rate（§13.5 DC-AM-002 再）。"""
+        """V1 にクリップがある場合、total_duration の rate は V1 の rate
+        （§13.5 DC-AM-002 再）。"""
         from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
 
         tl = new_timeline("rate_from_v1")
@@ -616,7 +615,8 @@ class TestSummarizeTimeline:
         assert dur.rate == pytest.approx(24.0, rel=1e-6)
 
     def test_total_duration_rate_1000_when_no_video(self) -> None:
-        """V1 が空（クリップなし）で A1 だけに gap がある場合 rate=1000.0（§13.5 DC-AM-002 再）。"""
+        """V1 が空（クリップなし）で A1 だけに gap がある場合
+        rate=1000.0（§13.5 DC-AM-002 再）。"""
         from clipwright.schemas import RationalTimeModel
 
         tl = new_timeline("audio_only")
@@ -646,3 +646,53 @@ class TestSummarizeTimeline:
         loaded = load_timeline(path)
         summary = summarize_timeline(loaded)
         assert summary["clip_count"] == 1
+
+    def test_marker_count_no_double_counting(self) -> None:
+        """track マーカーと clip マーカーが二重カウントされないことを検証する（H-3）。
+
+        track に N 個・clip に M 個マーカーを付与したとき marker_count == N+M。
+        """
+        import opentimelineio as otio
+
+        from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
+
+        tl = new_timeline("no_double_count")
+        track = tl.tracks[0]
+
+        # clip を1件追加
+        media = MediaRef(target_url="/v.mp4")
+        clip = add_clip(
+            track,
+            media,
+            TimeRangeModel(
+                start_time=RationalTimeModel(value=0.0, rate=30.0),
+                duration=RationalTimeModel(value=30.0, rate=30.0),
+            ),
+        )
+
+        # track に 3 個のマーカーを追加
+        n = 3
+        for i in range(n):
+            mr = TimeRangeModel(
+                start_time=RationalTimeModel(value=float(i), rate=30.0),
+                duration=RationalTimeModel(value=1.0, rate=30.0),
+            )
+            add_marker(track, mr, f"track_marker_{i}")
+
+        # clip に 2 個のマーカーを追加
+        m = 2
+        for i in range(m):
+            mr_clip = otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(float(i), 30.0),
+                duration=otio.opentime.RationalTime(1.0, 30.0),
+            )
+            clip_marker = otio.schema.Marker(
+                name=f"clip_marker_{i}", marked_range=mr_clip
+            )
+            clip.markers.append(clip_marker)
+
+        summary = summarize_timeline(tl)
+        assert summary["marker_count"] == n + m, (
+            f"track {n} 個 + clip {m} 個 = {n + m} 件（重複なし）であること"
+            f"（実際: {summary['marker_count']}）"
+        )

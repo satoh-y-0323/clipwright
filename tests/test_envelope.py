@@ -14,7 +14,6 @@ import pytest
 # --- Import（envelope.py 未実装のため ImportError が発生する → Red） ---
 from clipwright.envelope import error_result, ok_result
 
-
 # ===========================================================================
 # ok_result
 # ===========================================================================
@@ -90,11 +89,15 @@ class TestOkResult:
 
 
 class TestErrorResult:
-    """error_result が { ok: False, error: { code, message, hint } } 形 dict を返すことを確認する。"""
+    """error_result が { ok: False, error: { code, message, hint } } 形 dict を
+    返すことを確認する。
+    """
 
     def test_returns_ok_false(self) -> None:
         """ok キーが False。"""
-        result = error_result("FILE_NOT_FOUND", "ファイルが見つかりません", "パスを確認してください")
+        result = error_result(
+            "FILE_NOT_FOUND", "ファイルが見つかりません", "パスを確認してください"
+        )
         assert result["ok"] is False
 
     def test_error_key_exists(self) -> None:
@@ -104,28 +107,42 @@ class TestErrorResult:
 
     def test_error_has_code(self) -> None:
         """error.code に渡した文字列が格納される。"""
-        result = error_result("PROBE_FAILED", "ffprobe 出力のパースに失敗", "ffprobe を確認")
+        result = error_result(
+            "PROBE_FAILED", "ffprobe 出力のパースに失敗", "ffprobe を確認"
+        )
         assert result["error"]["code"] == "PROBE_FAILED"
 
     def test_error_has_message(self) -> None:
         """error.message に渡した文字列が格納される。"""
-        result = error_result("OTIO_ERROR", "OTIO ファイルのパースに失敗しました", "ヒント")
+        result = error_result(
+            "OTIO_ERROR", "OTIO ファイルのパースに失敗しました", "ヒント"
+        )
         assert result["error"]["message"] == "OTIO ファイルのパースに失敗しました"
 
     def test_error_has_hint(self) -> None:
         """error.hint に渡した文字列が格納される。"""
-        result = error_result("DEPENDENCY_MISSING", "ffprobe が見つかりません", "winget install Gyan.FFmpeg")
+        result = error_result(
+            "DEPENDENCY_MISSING",
+            "ffprobe が見つかりません",
+            "winget install Gyan.FFmpeg",
+        )
         assert result["error"]["hint"] == "winget install Gyan.FFmpeg"
 
     def test_error_structure_keys(self) -> None:
         """error オブジェクトに code / message / hint キーが全て含まれる。"""
-        result = error_result("INTERNAL", "予期しないエラー", "再現条件を添えて報告してください")
+        result = error_result(
+            "INTERNAL", "予期しないエラー", "再現条件を添えて報告してください"
+        )
         for key in ("code", "message", "hint"):
-            assert key in result["error"], f"error オブジェクトにキー '{key}' がありません"
+            assert key in result["error"], (
+                f"error オブジェクトにキー '{key}' がありません"
+            )
 
     def test_top_level_keys(self) -> None:
         """トップレベルに ok / error キーが存在する。"""
-        result = error_result("SUBPROCESS_FAILED", "プロセスが終了コード 1 で失敗", "コマンドを確認")
+        result = error_result(
+            "SUBPROCESS_FAILED", "プロセスが終了コード 1 で失敗", "コマンドを確認"
+        )
         for key in ("ok", "error"):
             assert key in result, f"トップレベルにキー '{key}' がありません"
 
@@ -169,5 +186,9 @@ class TestErrorResult:
 
     def test_hint_is_actionable_pattern(self) -> None:
         """hint が空でないこと（アクション可能 hint は必須・§6 規約）。"""
-        result = error_result("SUBPROCESS_TIMEOUT", "タイムアウトしました", "タイムアウト値を増やしてください")
+        result = error_result(
+            "SUBPROCESS_TIMEOUT",
+            "タイムアウトしました",
+            "タイムアウト値を増やしてください",
+        )
         assert len(result["error"]["hint"]) > 0
