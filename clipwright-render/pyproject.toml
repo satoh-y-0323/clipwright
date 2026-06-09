@@ -1,7 +1,7 @@
 [project]
-name = "clipwright"
+name = "clipwright-render"
 version = "0.1.0"
-description = "FFmpeg/OTIO をラップする MCP サーバー群。映像編集ワークフローを AI エージェントから操作できるプリミティブを提供する。"
+description = "OTIO タイムラインを FFmpeg で実体化する MCP ツール。区間抽出・連結・トリムを一回の再エンコードで完結させる。"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
@@ -9,10 +9,14 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
+    "clipwright",
     "mcp[cli]>=1.27.2",
     "opentimelineio>=0.18",
     "pydantic>=2",
 ]
+
+[project.scripts]
+clipwright-render = "clipwright_render.server:main"
 
 [build-system]
 requires = ["uv_build>=0.11.19,<0.12.0"]
@@ -26,6 +30,10 @@ dev = [
     "pytest-mock>=3.15.1",
     "ruff>=0.15.16",
 ]
+
+# workspace 内の clipwright (core) をパス参照で解決する
+[tool.uv.sources]
+clipwright = { workspace = true }
 
 # --- Ruff ---
 [tool.ruff]
@@ -64,13 +72,9 @@ markers = [
 
 # --- coverage ---
 [tool.coverage.run]
-source = ["clipwright"]
+source = ["clipwright_render"]
 omit = ["tests/*"]
 
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
-
-# --- uv workspace ---
-[tool.uv.workspace]
-members = ["clipwright-render"]
