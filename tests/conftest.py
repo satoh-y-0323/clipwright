@@ -1,11 +1,10 @@
 """共有 pytest フィクスチャ。
 
 ffmpeg/ffprobe の探索順序:
-  1. PATH (shutil.which) — フェーズ D 直前に Claude Code を再起動して PATH に載せる運用
-  2. 環境変数 CLIPWRIGHT_FFPROBE / CLIPWRIGHT_FFMPEG — PATH 未反映時のフォールバック
-  3. フォールバック絶対パス (Windows WinGet インストール先) — 環境変数も未設定の場合
+  1. PATH (shutil.which)
+  2. 環境変数 CLIPWRIGHT_FFPROBE / CLIPWRIGHT_FFMPEG
 
-ffmpeg がマシン上で一切到達不可の場合のみ統合テストを skip する。[DC-AM-006]
+いずれも見つからない場合のみ統合テストを skip する。[DC-AM-006]
 CLIPWRIGHT_FFMPEG はテスト専用。ランタイム (media.py) は ffprobe のみ使用。[DC-AM-008]
 """
 
@@ -18,39 +17,28 @@ from pathlib import Path
 
 import pytest
 
-# Windows WinGet インストール先のフォールバックパス（ユーザー合意 2026-06-09）
-_WINGET_FFMPEG_DIR = (
-    "C:/Users/shoma/AppData/Local/Microsoft/WinGet/Packages/"
-    "Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe/"
-    "ffmpeg-8.1.1-full_build/bin"
-)
-_FALLBACK_FFMPEG = os.path.join(_WINGET_FFMPEG_DIR, "ffmpeg.exe")
-_FALLBACK_FFPROBE = os.path.join(_WINGET_FFMPEG_DIR, "ffprobe.exe")
 
-
-def _find_binary(name: str, env_var: str, fallback: str) -> str | None:
-    """バイナリを PATH → env_var → fallback の順で探す。"""
+def _find_binary(name: str, env_var: str) -> str | None:
+    """バイナリを PATH → env_var の順で探す。どちらも見つからなければ None。"""
     found = shutil.which(name)
     if found:
         return found
     env_val = os.environ.get(env_var)
     if env_val and Path(env_val).is_file():
         return env_val
-    if Path(fallback).is_file():
-        return fallback
     return None
 
 
 @pytest.fixture(scope="session")
 def ffprobe_path() -> str | None:
     """ffprobe 実行ファイルのパス。見つからなければ None。"""
-    return _find_binary("ffprobe", "CLIPWRIGHT_FFPROBE", _FALLBACK_FFPROBE)
+    return _find_binary("ffprobe", "CLIPWRIGHT_FFPROBE")
 
 
 @pytest.fixture(scope="session")
 def ffmpeg_path() -> str | None:
     """ffmpeg 実行ファイルのパス（テスト素材生成専用）。見つからなければ None。"""
-    return _find_binary("ffmpeg", "CLIPWRIGHT_FFMPEG", _FALLBACK_FFMPEG)
+    return _find_binary("ffmpeg", "CLIPWRIGHT_FFMPEG")
 
 
 @pytest.fixture
@@ -81,12 +69,18 @@ def sample_media(
     cmd = [
         ffmpeg_path,
         "-y",
-        "-f", "lavfi",
-        "-i", "testsrc=duration=3:size=320x240:rate=30",
-        "-f", "lavfi",
-        "-i", "sine=frequency=440:duration=3",
-        "-c:v", "libx264",
-        "-c:a", "aac",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=duration=3:size=320x240:rate=30",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:duration=3",
+        "-c:v",
+        "libx264",
+        "-c:a",
+        "aac",
         "-shortest",
         out_path,
     ]
@@ -99,8 +93,6 @@ def sample_media(
     )
     if result.returncode != 0:
         pytest.fail(
-            f"テスト素材の生成に失敗しました。\n"
-            f"cmd: {cmd}\n"
-            f"stderr: {result.stderr}"
+            f"テスト素材の生成に失敗しました。\ncmd: {cmd}\nstderr: {result.stderr}"
         )
     return out_path

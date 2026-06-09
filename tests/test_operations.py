@@ -216,7 +216,6 @@ class TestOperationUnion:
         """op='add_clip' を持つ dict は AddClipOp として parse される。"""
         from pydantic import TypeAdapter
 
-
         adapter: TypeAdapter[Operation] = TypeAdapter(Operation)
         data = {
             "op": "add_clip",
@@ -854,6 +853,209 @@ class TestApplyOperationsMarkerOnTrack:
                     duration=RationalTimeModel(value=1.0, rate=30.0),
                 ),
                 name="empty_ok",
+            )
+        ]
+        report = apply_operations(tl, ops, validate_only=False)
+        assert report.valid is True
+        assert report.applied_count == 1
+
+
+# ===========================================================================
+# M-5 / F-09 回帰テスト:
+# AddClipOp.metadata / AddMarkerOp.metadata に dict[str, Any] を受け付ける
+# （型変更: dict | None  →  dict[str, Any] | None）
+#
+# 【Red 化困難な理由】
+# この変更は型アノテーションのみの変更であり、Pydantic のランタイム挙動は
+# 変わらない。型変更前から dict 値は受理されているため、テストを先に書いても
+# 最初から Pass する（Red にならない）。
+# 【代替検証の観点】
+# 1. ランタイム回帰テスト（本クラス）: metadata に dict[str, Any] 相当の値を
+#    渡した際にモデル構築と値保持が正しく動作することを確保する。
+# 2. mypy 検証: developer が `type: ignore[type-arg]` を削除して
+#    `dict[str, Any] | None` に変更した後、`uv run mypy` でエラーが出ないことを
+#    別途確認する。変更前（dict のみ）は mypy strict で [type-arg] エラーが
+#    発生することを確認済み。
+# ===========================================================================
+
+
+class TestMetadataDictStrAny:
+    """M-5 / F-09: metadata が dict[str, Any] | None を受け付ける回帰テスト。"""
+
+    def test_add_clip_op_accepts_flat_dict(self) -> None:
+        """AddClipOp の metadata にフラットな dict を渡すとモデルが構築される。"""
+        from typing import Any
+
+        from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
+
+        meta: dict[str, Any] = {"tool": "clipwright", "version": "1.0", "count": 3}
+        op = AddClipOp(
+            op="add_clip",
+            media=MediaRef(target_url="/v.mp4"),
+            source_range=TimeRangeModel(
+                start_time=RationalTimeModel(value=0.0, rate=30.0),
+                duration=RationalTimeModel(value=90.0, rate=30.0),
+            ),
+            metadata=meta,
+        )
+        assert op.metadata is not None
+        assert op.metadata["tool"] == "clipwright"
+        assert op.metadata["version"] == "1.0"
+        assert op.metadata["count"] == 3
+
+    def test_add_clip_op_accepts_nested_dict(self) -> None:
+        """AddClipOp の metadata にネストした dict を渡すとモデルが構築される。"""
+        from typing import Any
+
+        from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
+
+        meta: dict[str, Any] = {
+            "clipwright": {
+                "tool": "silence-detect",
+                "confidence": 0.95,
+                "flags": ["flag_a", "flag_b"],
+            }
+        }
+        op = AddClipOp(
+            op="add_clip",
+            media=MediaRef(target_url="/v.mp4"),
+            source_range=TimeRangeModel(
+                start_time=RationalTimeModel(value=0.0, rate=30.0),
+                duration=RationalTimeModel(value=30.0, rate=30.0),
+            ),
+            metadata=meta,
+        )
+        assert op.metadata is not None
+        assert op.metadata["clipwright"]["tool"] == "silence-detect"
+        assert op.metadata["clipwright"]["confidence"] == 0.95
+
+    def test_add_clip_op_metadata_none_by_default(self) -> None:
+        """AddClipOp の metadata のデフォルトは None（型変更後も維持）。"""
+        from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
+
+        op = AddClipOp(
+            op="add_clip",
+            media=MediaRef(target_url="/v.mp4"),
+            source_range=TimeRangeModel(
+                start_time=RationalTimeModel(value=0.0, rate=30.0),
+                duration=RationalTimeModel(value=30.0, rate=30.0),
+            ),
+        )
+        assert op.metadata is None
+
+    def test_add_marker_op_accepts_flat_dict(self) -> None:
+        """AddMarkerOp の metadata にフラットな dict を渡すとモデルが構築される。"""
+        from typing import Any
+
+        from clipwright.schemas import RationalTimeModel, TimeRangeModel
+
+        meta: dict[str, Any] = {"kind": "chapter", "index": 1, "enabled": True}
+        op = AddMarkerOp(
+            op="add_marker",
+            marked_range=TimeRangeModel(
+                start_time=RationalTimeModel(value=0.0, rate=30.0),
+                duration=RationalTimeModel(value=1.0, rate=30.0),
+            ),
+            name="chapter1",
+            metadata=meta,
+        )
+        assert op.metadata is not None
+        assert op.metadata["kind"] == "chapter"
+        assert op.metadata["index"] == 1
+        assert op.metadata["enabled"] is True
+
+    def test_add_marker_op_accepts_nested_dict(self) -> None:
+        """AddMarkerOp の metadata にネストした dict を渡すとモデルが構築される。"""
+        from typing import Any
+
+        from clipwright.schemas import RationalTimeModel, TimeRangeModel
+
+        meta: dict[str, Any] = {
+            "clipwright": {
+                "tool": "scene-detect",
+                "version": "2.0",
+            }
+        }
+        op = AddMarkerOp(
+            op="add_marker",
+            marked_range=TimeRangeModel(
+                start_time=RationalTimeModel(value=0.0, rate=30.0),
+                duration=RationalTimeModel(value=1.0, rate=30.0),
+            ),
+            name="scene_start",
+            metadata=meta,
+        )
+        assert op.metadata is not None
+        assert op.metadata["clipwright"]["tool"] == "scene-detect"
+
+    def test_add_marker_op_metadata_none_by_default(self) -> None:
+        """AddMarkerOp の metadata のデフォルトは None（型変更後も維持）。"""
+        from clipwright.schemas import RationalTimeModel, TimeRangeModel
+
+        op = AddMarkerOp(
+            op="add_marker",
+            marked_range=TimeRangeModel(
+                start_time=RationalTimeModel(value=0.0, rate=30.0),
+                duration=RationalTimeModel(value=1.0, rate=30.0),
+            ),
+            name="cue",
+        )
+        assert op.metadata is None
+
+    def test_add_clip_op_metadata_passed_to_apply_operations(
+        self, tmp_path: Path
+    ) -> None:
+        """AddClipOp に dict metadata を渡して apply_operations を呼ぶと成功する。"""
+        from typing import Any
+
+        from clipwright.otio_utils import new_timeline, save_timeline
+        from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
+
+        tl = new_timeline("meta_apply_clip")
+        path = str(tmp_path / "tl.otio")
+        save_timeline(tl, path)
+
+        meta: dict[str, Any] = {"tool": "clipwright", "version": "1.0"}
+        ops = [
+            AddClipOp(
+                op="add_clip",
+                track=0,
+                media=MediaRef(target_url="/v.mp4"),
+                source_range=TimeRangeModel(
+                    start_time=RationalTimeModel(value=0.0, rate=30.0),
+                    duration=RationalTimeModel(value=30.0, rate=30.0),
+                ),
+                metadata=meta,
+            )
+        ]
+        report = apply_operations(tl, ops, validate_only=False)
+        assert report.valid is True
+        assert report.applied_count == 1
+
+    def test_add_marker_op_metadata_passed_to_apply_operations(
+        self, tmp_path: Path
+    ) -> None:
+        """AddMarkerOp に dict metadata を渡して apply_operations を呼ぶと成功する。"""
+        from typing import Any
+
+        from clipwright.otio_utils import new_timeline, save_timeline
+        from clipwright.schemas import RationalTimeModel, TimeRangeModel
+
+        tl = new_timeline("meta_apply_marker")
+        path = str(tmp_path / "tl.otio")
+        save_timeline(tl, path)
+
+        meta: dict[str, Any] = {"kind": "chapter", "index": 0}
+        ops = [
+            AddMarkerOp(
+                op="add_marker",
+                track=0,
+                marked_range=TimeRangeModel(
+                    start_time=RationalTimeModel(value=0.0, rate=30.0),
+                    duration=RationalTimeModel(value=1.0, rate=30.0),
+                ),
+                name="start",
+                metadata=meta,
             )
         ]
         report = apply_operations(tl, ops, validate_only=False)

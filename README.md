@@ -52,6 +52,20 @@ uv run ruff format src tests
 uv run mypy src
 ```
 
+### 統合テストの前提条件
+
+統合テスト（ffprobe/ffmpeg を実際に呼び出すテスト）を実行するには、ffmpeg / ffprobe が PATH 上に存在するか、または以下の環境変数を設定すること。
+
+```bash
+# ffprobe のパスを指定（ランタイムおよび統合テストで使用）
+export CLIPWRIGHT_FFPROBE="/path/to/ffprobe"
+
+# ffmpeg のパスを指定（テスト素材生成に使用）
+export CLIPWRIGHT_FFMPEG="/path/to/ffmpeg"
+```
+
+PATH に ffmpeg / ffprobe が登録済みであれば環境変数の設定は不要。いずれも見つからない場合、対象の統合テストは自動的にスキップされる。
+
 ---
 
 ## 開発メモ: MCP パッケージ

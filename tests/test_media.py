@@ -17,6 +17,12 @@ rate 決定規則（§13.3 DC-AS-006）:
 - ffmpeg/ffprobe がマシンに到達可能な場合は skip せず必須実行（§13.4 DC-AM-006）
 - 生成 mp4 を inspect し duration / streams を検証
 
+セキュリティ・品質テスト（Red フェーズ追加）:
+- F-04: _validate_existing_file がシンボリックリンクを拒否すること（SR-V-002）
+  Windows では symlink 作成に要権限のため、失敗時は pytest.skip でガード
+- L-2: _to_optional_int ヘルパーの変換ロジックを固定するユニットテスト（CR-Q-002）
+  None / int / 数値文字列 / 不正値の各入力パターンを parametrize で検証
+
 [RED] media.py は未実装のため ImportError で失敗する。
 """
 
@@ -413,9 +419,7 @@ class TestInspectMediaFileNotFound:
         ファイル存在確認は ffprobe 探索より先に行うことで、
         ユーザーへの feedback を早める。
         """
-        mocker.patch(
-            "clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe"
-        )
+        mocker.patch("clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe")
 
         with pytest.raises(ClipwrightError) as exc_info:
             inspect_media("/nonexistent/video.mp4")
@@ -757,3 +761,212 @@ class TestInspectMediaIntegration:
         result = inspect_media(sample_media)
 
         assert result.path == sample_media
+
+
+# ===========================================================================
+# F-04: _validate_existing_file のシンボリックリンク挙動を固定する（SR-V-002）
+# ===========================================================================
+
+
+class TestValidateExistingFileSymlink:
+    """F-04: _validate_existing_file がシンボリックリンクを明示判定すること。
+
+    セキュリティ finding F-04 (SR-V-002) の修正を固定するテスト。
+    `Path.is_symlink()` でシンボリックリンクを拒否するか、
+    `path.resolve() != path` で解決後パス不一致を検出することを期待する。
+
+    Windows での symlink 作成には管理者権限または Developer Mode が必要。
+    作成失敗時は pytest.skip でガードし、CI/他環境では実行される。
+
+    [RED] _validate_existing_file は現在 is_symlink() チェックを持たないため失敗する。
+    """
+
+    def test_symlink_to_regular_file_is_rejected(self, tmp_path) -> None:
+        """通常ファイルへのシンボリックリンクを渡した場合に ClipwrightError が
+        発生すること（F-04 修正後に拒否すること）。
+
+        Arrange: 通常ファイル real.mp4 を作成し、symlink.mp4 → real.mp4 のリンクを作る
+        Act: _validate_existing_file(str(symlink_path)) を呼ぶ
+        Assert: ClipwrightError が送出されること（FILE_NOT_FOUND または専用コード）
+        """
+        from clipwright.media import _validate_existing_file
+
+        real_file = tmp_path / "real.mp4"
+        real_file.write_bytes(b"dummy media content")
+        symlink_path = tmp_path / "symlink.mp4"
+
+        # Windows では symlink 作成に権限が要るため失敗を skip でガード
+        try:
+            symlink_path.symlink_to(real_file)
+        except (OSError, NotImplementedError) as exc:
+            pytest.skip(
+                f"symlink の作成に失敗しました（権限不足または未対応環境）: {exc}"
+            )
+
+        # Arrange: symlink は作成できた
+        assert symlink_path.is_symlink(), "symlink が正しく作成されていること"
+        assert symlink_path.is_file(), (
+            "symlink が is_file() で True を返すこと（追跡あり）"
+        )
+
+        # Act & Assert: _validate_existing_file は symlink を拒否すること
+        with pytest.raises(ClipwrightError):
+            _validate_existing_file(str(symlink_path))
+
+    def test_symlink_rejection_uses_appropriate_error_code(self, tmp_path) -> None:
+        """シンボリックリンク拒否時のエラーコードが ClipwrightError の
+        適切なコードであること（FILE_NOT_FOUND または専用コード）。
+
+        Arrange: symlink.mp4 → real.mp4 を作成
+        Act: _validate_existing_file を呼ぶ
+        Assert: ClipwrightError.code が ErrorCode の値であること
+        """
+        from clipwright.media import _validate_existing_file
+
+        real_file = tmp_path / "real.mp4"
+        real_file.write_bytes(b"dummy")
+        symlink_path = tmp_path / "symlink_code_check.mp4"
+
+        try:
+            symlink_path.symlink_to(real_file)
+        except (OSError, NotImplementedError) as exc:
+            pytest.skip(f"symlink 作成失敗: {exc}")
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            _validate_existing_file(str(symlink_path))
+
+        # エラーコードが ErrorCode の有効な値であること
+        assert exc_info.value.code in list(ErrorCode)
+
+    def test_regular_file_still_passes_validation(self, tmp_path) -> None:
+        """通常ファイル（symlink でない）は引き続き検証を通過すること。
+
+        F-04 修正後も既存の正常系を壊さないことを確認するリグレッションテスト。
+
+        Arrange: 通常ファイル video.mp4 を作成
+        Act: _validate_existing_file を呼ぶ
+        Assert: 例外が送出されないこと
+        """
+        from clipwright.media import _validate_existing_file
+
+        regular_file = tmp_path / "video.mp4"
+        regular_file.write_bytes(b"dummy media content")
+
+        # 正常ファイルは例外なしで通過すること
+        _validate_existing_file(str(regular_file))  # 例外が出ないこと
+
+
+# ===========================================================================
+# L-2: _to_optional_int ヘルパーの変換ロジックを固定する（CR-Q-002）
+# ===========================================================================
+
+
+class TestToOptionalInt:
+    """L-2: _to_optional_int(val: object) -> int | None のユニットテスト。
+
+    コードレビュー finding L-2 (CR-Q-002) の修正を固定するテスト。
+    `int(str(x))` の二段変換を `_to_optional_int` ヘルパーに抽出した後の
+    変換契約を parametrize で固定する。
+
+    対象ヘルパー: `clipwright.media._to_optional_int`
+
+    [RED] _to_optional_int は media.py に未定義のため ImportError で失敗する。
+    """
+
+    @pytest.mark.parametrize(
+        "val, expected",
+        [
+            # None 入力 → None を返す
+            (None, None),
+            # int 入力 → そのまま int を返す
+            (0, 0),
+            (320, 320),
+            (-1, -1),
+            # 数値文字列 → int に変換する
+            ("44100", 44100),
+            ("0", 0),
+            ("1920", 1920),
+            # int に変換できない不正値 → None を返す
+            ("not_a_number", None),
+            ("", None),
+            ("1.5", None),  # float 文字列は int 変換できないので None
+            ({}, None),
+            ([], None),
+            (object(), None),
+        ],
+        ids=[
+            "none_input",
+            "int_zero",
+            "int_positive",
+            "int_negative",
+            "str_44100",
+            "str_zero",
+            "str_1920",
+            "str_invalid",
+            "str_empty",
+            "str_float",
+            "dict_input",
+            "list_input",
+            "object_input",
+        ],
+    )
+    def test_to_optional_int_conversion(
+        self, val: object, expected: int | None
+    ) -> None:
+        """_to_optional_int が各入力値に対して期待通りの値を返すこと。
+
+        Arrange: val を入力値として用意する
+        Act: _to_optional_int(val) を呼ぶ
+        Assert: 戻り値が expected と一致すること
+        """
+        try:
+            from clipwright.media import _to_optional_int  # type: ignore[attr-defined]
+        except ImportError:
+            pytest.fail(
+                "_to_optional_int が clipwright.media に存在しません。"
+                "L-2 修正（_to_optional_int ヘルパーの追加）が必要です。"
+            )
+
+        # Act
+        result = _to_optional_int(val)
+
+        # Assert
+        assert result == expected
+
+    def test_to_optional_int_returns_int_type_for_valid_input(self) -> None:
+        """_to_optional_int が有効な入力に対して int 型を返すこと（型保証）。
+
+        Arrange: 有効な数値文字列 "320"
+        Act: _to_optional_int("320") を呼ぶ
+        Assert: 戻り値が int 型であること
+        """
+        try:
+            from clipwright.media import _to_optional_int  # type: ignore[attr-defined]
+        except ImportError:
+            pytest.fail(
+                "_to_optional_int が clipwright.media に存在しません。"
+                "L-2 修正が必要です。"
+            )
+
+        result = _to_optional_int("320")
+
+        assert isinstance(result, int)
+
+    def test_to_optional_int_returns_none_type_for_invalid_input(self) -> None:
+        """_to_optional_int が不正な入力に対して None を返すこと（型保証）。
+
+        Arrange: 変換不可能な値 "abc"
+        Act: _to_optional_int("abc") を呼ぶ
+        Assert: 戻り値が None であること
+        """
+        try:
+            from clipwright.media import _to_optional_int  # type: ignore[attr-defined]
+        except ImportError:
+            pytest.fail(
+                "_to_optional_int が clipwright.media に存在しません。"
+                "L-2 修正が必要です。"
+            )
+
+        result = _to_optional_int("abc")
+
+        assert result is None

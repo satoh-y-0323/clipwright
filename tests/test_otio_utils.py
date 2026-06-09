@@ -487,7 +487,11 @@ class TestSummarizeTimeline:
         tl = new_timeline("keys_check")
         summary = summarize_timeline(tl)
         for key in (
-            "clip_count", "gap_count", "marker_count", "total_duration", "markers"
+            "clip_count",
+            "gap_count",
+            "marker_count",
+            "total_duration",
+            "markers",
         ):
             assert key in summary, f"必須キー {key!r} が返り値に含まれない"
 
@@ -695,4 +699,383 @@ class TestSummarizeTimeline:
         assert summary["marker_count"] == n + m, (
             f"track {n} 個 + clip {m} 個 = {n + m} 件（重複なし）であること"
             f"（実際: {summary['marker_count']}）"
+        )
+
+
+# ===========================================================================
+# M-4: summarize_timeline の warnings キー契約
+# ===========================================================================
+
+
+class TestSummarizeTimelineWarnings:
+    """M-4: summarize_timeline の戻り値に warnings キー（list[str]）が追加されること。
+
+    - 正常系: warnings == []
+    - _track_duration_sec が OTIO 例外で失敗した場合: warnings に1件以上記録される
+    """
+
+    def test_warnings_key_present_in_normal_case(self) -> None:
+        """summarize_timeline の返り値に warnings キーが含まれる（M-4）。"""
+        tl = new_timeline("warn_normal")
+        summary = summarize_timeline(tl)
+        assert "warnings" in summary, (
+            "summarize_timeline の返り値に 'warnings' キーが必要（M-4）"
+        )
+
+    def test_warnings_is_empty_list_in_normal_case(self) -> None:
+        """正常な timeline では warnings == []（M-4）。"""
+        tl = new_timeline("warn_empty")
+        summary = summarize_timeline(tl)
+        assert summary["warnings"] == [], (
+            "正常系では warnings は空リストであること（M-4）"
+        )
+
+    def test_warnings_is_list_type(self) -> None:
+        """warnings の型は list[str]（M-4）。"""
+        tl = new_timeline("warn_type")
+        summary = summarize_timeline(tl)
+        assert isinstance(summary["warnings"], list), (
+            "warnings は list 型でなければならない（M-4）"
+        )
+
+    def test_required_keys_include_warnings(self) -> None:
+        """summarize_timeline の返り値キー集合が既存キー + 'warnings' を含む（M-4）。"""
+        tl = new_timeline("keys_with_warnings")
+        summary = summarize_timeline(tl)
+        expected_keys = {
+            "clip_count",
+            "gap_count",
+            "marker_count",
+            "total_duration",
+            "markers",
+            "warnings",
+        }
+        actual_keys = set(summary.keys())
+        missing = expected_keys - actual_keys
+        assert not missing, (
+            f"summarize_timeline の返り値にキーが不足している: {missing}（M-4）"
+        )
+
+    def test_warnings_recorded_when_track_duration_raises_otio_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_track_duration_sec が OTIO 例外時に warnings へ記録される（M-4）。
+
+        monkeypatch で track.duration() が OTIOError を送出するよう誘発する。
+        _track_duration_sec は OTIO 例外のみを捕捉して 0.0 を返し、
+        summarize_timeline の warnings に1件以上のメッセージを記録する。
+        """
+        import opentimelineio as otio
+
+        tl = new_timeline("warn_otio_error")
+
+        # track.duration() が OTIOError を送出するよう monkeypatch
+        def _raise_otio_error(self: object) -> None:
+            raise otio.exceptions.OTIOError("duration 取得失敗（テスト用）")
+
+        monkeypatch.setattr(otio.schema.Track, "duration", _raise_otio_error)
+
+        summary = summarize_timeline(tl)
+
+        assert len(summary["warnings"]) >= 1, (
+            "OTIO 例外発生時に warnings に1件以上のメッセージが記録されること（M-4）"
+        )
+
+    def test_warnings_with_clip_normal_case(self) -> None:
+        """クリップ付き timeline の正常系でも warnings == []（M-4）。"""
+        from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
+
+        tl = new_timeline("warn_with_clips")
+        track = tl.tracks[0]
+        media = MediaRef(target_url="/v.mp4")
+        add_clip(
+            track,
+            media,
+            TimeRangeModel(
+                start_time=RationalTimeModel(value=0.0, rate=30.0),
+                duration=RationalTimeModel(value=30.0, rate=30.0),
+            ),
+        )
+        summary = summarize_timeline(tl)
+        assert summary["warnings"] == []
+
+
+# ===========================================================================
+# L-1 / F-07: load_timeline の assert → ClipwrightError 置換契約
+# ===========================================================================
+
+
+class TestLoadTimelineRaisesClipwrightErrorForNonTimeline:
+    """L-1 / F-07: load_timeline が Timeline でないオブジェクトを読んだとき
+    ClipwrightError(code=OTIO_ERROR) を送出すること。
+
+    assert isinstance(..., Timeline) はプロダクションに不適切（-O フラグで無効化）。
+    明示的な ClipwrightError に置き換える契約を固定する。
+    """
+
+    def test_raises_clipwright_error_when_not_timeline(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """otio.adapters.read_from_file が Timeline 以外を返したとき ClipwrightError
+        (code=OTIO_ERROR) が送出される（L-1 / F-07）。"""
+        import opentimelineio as otio
+
+        from clipwright.errors import ClipwrightError, ErrorCode
+
+        # read_from_file が Timeline ではなく Track を返すよう monkeypatch
+        monkeypatch.setattr(
+            otio.adapters,
+            "read_from_file",
+            lambda path: otio.schema.Track(name="not_a_timeline"),
+        )
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            load_timeline(str(tmp_path / "dummy.otio"))
+
+        assert exc_info.value.code == ErrorCode.OTIO_ERROR, (
+            "Timeline でない場合に code=OTIO_ERROR の ClipwrightError が送出されること"
+            f"（実際: {exc_info.value.code}）（L-1 / F-07）"
+        )
+
+    def test_assert_error_not_raised_when_not_timeline(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """AssertionError ではなく ClipwrightError が送出されること（L-1 / F-07）。
+
+        assert を ClipwrightError に置換後、AssertionError が出ないことを確認。
+        """
+        import opentimelineio as otio
+
+        from clipwright.errors import ClipwrightError
+
+        monkeypatch.setattr(
+            otio.adapters,
+            "read_from_file",
+            lambda path: otio.schema.Track(name="not_a_timeline"),
+        )
+
+        with pytest.raises(ClipwrightError):
+            load_timeline(str(tmp_path / "dummy.otio"))
+
+        # ClipwrightError が送出された = AssertionError ではない（暗黙確認）
+
+    def test_error_code_is_otio_error_for_none_result(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """read_from_file が None を返す場合も ClipwrightError(OTIO_ERROR) 送出
+        （L-1 / F-07）。"""
+        import opentimelineio as otio
+
+        from clipwright.errors import ClipwrightError, ErrorCode
+
+        monkeypatch.setattr(
+            otio.adapters,
+            "read_from_file",
+            lambda path: None,  # None も Timeline でない
+        )
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            load_timeline(str(tmp_path / "dummy.otio"))
+
+        assert exc_info.value.code == ErrorCode.OTIO_ERROR
+
+
+# ===========================================================================
+# L-3: load_timeline が OTIO パーサ例外を ClipwrightError に変換する責務
+# ===========================================================================
+
+
+class TestLoadTimelineConvertsOTIOException:
+    """L-3: load_timeline が生の OTIO 例外を捕捉して ClipwrightError(OTIO_ERROR)
+    に変換する責務を持つことを固定する。
+
+    server.py は ClipwrightError のみを捕捉すれば十分であり、
+    生の OTIO 例外が server 層まで届かないことが契約。
+    """
+
+    def test_otio_error_from_parser_is_converted_to_clipwright_error(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """otio.adapters.read_from_file が OTIOError を送出したとき
+        呼び出し元へ届くのが ClipwrightError であること（L-3）。"""
+        import opentimelineio as otio
+
+        from clipwright.errors import ClipwrightError, ErrorCode
+
+        def _raise_otio(path: str) -> None:
+            raise otio.exceptions.OTIOError("パーサエラー（テスト用）")
+
+        monkeypatch.setattr(otio.adapters, "read_from_file", _raise_otio)
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            load_timeline(str(tmp_path / "bad.otio"))
+
+        assert exc_info.value.code == ErrorCode.OTIO_ERROR, (
+            "OTIO 例外は ClipwrightError(code=OTIO_ERROR) に変換されること（L-3）"
+        )
+
+    def test_raw_otio_exception_does_not_propagate(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """生の OTIOError が呼び出し元に届かないこと（L-3）。
+
+        ClipwrightError が送出されることで OTIOError は届かない。
+        """
+        import opentimelineio as otio
+
+        from clipwright.errors import ClipwrightError
+
+        def _raise_otio(path: str) -> None:
+            raise otio.exceptions.OTIOError("生の OTIO 例外（テスト用）")
+
+        monkeypatch.setattr(otio.adapters, "read_from_file", _raise_otio)
+
+        # OTIOError が素通りしないことを確認
+        try:
+            load_timeline(str(tmp_path / "bad.otio"))
+            pytest.fail("例外が送出されなかった（L-3）")
+        except ClipwrightError:
+            pass  # 期待通り ClipwrightError が届いた
+        except otio.exceptions.OTIOError:
+            pytest.fail(
+                "生の OTIOError が呼び出し元に届いた。"
+                "load_timeline が ClipwrightError に変換する責務を持つこと（L-3）"
+            )
+
+    def test_clipwright_error_has_hint_on_otio_failure(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """変換後の ClipwrightError に hint が含まれること（L-3 / §6.4）。"""
+        import opentimelineio as otio
+
+        from clipwright.errors import ClipwrightError
+
+        def _raise_otio(path: str) -> None:
+            raise otio.exceptions.OTIOError("ヒント確認用エラー（テスト用）")
+
+        monkeypatch.setattr(otio.adapters, "read_from_file", _raise_otio)
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            load_timeline(str(tmp_path / "bad.otio"))
+
+        assert exc_info.value.hint, (
+            "ClipwrightError に hint が設定されていること（§6.4 エラー規約）（L-3）"
+        )
+
+
+# ===========================================================================
+# L-5: set_clipwright_metadata の部分更新パターン（キー全消え防止）
+# ===========================================================================
+
+
+class TestSetClipwrightMetadataPartialUpdate:
+    """L-5: get → update → set パターンで既存キーが保持されることを固定する回帰テスト。
+
+    set_clipwright_metadata の docstring に追記すべき使用例の動作契約を保護する。
+    部分更新せず set だけ呼ぶと clipwright キー全体が置換される挙動も確認する。
+    """
+
+    def test_partial_update_preserves_existing_keys(self) -> None:
+        """get → merge → set パターンで既存キーが保持される（L-5）。
+
+        set_clipwright_metadata を単純呼び出しではなく部分更新パターンで使うと
+        既存キーが失われないことを確認する。
+        """
+        tl = new_timeline("partial_update")
+
+        # 初期メタデータを設定
+        initial_data = {"tool": "silence_detect", "version": "0.1.0"}
+        set_clipwright_metadata(tl, initial_data)
+
+        # 部分更新パターン: get → merge → set
+        existing = get_clipwright_metadata(tl)
+        existing["confidence"] = 0.95  # 新キーを追加
+        set_clipwright_metadata(tl, existing)
+
+        result = get_clipwright_metadata(tl)
+
+        # 既存キーが保持されていること
+        assert result["tool"] == "silence_detect", (
+            "部分更新後に 'tool' キーが消えていてはならない（L-5）"
+        )
+        assert result["version"] == "0.1.0", (
+            "部分更新後に 'version' キーが消えていてはならない（L-5）"
+        )
+        # 新キーが追加されていること
+        assert result["confidence"] == pytest.approx(0.95), (
+            "部分更新で追加した 'confidence' キーが設定されていること（L-5）"
+        )
+
+    def test_direct_set_replaces_entire_clipwright_dict(self) -> None:
+        """部分更新パターンを使わずに set_clipwright_metadata を呼ぶと
+        clipwright キー全体が置換される（L-5 の注意事項を明示する逆テスト）。"""
+        tl = new_timeline("full_replace")
+
+        # 初期設定
+        set_clipwright_metadata(tl, {"tool": "silence_detect", "version": "0.1.0"})
+
+        # 直接 set すると全体が置換される（意図的な動作の明示）
+        set_clipwright_metadata(tl, {"confidence": 0.8})
+
+        result = get_clipwright_metadata(tl)
+
+        # tool / version は消える（直接 set の仕様）
+        assert "tool" not in result, (
+            "直接 set では既存キーが消えることが仕様（L-5 注意事項）"
+        )
+        # confidence は設定されている
+        assert result["confidence"] == pytest.approx(0.8)
+
+    def test_partial_update_works_on_clip(self) -> None:
+        """Clip に対しても部分更新パターンが機能すること（L-5）。"""
+        from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
+
+        tl = new_timeline("clip_partial")
+        track = tl.tracks[0]
+        media = MediaRef(target_url="/v.mp4")
+        clip = add_clip(
+            track,
+            media,
+            TimeRangeModel(
+                start_time=RationalTimeModel(value=0.0, rate=30.0),
+                duration=RationalTimeModel(value=30.0, rate=30.0),
+            ),
+        )
+
+        # 初期設定
+        set_clipwright_metadata(clip, {"kind": "scene", "index": 1})
+
+        # 部分更新: get → merge → set
+        existing = get_clipwright_metadata(clip)
+        existing["label"] = "intro"
+        set_clipwright_metadata(clip, existing)
+
+        result = get_clipwright_metadata(clip)
+
+        assert result["kind"] == "scene", "部分更新後に 'kind' が保持されること（L-5）"
+        assert result["index"] == 1, "部分更新後に 'index' が保持されること（L-5）"
+        assert result["label"] == "intro", (
+            "部分更新で追加した 'label' が設定されること（L-5）"
+        )
+
+    def test_get_then_set_prevents_key_loss_after_multiple_updates(self) -> None:
+        """複数回の部分更新を繰り返しても既存キーが保持されること（L-5）。"""
+        tl = new_timeline("multi_update")
+
+        set_clipwright_metadata(tl, {"a": 1})
+
+        # 1回目の部分更新
+        data = get_clipwright_metadata(tl)
+        data["b"] = 2
+        set_clipwright_metadata(tl, data)
+
+        # 2回目の部分更新
+        data = get_clipwright_metadata(tl)
+        data["c"] = 3
+        set_clipwright_metadata(tl, data)
+
+        result = get_clipwright_metadata(tl)
+
+        assert result == {"a": 1, "b": 2, "c": 3}, (
+            "複数回の部分更新後にすべてのキーが保持されること（L-5）"
         )
