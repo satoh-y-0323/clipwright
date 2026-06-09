@@ -16,10 +16,9 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field, TypeAdapter, ValidationError
 
-import clipwright.process as _process
+import clipwright.media as _media
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
-from clipwright.media import inspect_media as _inspect_media
 from clipwright.operations import (
     AddClipOp,
     AddGapOp,
@@ -29,13 +28,24 @@ from clipwright.operations import (
 )
 from clipwright.otio_utils import load_timeline, save_timeline, summarize_timeline
 from clipwright.project import init_project as _init_project
-from clipwright.schemas import Artifact
+from clipwright.schemas import Artifact, MediaInfo
 
 # FastMCP インスタンス（名前 = MCP サーバー名）
 mcp = FastMCP("clipwright")
 
 # marker truncation 閾値（§13.2 DC-AS-004）
 _MARKER_THRESHOLD = 50
+
+
+def _inspect_media(path: str) -> MediaInfo:
+    """clipwright.media.inspect_media への薄いラッパー。
+
+    server モジュール名前空間に _inspect_media を露出することで、
+    テストが clipwright.server._inspect_media をパッチできる（M-2）。
+    実装は clipwright.media モジュール経由で呼ぶため、
+    clipwright.media.inspect_media のパッチも有効になる。
+    """
+    return _media.inspect_media(path)
 
 
 # ===========================================================================
@@ -139,18 +149,8 @@ def clipwright_inspect_media(
     （起動時チェックはしない。§13.3 DC-GP-001）。
 
     Windows での依存欠如時は winget install Gyan.FFmpeg で導入できる旨を hint に含める。
-
-    依存チェックは clipwright.process.resolve_tool 経由で行い、
-    テストでのモックが正しく機能する（§13.3 DC-GP-001 / DC-GP-004 対応）。
+    依存チェックは _inspect_media 内部の resolve_tool で行う（M-2: 二重呼び出し排除）。
     """
-    # ffprobe 依存チェック（clipwright.process.resolve_tool 経由）
-    # test_server.py は clipwright.process.resolve_tool をパッチするため、
-    # ここで呼ぶことで依存欠如を正しく検出できる（§13.3 DC-GP-001）。
-    try:
-        _process.resolve_tool("ffprobe", "CLIPWRIGHT_FFPROBE")
-    except ClipwrightError as exc:
-        return error_result(exc.code, exc.message, exc.hint)
-
     try:
         media_info = _inspect_media(path)
     except ClipwrightError as exc:
@@ -275,10 +275,10 @@ def clipwright_read_timeline(
         timeline = load_timeline(resolved_path)
     except ClipwrightError as exc:
         return error_result(exc.code, exc.message, exc.hint)
-    except Exception as exc:
+    except Exception:
         return error_result(
             ErrorCode.OTIO_ERROR,
-            f"timeline.otio の読み込みに失敗しました: {exc}",
+            "timeline.otio の読み込みに失敗しました",
             "ファイルが有効な OTIO ファイルか確認してください。",
         )
 
@@ -315,12 +315,16 @@ def clipwright_read_timeline(
         Artifact(role="timeline", path=resolved_path, format="otio").model_dump(),
     ]
 
+    # summarize_timeline の warnings をエンベロープに詰める（M-4）
+    summary_warnings: list[str] = summary_dict.get("warnings", [])
+
     return ok_result(
         f"timeline 読み込み完了: {timeline.name} "
         f"(clip={data['clip_count']}, gap={data['gap_count']}"
         f", marker={marker_count})",
         data=data,
         artifacts=artifacts,
+        warnings=summary_warnings if summary_warnings else None,
     )
 
 
@@ -384,10 +388,10 @@ def clipwright_write_timeline(
         timeline = load_timeline(resolved_path)
     except ClipwrightError as exc:
         return error_result(exc.code, exc.message, exc.hint)
-    except Exception as exc:
+    except Exception:
         return error_result(
             ErrorCode.OTIO_ERROR,
-            f"timeline.otio の読み込みに失敗しました: {exc}",
+            "timeline.otio の読み込みに失敗しました",
             "init_project でプロジェクトを初期化してから再実行してください。",
         )
 
@@ -434,10 +438,10 @@ def clipwright_write_timeline(
     if report.valid and not validate_only and len(typed_ops) > 0:
         try:
             save_timeline(timeline, resolved_path)
-        except Exception as exc:
+        except Exception:
             return error_result(
                 ErrorCode.OTIO_ERROR,
-                f"timeline.otio の保存に失敗しました: {exc}",
+                "timeline.otio の保存に失敗しました",
                 "ディスク容量・書き込み権限を確認してください。",
             )
 

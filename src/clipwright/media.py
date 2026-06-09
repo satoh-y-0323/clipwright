@@ -8,10 +8,36 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from subprocess import CompletedProcess
 
+import clipwright.process as _process_module
 from clipwright.errors import ClipwrightError, ErrorCode
-from clipwright.process import resolve_tool, run
 from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo
+
+
+def resolve_tool(name: str, env_var: str | None = None) -> str:
+    """clipwright.process.resolve_tool への転送。
+
+    media モジュール名前空間に露出することで、テストが
+    clipwright.media.resolve_tool をパッチできる。
+    内部実装は clipwright.process モジュール経由のため、
+    clipwright.process.resolve_tool のパッチも有効になる。
+    """
+    return _process_module.resolve_tool(name, env_var)
+
+
+def run(
+    cmd: list[str],
+    *,
+    timeout: float = 60.0,
+    cwd: str | None = None,
+) -> CompletedProcess[str]:
+    """clipwright.process.run への転送。
+
+    media モジュール名前空間に露出することで、テストが
+    clipwright.media.run をパッチできる。
+    """
+    return _process_module.run(cmd, timeout=timeout, cwd=cwd)
 
 
 def inspect_media(path: str) -> MediaInfo:
