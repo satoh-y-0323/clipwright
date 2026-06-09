@@ -86,7 +86,7 @@ def save_timeline(timeline: otio.schema.Timeline, path: str) -> None:
         otio.adapters.write_to_file(timeline, tmp_path)
         os.replace(tmp_path, path)
     except Exception:
-        # 書き込み失敗時は temp ファイルを削除して例外を再送出
+        # temp 削除のための broad catch。例外は常に再送出し握りつぶさない（NL-2）
         with contextlib.suppress(OSError):
             os.unlink(tmp_path)
         raise
@@ -305,10 +305,9 @@ def _track_duration_sec(track: otio.schema.Track) -> tuple[float, str | None]:
     try:
         dur = track.duration()
         return float(dur.to_seconds()), None
-    except otio.exceptions.OTIOError as exc:
-        warn_msg = (
-            f"トラック '{track.name}' の duration 取得に失敗しました: {exc}"
-        )
+    except otio.exceptions.OTIOError:
+        # OTIO エラー文字列は warnings 経由で露出するため含めない（NF-01）
+        warn_msg = f"トラック '{track.name}' の duration 取得に失敗しました。"
         return 0.0, warn_msg
 
 

@@ -103,9 +103,9 @@ class TestInspectMediaSuccess:
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
-        mocker.patch("clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
         mocker.patch(
-            "clipwright.media.run",
+            "clipwright.process.run",
             return_value=_make_completed_process(_make_ffprobe_json()),
         )
 
@@ -118,9 +118,9 @@ class TestInspectMediaSuccess:
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
-        mocker.patch("clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
         mocker.patch(
-            "clipwright.media.run",
+            "clipwright.process.run",
             return_value=_make_completed_process(_make_ffprobe_json()),
         )
 
@@ -133,9 +133,9 @@ class TestInspectMediaSuccess:
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
-        mocker.patch("clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
         mocker.patch(
-            "clipwright.media.run",
+            "clipwright.process.run",
             return_value=_make_completed_process(_make_ffprobe_json()),
         )
 
@@ -149,9 +149,9 @@ class TestInspectMediaSuccess:
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
-        mocker.patch("clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
         mocker.patch(
-            "clipwright.media.run",
+            "clipwright.process.run",
             return_value=_make_completed_process(_make_ffprobe_json()),
         )
 
@@ -167,9 +167,9 @@ class TestInspectMediaSuccess:
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
-        mocker.patch("clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
         mocker.patch(
-            "clipwright.media.run",
+            "clipwright.process.run",
             return_value=_make_completed_process(_make_ffprobe_json()),
         )
 
@@ -184,9 +184,9 @@ class TestInspectMediaSuccess:
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
-        mocker.patch("clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
         mocker.patch(
-            "clipwright.media.run",
+            "clipwright.process.run",
             return_value=_make_completed_process(
                 _make_ffprobe_json(container_format="mov,mp4,m4a,3gp,3g2,mj2")
             ),
@@ -202,9 +202,9 @@ class TestInspectMediaSuccess:
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
-        mocker.patch("clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
         mocker.patch(
-            "clipwright.media.run",
+            "clipwright.process.run",
             return_value=_make_completed_process(_make_ffprobe_json(duration="3.0")),
         )
 
@@ -240,9 +240,9 @@ class TestRateDecisionRule:
                 "avg_frame_rate": "30/1",
             }
         ]
-        mocker.patch("clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
         mocker.patch(
-            "clipwright.media.run",
+            "clipwright.process.run",
             return_value=_make_completed_process(
                 _make_ffprobe_json(streams=streams, duration="3.0")
             ),
@@ -272,9 +272,9 @@ class TestRateDecisionRule:
                 "avg_frame_rate": "24000/1001",
             }
         ]
-        mocker.patch("clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
         mocker.patch(
-            "clipwright.media.run",
+            "clipwright.process.run",
             return_value=_make_completed_process(
                 _make_ffprobe_json(streams=streams, duration="3.0")
             ),
@@ -299,9 +299,9 @@ class TestRateDecisionRule:
                 "channels": 2,
             }
         ]
-        mocker.patch("clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
         mocker.patch(
-            "clipwright.media.run",
+            "clipwright.process.run",
             return_value=_make_completed_process(
                 _make_ffprobe_json(streams=streams, duration="5.0")
             ),
@@ -334,9 +334,9 @@ class TestRateDecisionRule:
                 "avg_frame_rate": "60/1",
             },
         ]
-        mocker.patch("clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
         mocker.patch(
-            "clipwright.media.run",
+            "clipwright.process.run",
             return_value=_make_completed_process(
                 _make_ffprobe_json(streams=streams, duration="3.0")
             ),
@@ -365,9 +365,9 @@ class TestRateDecisionRule:
                 "avg_frame_rate": "30/1",
             }
         ]
-        mocker.patch("clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
         mocker.patch(
-            "clipwright.media.run",
+            "clipwright.process.run",
             return_value=_make_completed_process(
                 _make_ffprobe_json(streams=streams, duration="3.0")
             ),
@@ -392,7 +392,7 @@ class TestInspectMediaFileNotFound:
         self, mocker: MagicMock
     ) -> None:
         """存在しないパスを渡すと FILE_NOT_FOUND になること。"""
-        mocker.patch("clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
 
         with pytest.raises(ClipwrightError) as exc_info:
             inspect_media("/nonexistent/path/video.mp4")
@@ -401,7 +401,7 @@ class TestInspectMediaFileNotFound:
 
     def test_file_not_found_has_message_and_hint(self, mocker: MagicMock) -> None:
         """FILE_NOT_FOUND エラーは message と hint を持つ（§6.4 規約）。"""
-        mocker.patch("clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
 
         with pytest.raises(ClipwrightError) as exc_info:
             inspect_media("/nonexistent/video.mp4")
@@ -419,7 +419,7 @@ class TestInspectMediaFileNotFound:
         ファイル存在確認は ffprobe 探索より先に行うことで、
         ユーザーへの feedback を早める。
         """
-        mocker.patch("clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
 
         with pytest.raises(ClipwrightError) as exc_info:
             inspect_media("/nonexistent/video.mp4")
@@ -441,7 +441,7 @@ class TestInspectMediaDependencyMissing:
         media_file.write_bytes(b"dummy")
 
         mocker.patch(
-            "clipwright.media.resolve_tool",
+            "clipwright.process.resolve_tool",
             side_effect=ClipwrightError(
                 code=ErrorCode.DEPENDENCY_MISSING,
                 message="ffprobe が PATH 上に見つかりません",
@@ -462,7 +462,7 @@ class TestInspectMediaDependencyMissing:
         media_file.write_bytes(b"dummy")
 
         mocker.patch(
-            "clipwright.media.resolve_tool",
+            "clipwright.process.resolve_tool",
             side_effect=ClipwrightError(
                 code=ErrorCode.DEPENDENCY_MISSING,
                 message="ffprobe が PATH 上に見つかりません",
@@ -486,9 +486,9 @@ class TestInspectMediaProbeFailed:
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
-        mocker.patch("clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
         mocker.patch(
-            "clipwright.media.run",
+            "clipwright.process.run",
             return_value=_make_completed_process("THIS IS NOT JSON"),
         )
 
@@ -504,9 +504,9 @@ class TestInspectMediaProbeFailed:
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
-        mocker.patch("clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
         mocker.patch(
-            "clipwright.media.run",
+            "clipwright.process.run",
             return_value=_make_completed_process(""),
         )
 
@@ -523,9 +523,9 @@ class TestInspectMediaProbeFailed:
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
-        mocker.patch("clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
         mocker.patch(
-            "clipwright.media.run",
+            "clipwright.process.run",
             return_value=_make_completed_process(json.dumps({"unexpected": "data"})),
         )
 
@@ -541,9 +541,9 @@ class TestInspectMediaProbeFailed:
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
-        mocker.patch("clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
         mocker.patch(
-            "clipwright.media.run",
+            "clipwright.process.run",
             return_value=_make_completed_process("INVALID JSON{{"),
         )
 
@@ -563,9 +563,9 @@ class TestInspectMediaRunInvocation:
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
-        mocker.patch("clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
         mock_run = mocker.patch(
-            "clipwright.media.run",
+            "clipwright.process.run",
             return_value=_make_completed_process(_make_ffprobe_json()),
         )
 
@@ -582,9 +582,9 @@ class TestInspectMediaRunInvocation:
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
-        mocker.patch("clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
         mock_run = mocker.patch(
-            "clipwright.media.run",
+            "clipwright.process.run",
             return_value=_make_completed_process(_make_ffprobe_json()),
         )
 
@@ -602,9 +602,9 @@ class TestInspectMediaRunInvocation:
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
-        mocker.patch("clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
         mock_run = mocker.patch(
-            "clipwright.media.run",
+            "clipwright.process.run",
             return_value=_make_completed_process(_make_ffprobe_json()),
         )
 
@@ -623,9 +623,9 @@ class TestInspectMediaRunInvocation:
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
-        mocker.patch("clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
         mock_run = mocker.patch(
-            "clipwright.media.run",
+            "clipwright.process.run",
             return_value=_make_completed_process(_make_ffprobe_json()),
         )
 
@@ -642,10 +642,10 @@ class TestInspectMediaRunInvocation:
         media_file.write_bytes(b"dummy")
 
         mock_resolve = mocker.patch(
-            "clipwright.media.resolve_tool", return_value="/usr/bin/ffprobe"
+            "clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe"
         )
         mocker.patch(
-            "clipwright.media.run",
+            "clipwright.process.run",
             return_value=_make_completed_process(_make_ffprobe_json()),
         )
 

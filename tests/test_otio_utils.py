@@ -780,6 +780,10 @@ class TestSummarizeTimelineWarnings:
         assert len(summary["warnings"]) >= 1, (
             "OTIO 例外発生時に warnings に1件以上のメッセージが記録されること（M-4）"
         )
+        # NF-01: 警告文に OTIO 内部エラー文字列（exc 詳細）が含まれないこと
+        assert "duration 取得失敗（テスト用）" not in summary["warnings"][0], (
+            "warnings に OTIO 例外の生文字列を含めない（NF-01）"
+        )
 
     def test_warnings_with_clip_normal_case(self) -> None:
         """クリップ付き timeline の正常系でも warnings == []（M-4）。"""

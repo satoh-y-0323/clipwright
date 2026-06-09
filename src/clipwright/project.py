@@ -52,7 +52,7 @@ def _atomic_write_text(path: Path, text: str) -> None:
             f.write(text)
         os.replace(tmp_path, str(path))
     except Exception:
-        # 書き込み失敗時は一時ファイルを削除して例外を伝播させる
+        # temp 削除のための broad catch。例外は常に再送出し握りつぶさない（NL-2）
         with contextlib.suppress(OSError):
             os.unlink(tmp_path)
         raise
@@ -167,13 +167,12 @@ def find_project(start_dir: str) -> str:
             break
         current = parent
 
-    safe_dir_name = Path(start_dir).name
     raise ClipwrightError(
         code=ErrorCode.PROJECT_NOT_FOUND,
         message=f"clipwright.json が見つかりません: {start_dir} から上位へ探索しました",
         hint=(
             f"init_project でプロジェクトを初期化してから再実行してください"
-            f"（探索開始: .../{safe_dir_name}）。"
+            f"（探索開始: .../{start_path.name}）。"
         ),
     )
 
