@@ -177,6 +177,7 @@ def _detect_vad_silence_intervals(
         "--min-silence",
         f"{options.vad_min_silence_duration}",
         "--media-duration",
+        # vad_cli 側で ceil(total * 2) するため float 精度不定でも実害なし（NF-L-1）
         f"{total_duration_sec}",
     ]
     result = run(cmd, timeout=timeout)

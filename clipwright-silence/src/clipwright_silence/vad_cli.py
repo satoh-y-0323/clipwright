@@ -80,9 +80,13 @@ def _load_audio_as_float32(
     """PCM WAV ファイルを読み込み float32 numpy array と sample_rate を返す。
 
     int16 → float32 正規化（/32768.0）を行う。
-    numpy は呼び出し元 main() で遅延 import 済み（CR L-2: サーバープロセス疎結合徹底）。
+
+    前提: 本関数は必ず main() 経由で呼び出すこと。
+    main() 内で numpy を遅延 import して sys.modules に登録しているため、
+    本関数内の import は実質キャッシュ取得になる（NF-M-2: 前提条件の明記）。
+    テストやユーティリティから直接呼び出した場合は CR L-2 の疎結合目的が崩れる。
     """
-    import numpy as np  # main() で既に sys.modules に登録済み（キャッシュから取得）
+    import numpy as np  # main() で sys.modules にキャッシュ済み（キャッシュから取得）
 
     with wave.open(pcm_path, "rb") as wf:
         n_frames = wf.getnframes()
@@ -107,7 +111,9 @@ def main(argv: list[str] | None = None) -> int:
     """
     # numpy を main 内で遅延 import する（CR L-2: トップレベル import を避け
     # サーバープロセス疎結合を徹底する。sys.executable -m での別プロセス起動前提）
-    import numpy as np  # noqa: F401  # _load_audio_as_float32 が参照する
+    # sys.modules へのキャッシュ登録用先行 import（_load_audio_as_float32 が参照）。
+    # noqa: F401 = 直接参照しないことによる lint 警告抑制（NF-L-2）。
+    import numpy as np  # noqa: F401
 
     # --- 引数パース ---
     parser = argparse.ArgumentParser(
@@ -253,12 +259,16 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    except Exception as exc:
+    except Exception:
         # 想定外の例外もすべて捕捉して error JSON を返す（§7.1）
-        # CR M-3: basename は非パス例外に対して機能しないため str(exc) をそのまま使う
+        # SR NF-L-1: str(exc) に内部パスが含まれうるため固定文言を使用する。
+        # デバッグ詳細は stderr 限定・stdout JSON（MCP レスポンス）には漏洩させない。
+        import traceback
+
+        traceback.print_exc(file=sys.stderr)
         _error_output(
             code=ErrorCode.INTERNAL,
-            message=f"VAD CLI で予期しないエラーが発生しました: {exc}",
+            message="VAD CLI で予期しないエラーが発生しました",
             hint="再現条件を添えて報告してください。",
         )
         return 0
