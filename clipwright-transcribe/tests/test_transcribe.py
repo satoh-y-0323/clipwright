@@ -489,7 +489,7 @@ class TestEnvelopeAndOutputs:
 
 class TestRunWhisperAdapter:
     def _fake_resolve(self) -> Any:
-        def _impl(name: str, env: str | None = None) -> str:
+        def _impl(name: str, env_var: str | None = None) -> str:
             return f"/bin/{name}"
 
         return _impl
@@ -692,7 +692,7 @@ class TestRunWhisperAdapter:
         """resolve_tool が WHISPER_BINARY_NAME 定数で呼ばれること（DC-AS-003）。"""
         names: list[str] = []
 
-        def _track_resolve(name: str, env: str | None = None) -> str:
+        def _track_resolve(name: str, env_var: str | None = None) -> str:
             names.append(name)
             return f"/bin/{name}"
 
