@@ -75,9 +75,9 @@ def _parse_silence_intervals(
             continue
 
         m_end = _RE_SILENCE_END.search(line)
-        # CR L-2: 対応する silence_start が無い孤立 silence_end の行は無視する。
-        # silencedetect は正常時 start→end の対で出力するため孤立 end は異常出力とみなす
-        # （先頭からの無音も start が出力されるので対で拾える）。
+        # 孤立 silence_end は silencedetect の正常出力では発生しない（start→end が対で
+        # 出力されるため）。発生した場合は異常出力としてスキップする。
+        # これは握りつぶしではなく、設計意図のある無視（silencedetect 仕様への準拠）。
         if m_end and pending_start is not None:
             end = float(m_end.group(1))
             # SR L-3: end < start の異常区間はスキップする
@@ -176,10 +176,22 @@ def _detect_vad_silence_intervals(
         f"{options.vad_min_speech_duration}",
         "--min-silence",
         f"{options.vad_min_silence_duration}",
+        "--media-duration",
+        f"{total_duration_sec}",
     ]
     result = run(cmd, timeout=timeout)
 
-    payload: dict[str, Any] = json.loads(result.stdout)
+    try:
+        payload: dict[str, Any] = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ClipwrightError(
+            code=ErrorCode.SUBPROCESS_FAILED,
+            message="VAD CLI の出力が不正な JSON です",
+            hint=(
+                "VAD CLI が期待する JSON を返しませんでした。"
+                "再実行してもエラーが続く場合は再現条件を添えて報告してください。"
+            ),
+        ) from exc
 
     # エラー JSON の場合は ErrorCode にマップして ClipwrightError を送出（§7.1）
     if "error" in payload:
@@ -201,11 +213,15 @@ def _detect_vad_silence_intervals(
     total = total_duration_sec
     speech_segments: list[tuple[float, float]] = []
     for seg in raw_segments:
-        # dict 形式 {"start": ..., "end": ...} または list 形式 [start, end] を許容
-        if isinstance(seg, (list, tuple)):
-            start, end = float(seg[0]), float(seg[1])
-        else:
-            start, end = float(seg["start"]), float(seg["end"])
+        try:
+            # dict 形式 {"start": ..., "end": ...} または list 形式 [start, end] を許容
+            if isinstance(seg, (list, tuple)):
+                start, end = float(seg[0]), float(seg[1])
+            else:
+                start, end = float(seg["start"]), float(seg["end"])
+        except (TypeError, KeyError, ValueError, IndexError):
+            # 不正要素（null/string/空 dict 等）はスキップして処理継続（SR L-3）
+            continue
         # start < 0 → 0 でクリップ、end > total → total でクリップ
         start = max(0.0, start)
         end = min(total, end)
@@ -450,7 +466,10 @@ def _detect_inner(
     total_keep_seconds = sum(e - s for s, e in keep_ranges)
 
     # summary を backend で出し分け（VAD-AD-08・§7.5）
-    if options.backend == "vad" and speech_count is not None:
+    # VAD 経路では _detect_vad_silence_intervals が常に int を返すため
+    # speech_count は必ず int（assert で型確定し mypy を満足させる）
+    if options.backend == "vad":
+        assert speech_count is not None  # VAD 経路で必ず設定される
         _silence_fmt = _fmt_sec(total_silence_seconds)
         _keep_fmt = _fmt_sec(total_keep_seconds)
         summary = (

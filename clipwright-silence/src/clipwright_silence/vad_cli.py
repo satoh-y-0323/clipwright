@@ -20,10 +20,8 @@ import os
 import sys
 import tempfile
 import wave
-from os.path import basename
 from typing import Any
 
-import numpy as np
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.process import resolve_tool, run
 
@@ -33,10 +31,15 @@ _SAMPLE_RATE = 16000
 _VAD_INSTALL_HINT = (
     "`pip install 'clipwright-silence[vad]'` で VAD 依存を導入してください。"
 )
+# SUBPROCESS_FAILED/TIMEOUT 時のサニタイズ済み汎用文言（SR M-1: ffmpeg stderr 漏洩防止）
+_SUBPROCESS_SAFE_MESSAGE = "内部サブプロセスが失敗しました"
 
 
 def _error_output(code: str, message: str, hint: str) -> None:
-    """エラー JSON を stdout に出力する。フルパスは basename に変換する。"""
+    """エラー JSON を stdout に出力する。
+
+    呼び出し元でパス情報をサニタイズしてから渡すこと。
+    """
     result: dict[str, Any] = {
         "error": {
             "code": code,
@@ -73,18 +76,21 @@ def _extract_pcm(ffmpeg: str, media: str, output_path: str, timeout: float) -> N
 
 def _load_audio_as_float32(
     pcm_path: str,
-) -> tuple[np.ndarray, int]:
+) -> tuple[Any, int]:
     """PCM WAV ファイルを読み込み float32 numpy array と sample_rate を返す。
 
     int16 → float32 正規化（/32768.0）を行う。
+    numpy は呼び出し元 main() で遅延 import 済み（CR L-2: サーバープロセス疎結合徹底）。
     """
+    import numpy as np  # main() で既に sys.modules に登録済み（キャッシュから取得）
+
     with wave.open(pcm_path, "rb") as wf:
         n_frames = wf.getnframes()
         sample_rate = wf.getframerate()
         raw = wf.readframes(n_frames)
 
     audio_int16 = np.frombuffer(raw, dtype=np.int16)
-    audio_float32: np.ndarray = audio_int16.astype(np.float32) / 32768.0
+    audio_float32: Any = audio_int16.astype(np.float32) / 32768.0
     return audio_float32, sample_rate
 
 
@@ -99,6 +105,10 @@ def main(argv: list[str] | None = None) -> int:
     Returns:
         終了コード（常に 0）。
     """
+    # numpy を main 内で遅延 import する（CR L-2: トップレベル import を避け
+    # サーバープロセス疎結合を徹底する。sys.executable -m での別プロセス起動前提）
+    import numpy as np  # noqa: F401  # _load_audio_as_float32 が参照する
+
     # --- 引数パース ---
     parser = argparse.ArgumentParser(
         description="Silero VAD で発話区間を検出して JSON で stdout 出力する。"
@@ -122,6 +132,15 @@ def main(argv: list[str] | None = None) -> int:
         default=0.1,
         help="発話間の最小無音長（秒, デフォルト: 0.1）",
     )
+    parser.add_argument(
+        "--media-duration",
+        type=float,
+        default=None,
+        help=(
+            "メディアの総尺（秒）。内側 ffmpeg timeout を"
+            " total 連動で計算する（§7.7）。省略時は安全な既定（60秒）を使用。"
+        ),
+    )
 
     try:
         args = parser.parse_args(argv)
@@ -138,15 +157,17 @@ def main(argv: list[str] | None = None) -> int:
     threshold: float = args.threshold
     min_speech_sec: float = args.min_speech
     min_silence_sec: float = args.min_silence
+    media_duration: float | None = args.media_duration
 
     try:
         # --- silero_vad 遅延 import（サーバープロセスへ漏らさない・§2.4）---
         try:
             import silero_vad
-        except ImportError as exc:
+        except ImportError:
+            # SR L-2: str(exc) には内部パスが含まれうるため固定文言を使用する
             _error_output(
                 code=ErrorCode.DEPENDENCY_MISSING,
-                message=f"silero-vad または onnxruntime が見つかりません: {exc}",
+                message="silero_vad または onnxruntime のインポートに失敗しました",
                 hint=_VAD_INSTALL_HINT,
             )
             return 0
@@ -159,11 +180,16 @@ def main(argv: list[str] | None = None) -> int:
         ffmpeg = resolve_tool("ffmpeg", "CLIPWRIGHT_FFMPEG")
 
         # --- ffmpeg で 16kHz mono s16le PCM を一時ファイルに生成（§7.3）---
-        # ffmpeg 内側 timeout は外側より短く設定する（§7.7）
-        ffmpeg_timeout = float(max(30, math.ceil(120.0)))  # 暫定: 120秒
+        # 内側 timeout は外側（max(60, ceil(total*4))）より必ず短くする（§7.7）
+        # --media-duration が渡された場合: max(30, ceil(total * 2)) で total 連動
+        # 未指定時: 安全な既定 60 秒
+        if media_duration is not None:
+            ffmpeg_timeout = float(max(30, math.ceil(media_duration * 2)))
+        else:
+            ffmpeg_timeout = 60.0
 
         tmp_path: str = ""
-        audio_float32: np.ndarray
+        audio_float32: Any
         sample_rate: int
 
         # delete=False で開いて name を取得し、try/finally で確実に削除する（§7.3）
@@ -204,27 +230,35 @@ def main(argv: list[str] | None = None) -> int:
     except ClipwrightError as exc:
         # core run() が送出した ClipwrightError（SUBPROCESS_FAILED/TIMEOUT）と
         # resolve_tool の DEPENDENCY_MISSING をここで捕捉する（§7.1/§7.2）
+        # SR M-1: SUBPROCESS_FAILED/TIMEOUT は ffmpeg stderr 断片を含むため
+        # 汎用文言に差し替えてパス情報漏洩を防ぐ
+        if exc.code in (ErrorCode.SUBPROCESS_FAILED, ErrorCode.SUBPROCESS_TIMEOUT):
+            safe_message = f"{_SUBPROCESS_SAFE_MESSAGE}（code: {exc.code}）"
+        else:
+            safe_message = exc.message
         _error_output(
             code=str(exc.code),
-            message=exc.message,
+            message=safe_message,
             hint=exc.hint,
         )
         return 0
 
-    except ImportError as exc:
+    except ImportError:
         # load_silero_vad 等で onnxruntime の ImportError が伝播した場合
+        # SR L-2: str(exc) には内部パスが含まれうるため固定文言を使用する
         _error_output(
             code=ErrorCode.DEPENDENCY_MISSING,
-            message=f"VAD 依存ライブラリのロードに失敗しました: {exc}",
+            message="silero_vad または onnxruntime のインポートに失敗しました",
             hint=_VAD_INSTALL_HINT,
         )
         return 0
 
     except Exception as exc:
         # 想定外の例外もすべて捕捉して error JSON を返す（§7.1）
+        # CR M-3: basename は非パス例外に対して機能しないため str(exc) をそのまま使う
         _error_output(
             code=ErrorCode.INTERNAL,
-            message=(f"VAD CLI で予期しないエラーが発生しました: {basename(str(exc))}"),
+            message=f"VAD CLI で予期しないエラーが発生しました: {exc}",
             hint="再現条件を添えて報告してください。",
         )
         return 0
