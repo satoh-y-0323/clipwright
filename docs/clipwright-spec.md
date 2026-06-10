@@ -278,6 +278,26 @@ OTIO を共通言語として使う。独自の編集フォーマットは定義
 
 ---
 
+## 11.5 採用候補 OSS の評価と Adobe 連携方針（追記 2026-06-10）
+
+検討した代替・追加 OSS が、本スペックの設計原則（§2）・規約（§6）・ライセンス方針（§9）に乗るかの判断。
+
+### 採用可（OSS・サブプロセス化・OTIO/SRT 正規化が可能）
+
+- **Silero VAD（MIT）— `clipwright-silence` の上位バックエンド**: ffmpeg `silencedetect`（音量しきい値）に対し、ML ベースの発話検出。BGM/環境音下で精度が高い。重要な差: silencedetect は**音量**判定のため咳払い（大音量だが非発話）を無音と見なせず**残す**が、VAD は**発話/非発話**判定のため咳払いを**非発話として除去**できる。→ `clipwright-silence` の検出バックエンドとして採用（detect ロジックは単一アダプタ関数に隔離済みのため差し替え容易）。Python ライブラリのため §2.4 を守るには小さな CLI でサブプロセス起動する。注: 言語的フィラー（「えー/あの」）は発話のため VAD では残る（除去には transcribe ベースの検出が要る）。咳払い・息継ぎ等の非発話音は VAD の守備範囲。
+- **Whisper（whisper.cpp, MIT）— 文字起こし**: §1/§10 で既定の本命。C++ バイナリのためサブプロセス疎結合に最適。SRT/VTT + OTIO marker を出力。
+- **BudouX（Apache-2.0）— テロップ改行整形**: 字幕の自然な改行位置決め（日本語/CJK の文節境界）。純テキスト変換（メディア非改変）。薄い CLI ラッパー（subprocess）で `clipwright-*` ツール化する。transcribe 出力（SRT）の後処理に位置づく。
+
+### 採用不可（思想不一致）
+
+- **After Effects スクリプトによるテロップ合成 / MOGRT 出力 / AE 経由の Premiere 連携**: After Effects・Premiere Pro は専有・有料の GUI アプリで、§2.1（GUI レス）・§2.4＋§9（OSS をサブプロセスで疎結合・ライセンス独立）に反する。MOGRT は Adobe 専有フォーマットで §2.8（可搬フォーマット・独自フォーマットを新規発明しない）に反する。→ `clipwright-*` ツールとしては取り込まない。
+
+### spec 準拠の Adobe 連携の道
+
+OTIO を背骨に採用した利点として、**OTIO → FCPXML / AAF / EDL** を OTIO 標準アダプタで書き出せば（§4.1 の将来オプション）、**Premiere Pro / After Effects 利用者が最後の仕上げを自分の NLE で行える**。Clipwright は編集の骨組み（カット・字幕位置）を OTIO/可搬形式で渡すところまでを責務とし、凝ったアニメーションテロップ等の作り込みは NLE 側に委ねる（detect/render 分離思想の自然な延長）。
+
+---
+
 ## 12. Claude Code への着手指示（最初のタスク）
 
 1. リポジトリと開発環境を用意（Python, FastMCP, opentimelineio, ffprobe/ffmpeg の存在チェック）。推奨レイアウト:
