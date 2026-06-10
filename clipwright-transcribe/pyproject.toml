@@ -1,7 +1,7 @@
 [project]
-name = "clipwright"
+name = "clipwright-transcribe"
 version = "0.1.0"
-description = "FFmpeg/OTIO をラップする MCP サーバー群。映像編集ワークフローを AI エージェントから操作できるプリミティブを提供する。"
+description = "音声・映像ファイルを whisper.cpp バイナリで文字起こしし、SRT/VTT キャプションと OTIO タイムラインを生成する MCP ツール。"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
@@ -9,10 +9,14 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
+    "clipwright",
     "mcp[cli]>=1.27.2",
     "opentimelineio>=0.18",
     "pydantic>=2",
 ]
+
+[project.scripts]
+clipwright-transcribe = "clipwright_transcribe.server:main"
 
 [build-system]
 requires = ["uv_build>=0.11.19,<0.12.0"]
@@ -27,6 +31,10 @@ dev = [
     "ruff>=0.15.16",
 ]
 
+# workspace 内の clipwright (core) をパス参照で解決する
+[tool.uv.sources]
+clipwright = { workspace = true }
+
 # --- Ruff ---
 [tool.ruff]
 target-version = "py311"
@@ -35,6 +43,10 @@ line-length = 88
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
 ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+# テストファイルの日本語 docstring/コメントは E501 を許容する
+"tests/*.py" = ["E501"]
 
 [tool.ruff.format]
 # ruff formatter のデフォルトで OK
@@ -64,13 +76,9 @@ markers = [
 
 # --- coverage ---
 [tool.coverage.run]
-source = ["clipwright"]
+source = ["clipwright_transcribe"]
 omit = ["tests/*"]
 
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
-
-# --- uv workspace ---
-[tool.uv.workspace]
-members = ["clipwright-render", "clipwright-silence", "clipwright-transcribe"]
