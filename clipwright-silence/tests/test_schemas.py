@@ -193,7 +193,10 @@ class TestBackendField:
     """backend フィールドの型・既定値・制約を検証する（VAD-AD-01）。"""
 
     def test_backend_default_is_silencedetect(self) -> None:
-        """backend 未指定で既定値が "silencedetect" であること（後方互換 opt-in VAD）。"""
+        """backend 未指定で既定値が "silencedetect" であること。
+
+        後方互換 opt-in VAD。
+        """
         opts = DetectSilenceOptions()
         assert opts.backend == "silencedetect"
 

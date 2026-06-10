@@ -13,6 +13,10 @@ detect_silence → render_timeline の連携パイプラインを検証する。
 実行条件:
   - CLIPWRIGHT_FFMPEG / CLIPWRIGHT_FFPROBE が設定済み、または PATH に
     ffmpeg/ffprobe があること。未設定時は pytest.skip する（モックは使わない）。
+
+注意: e2e テストは実バイナリ（ffmpeg/ffprobe/flite TTS 等）を直接呼び出すため、
+  subprocess を直接使用している。これはプロダクションコードの process.run 規約
+  の意図的な例外であり、e2e テストインフラとして許容される（CR-R-003）。
 """
 
 from __future__ import annotations
@@ -309,8 +313,8 @@ def test_silence_detect_to_render_e2e(
 # VAD extra 未インストール時のスキップフラグ
 _VAD_AVAILABLE = True
 try:
-    import silero_vad as _silero_vad  # noqa: F401
     import onnxruntime as _onnxruntime  # noqa: F401
+    import silero_vad as _silero_vad  # noqa: F401
 except ImportError:
     _VAD_AVAILABLE = False
 
@@ -361,7 +365,14 @@ def _make_vad_test_video(
 
     # 発話尺を計測するため一時生成
     def _probe_flite_dur(text: str) -> float:
-        """flite TTS の音声尺を計測する。"""
+        """flite TTS の音声尺を計測する。
+
+        ffmpeg の libflite が利用できない環境（returncode != 0 または
+        time= パターン非マッチ）の場合は pytest.skip を呼び出す。
+        フォールバック値での継続は避ける（CR-E-002）。
+        """
+        import re  # noqa: PLC0415
+
         result = subprocess.run(
             [
                 ffmpeg,
@@ -384,20 +395,36 @@ def _make_vad_test_video(
             text=True,
             timeout=30,
         )
+        # ffmpeg 自体が失敗した場合（libflite 非サポートのビルド等）はスキップ
+        if result.returncode != 0:
+            pytest.skip(
+                f"ffmpeg libflite が利用できません（returncode={result.returncode}）。"
+                f"libflite サポート付きの ffmpeg ビルドが必要です。"
+                f"stderr: {result.stderr[-200:]}"
+            )
         # stderr から duration を取得
-        import re
-
         m = re.search(r"time=(\d+):(\d+):([0-9.]+)", result.stderr)
         if m:
             h, mi, s = int(m.group(1)), int(m.group(2)), float(m.group(3))
             return h * 3600 + mi * 60 + s
-        return 1.2  # フォールバック
+        # time= パターン非マッチ = flite TTS が実際に動作していない
+        pytest.skip(
+            "ffmpeg stderr に time= パターンが見つかりません。"
+            "libflite TTS が正常に動作していない可能性があります。"
+            f"text={text!r}, stderr={result.stderr[-200:]}"
+        )
 
     speech_a_dur = _probe_flite_dur(speech_text_a)
     speech_b_dur = _probe_flite_dur(speech_text_b)
 
     total = (
-        pre_sil + speech_a_dur + gap_sil + cough_dur + gap_sil2 + speech_b_dur + post_sil
+        pre_sil
+        + speech_a_dur
+        + gap_sil
+        + cough_dur
+        + gap_sil2
+        + speech_b_dur
+        + post_sil
     )
     cough_start = pre_sil + speech_a_dur + gap_sil
     cough_end = cough_start + cough_dur
@@ -510,7 +537,7 @@ def test_vad_backend_e2e(
     require_ffmpeg: str,
     require_ffprobe: str,
 ) -> None:
-    """VAD backend e2e: 咳払い相当ノイズが VAD では除去・silencedetect では残ることを実証。
+    """VAD backend e2e: 咳払いノイズが VAD では除去・silencedetect では残ることを実証。
 
     検証フロー（architecture-report §7.8 / DC-AS-007）:
       ① VAD が speech 判定する素材を ffmpeg flite TTS で生成（先行確立）
@@ -534,7 +561,6 @@ def test_vad_backend_e2e(
 
     cough_start = timing["cough_start"]
     cough_end = timing["cough_end"]
-    total_dur = timing["total"]
 
     # flite TTS 音声が実際に VAD で speech 判定されることを先行確認
     # （§7.8: 素材確立の先行ステップ）
@@ -597,20 +623,17 @@ def test_vad_backend_e2e(
 
     vad_keep_intervals = _collect_keep_intervals(otio_vad)
     assert len(vad_keep_intervals) > 0, (
-        f"VAD backend の KEEP 区間が 0 です。"
-        f"vad_result={vad_result}"
+        f"VAD backend の KEEP 区間が 0 です。vad_result={vad_result}"
     )
 
     # 咳払い区間（cough_start〜cough_end）が VAD の KEEP 区間に含まれていないことを確認
     # （VAD は非発話と判定して除去する）
     cough_center = (cough_start + cough_end) / 2
-    vad_cough_covered = any(
-        s <= cough_center <= e for s, e in vad_keep_intervals
-    )
+    vad_cough_covered = any(s <= cough_center <= e for s, e in vad_keep_intervals)
     assert not vad_cough_covered, (
         f"VAD backend が咳払い中心点({cough_center:.3f}s)を KEEP に含めています。"
         f"咳払い区間: [{cough_start:.3f}s - {cough_end:.3f}s]。"
-        f"VAD KEEP 区間: {[(round(s,3), round(e,3)) for s,e in vad_keep_intervals]}。"
+        f"VAD KEEP 区間: {[(round(s, 3), round(e, 3)) for s, e in vad_keep_intervals]}。"  # noqa: E501
         "VAD が咳払い相当のノイズを非発話として除去できていません。"
     )
 
@@ -644,23 +667,22 @@ def test_vad_backend_e2e(
     assert sd_result["ok"] is True, (
         f"silencedetect backend detect_silence が失敗しました: {sd_result}"
     )
-    assert otio_sd.exists(), "silencedetect backend の timeline.otio が生成されていません"
+    assert otio_sd.exists(), (
+        "silencedetect backend の timeline.otio が生成されていません"
+    )  # noqa: E501
 
     sd_keep_intervals = _collect_keep_intervals(otio_sd)
     assert len(sd_keep_intervals) > 0, (
-        f"silencedetect backend の KEEP 区間が 0 です。"
-        f"sd_result={sd_result}"
+        f"silencedetect backend の KEEP 区間が 0 です。sd_result={sd_result}"
     )
 
-    # 咳払い区間（cough_start〜cough_end）が silencedetect の KEEP 区間に含まれることを確認
+    # 咳払い区間（cough_start〜cough_end）が silencedetect の KEEP 区間に含まれることを確認  # noqa: E501
     # （silencedetect は音量で非無音 → KEEP として残す）
-    sd_cough_covered = any(
-        s <= cough_center <= e for s, e in sd_keep_intervals
-    )
+    sd_cough_covered = any(s <= cough_center <= e for s, e in sd_keep_intervals)
     assert sd_cough_covered, (
-        f"silencedetect backend が咳払い中心点({cough_center:.3f}s)を KEEP に含めていません。"
+        f"silencedetect backend が咳払い中心点({cough_center:.3f}s)を KEEP に含めていません。"  # noqa: E501
         f"咳払い区間: [{cough_start:.3f}s - {cough_end:.3f}s]。"
-        f"silencedetect KEEP 区間: {[(round(s,3), round(e,3)) for s,e in sd_keep_intervals]}。"
+        f"silencedetect KEEP 区間: {[(round(s, 3), round(e, 3)) for s, e in sd_keep_intervals]}。"  # noqa: E501
         "咳払い（大音量ノイズ）が有音として KEEP に残ることを確認できていません。"
     )
 
@@ -670,7 +692,7 @@ def test_vad_backend_e2e(
         if isinstance(clip, otio.schema.Clip):
             meta = clip.metadata.get("clipwright", {})
             assert meta.get("backend") == "silencedetect", (
-                f"silencedetect clip の metadata.backend が 'silencedetect' でありません: {meta!r}"
+                f"silencedetect clip の metadata.backend が 'silencedetect' でありません: {meta!r}"  # noqa: E501
             )
             break
 

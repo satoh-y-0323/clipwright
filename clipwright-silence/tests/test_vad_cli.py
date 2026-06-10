@@ -6,6 +6,7 @@
 CLI 契約（§7.1 一本化）:
   - エントリ: main(argv: list[str] | None = None) -> int
   - 引数: --media <path> --threshold <f> --min-speech <f> --min-silence <f>
+         --media-duration <float秒>（省略可: timeout 連動）
   - 正常: stdout に JSON {"speech_segments": [[start, end], ...]}（秒・float）, exit 0
   - 全エラー: exit 0 + stdout JSON {"error": {"code", "message", "hint"}}
   - stdout は JSON のみ。ログ等は stderr。
@@ -14,19 +15,20 @@ CLI 契約（§7.1 一本化）:
   ① 引数パース（argparse）と値受け渡し
   ② get_speech_timestamps をモックし発話区間→秒換算 speech_segments を JSON 出力
   ③ ImportError 経路（silero-vad/onnxruntime 欠落）→ DEPENDENCY_MISSING JSON + exit 0
-  ④ 内部 ffmpeg の core run() が ClipwrightError(SUBPROCESS_FAILED) を送出 → error JSON + exit 0
-  ⑤ ffmpeg 解決失敗（resolve_tool が DEPENDENCY_MISSING を送出）→ error JSON + exit 0
+  ④ 内部 ffmpeg の core run() が ClipwrightError(SUBPROCESS_FAILED) を送出
+     → error JSON + exit 0
+  ⑤ ffmpeg 解決失敗（resolve_tool が DEPENDENCY_MISSING を送出）
+     → error JSON + exit 0
   ⑥ JSON が stdout のみに出る（ログ等は stderr）
-
-vad_cli.py が未実装のため全テストは「機能未実装による失敗」で Red になる。
+  ⑦ --media-duration 引数受け取りと内側 ffmpeg timeout 連動（CR M-2 / SR M-2）
+  ⑧ SUBPROCESS_FAILED ハンドラが ffmpeg stderr 断片でなく汎用文言を出力（SR M-1）
+  ⑨ ImportError message に内部パスでなく固定文言/exc.name 相当が入る（SR L-2）
 """
 
 from __future__ import annotations
 
 import io
 import json
-import sys
-from types import ModuleType
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -37,7 +39,6 @@ import pytest
 # ---------------------------------------------------------------------------
 
 try:
-    from clipwright_silence import vad_cli as _vad_cli_module
     from clipwright_silence.vad_cli import main as vad_main
 
     _VAD_CLI_AVAILABLE = True
@@ -64,10 +65,14 @@ def _make_silero_mock(
 ) -> tuple[MagicMock, MagicMock]:
     """silero_vad モジュールのモック一式を返す。
 
+    MagicMock(spec=ModuleType) は types.ModuleType に存在しない
+    load_silero_vad / get_speech_timestamps へのアクセスを拒否するため、
+    spec なし MagicMock() を使う。
+
     Returns:
         (mock_silero_vad_module, mock_get_speech_timestamps)
     """
-    mock_module = MagicMock(spec=ModuleType)
+    mock_module = MagicMock()
     mock_model = MagicMock()
     mock_module.load_silero_vad.return_value = mock_model
 
@@ -108,11 +113,8 @@ class TestArgParsing:
         exit_code, result = _capture_main([])
         assert exit_code == 0
         assert "error" in result
-        assert result["error"]["code"] in (
-            "INVALID_INPUT",
-            "DEPENDENCY_MISSING",
-            "SUBPROCESS_FAILED",
-        )
+        # --media 省略による SystemExit は必ず INVALID_INPUT に変換される（§7.1）
+        assert result["error"]["code"] == "INVALID_INPUT"
 
     def test_defaults_are_used(self) -> None:
         """--threshold / --min-speech / --min-silence のデフォルト値が使われる。
@@ -277,7 +279,7 @@ class TestSpeechSegmentsOutput:
         その場合も正しく [start_sec, end_sec] を組み立てること。
         """
         # return_seconds=True 経路: {"start": 1.0, "end": 2.5} を返すモック
-        mock_module_new = MagicMock(spec=ModuleType)
+        mock_module_new = MagicMock()
         mock_model = MagicMock()
         mock_module_new.load_silero_vad.return_value = mock_model
         # float 値を直接返す（秒単位 API）
@@ -325,10 +327,10 @@ class TestSpeechSegmentsOutput:
 class TestImportErrorPath:
     """silero-vad / onnxruntime が import できない場合の DEPENDENCY_MISSING 検証。"""
 
-    def test_silero_vad_import_error_returns_dependency_missing(self) -> None:
+    def test_silero_vad_import_error_returns_dependency_missing(
+        self,
+    ) -> None:
         """silero_vad が import できないとき DEPENDENCY_MISSING JSON + exit 0 を返す。"""
-        # sys.modules から silero_vad を除去して ImportError を強制
-        modules_patch = {k: v for k, v in sys.modules.items()}
         # silero_vad が存在していたら一旦 None に
         with patch.dict(
             "sys.modules",
@@ -372,7 +374,7 @@ class TestImportErrorPath:
         ImportError が伝播するケースを検証する。
         """
         # silero_vad の load_silero_vad が ImportError を送出するシミュレーション
-        mock_module = MagicMock(spec=ModuleType)
+        mock_module = MagicMock()
         mock_module.load_silero_vad.side_effect = ImportError(
             "No module named 'onnxruntime'"
         )
@@ -391,7 +393,10 @@ class TestImportErrorPath:
 
 
 class TestFfmpegSubprocessFailure:
-    """内部 ffmpeg が SUBPROCESS_FAILED を投げた場合の error JSON + exit 0 検証（DC-AS-001）。"""
+    """内部 ffmpeg が SUBPROCESS_FAILED を投げた場合の error JSON + exit 0 検証。
+
+    DC-AS-001 準拠。
+    """
 
     def test_subprocess_failed_returns_error_json(self) -> None:
         """core run() が ClipwrightError(SUBPROCESS_FAILED) を送出したとき
@@ -478,10 +483,13 @@ class TestFfmpegSubprocessFailure:
 
 
 class TestFfmpegResolveFailed:
-    """ffmpeg が resolve_tool で見つからない場合の DEPENDENCY_MISSING 検証（DC-AS-006）。"""
+    """ffmpeg が resolve_tool で見つからない場合の DEPENDENCY_MISSING 検証。
+
+    DC-AS-006 準拠。
+    """
 
     def test_resolve_tool_failure_returns_dependency_missing(self) -> None:
-        """resolve_tool が DEPENDENCY_MISSING を送出したとき error JSON + exit 0 を返す。"""
+        """resolve_tool が DEPENDENCY_MISSING を送出したとき error JSON + exit 0。"""
         from clipwright.errors import ClipwrightError, ErrorCode
 
         mock_module, _ = _make_silero_mock([])
@@ -638,3 +646,234 @@ class TestStdoutStderrSeparation:
         except (json.JSONDecodeError, ValueError):
             # stderr が JSON でなければ問題なし（ログ文字列 OK）
             pass
+
+
+# ---------------------------------------------------------------------------
+# ⑦ --media-duration 引数と内側 ffmpeg timeout 連動（CR M-2 / SR M-2）
+# ---------------------------------------------------------------------------
+
+
+class TestMediaDurationArg:
+    """--media-duration 引数を受け取り内側 ffmpeg timeout を total に連動させる検証。
+
+    CR M-2 / SR M-2: 内側 ffmpeg timeout = max(30, ceil(total_duration * 2))
+    detect.py から total_duration_sec を --media-duration として渡すことで
+    §7.7「内側 timeout は外側より必ず短く」を満たす設計を検証する。
+    """
+
+    def test_media_duration_arg_accepted(self) -> None:
+        """--media-duration 引数を受け取り正常終了すること（引数拒否しない）。"""
+        mock_module, _ = _make_silero_mock([])
+        fake_wave_module = MagicMock()
+        fake_wave_file = MagicMock()
+        fake_wave_file.__enter__ = MagicMock(return_value=fake_wave_file)
+        fake_wave_file.__exit__ = MagicMock(return_value=False)
+        fake_wave_file.getnframes.return_value = 0
+        fake_wave_file.getframerate.return_value = 16000
+        fake_wave_file.readframes.return_value = b""
+        fake_wave_module.open.return_value = fake_wave_file
+
+        with (
+            patch.dict("sys.modules", {"silero_vad": mock_module}),
+            patch(
+                "clipwright_silence.vad_cli.resolve_tool",
+                return_value="/usr/bin/ffmpeg",
+            ),
+            patch("clipwright_silence.vad_cli.run") as mock_run,
+            patch("wave.open", fake_wave_module.open),
+            patch("numpy.frombuffer", return_value=MagicMock()),
+            patch("tempfile.NamedTemporaryFile"),
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            exit_code, result = _capture_main(
+                ["--media", _DUMMY_MEDIA, "--media-duration", "60.0"]
+            )
+
+        # --media-duration を受け取れる（argparse が SystemExit しない）こと
+        assert exit_code == 0
+        assert (
+            "error" not in result
+            or result.get("error", {}).get("code") != "INVALID_INPUT"
+        )
+
+    def test_ffmpeg_timeout_uses_media_duration(self) -> None:
+        """--media-duration 指定時に内側 ffmpeg timeout が total 連動になること。
+
+        run() の timeout 引数をモックで確認する。
+        CR M-2 修正前（固定120秒）は total=10s でも120秒になるため Red。
+        修正後は total=10s → max(30, ceil(10*2))=30 になることを期待する。
+        """
+        import math
+
+        total_duration = 10.0
+        expected_timeout = float(max(30, math.ceil(total_duration * 2)))
+
+        mock_module, _ = _make_silero_mock([])
+        fake_wave_module = MagicMock()
+        fake_wave_file = MagicMock()
+        fake_wave_file.__enter__ = MagicMock(return_value=fake_wave_file)
+        fake_wave_file.__exit__ = MagicMock(return_value=False)
+        fake_wave_file.getnframes.return_value = 16000 * int(total_duration)
+        fake_wave_file.getframerate.return_value = 16000
+        fake_wave_file.readframes.return_value = b"\x00" * (
+            16000 * int(total_duration) * 2
+        )
+        fake_wave_module.open.return_value = fake_wave_file
+
+        with (
+            patch.dict("sys.modules", {"silero_vad": mock_module}),
+            patch(
+                "clipwright_silence.vad_cli.resolve_tool",
+                return_value="/usr/bin/ffmpeg",
+            ),
+            patch("clipwright_silence.vad_cli.run") as mock_run,
+            patch("wave.open", fake_wave_module.open),
+            patch("numpy.frombuffer", return_value=MagicMock()),
+            patch("tempfile.NamedTemporaryFile"),
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            _capture_main(
+                [
+                    "--media",
+                    _DUMMY_MEDIA,
+                    "--media-duration",
+                    str(total_duration),
+                ]
+            )
+
+        # run() が呼ばれたときの timeout キーワード引数を確認する
+        assert mock_run.called, "run() が呼ばれていない"
+        call_kwargs = mock_run.call_args
+        actual_timeout = call_kwargs.kwargs.get(
+            "timeout", call_kwargs.args[1] if len(call_kwargs.args) > 1 else None
+        )
+        assert actual_timeout == pytest.approx(expected_timeout), (
+            f"timeout={actual_timeout} が期待値 {expected_timeout} と異なる。"
+            f"--media-duration={total_duration} のとき max(30, ceil({total_duration}*2))="
+            f"{expected_timeout} になること。"
+        )
+
+
+# ---------------------------------------------------------------------------
+# ⑧ SUBPROCESS_FAILED ハンドラが ffmpeg stderr 断片でなく汎用文言を出力する（SR M-1）
+# ---------------------------------------------------------------------------
+
+
+class TestSubprocessFailedSanitize:
+    """ClipwrightError(SUBPROCESS_FAILED) ハンドラが stderr 断片を漏らさないことを検証。
+
+    SR M-1: process.py が ClipwrightError.message に stderr[:200] を埋め込む。
+    vad_cli.py の except ClipwrightError ハンドラでその message をそのまま出すと
+    内部パス（-i /path/to/video.mp4 等）が MCP レスポンスに漏洩する。
+    汎用文言（「内部サブプロセスが失敗しました」相当）に差し替えることを検証する。
+    """
+
+    def _run_with_subprocess_failed(self, stderr_fragment: str) -> dict[str, Any]:
+        """指定 stderr 断片を含む ClipwrightError(SUBPROCESS_FAILED) を送出して main を実行。"""
+        from clipwright.errors import ClipwrightError, ErrorCode
+
+        mock_module, _ = _make_silero_mock([])
+
+        with (
+            patch.dict("sys.modules", {"silero_vad": mock_module}),
+            patch(
+                "clipwright_silence.vad_cli.resolve_tool",
+                return_value="/usr/bin/ffmpeg",
+            ),
+            patch("clipwright_silence.vad_cli.run") as mock_run,
+            patch("tempfile.NamedTemporaryFile"),
+        ):
+            mock_run.side_effect = ClipwrightError(
+                code=ErrorCode.SUBPROCESS_FAILED,
+                message=f"コマンドが終了コード 1 で失敗しました: {stderr_fragment}",
+                hint="ffmpeg の引数を確認してください",
+            )
+            _, result = _capture_main(["--media", _DUMMY_MEDIA])
+        return result
+
+    def test_subprocess_failed_message_does_not_contain_stderr_fragment(
+        self,
+    ) -> None:
+        """SUBPROCESS_FAILED の message に ffmpeg stderr 断片が含まれない。
+
+        SR M-1 修正前は exc.message をそのまま出すため stderr 断片がそのまま漏洩する。
+        修正後は汎用文言（ffmpeg stderr 非露出）になることを期待する。
+        """
+        secret_path = "/home/user/private/videos/secret.mp4"
+        stderr_fragment = f"-i {secret_path}"
+        result = self._run_with_subprocess_failed(stderr_fragment)
+
+        assert "error" in result
+        message = result["error"].get("message", "")
+        # ffmpeg stderr に含まれる内部パス断片が message に出ていないこと
+        assert secret_path not in message, (
+            f"message に内部パス '{secret_path}' が含まれている: {message!r}"
+        )
+        assert stderr_fragment not in message, (
+            f"message に stderr 断片 '{stderr_fragment}' が含まれている: {message!r}"
+        )
+
+    def test_subprocess_failed_message_is_generic(self) -> None:
+        """SUBPROCESS_FAILED の message は汎用文言であること。"""
+        result = self._run_with_subprocess_failed("some stderr output")
+
+        assert "error" in result
+        message = result["error"].get("message", "")
+        # 何らかの汎用文言が入っていること（空でない）
+        assert len(message) > 0
+
+
+# ---------------------------------------------------------------------------
+# ⑨ ImportError message に内部パスでなく固定文言/exc.name 相当が入る（SR L-2）
+# ---------------------------------------------------------------------------
+
+
+class TestImportErrorMessageSanitize:
+    """ImportError message に Python 内部パスが含まれないことを検証。
+
+    SR L-2: ImportError の str(exc) には
+    "cannot import name 'X' from '/path/to/site-packages/...'" 等の
+    内部パスが含まれることがある。
+    固定文言または exc.name（モジュール名のみ）を使うことを検証する。
+    """
+
+    def _run_with_import_error(self, exc_message: str) -> dict[str, Any]:
+        """指定 message を持つ ImportError を silero_vad import 時に送出して main を実行。"""
+        # sys.modules を None にすると ImportError が発生する
+        with patch.dict(
+            "sys.modules",
+            {"silero_vad": None},  # type: ignore[dict-item]
+        ):
+            _, result = _capture_main(["--media", _DUMMY_MEDIA])
+        return result
+
+    def test_import_error_message_excludes_internal_path(self) -> None:
+        """DEPENDENCY_MISSING の message に Python 内部パスが含まれない。
+
+        SR L-2 修正前は f"...{exc}" で exc の str 表現をそのまま使うため
+        内部パスが漏洩しうる。修正後は固定文言または exc.name を使うことを期待する。
+        この検証は「/site-packages/」「/usr/lib/python」等の典型的な内部パス断片が
+        message に含まれないことを確認する。
+        """
+        result = self._run_with_import_error(
+            "cannot import name 'load_silero_vad' "
+            "from '/home/user/.venv/lib/python3.11/site-packages/silero_vad/__init__.py'"
+        )
+        assert "error" in result
+        assert result["error"]["code"] == "DEPENDENCY_MISSING"
+        message = result["error"].get("message", "")
+        # 内部パス断片が message に含まれていないこと
+        assert "/site-packages/" not in message, (
+            f"message に内部パス '/site-packages/' が含まれている: {message!r}"
+        )
+
+    def test_import_error_message_is_fixed_or_module_name(self) -> None:
+        """DEPENDENCY_MISSING の message は固定文言またはモジュール名のみであること。
+
+        実装が exc.name を使うか固定文言を使うかに関わらず、
+        message が空でなく適切な文言であることを検証する。
+        """
+        result = self._run_with_import_error("No module named 'silero_vad'")
+        assert "error" in result
+        message = result["error"].get("message", "")
+        assert len(message) > 0

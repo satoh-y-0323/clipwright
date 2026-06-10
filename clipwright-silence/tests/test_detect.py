@@ -24,7 +24,9 @@
 
 from __future__ import annotations
 
+import json
 import math
+import sys
 from pathlib import Path
 from subprocess import CompletedProcess
 from typing import Any
@@ -1451,18 +1453,14 @@ class TestAbnormalIntervalGuard:
 # 現状 backend="vad" 分岐は未実装 → 全テスト Red（機能未実装による失敗）
 # ===========================================================================
 
-import json
-import sys
-
 
 def _make_vad_speech_json(speech_segments: list[tuple[float, float]]) -> str:
     """VAD CLI の stdout JSON（成功）を生成するヘルパー。
 
     各要素は (start_sec, end_sec) の発話区間タプル。
+    vad_cli.py の実出力形式（list 形式 [[start, end], ...]）に合わせる（CR M-4 / CR-T-001）。
     """
-    return json.dumps(
-        {"speech_segments": [{"start": s, "end": e} for s, e in speech_segments]}
-    )
+    return json.dumps({"speech_segments": [[s, e] for s, e in speech_segments]})
 
 
 def _make_vad_error_json(code: str, message: str, hint: str) -> str:
@@ -2481,24 +2479,297 @@ class TestVadTimeout:
     def test_vad_timeout_exceeds_silencedetect_timeout_for_long_video(
         self, tmp_path: Path
     ) -> None:
-        """長尺素材（100s）の VAD timeout が silencedetect より大きい。
+        """長尺素材（100s）の VAD timeout が silencedetect timeout より大きいことを確認。
 
         VAD: max(60, ceil(100*4))=400。silencedetect: max(60, ceil(100*2))=200。
+        両者を実際にそれぞれ起動して timeout を比較する（CR L-5 / CR-T-004）。
+        """
+        from clipwright_silence.detect import detect_silence
+
+        media_vad = str(tmp_path / "video_vad.mp4")
+        Path(media_vad).touch()
+        output_vad = str(tmp_path / "out_vad.otio")
+        media_info = _make_media_info(path=media_vad, duration_sec=100.0)
+        speech_json = _make_vad_speech_json([(10.0, 90.0)])
+
+        vad_timeouts: list[float] = []
+
+        def _capture_vad_run(
+            cmd: list[str], *, timeout: float = 60.0, **kwargs: Any
+        ) -> CompletedProcess[str]:
+            vad_timeouts.append(timeout)
+            return CompletedProcess(
+                args=cmd, returncode=0, stdout=speech_json, stderr=""
+            )
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch("clipwright_silence.detect.run", side_effect=_capture_vad_run),
+        ):
+            detect_silence(media_vad, output_vad, _vad_opts())
+
+        # silencedetect 経路の timeout を取得
+        media_sd = str(tmp_path / "video_sd.mp4")
+        Path(media_sd).touch()
+        output_sd = str(tmp_path / "out_sd.otio")
+        media_info_sd = _make_media_info(path=media_sd, duration_sec=100.0)
+        stderr_sd = _make_stderr([(10.0, 90.0)])
+
+        sd_timeouts: list[float] = []
+
+        def _capture_sd_run(
+            cmd: list[str], *, timeout: float = 60.0, **kwargs: Any
+        ) -> CompletedProcess[str]:
+            sd_timeouts.append(timeout)
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr=stderr_sd)
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info_sd,
+            ),
+            patch(
+                "clipwright_silence.detect.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
+            patch("clipwright_silence.detect.run", side_effect=_capture_sd_run),
+        ):
+            detect_silence(media_sd, output_sd, _opts())
+
+        assert len(vad_timeouts) >= 1
+        assert len(sd_timeouts) >= 1
+        # total=100s → VAD: max(60, ceil(100*4))=400、silencedetect: max(60, ceil(100*2))=200
+        vad_timeout = vad_timeouts[0]
+        sd_timeout = sd_timeouts[0]
+        assert vad_timeout == pytest.approx(400, abs=1)
+        assert sd_timeout == pytest.approx(200, abs=1)
+        # VAD timeout > silencedetect timeout を assert（テスト名と内容の一致）
+        assert vad_timeout > sd_timeout
+
+
+# ===========================================================================
+# SR H-1 [SR-R-001]: VAD CLI stdout が空/不正 JSON → SUBPROCESS_FAILED（新規 Red）
+# 現状 detect.py L182 の json.loads に try/except がないため Red になる想定
+# ===========================================================================
+
+
+class TestVadJsonDecodeDefense:
+    """VAD CLI stdout が空文字列や不正 JSON の場合に SUBPROCESS_FAILED エンベロープを返す。
+
+    detect.py の _detect_vad_silence_intervals が json.loads の JSONDecodeError を
+    捕捉せず伝播させているため、detect_silence が SUBPROCESS_FAILED を返さず
+    未処理例外が送出される → Red（SR H-1 / SR-R-001）。
+    """
+
+    def test_empty_stdout_returns_subprocess_failed(self, tmp_path: Path) -> None:
+        """VAD CLI stdout が空文字列 → SUBPROCESS_FAILED エンベロープを返す（SR H-1）。
+
+        現状: json.loads("") が JSONDecodeError を送出し detect_silence の
+        except ClipwrightError で捕捉されずに未処理例外が伝播する → Red。
         """
         from clipwright_silence.detect import detect_silence
 
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
         output = str(tmp_path / "out.otio")
-        media_info = _make_media_info(path=media, duration_sec=100.0)
-        speech_json = _make_vad_speech_json([(10.0, 90.0)])
+        media_info = _make_media_info(path=media, duration_sec=10.0)
 
-        captured_timeouts: list[float] = []
+        def _run_empty_stdout(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
-        def _capture_run(
-            cmd: list[str], *, timeout: float = 60.0, **kwargs: Any
-        ) -> CompletedProcess[str]:
-            captured_timeouts.append(timeout)
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch("clipwright_silence.detect.run", side_effect=_run_empty_stdout),
+        ):
+            result = detect_silence(media, output, _vad_opts())
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.SUBPROCESS_FAILED
+
+    def test_invalid_json_stdout_returns_subprocess_failed(
+        self, tmp_path: Path
+    ) -> None:
+        """VAD CLI stdout が不正 JSON → SUBPROCESS_FAILED エンベロープを返す（SR H-1）。
+
+        現状: json.loads("not json") が JSONDecodeError を送出し detect_silence の
+        except ClipwrightError で捕捉されずに未処理例外が伝播する → Red。
+        """
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        def _run_invalid_json(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            return CompletedProcess(
+                args=cmd, returncode=0, stdout="not json", stderr=""
+            )
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch("clipwright_silence.detect.run", side_effect=_run_invalid_json),
+        ):
+            result = detect_silence(media, output, _vad_opts())
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.SUBPROCESS_FAILED
+
+
+# ===========================================================================
+# SR L-3 [SR-V-001]: speech_segments に不正要素が混入 → スキップして処理継続（新規 Red）
+# 現状 detect.py L200-215 の for ループに try/except がないため Red になる想定
+# ===========================================================================
+
+
+class TestVadSpeechSegmentsMalformedElements:
+    """speech_segments に不正要素（null/string/空 dict 等）が混入した場合の防御。
+
+    現状: detect.py の for ループに try/except がないため TypeError/KeyError/IndexError が
+    伝播する → Red（SR L-3 / SR-V-001）。
+    修正後: 不正要素をスキップして処理を継続し、valid な区間は正しく処理される。
+    """
+
+    def test_null_element_in_speech_segments_is_skipped(self, tmp_path: Path) -> None:
+        """speech_segments に null 要素が含まれる場合、スキップして処理継続（SR L-3）。
+
+        現状: seg=None で isinstance(None, (list, tuple)) が False → seg["start"] で
+        TypeError が発生し伝播する → Red。
+        """
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        # null 要素混入: [null, [1.0, 5.0]] → null はスキップ、[1.0, 5.0] は有効
+        malformed_json = json.dumps({"speech_segments": [None, [1.0, 5.0]]})
+
+        def _run_malformed(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            return CompletedProcess(
+                args=cmd, returncode=0, stdout=malformed_json, stderr=""
+            )
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch("clipwright_silence.detect.run", side_effect=_run_malformed),
+        ):
+            result = detect_silence(media, output, _vad_opts(padding=0.0))
+
+        # null はスキップされ、[1.0, 5.0] の発話区間から KEEP が計算される → ok=True
+        assert result["ok"] is True
+
+    def test_string_element_in_speech_segments_is_skipped(self, tmp_path: Path) -> None:
+        """speech_segments に string 要素が含まれる場合、スキップして処理継続（SR L-3）。
+
+        現状: seg="abc" で isinstance("abc", (list, tuple)) が False → "abc"["start"] で
+        TypeError が発生し伝播する → Red。
+        """
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        # string 要素混入: ["abc", [2.0, 8.0]] → "abc" はスキップ、[2.0, 8.0] は有効
+        malformed_json = json.dumps({"speech_segments": ["abc", [2.0, 8.0]]})
+
+        def _run_malformed(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            return CompletedProcess(
+                args=cmd, returncode=0, stdout=malformed_json, stderr=""
+            )
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch("clipwright_silence.detect.run", side_effect=_run_malformed),
+        ):
+            result = detect_silence(media, output, _vad_opts(padding=0.0))
+
+        assert result["ok"] is True
+
+    def test_empty_dict_element_in_speech_segments_is_skipped(
+        self, tmp_path: Path
+    ) -> None:
+        """speech_segments に空 dict 要素が含まれる場合、スキップして処理継続（SR L-3）。
+
+        現状: seg={} で seg["start"] が KeyError を送出し伝播する → Red。
+        """
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        # 空 dict 混入: [{}, [3.0, 7.0]] → {} はスキップ、[3.0, 7.0] は有効
+        malformed_json = json.dumps({"speech_segments": [{}, [3.0, 7.0]]})
+
+        def _run_malformed(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            return CompletedProcess(
+                args=cmd, returncode=0, stdout=malformed_json, stderr=""
+            )
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch("clipwright_silence.detect.run", side_effect=_run_malformed),
+        ):
+            result = detect_silence(media, output, _vad_opts(padding=0.0))
+
+        assert result["ok"] is True
+
+
+# ===========================================================================
+# CR M-2/SR M-2: detect が vad_cli 起動 cmd に --media-duration を含める（新規 Red）
+# 現状 detect.py L167-179 の cmd に --media-duration がないため Red になる想定
+# ===========================================================================
+
+
+class TestVadMediaDurationArg:
+    """VAD CLI 起動コマンドに --media-duration <total_duration_sec> が含まれることを検証。
+
+    現状 detect.py の cmd 構築に --media-duration が存在しないため Red（CR M-2/SR M-2）。
+    修正後: cmd に ["--media-duration", str(total_duration_sec)] が含まれることを assert。
+    """
+
+    def test_vad_cmd_contains_media_duration_arg(self, tmp_path: Path) -> None:
+        """VAD CLI 起動 cmd に --media-duration が含まれる（CR M-2 / SR M-2）。
+
+        現状: cmd = [..., "--media", ..., "--threshold", ..., "--min-speech", ...,
+        "--min-silence", ...] で --media-duration が含まれない → Red。
+        """
+        from clipwright_silence.detect import detect_silence
+
+        total_duration = 42.5
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=total_duration)
+        speech_json = _make_vad_speech_json([(1.0, 40.0)])
+
+        captured_cmds: list[list[str]] = []
+
+        def _capture_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            captured_cmds.append(cmd)
             return CompletedProcess(
                 args=cmd, returncode=0, stdout=speech_json, stderr=""
             )
@@ -2512,6 +2783,10 @@ class TestVadTimeout:
         ):
             detect_silence(media, output, _vad_opts())
 
-        assert len(captured_timeouts) >= 1
-        # total=100s → max(60, ceil(100*4))=400
-        assert captured_timeouts[0] == pytest.approx(400, abs=1)
+        assert len(captured_cmds) >= 1
+        cmd = captured_cmds[0]
+        # --media-duration が cmd に含まれていること
+        assert "--media-duration" in cmd
+        dur_idx = cmd.index("--media-duration")
+        # 値が total_duration_sec を文字列化したものであること
+        assert float(cmd[dur_idx + 1]) == pytest.approx(total_duration)
