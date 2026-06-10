@@ -2,11 +2,12 @@
 
 対象:
   - _probe(source) -> ProbeInfo
-    ffprobe 実行・JSON パース・bit_rate/has_video/audio_count の抽出
+    inspect_media 呼び出し・MediaInfo→ProbeInfo アダプタ変換
   - render_timeline(timeline, source, output, options, dry_run) のオーケストレーション
     入力検証・dry_run 経路・実行経路・エラー伝播
 
-process.run / resolve_tool は clipwright.process をモックして検証する。
+inspect_media は clipwright_render.render.inspect_media をモックして検証する。
+process.run は ffmpeg 呼び出し専用に縮小して patch する。
 実 ffmpeg/ffprobe バイナリは一切呼ばない（integration テストは別ファイル担当）。
 """
 
@@ -21,6 +22,7 @@ from unittest.mock import patch
 import opentimelineio as otio
 import pytest
 from clipwright.errors import ClipwrightError, ErrorCode
+from clipwright.schemas import MediaInfo, StreamInfo
 
 from clipwright_render.schemas import RenderOptions
 
@@ -65,38 +67,127 @@ def _write_timeline(path: Path, clips: list[otio.schema.Clip]) -> None:
     otio.adapters.write_to_file(tl, str(path))
 
 
-def _fake_probe_result(
+def _make_media_info(
+    path: str = "/fake/source.mp4",
     *,
-    bit_rate: str | None = "8000000",
+    bit_rate: int | None = 8_000_000,
     has_video: bool = True,
     audio_streams: int = 1,
-) -> CompletedProcess[str]:
-    """ffprobe が返す JSON 出力を模した CompletedProcess を生成する。"""
-    streams: list[dict[str, Any]] = []
+    extra_streams: list[StreamInfo] | None = None,
+) -> MediaInfo:
+    """テスト用 MediaInfo を構築するヘルパー。
+
+    inspect_media のモック戻り値として使用する。
+    bit_rate は int | None で渡す（_to_optional_int 変換済みを想定）。
+    """
+    streams: list[StreamInfo] = []
     if has_video:
-        streams.append({"codec_type": "video", "codec_name": "h264"})
-    for _ in range(audio_streams):
-        streams.append({"codec_type": "audio", "codec_name": "aac"})
-    fmt: dict[str, Any] = {}
-    if bit_rate is not None:
-        fmt["bit_rate"] = bit_rate
-    payload = {"streams": streams, "format": fmt}
-    cp: CompletedProcess[str] = CompletedProcess(
-        args=[], returncode=0, stdout=json.dumps(payload), stderr=""
+        streams.append(StreamInfo(index=0, codec_type="video", codec_name="h264"))
+    for i in range(audio_streams):
+        streams.append(
+            StreamInfo(
+                index=len(streams),
+                codec_type="audio",
+                codec_name="aac",
+            )
+        )
+    if extra_streams:
+        streams.extend(extra_streams)
+    return MediaInfo(
+        path=path,
+        container="mov,mp4,m4a,3gp,3g2,mj2",
+        duration=None,
+        streams=streams,
+        bit_rate=bit_rate,
     )
-    return cp
 
 
 # ---------------------------------------------------------------------------
 # _probe() テスト群（DC-GP-001 / AS-001 / AM-007）
+# (a) inspect_media モックベースへ移行
 # ---------------------------------------------------------------------------
 
 
 class TestProbe:
-    """_probe(source) の動作検証。"""
+    """_probe(source) の動作検証。
 
-    def test_probe_calls_ffprobe_with_array_args(self, tmp_path: Path) -> None:
-        """ffprobe を引数配列で呼ぶこと（コマンドインジェクション防止）。"""
+    ffprobe 直叩きモックを廃止し、clipwright_render.render.inspect_media を
+    patch して MediaInfo を供給するスタイルへ移行する（DC-GP-001/AD-3）。
+    """
+
+    def test_probe_video_audio_bit_rate(self, tmp_path: Path) -> None:
+        """video+audio+bit_rate を持つ MediaInfo → ProbeInfo(has_video=True, audio_count=1, bit_rate=8000000)。"""
+        from clipwright_render.render import _probe
+
+        source = str(tmp_path / "a.mp4")
+        Path(source).touch()
+
+        media_info = _make_media_info(path=source, bit_rate=8_000_000, has_video=True, audio_streams=1)
+
+        with patch(
+            "clipwright_render.render.inspect_media",
+            return_value=media_info,
+        ) as mock_inspect:
+            info = _probe(source)
+
+        mock_inspect.assert_called_once_with(source)
+        assert info.has_video is True
+        assert info.audio_count == 1
+        assert info.bit_rate == 8_000_000
+
+    def test_probe_audio_count_zero(self, tmp_path: Path) -> None:
+        """音声ストリーム数 0 → audio_count=0（DC-GP-001）。"""
+        from clipwright_render.render import _probe
+
+        source = str(tmp_path / "a.mp4")
+        Path(source).touch()
+
+        media_info = _make_media_info(path=source, has_video=True, audio_streams=0)
+
+        with patch(
+            "clipwright_render.render.inspect_media",
+            return_value=media_info,
+        ):
+            info = _probe(source)
+
+        assert info.audio_count == 0
+
+    def test_probe_audio_count_multiple(self, tmp_path: Path) -> None:
+        """音声ストリーム複数 → audio_count=N（DC-GP-001）。"""
+        from clipwright_render.render import _probe
+
+        source = str(tmp_path / "a.mp4")
+        Path(source).touch()
+
+        media_info = _make_media_info(path=source, has_video=True, audio_streams=3)
+
+        with patch(
+            "clipwright_render.render.inspect_media",
+            return_value=media_info,
+        ):
+            info = _probe(source)
+
+        assert info.audio_count == 3
+
+    def test_probe_bit_rate_none(self, tmp_path: Path) -> None:
+        """MediaInfo.bit_rate が None → ProbeInfo.bit_rate is None（DC-GP-001）。"""
+        from clipwright_render.render import _probe
+
+        source = str(tmp_path / "a.mp4")
+        Path(source).touch()
+
+        media_info = _make_media_info(path=source, bit_rate=None)
+
+        with patch(
+            "clipwright_render.render.inspect_media",
+            return_value=media_info,
+        ):
+            info = _probe(source)
+
+        assert info.bit_rate is None
+
+    def test_probe_propagates_probe_failed(self, tmp_path: Path) -> None:
+        """inspect_media が PROBE_FAILED を送出 → _probe がそれを伝播する（DC-GP-001）。"""
         from clipwright_render.render import _probe
 
         source = str(tmp_path / "a.mp4")
@@ -104,219 +195,96 @@ class TestProbe:
 
         with (
             patch(
-                "clipwright_render.render.resolve_tool",
-                return_value="/usr/bin/ffprobe",
-            ) as mock_resolve,
-            patch(
-                "clipwright_render.render.run",
-                return_value=_fake_probe_result(),
-            ) as mock_run,
+                "clipwright_render.render.inspect_media",
+                side_effect=ClipwrightError(
+                    code=ErrorCode.PROBE_FAILED,
+                    message="ffprobe の出力が有効な JSON ではありません。",
+                    hint="入力ファイルが有効なメディアファイルか確認してください。",
+                ),
+            ),
+            pytest.raises(ClipwrightError) as exc_info,
         ):
             _probe(source)
 
-        mock_resolve.assert_called_once_with("ffprobe", "CLIPWRIGHT_FFPROBE")
-        args, kwargs = mock_run.call_args
-        cmd = args[0]
-        assert isinstance(cmd, list), "cmd は引数配列（list）でなければならない"
-        # 先頭は resolve_tool で返されたパス
-        assert cmd[0] == "/usr/bin/ffprobe"
-        # -print_format json / -show_format / -show_streams を含む
-        joined = " ".join(cmd)
-        assert "json" in joined
-        assert "-show_format" in joined
-        assert "-show_streams" in joined
-        # source パスが末尾引数として含まれる
-        assert source in cmd
+        assert exc_info.value.code == ErrorCode.PROBE_FAILED
 
-    def test_probe_parses_bit_rate(self, tmp_path: Path) -> None:
-        """format.bit_rate を int で ProbeInfo に格納する（DC-GP-001）。"""
-        from clipwright_render.render import _probe
-
-        source = str(tmp_path / "a.mp4")
-        Path(source).touch()
-
-        with (
-            patch(
-                "clipwright_render.render.resolve_tool", return_value="/usr/bin/ffprobe"
-            ),
-            patch(
-                "clipwright_render.render.run",
-                return_value=_fake_probe_result(bit_rate="8000000"),
-            ),
-        ):
-            info = _probe(source)
-
-        assert info.bit_rate == 8_000_000
-
-    def test_probe_bit_rate_missing_returns_none(self, tmp_path: Path) -> None:
-        """format.bit_rate 欠落時 ProbeInfo.bit_rate が None になる（DC-GP-001）。"""
-        from clipwright_render.render import _probe
-
-        source = str(tmp_path / "a.mp4")
-        Path(source).touch()
-
-        with (
-            patch(
-                "clipwright_render.render.resolve_tool", return_value="/usr/bin/ffprobe"
-            ),
-            patch(
-                "clipwright_render.render.run",
-                return_value=_fake_probe_result(bit_rate=None),
-            ),
-        ):
-            info = _probe(source)
-
-        assert info.bit_rate is None
-
-    def test_probe_bit_rate_na_string_returns_none(self, tmp_path: Path) -> None:
-        """bit_rate='N/A' → ProbeInfo.bit_rate=None（PROBE_FAILED にしない・M-3）。
-
-        ffprobe が 'N/A' や空文字を返す場合は ValueError をキャッチし
-        None にフォールバックすること。
-        """
-        from clipwright_render.render import _probe
-
-        source = str(tmp_path / "a.mp4")
-        Path(source).touch()
-
-        with (
-            patch(
-                "clipwright_render.render.resolve_tool", return_value="/usr/bin/ffprobe"
-            ),
-            patch(
-                "clipwright_render.render.run",
-                return_value=_fake_probe_result(bit_rate="N/A"),
-            ),
-        ):
-            info = _probe(source)
-
-        # "N/A" は int() 変換不可 → None フォールバック（PROBE_FAILED にしない）
-        assert info.bit_rate is None
-
-    def test_probe_has_video_true(self, tmp_path: Path) -> None:
-        """video stream がある場合 has_video=True（DC-GP-001）。"""
-        from clipwright_render.render import _probe
-
-        source = str(tmp_path / "a.mp4")
-        Path(source).touch()
-
-        with (
-            patch(
-                "clipwright_render.render.resolve_tool", return_value="/usr/bin/ffprobe"
-            ),
-            patch(
-                "clipwright_render.render.run",
-                return_value=_fake_probe_result(has_video=True),
-            ),
-        ):
-            info = _probe(source)
-
-        assert info.has_video is True
-
-    def test_probe_no_video_stream(self, tmp_path: Path) -> None:
+    def test_probe_has_video_false(self, tmp_path: Path) -> None:
         """video stream が無い場合 has_video=False（DC-GP-001）。"""
         from clipwright_render.render import _probe
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
 
-        with (
-            patch(
-                "clipwright_render.render.resolve_tool", return_value="/usr/bin/ffprobe"
-            ),
-            patch(
-                "clipwright_render.render.run",
-                return_value=_fake_probe_result(has_video=False, audio_streams=1),
-            ),
+        media_info = _make_media_info(path=source, has_video=False, audio_streams=1)
+
+        with patch(
+            "clipwright_render.render.inspect_media",
+            return_value=media_info,
         ):
             info = _probe(source)
 
         assert info.has_video is False
 
-    def test_probe_audio_count(self, tmp_path: Path) -> None:
-        """audio stream 数が ProbeInfo.audio_count に格納される（DC-GP-001）。"""
+    def test_probe_audio_count_single(self, tmp_path: Path) -> None:
+        """audio stream が1本のとき audio_count=1（DC-GP-001）。"""
         from clipwright_render.render import _probe
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
 
-        with (
-            patch(
-                "clipwright_render.render.resolve_tool", return_value="/usr/bin/ffprobe"
-            ),
-            patch(
-                "clipwright_render.render.run",
-                return_value=_fake_probe_result(audio_streams=2),
-            ),
+        media_info = _make_media_info(path=source, has_video=True, audio_streams=1)
+
+        with patch(
+            "clipwright_render.render.inspect_media",
+            return_value=media_info,
         ):
             info = _probe(source)
 
-        assert info.audio_count == 2
+        assert info.audio_count == 1
 
-    def test_probe_no_audio_returns_zero(self, tmp_path: Path) -> None:
-        """音声ストリーム無し → audio_count=0（DC-GP-001）。"""
+
+# ---------------------------------------------------------------------------
+# (d) codec_type 欠落・空文字のエッジケース（DC-AM-002）
+# ---------------------------------------------------------------------------
+
+
+class TestProbeEdgeCases:
+    """_probe の codec_type 欠落・空文字等価性検証（DC-AM-002）。"""
+
+    def test_probe_codec_type_missing_or_empty_not_counted(self, tmp_path: Path) -> None:
+        """codec_type 欠落・空文字ストリームを含む MediaInfo で
+        has_video=False / audio_count=0 になる（旧実装と等価）。
+
+        旧実装: s.get("codec_type") == "video" → 欠落は None で不一致 → 数えない。
+        新実装: StreamInfo.codec_type は str(s.get("codec_type", "")) で "" に正規化 →
+                "video"/"audio" に一致しない → 数えない。両者は等価（DC-AM-002）。
+        """
         from clipwright_render.render import _probe
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
 
-        with (
-            patch(
-                "clipwright_render.render.resolve_tool", return_value="/usr/bin/ffprobe"
-            ),
-            patch(
-                "clipwright_render.render.run",
-                return_value=_fake_probe_result(has_video=True, audio_streams=0),
-            ),
+        # codec_type が "" のストリームを2本含む MediaInfo
+        extra_streams = [
+            StreamInfo(index=0, codec_type="", codec_name=None),
+            StreamInfo(index=1, codec_type="", codec_name="data"),
+        ]
+        media_info = MediaInfo(
+            path=source,
+            container=None,
+            duration=None,
+            streams=extra_streams,
+            bit_rate=None,
+        )
+
+        with patch(
+            "clipwright_render.render.inspect_media",
+            return_value=media_info,
         ):
             info = _probe(source)
 
+        assert info.has_video is False
         assert info.audio_count == 0
-
-    def test_probe_invalid_json_raises_probe_failed(self, tmp_path: Path) -> None:
-        """ffprobe が不正 JSON を返した場合 PROBE_FAILED を送出する（DC-GP-001）。"""
-        from clipwright_render.render import _probe
-
-        source = str(tmp_path / "a.mp4")
-        Path(source).touch()
-
-        bad_cp: CompletedProcess[str] = CompletedProcess(
-            args=[], returncode=0, stdout="not-json{{{{", stderr=""
-        )
-        with (
-            patch(
-                "clipwright_render.render.resolve_tool",
-                return_value="/usr/bin/ffprobe",
-            ),
-            patch("clipwright_render.render.run", return_value=bad_cp),
-            pytest.raises(ClipwrightError) as exc_info,
-        ):
-            _probe(source)
-        assert exc_info.value.code == ErrorCode.PROBE_FAILED
-
-    def test_probe_missing_streams_key_raises_probe_failed(
-        self, tmp_path: Path
-    ) -> None:
-        """必須キー streams が欠落した JSON → PROBE_FAILED（DC-GP-001）。"""
-        from clipwright_render.render import _probe
-
-        source = str(tmp_path / "a.mp4")
-        Path(source).touch()
-
-        payload = json.dumps({"format": {"bit_rate": "8000000"}})
-        bad_cp: CompletedProcess[str] = CompletedProcess(
-            args=[], returncode=0, stdout=payload, stderr=""
-        )
-        with (
-            patch(
-                "clipwright_render.render.resolve_tool",
-                return_value="/usr/bin/ffprobe",
-            ),
-            patch("clipwright_render.render.run", return_value=bad_cp),
-            pytest.raises(ClipwrightError) as exc_info,
-        ):
-            _probe(source)
-        assert exc_info.value.code == ErrorCode.PROBE_FAILED
 
 
 # ---------------------------------------------------------------------------
@@ -403,14 +371,9 @@ class TestInputValidation:
         _write_timeline(tl_path, [_make_clip(source, 0.0, 5.0)])
         output = str(tmp_path / f"out{ext}")
 
-        with (
-            patch(
-                "clipwright_render.render.resolve_tool", return_value="/usr/bin/ffprobe"
-            ),
-            patch(
-                "clipwright_render.render.run",
-                return_value=_fake_probe_result(),
-            ),
+        with patch(
+            "clipwright_render.render.inspect_media",
+            return_value=_make_media_info(path=source),
         ):
             result = render_timeline(
                 timeline=str(tl_path),
@@ -456,14 +419,9 @@ class TestInputValidation:
         output = str(tmp_path / "out.mp4")
         Path(output).touch()
 
-        with (
-            patch(
-                "clipwright_render.render.resolve_tool", return_value="/usr/bin/ffprobe"
-            ),
-            patch(
-                "clipwright_render.render.run",
-                return_value=_fake_probe_result(),
-            ),
+        with patch(
+            "clipwright_render.render.inspect_media",
+            return_value=_make_media_info(path=source),
         ):
             result = render_timeline(
                 timeline=str(tl_path),
@@ -523,9 +481,42 @@ class TestInputValidation:
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
 
+    def test_symlink_source_raises_file_not_found(self, tmp_path: Path) -> None:
+        """symlink ソースを持つ render_timeline 呼び出しが FILE_NOT_FOUND を返す（DC-AS-001）。
+
+        _probe → inspect_media._validate_existing_file がシンボリックリンクを
+        FILE_NOT_FOUND で拒否することを render_timeline 経由で確認する回帰テスト。
+        render.py:288 の Path.exists() は symlink 先が存在すれば True を返すため通過するが、
+        _probe 内の inspect_media で発火する。
+        """
+        from clipwright_render.render import render_timeline
+
+        # 実ファイルと symlink を作成
+        real_file = tmp_path / "real.mp4"
+        real_file.touch()
+        symlink_source = tmp_path / "link.mp4"
+        symlink_source.symlink_to(real_file)
+
+        # timeline は symlink を source に参照する
+        tl_path = tmp_path / "tl.otio"
+        _write_timeline(tl_path, [_make_clip(str(symlink_source), 0.0, 5.0)])
+        output = str(tmp_path / "out.mp4")
+
+        # inspect_media を実際に通す（シンボリックリンク拒否は _validate_existing_file が担う）
+        # patch しないことで実装の symlink 拒否挙動が発火することを確認する
+        result = render_timeline(
+            timeline=str(tl_path),
+            output=output,
+            options=RenderOptions(),
+        )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
+
 
 # ---------------------------------------------------------------------------
 # clipwright_render — dry_run テスト（§3 データフロー 6a）
+# (b) probe モック: clipwright_render.render.inspect_media を patch へ移行
 # ---------------------------------------------------------------------------
 
 
@@ -533,7 +524,7 @@ class TestDryRun:
     """dry_run=True 時の動作検証。"""
 
     def test_dry_run_does_not_call_ffmpeg(self, tmp_path: Path) -> None:
-        """dry_run=True のとき ffmpeg が呼ばれない（ffprobe は呼ぶ）。"""
+        """dry_run=True のとき ffmpeg が呼ばれない（inspect_media は呼ぶ）。"""
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
@@ -544,16 +535,20 @@ class TestDryRun:
 
         run_calls: list[list[str]] = []
 
-        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+        def _fake_ffmpeg_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             run_calls.append(cmd)
-            return _fake_probe_result()
+            return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
         with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=source),
+            ),
             patch(
                 "clipwright_render.render.resolve_tool",
                 side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
-            patch("clipwright_render.render.run", side_effect=_fake_run),
+            patch("clipwright_render.render.run", side_effect=_fake_ffmpeg_run),
         ):
             result = render_timeline(
                 timeline=str(tl_path),
@@ -563,7 +558,7 @@ class TestDryRun:
             )
 
         assert result["ok"] is True
-        # run が呼ばれた回数 = ffprobe のみ（ffmpeg = 0）
+        # run は ffmpeg 専用 patch → dry_run=True なら呼ばれない
         ffmpeg_calls = [c for c in run_calls if "ffmpeg" in c[0]]
         assert len(ffmpeg_calls) == 0
 
@@ -577,15 +572,9 @@ class TestDryRun:
         _write_timeline(tl_path, [_make_clip(source, 0.0, 5.0)])
         output = str(tmp_path / "out.mp4")
 
-        with (
-            patch(
-                "clipwright_render.render.resolve_tool",
-                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
-            ),
-            patch(
-                "clipwright_render.render.run",
-                return_value=_fake_probe_result(bit_rate="8000000"),
-            ),
+        with patch(
+            "clipwright_render.render.inspect_media",
+            return_value=_make_media_info(path=source, bit_rate=8_000_000),
         ):
             result = render_timeline(
                 timeline=str(tl_path),
@@ -618,15 +607,9 @@ class TestDryRun:
         )
         output = str(tmp_path / "out.mp4")
 
-        with (
-            patch(
-                "clipwright_render.render.resolve_tool",
-                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
-            ),
-            patch(
-                "clipwright_render.render.run",
-                return_value=_fake_probe_result(bit_rate="8000000"),
-            ),
+        with patch(
+            "clipwright_render.render.inspect_media",
+            return_value=_make_media_info(path=source, bit_rate=8_000_000),
         ):
             result = render_timeline(
                 timeline=str(tl_path),
@@ -652,12 +635,12 @@ class TestDryRun:
 
         with (
             patch(
-                "clipwright_render.render.resolve_tool",
-                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=source),
             ),
             patch(
-                "clipwright_render.render.run",
-                return_value=_fake_probe_result(),
+                "clipwright_render.render.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
         ):
             result = render_timeline(
@@ -681,15 +664,9 @@ class TestDryRun:
         _write_timeline(tl_path, [_make_clip(source, 0.0, 10.0)])
         output = str(tmp_path / "out.mp4")
 
-        with (
-            patch(
-                "clipwright_render.render.resolve_tool",
-                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
-            ),
-            patch(
-                "clipwright_render.render.run",
-                return_value=_fake_probe_result(bit_rate="8000000"),
-            ),
+        with patch(
+            "clipwright_render.render.inspect_media",
+            return_value=_make_media_info(path=source, bit_rate=8_000_000),
         ):
             result = render_timeline(
                 timeline=str(tl_path),
@@ -705,14 +682,19 @@ class TestDryRun:
 
 # ---------------------------------------------------------------------------
 # clipwright_render — 実行経路テスト（dry_run=False・§3 データフロー 6b）
+# (b) probe モック: inspect_media → render.run(ffmpeg) の順序検証へ読み替え
 # ---------------------------------------------------------------------------
 
 
 class TestExecutionPath:
     """dry_run=False の実行経路検証。"""
 
-    def test_ffprobe_called_before_ffmpeg(self, tmp_path: Path) -> None:
-        """ffprobe → ffmpeg の順で process.run が呼ばれる（§3 データフロー）。"""
+    def test_inspect_media_called_before_ffmpeg(self, tmp_path: Path) -> None:
+        """inspect_media → ffmpeg の順で呼ばれる（§3 データフロー）。
+
+        旧: ffprobe → ffmpeg の run 呼び出し順
+        新: inspect_media（内部で ffprobe）→ render.run(ffmpeg) の順序検証
+        """
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
@@ -724,20 +706,24 @@ class TestExecutionPath:
 
         call_order: list[str] = []
 
-        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
-            if "ffprobe" in cmd[0]:
-                call_order.append("ffprobe")
-                return _fake_probe_result()
-            else:
-                call_order.append("ffmpeg")
-                return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        def _inspecting(*args: Any, **kwargs: Any) -> MediaInfo:
+            call_order.append("inspect_media")
+            return _make_media_info(path=source)
+
+        def _fake_ffmpeg_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            call_order.append("ffmpeg")
+            return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
         with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                side_effect=_inspecting,
+            ),
             patch(
                 "clipwright_render.render.resolve_tool",
                 side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
-            patch("clipwright_render.render.run", side_effect=_fake_run),
+            patch("clipwright_render.render.run", side_effect=_fake_ffmpeg_run),
         ):
             render_timeline(
                 timeline=str(tl_path),
@@ -745,7 +731,7 @@ class TestExecutionPath:
                 options=RenderOptions(overwrite=True),
             )
 
-        assert call_order[0] == "ffprobe"
+        assert call_order[0] == "inspect_media"
         assert "ffmpeg" in call_order
 
     def test_ffmpeg_called_with_array_args(self, tmp_path: Path) -> None:
@@ -761,19 +747,20 @@ class TestExecutionPath:
 
         ffmpeg_cmd: list[str] = []
 
-        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
-            if "ffprobe" in cmd[0]:
-                return _fake_probe_result()
-            else:
-                ffmpeg_cmd.extend(cmd)
-                return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        def _fake_ffmpeg_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            ffmpeg_cmd.extend(cmd)
+            return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
         with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=source),
+            ),
             patch(
                 "clipwright_render.render.resolve_tool",
                 side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
-            patch("clipwright_render.render.run", side_effect=_fake_run),
+            patch("clipwright_render.render.run", side_effect=_fake_ffmpeg_run),
         ):
             render_timeline(
                 timeline=str(tl_path),
@@ -801,18 +788,20 @@ class TestExecutionPath:
 
         ffmpeg_first_arg: list[str] = []
 
-        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
-            if "ffprobe" in cmd[0]:
-                return _fake_probe_result()
+        def _fake_ffmpeg_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             ffmpeg_first_arg.append(cmd[0])
             return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
         with (
             patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=source),
+            ),
+            patch(
                 "clipwright_render.render.resolve_tool",
                 side_effect=lambda name, env_var=None: f"/custom/path/{name}",
             ),
-            patch("clipwright_render.render.run", side_effect=_fake_run),
+            patch("clipwright_render.render.run", side_effect=_fake_ffmpeg_run),
         ):
             render_timeline(
                 timeline=str(tl_path),
@@ -839,20 +828,22 @@ class TestExecutionPath:
 
         ffmpeg_timeout: list[float] = []
 
-        def _fake_run(
+        def _fake_ffmpeg_run(
             cmd: list[str], *, timeout: float = 60.0, **kwargs: Any
         ) -> CompletedProcess[str]:
-            if "ffprobe" in cmd[0]:
-                return _fake_probe_result()
             ffmpeg_timeout.append(timeout)
             return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
         with (
             patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=source),
+            ),
+            patch(
                 "clipwright_render.render.resolve_tool",
                 side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
-            patch("clipwright_render.render.run", side_effect=_fake_run),
+            patch("clipwright_render.render.run", side_effect=_fake_ffmpeg_run),
         ):
             render_timeline(
                 timeline=str(tl_path),
@@ -876,20 +867,22 @@ class TestExecutionPath:
 
         ffmpeg_timeout: list[float] = []
 
-        def _fake_run(
+        def _fake_ffmpeg_run(
             cmd: list[str], *, timeout: float = 60.0, **kwargs: Any
         ) -> CompletedProcess[str]:
-            if "ffprobe" in cmd[0]:
-                return _fake_probe_result()
             ffmpeg_timeout.append(timeout)
             return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
         with (
             patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=source),
+            ),
+            patch(
                 "clipwright_render.render.resolve_tool",
                 side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
-            patch("clipwright_render.render.run", side_effect=_fake_run),
+            patch("clipwright_render.render.run", side_effect=_fake_ffmpeg_run),
         ):
             render_timeline(
                 timeline=str(tl_path),
@@ -911,17 +904,19 @@ class TestExecutionPath:
         output = str(tmp_path / "out.mp4")
         Path(output).touch()
 
-        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
-            if "ffprobe" in cmd[0]:
-                return _fake_probe_result(bit_rate="8000000")
+        def _fake_ffmpeg_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
         with (
             patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=source, bit_rate=8_000_000),
+            ),
+            patch(
                 "clipwright_render.render.resolve_tool",
                 side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
-            patch("clipwright_render.render.run", side_effect=_fake_run),
+            patch("clipwright_render.render.run", side_effect=_fake_ffmpeg_run),
         ):
             result = render_timeline(
                 timeline=str(tl_path),
@@ -952,17 +947,19 @@ class TestExecutionPath:
         output = str(tmp_path / "out.mp4")
         Path(output).touch()
 
-        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
-            if "ffprobe" in cmd[0]:
-                return _fake_probe_result(bit_rate="8000000")
+        def _fake_ffmpeg_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
         with (
             patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=source, bit_rate=8_000_000),
+            ),
+            patch(
                 "clipwright_render.render.resolve_tool",
                 side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
-            patch("clipwright_render.render.run", side_effect=_fake_run),
+            patch("clipwright_render.render.run", side_effect=_fake_ffmpeg_run),
         ):
             result = render_timeline(
                 timeline=str(tl_path),
@@ -977,6 +974,7 @@ class TestExecutionPath:
 
 # ---------------------------------------------------------------------------
 # clipwright_render — エラー伝播テスト（DC-GP-004）
+# (b) probe モック: inspect_media patch へ移行
 # ---------------------------------------------------------------------------
 
 
@@ -993,9 +991,7 @@ class TestErrorPropagation:
         _write_timeline(tl_path, [_make_clip(source, 0.0, 5.0)])
         output = str(tmp_path / "out.mp4")
 
-        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
-            if "ffprobe" in cmd[0]:
-                return _fake_probe_result()
+        def _fake_ffmpeg_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             raise ClipwrightError(
                 code=ErrorCode.SUBPROCESS_FAILED,
                 message="コマンドが終了コード 1 で失敗しました",
@@ -1004,10 +1000,14 @@ class TestErrorPropagation:
 
         with (
             patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=source),
+            ),
+            patch(
                 "clipwright_render.render.resolve_tool",
                 side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
-            patch("clipwright_render.render.run", side_effect=_fake_run),
+            patch("clipwright_render.render.run", side_effect=_fake_ffmpeg_run),
         ):
             result = render_timeline(
                 timeline=str(tl_path), output=output, options=RenderOptions()
@@ -1026,9 +1026,7 @@ class TestErrorPropagation:
         _write_timeline(tl_path, [_make_clip(source, 0.0, 5.0)])
         output = str(tmp_path / "out.mp4")
 
-        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
-            if "ffprobe" in cmd[0]:
-                return _fake_probe_result()
+        def _fake_ffmpeg_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             raise ClipwrightError(
                 code=ErrorCode.SUBPROCESS_TIMEOUT,
                 message="タイムアウト",
@@ -1037,10 +1035,14 @@ class TestErrorPropagation:
 
         with (
             patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=source),
+            ),
+            patch(
                 "clipwright_render.render.resolve_tool",
                 side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
-            patch("clipwright_render.render.run", side_effect=_fake_run),
+            patch("clipwright_render.render.run", side_effect=_fake_ffmpeg_run),
         ):
             result = render_timeline(
                 timeline=str(tl_path), output=output, options=RenderOptions()
@@ -1060,8 +1062,6 @@ class TestErrorPropagation:
         output = str(tmp_path / "out.mp4")
 
         def _fake_resolve(name: str, env: str | None = None) -> str:
-            if name == "ffprobe":
-                return "/usr/bin/ffprobe"
             raise ClipwrightError(
                 code=ErrorCode.DEPENDENCY_MISSING,
                 message="ffmpeg が見つかりません",
@@ -1069,36 +1069,11 @@ class TestErrorPropagation:
             )
 
         with (
-            patch("clipwright_render.render.resolve_tool", side_effect=_fake_resolve),
             patch(
-                "clipwright_render.render.run",
-                return_value=_fake_probe_result(),
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=source),
             ),
-        ):
-            result = render_timeline(
-                timeline=str(tl_path), output=output, options=RenderOptions()
-            )
-
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.DEPENDENCY_MISSING
-
-    def test_ffprobe_not_found_returns_dependency_missing(self, tmp_path: Path) -> None:
-        """ffprobe 不在 → DEPENDENCY_MISSING エンベロープ（DC-GP-004）。"""
-        from clipwright_render.render import render_timeline
-
-        source = str(tmp_path / "a.mp4")
-        Path(source).touch()
-        tl_path = tmp_path / "tl.otio"
-        _write_timeline(tl_path, [_make_clip(source, 0.0, 5.0)])
-        output = str(tmp_path / "out.mp4")
-
-        with patch(
-            "clipwright_render.render.resolve_tool",
-            side_effect=ClipwrightError(
-                code=ErrorCode.DEPENDENCY_MISSING,
-                message="ffprobe が見つかりません",
-                hint="PATH に追加してください。",
-            ),
+            patch("clipwright_render.render.resolve_tool", side_effect=_fake_resolve),
         ):
             result = render_timeline(
                 timeline=str(tl_path), output=output, options=RenderOptions()
@@ -1108,7 +1083,7 @@ class TestErrorPropagation:
         assert result["error"]["code"] == ErrorCode.DEPENDENCY_MISSING
 
     def test_probe_failure_returns_probe_failed(self, tmp_path: Path) -> None:
-        """probe 失敗 → PROBE_FAILED エンベロープ（DC-GP-004 / GP-001）。"""
+        """probe 失敗（inspect_media 送出）→ PROBE_FAILED エンベロープ（DC-GP-004 / GP-001）。"""
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
@@ -1117,16 +1092,12 @@ class TestErrorPropagation:
         _write_timeline(tl_path, [_make_clip(source, 0.0, 5.0)])
         output = str(tmp_path / "out.mp4")
 
-        with (
-            patch(
-                "clipwright_render.render.resolve_tool",
-                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
-            ),
-            patch(
-                "clipwright_render.render.run",
-                return_value=CompletedProcess(
-                    args=[], returncode=0, stdout="not-json", stderr=""
-                ),
+        with patch(
+            "clipwright_render.render.inspect_media",
+            side_effect=ClipwrightError(
+                code=ErrorCode.PROBE_FAILED,
+                message="ffprobe の出力が有効な JSON ではありません。",
+                hint="入力ファイルが有効なメディアファイルか確認してください。",
             ),
         ):
             result = render_timeline(
@@ -1148,9 +1119,7 @@ class TestErrorPropagation:
 
         raw_stderr = "SUPER SECRET INTERNAL PATH /home/user/private/data"
 
-        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
-            if "ffprobe" in cmd[0]:
-                return _fake_probe_result()
+        def _fake_ffmpeg_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             raise ClipwrightError(
                 code=ErrorCode.SUBPROCESS_FAILED,
                 message="コマンドが終了コード 1 で失敗しました: 一部エラー",
@@ -1159,10 +1128,14 @@ class TestErrorPropagation:
 
         with (
             patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=source),
+            ),
+            patch(
                 "clipwright_render.render.resolve_tool",
                 side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
-            patch("clipwright_render.render.run", side_effect=_fake_run),
+            patch("clipwright_render.render.run", side_effect=_fake_ffmpeg_run),
         ):
             result = render_timeline(
                 timeline=str(tl_path), output=output, options=RenderOptions()
@@ -1183,16 +1156,12 @@ class TestErrorPropagation:
         _write_timeline(tl_path, [_make_clip(source, 0.0, 5.0)])
         output = str(tmp_path / "out.mp4")
 
-        with (
-            patch(
-                "clipwright_render.render.resolve_tool",
-                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
-            ),
-            patch(
-                "clipwright_render.render.run",
-                return_value=CompletedProcess(
-                    args=[], returncode=0, stdout="bad-json", stderr=""
-                ),
+        with patch(
+            "clipwright_render.render.inspect_media",
+            side_effect=ClipwrightError(
+                code=ErrorCode.PROBE_FAILED,
+                message="ffprobe の出力が有効な JSON ではありません。",
+                hint="入力ファイルが有効なメディアファイルか確認してください。",
             ),
         ):
             result = render_timeline(
@@ -1226,17 +1195,19 @@ class TestNonDestructive:
         output = str(tmp_path / "out.mp4")
         (tmp_path / "out.mp4").touch()
 
-        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
-            if "ffprobe" in cmd[0]:
-                return _fake_probe_result()
+        def _fake_ffmpeg_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
         with (
             patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=str(source)),
+            ),
+            patch(
                 "clipwright_render.render.resolve_tool",
                 side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
-            patch("clipwright_render.render.run", side_effect=_fake_run),
+            patch("clipwright_render.render.run", side_effect=_fake_ffmpeg_run),
         ):
             render_timeline(
                 timeline=str(tl_path),
@@ -1258,17 +1229,19 @@ class TestNonDestructive:
         output = str(tmp_path / "out.mp4")
         (tmp_path / "out.mp4").touch()
 
-        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
-            if "ffprobe" in cmd[0]:
-                return _fake_probe_result()
+        def _fake_ffmpeg_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
         with (
             patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=str(source)),
+            ),
+            patch(
                 "clipwright_render.render.resolve_tool",
                 side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
-            patch("clipwright_render.render.run", side_effect=_fake_run),
+            patch("clipwright_render.render.run", side_effect=_fake_ffmpeg_run),
         ):
             render_timeline(
                 timeline=str(tl_path),
