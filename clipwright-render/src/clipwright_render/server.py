@@ -116,12 +116,8 @@ def main() -> None:
     parser.add_argument(
         "--height", type=int, metavar="H", help="出力映像高さ（width とペア）"
     )
-    parser.add_argument(
-        "--fps", type=float, metavar="F", help="出力フレームレート"
-    )
-    parser.add_argument(
-        "--crf", type=int, metavar="N", help="映像品質（CRF 0〜51）"
-    )
+    parser.add_argument("--fps", type=float, metavar="F", help="出力フレームレート")
+    parser.add_argument("--crf", type=int, metavar="N", help="映像品質（CRF 0〜51）")
     parser.add_argument(
         "--overwrite", action="store_true", help="既存出力ファイルを上書き"
     )

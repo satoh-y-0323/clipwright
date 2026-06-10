@@ -54,8 +54,10 @@ def _probe(source: str) -> ProbeInfo:
     ffprobe = resolve_tool("ffprobe", "CLIPWRIGHT_FFPROBE")
     cmd = [
         ffprobe,
-        "-v", "quiet",
-        "-print_format", "json",
+        "-v",
+        "quiet",
+        "-print_format",
+        "json",
         "-show_format",
         "-show_streams",
         source,
@@ -184,9 +186,7 @@ def _render_inner(
     if not output_path.parent.exists():
         raise ClipwrightError(
             code=ErrorCode.FILE_NOT_FOUND,
-            message=(
-                f"出力先ディレクトリが存在しません: {output_path.parent}"
-            ),
+            message=(f"出力先ディレクトリが存在しません: {output_path.parent}"),
             hint="出力先ディレクトリを先に作成してから再実行してください。",
         )
 
@@ -211,9 +211,7 @@ def _render_inner(
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
             message=f"出力ファイルが既に存在します: {output_path.name}",
-            hint=(
-                "既存ファイルを上書きする場合は overwrite=True を指定してください。"
-            ),
+            hint=("既存ファイルを上書きする場合は overwrite=True を指定してください。"),
         )
 
     # source ファイル存在確認（DC-GP-005）

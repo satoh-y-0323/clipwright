@@ -70,6 +70,7 @@ def _make_timeline_with_clips(
 # ヘルパー: ProbeInfo 相当のデータクラス（plan.py が受け取る型を想定）
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ProbeInfo:
     """probe 結果を表す値オブジェクト（DC-AM-007・plan.py が受け取る型の想定）。"""

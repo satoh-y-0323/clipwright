@@ -45,8 +45,10 @@ def _probe_duration(ffprobe: str, path: Path) -> float:
     """ffprobe で動画の duration（秒）を取得する。"""
     cmd = [
         ffprobe,
-        "-v", "quiet",
-        "-print_format", "json",
+        "-v",
+        "quiet",
+        "-print_format",
+        "json",
         "-show_format",
         str(path),
     ]
@@ -67,11 +69,20 @@ def _make_test_video(ffmpeg: str, output: Path, duration: float = 5.0) -> None:
     cmd = [
         ffmpeg,
         "-y",
-        "-f", "lavfi", "-i", f"testsrc=duration={duration}:size=320x240:rate=25",
-        "-f", "lavfi", "-i", f"sine=frequency=440:duration={duration}",
-        "-c:v", "libx264",
-        "-c:a", "aac",
-        "-pix_fmt", "yuv420p",
+        "-f",
+        "lavfi",
+        "-i",
+        f"testsrc=duration={duration}:size=320x240:rate=25",
+        "-f",
+        "lavfi",
+        "-i",
+        f"sine=frequency=440:duration={duration}",
+        "-c:v",
+        "libx264",
+        "-c:a",
+        "aac",
+        "-pix_fmt",
+        "yuv420p",
         "-shortest",
         str(output),
     ]
@@ -109,12 +120,8 @@ def _build_two_segment_timeline(
             name=f"clip_{start_sec}",
             media_reference=ref,
             source_range=otio.opentime.TimeRange(
-                start_time=otio.opentime.RationalTime(
-                    start_sec * rate, rate
-                ),
-                duration=otio.opentime.RationalTime(
-                    dur_sec * rate, rate
-                ),
+                start_time=otio.opentime.RationalTime(start_sec * rate, rate),
+                duration=otio.opentime.RationalTime(dur_sec * rate, rate),
             ),
         )
 

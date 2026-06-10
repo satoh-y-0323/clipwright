@@ -28,8 +28,7 @@ class RenderOptions(BaseModel):
         Field(
             default=None,
             description=(
-                "出力映像コーデック。例: libx264 / libx265 / copy。"
-                "未指定はソース踏襲。"
+                "出力映像コーデック。例: libx264 / libx265 / copy。未指定はソース踏襲。"
             ),
         ),
     ] = None
@@ -39,8 +38,7 @@ class RenderOptions(BaseModel):
         Field(
             default=None,
             description=(
-                "出力音声コーデック。例: aac / opus / mp3。"
-                "未指定はソース踏襲。"
+                "出力音声コーデック。例: aac / opus / mp3。未指定はソース踏襲。"
             ),
         ),
     ] = None
@@ -51,8 +49,7 @@ class RenderOptions(BaseModel):
             default=None,
             gt=0,
             description=(
-                "出力映像幅（ピクセル）。height とペアで指定する。"
-                "未指定はソース踏襲。"
+                "出力映像幅（ピクセル）。height とペアで指定する。未指定はソース踏襲。"
             ),
         ),
     ] = None
@@ -63,8 +60,7 @@ class RenderOptions(BaseModel):
             default=None,
             gt=0,
             description=(
-                "出力映像高さ（ピクセル）。width とペアで指定する。"
-                "未指定はソース踏襲。"
+                "出力映像高さ（ピクセル）。width とペアで指定する。未指定はソース踏襲。"
             ),
         ),
     ] = None
@@ -75,8 +71,7 @@ class RenderOptions(BaseModel):
             default=None,
             gt=0.0,
             description=(
-                "出力フレームレート。未指定はソース踏襲"
-                "（CFR 単一ソース前提）。"
+                "出力フレームレート。未指定はソース踏襲（CFR 単一ソース前提）。"
             ),
         ),
     ] = None
@@ -88,8 +83,7 @@ class RenderOptions(BaseModel):
             ge=0,
             le=51,
             description=(
-                "映像品質（CRF 値）。0〜51 の範囲。0 が最高品質。"
-                "未指定は ffmpeg 既定。"
+                "映像品質（CRF 値）。0〜51 の範囲。0 が最高品質。未指定は ffmpeg 既定。"
             ),
         ),
     ] = None
@@ -99,8 +93,7 @@ class RenderOptions(BaseModel):
         Field(
             default=False,
             description=(
-                "True のとき既存出力ファイルを上書きする。"
-                "既定は False（上書き拒否）。"
+                "True のとき既存出力ファイルを上書きする。既定は False（上書き拒否）。"
             ),
         ),
     ] = False

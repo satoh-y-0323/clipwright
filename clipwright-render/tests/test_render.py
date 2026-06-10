@@ -450,9 +450,7 @@ class TestInputValidation:
         if not result["ok"]:
             assert result["error"]["code"] != ErrorCode.INVALID_INPUT
 
-    def test_output_equals_source_raises_path_not_allowed(
-        self, tmp_path: Path
-    ) -> None:
+    def test_output_equals_source_raises_path_not_allowed(self, tmp_path: Path) -> None:
         """output == source → PATH_NOT_ALLOWED（DC-AM-002）。"""
         from clipwright_render.render import clipwright_render
 
@@ -1028,9 +1026,7 @@ class TestErrorPropagation:
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.DEPENDENCY_MISSING
 
-    def test_ffprobe_not_found_returns_dependency_missing(
-        self, tmp_path: Path
-    ) -> None:
+    def test_ffprobe_not_found_returns_dependency_missing(self, tmp_path: Path) -> None:
         """ffprobe 不在 → DEPENDENCY_MISSING エンベロープ（DC-GP-004）。"""
         from clipwright_render.render import clipwright_render
 

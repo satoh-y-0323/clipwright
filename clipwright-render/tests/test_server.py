@@ -179,9 +179,7 @@ class TestMcpToolDelegation:
 
         _args, kwargs = mock_render.call_args
         # positional または keyword で dry_run=True が渡される
-        assert kwargs.get("dry_run") is True or (
-            len(_args) >= 4 and _args[3] is True
-        )
+        assert kwargs.get("dry_run") is True or (len(_args) >= 4 and _args[3] is True)
 
     def test_options_passed_to_render_timeline(self, tmp_path: Path) -> None:
         """options の内容が render_timeline に渡されること。"""

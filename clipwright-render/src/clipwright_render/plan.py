@@ -90,9 +90,7 @@ def resolve_kept_ranges(timeline: otio.schema.Timeline) -> list[KeptRange]:
         KeptRange のリスト（source と source_range を opentime で保持）。
     """
     # 先頭 video トラックを取得（複数 video トラックは非対応）
-    video_tracks = [
-        t for t in timeline.tracks if t.kind == otio.schema.TrackKind.Video
-    ]
+    video_tracks = [t for t in timeline.tracks if t.kind == otio.schema.TrackKind.Video]
     if len(video_tracks) >= 2:
         raise ClipwrightError(
             code=ErrorCode.UNSUPPORTED_OPERATION,
@@ -131,9 +129,7 @@ def resolve_kept_ranges(timeline: otio.schema.Timeline) -> list[KeptRange]:
                 raise ClipwrightError(
                     code=ErrorCode.UNSUPPORTED_OPERATION,
                     message="ExternalReference 以外のメディア参照は非対応です。",
-                    hint=(
-                        "target_url を持つ ExternalReference を使用してください。"
-                    ),
+                    hint=("target_url を持つ ExternalReference を使用してください。"),
                 )
             source = mr.target_url
             # 単一ソース検証（DC-AS-007）
@@ -155,9 +151,7 @@ def resolve_kept_ranges(timeline: otio.schema.Timeline) -> list[KeptRange]:
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
             message="残区間が0件です（Clip が見つかりません）。",
-            hint=(
-                "少なくとも1件の Clip を含む OTIO タイムラインを使用してください。"
-            ),
+            hint=("少なくとも1件の Clip を含む OTIO タイムラインを使用してください。"),
         )
 
     return ranges
