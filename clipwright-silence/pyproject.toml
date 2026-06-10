@@ -1,7 +1,7 @@
 [project]
-name = "clipwright"
+name = "clipwright-silence"
 version = "0.1.0"
-description = "FFmpeg/OTIO をラップする MCP サーバー群。映像編集ワークフローを AI エージェントから操作できるプリミティブを提供する。"
+description = "無音検出 → OTIO タイムライン生成 MCP ツール。ffmpeg silencedetect で無音区間を検出し、残す区間の clip 列を持つ timeline.otio を生成する。"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
@@ -9,10 +9,14 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
+    "clipwright",
     "mcp[cli]>=1.27.2",
     "opentimelineio>=0.18",
     "pydantic>=2",
 ]
+
+[project.scripts]
+clipwright-silence = "clipwright_silence.server:main"
 
 [build-system]
 requires = ["uv_build>=0.11.19,<0.12.0"]
@@ -26,6 +30,10 @@ dev = [
     "pytest-mock>=3.15.1",
     "ruff>=0.15.16",
 ]
+
+# workspace 内の clipwright (core) をパス参照で解決する
+[tool.uv.sources]
+clipwright = { workspace = true }
 
 # --- Ruff ---
 [tool.ruff]
@@ -64,13 +72,9 @@ markers = [
 
 # --- coverage ---
 [tool.coverage.run]
-source = ["clipwright"]
+source = ["clipwright_silence"]
 omit = ["tests/*"]
 
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
-
-# --- uv workspace ---
-[tool.uv.workspace]
-members = ["clipwright-render", "clipwright-silence"]
