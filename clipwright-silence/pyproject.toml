@@ -15,8 +15,16 @@ dependencies = [
     "pydantic>=2",
 ]
 
+[project.optional-dependencies]
+vad = [
+    "silero-vad>=5.1",
+    "onnxruntime>=1.17",
+    "numpy>=1.24",
+]
+
 [project.scripts]
 clipwright-silence = "clipwright_silence.server:main"
+clipwright-silence-vad = "clipwright_silence.vad_cli:main"
 
 [build-system]
 requires = ["uv_build>=0.11.19,<0.12.0"]
@@ -59,6 +67,15 @@ disallow_any_generics = true
 # opentimelineio はスタブなし・mypy strict で ignore
 [[tool.mypy.overrides]]
 module = "opentimelineio.*"
+ignore_missing_imports = true
+
+# silero-vad / onnxruntime はスタブなし・VAD optional extra のため ignore
+[[tool.mypy.overrides]]
+module = "silero_vad.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "onnxruntime.*"
 ignore_missing_imports = true
 
 # --- pytest ---
