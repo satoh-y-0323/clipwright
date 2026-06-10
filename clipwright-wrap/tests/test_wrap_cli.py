@@ -91,10 +91,14 @@ def mock_parser_with_segments() -> MagicMock:
 
     fixtures = Path(__file__).parent / "fixtures" / "budoux_sample.json"
     sample = _json.loads(fixtures.read_text(encoding="utf-8"))
-    segs_map: dict[str, list[str]] = dict(zip(sample["texts"], sample["segments"], strict=True))
+    segs_map: dict[str, list[str]] = dict(
+        zip(sample["texts"], sample["segments"], strict=True)
+    )
 
     p = MagicMock()
-    p.parse.side_effect = lambda text: segs_map.get(text, [text])
+    # CR L-4: fixture にないテキストでサイレントフォールバックせず KeyError を送出する。
+    # 登録済みテキスト以外を渡したテスト側のバグを即座に検出できる。
+    p.parse.side_effect = lambda text: segs_map[text]
     return p
 
 
@@ -473,6 +477,136 @@ class TestWrapCliErrors:
         )
         assert rc == 0
         assert result["error"]["code"] == "INVALID_INPUT"
+
+    # --- SR M-2: 不正 language エラーに入力値・内部辞書キーを露出しない ---
+
+    def test_invalid_language_message_does_not_contain_input_value(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """SR M-2: 不正 language のエラー message に入力 language 値が含まれない。
+
+        現行実装は f"対応していない language: {language!r}" で入力値を露出する。
+        固定文言「対応していない language が指定されました」に変更することを要求する。
+        """
+        malicious_lang = "xx'; DROP TABLE users; --"
+        result, rc = _run_main(
+            argv=None,
+            stdin_data={"language": malicious_lang, "texts": ["テキスト"]},
+            monkeypatch=monkeypatch,
+            loader_map={"ja": lambda: MagicMock()},
+        )
+        assert rc == 0
+        assert result["error"]["code"] == "INVALID_INPUT"
+        # 入力値が message に含まれてはならない（固定文言のみ）
+        assert malicious_lang not in result["error"]["message"]
+        assert repr(malicious_lang) not in result["error"]["message"]
+        # 固定文言が含まれる
+        assert "対応していない language が指定されました" in result["error"]["message"]
+
+    def test_invalid_language_hint_does_not_expose_parser_loaders_keys(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """SR M-2: 不正 language の hint に _PARSER_LOADERS.keys() 展開が含まれない。
+
+        現行実装は f"language は {list(_PARSER_LOADERS.keys())} のいずれか..."
+        で内部辞書の動的展開を露出する。
+        固定文言 "ja / zh-hans / zh-hant / th" に変更することを要求する。
+        """
+        result, rc = _run_main(
+            argv=None,
+            stdin_data={"language": "ko", "texts": ["テキスト"]},
+            monkeypatch=monkeypatch,
+            loader_map={"ja": lambda: MagicMock(), "zh-hans": lambda: MagicMock()},
+        )
+        assert rc == 0
+        assert result["error"]["code"] == "INVALID_INPUT"
+        hint = result["error"]["hint"]
+        # dict キー展開形式（["ja", "zh-hans", ...]）が含まれてはならない
+        assert "['" not in hint
+        assert "']" not in hint
+        # 固定列挙が含まれる
+        assert "ja" in hint
+        assert "zh-hans" in hint
+        assert "zh-hant" in hint
+        assert "th" in hint
+
+    # --- SR L-3: texts 要素が str でない場合の型チェック ---
+
+    def test_invalid_input_on_texts_with_non_str_elements(
+        self, monkeypatch: pytest.MonkeyPatch, mock_parser: MagicMock
+    ) -> None:
+        """SR L-3: texts に str 以外の要素が含まれる場合 INVALID_INPUT を返す。
+
+        現行実装は型チェックを行わないため parser.parse(None) で AttributeError が発生し
+        INTERNAL エラーになる。texts 要素の型チェックを追加することを要求する。
+        """
+        result, rc = _run_main(
+            argv=None,
+            stdin_data={"language": "ja", "texts": [None, 1, []]},
+            monkeypatch=monkeypatch,
+            loader_map={"ja": lambda: mock_parser},
+        )
+        assert rc == 0
+        # AttributeError/TypeError で INTERNAL に落ちてはならない
+        assert result["error"]["code"] == "INVALID_INPUT"
+        assert "texts" in result["error"]["message"]
+
+    def test_invalid_input_on_texts_with_mixed_str_and_non_str(
+        self, monkeypatch: pytest.MonkeyPatch, mock_parser: MagicMock
+    ) -> None:
+        """SR L-3: texts が str と非 str の混在リストでも INVALID_INPUT を返す。"""
+        result, rc = _run_main(
+            argv=None,
+            stdin_data={
+                "language": "ja",
+                "texts": ["有効なテキスト", 42, "別テキスト"],
+            },
+            monkeypatch=monkeypatch,
+            loader_map={"ja": lambda: mock_parser},
+        )
+        assert rc == 0
+        assert result["error"]["code"] == "INVALID_INPUT"
+
+    # --- CR L-2: _PARSER_LOADERS 空辞書時の DEPENDENCY_MISSING ---
+
+    def test_dependency_missing_when_parser_loaders_is_empty(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """CR L-2: budoux 未インストールで _PARSER_LOADERS={} のとき DEPENDENCY_MISSING を返す。
+
+        現行実装は language not in _PARSER_LOADERS で INVALID_INPUT を返す。
+        main() 先頭で _PARSER_LOADERS が空辞書の場合は DEPENDENCY_MISSING を返すべき。
+        """
+        result, rc = _run_main(
+            argv=None,
+            stdin_data={"language": "ja", "texts": ["テキスト"]},
+            monkeypatch=monkeypatch,
+            loader_map={},  # budoux 未インストール状態を再現
+        )
+        # monkeypatch.setattr でも確認（_run_main の loader_map が優先だが念のため）
+        assert rc == 0
+        # INVALID_INPUT ではなく DEPENDENCY_MISSING であること
+        assert result["error"]["code"] == "DEPENDENCY_MISSING"
+        # install hint が含まれる
+        assert "hint" in result["error"]
+        assert (
+            "install" in result["error"]["hint"].lower()
+            or "pip" in result["error"]["hint"].lower()
+            or "clipwright-wrap" in result["error"]["hint"]
+        )
+
+    def test_dependency_missing_when_parser_loaders_is_empty_no_invalid_input(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """CR L-2: _PARSER_LOADERS={} のとき INVALID_INPUT に落ちてはならない。"""
+        result, rc = _run_main(
+            argv=None,
+            stdin_data={"language": "ja", "texts": ["テキスト"]},
+            monkeypatch=monkeypatch,
+            loader_map={},
+        )
+        assert rc == 0
+        assert result["error"]["code"] != "INVALID_INPUT"
 
     # --- INTERNAL: 想定外例外 ---
 

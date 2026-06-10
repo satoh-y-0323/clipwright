@@ -48,12 +48,17 @@ def _srt_1cue(text: str = "今日はいい天気です。") -> str:
 
 
 def _srt_ncues(n: int) -> str:
-    """n cue の SRT テキストを生成する。"""
+    """n cue の SRT テキストを生成する。
+
+    秒→分繰り上げの正規タイムコードを生成する（n>=60 でも不正SRTにならない）。
+    """
     blocks = []
     for i in range(1, n + 1):
-        t_start = f"00:00:{i - 1:02d},000"
-        t_end = f"00:00:{i:02d},000"
-        blocks.append(f"{i}\n{t_start} --> {t_end}\nテキスト{i}\n")
+        sm, ss = divmod(i - 1, 60)
+        em, es = divmod(i, 60)
+        blocks.append(
+            f"{i}\n00:{sm:02d}:{ss:02d},000 --> 00:{em:02d}:{es:02d},000\nテキスト{i}\n"
+        )
     return "\n".join(blocks)
 
 
@@ -1015,3 +1020,309 @@ class TestEmptyCaptions:
         )
         wrap_captions(str(inp), out, _opts())
         assert Path(out).read_text(encoding="utf-8") == "WEBVTT\n"
+
+
+# ===========================================================================
+# CR M-2 / SR M-1: 不正タイムコード行がエラーメッセージに含まれないこと
+# ===========================================================================
+
+
+class TestTimecodeInjectionSafety:
+    """不正 SRT タイムコード行の内容が error.message に漏洩しないことを検証する（CR M-2 / SR M-1）。
+
+    wrap.py L160 で ValueError のメッセージを str(exc) として連結している現状では、
+    ユーザー入力値（timeline_line）が message に混入する。
+    固定文言への変更後にのみ pass するテスト（Red フェーズ）。
+    """
+
+    def test_inject_payload_not_in_error_message(self, tmp_path: Path) -> None:
+        """タイムライン行に仕込んだ inject payload が error.message に含まれないこと（SR M-1）。"""
+        wrap_captions = _import_wrap_captions()
+        inject_payload = "<script>alert(1)</script>"
+        # SRT タイムライン行位置に inject payload を仕込む
+        bad_srt = f"1\n{inject_payload}\nテキスト\n"
+        inp = tmp_path / "inject.srt"
+        inp.write_text(bad_srt, encoding="utf-8")
+        out = str(tmp_path / "output.srt")
+        result: dict[str, Any] = wrap_captions(str(inp), out, _opts())
+        assert result["ok"] is False
+        assert result["error"]["code"] == "INVALID_INPUT"
+        # inject payload がメッセージに含まれないこと（固定文言のみ）
+        assert inject_payload not in result["error"]["message"]
+        assert "<script>" not in result["error"]["message"]
+
+    def test_crlf_injection_not_in_error_message(self, tmp_path: Path) -> None:
+        """CRLF 注入を含むタイムライン行の内容が error.message に露出しないこと（SR M-1）。"""
+        wrap_captions = _import_wrap_captions()
+        crlf_payload = "00:00:00,000 --> 00:00:01,000\r\nX-Injected: header"
+        bad_srt = f"1\n{crlf_payload}\nテキスト\n"
+        inp = tmp_path / "crlf.srt"
+        inp.write_text(bad_srt, encoding="utf-8")
+        out = str(tmp_path / "output.srt")
+        result: dict[str, Any] = wrap_captions(str(inp), out, _opts())
+        assert result["ok"] is False
+        # CRLF 注入文字列がメッセージに含まれないこと
+        assert "X-Injected" not in result["error"]["message"]
+
+    def test_error_message_is_fixed_string(self, tmp_path: Path) -> None:
+        """不正タイムコード時の error.message は固定文言であること（SR M-1 推奨対応）。
+
+        現行実装は f-string でタイムコード行を連結するため、このテストは Red になる。
+        """
+        wrap_captions = _import_wrap_captions()
+        inp = tmp_path / "bad.srt"
+        inp.write_text("1\nINVALID_TC_LINE_UNIQUE_MARKER\nテキスト\n", encoding="utf-8")
+        out = str(tmp_path / "output.srt")
+        result: dict[str, Any] = wrap_captions(str(inp), out, _opts())
+        assert result["ok"] is False
+        # タイムコード行そのものが message に含まれないこと
+        assert "INVALID_TC_LINE_UNIQUE_MARKER" not in result["error"]["message"]
+
+
+# ===========================================================================
+# CR M-3: subprocess.run に text=True, encoding="utf-8" が渡されること
+# ===========================================================================
+
+
+class TestSubprocessTextMode:
+    """wrap.py が subprocess.run に text=True, encoding='utf-8' を渡すことを検証する（CR M-3）。
+
+    現行実装は text パラメータ省略（デフォルト False）で bytes I/O を使用しており、
+    このテストは Red になる（text=True が設定されたときに pass する）。
+    """
+
+    def test_subprocess_called_with_text_true(
+        self, tmp_path: Path, mocker: Any
+    ) -> None:
+        """subprocess.run に text=True が渡されること（CR M-3）。"""
+        wrap_captions = _import_wrap_captions()
+        inp = _make_input_srt(tmp_path)
+        out = str(tmp_path / "output.srt")
+        mock_run: MagicMock = mocker.patch(
+            "clipwright_wrap.wrap.subprocess.run",
+            return_value=MagicMock(
+                stdout=json.dumps(
+                    {"segments": [["今日はいい天気です。"]]}, ensure_ascii=False
+                ),
+                returncode=0,
+            ),
+        )
+        wrap_captions(inp, out, _opts())
+        call_kwargs = mock_run.call_args[1]
+        # text=True が渡されていること
+        assert call_kwargs.get("text") is True
+
+    def test_subprocess_called_with_encoding_utf8(
+        self, tmp_path: Path, mocker: Any
+    ) -> None:
+        """subprocess.run に encoding='utf-8' が渡されること（CR M-3）。"""
+        wrap_captions = _import_wrap_captions()
+        inp = _make_input_srt(tmp_path)
+        out = str(tmp_path / "output.srt")
+        mock_run: MagicMock = mocker.patch(
+            "clipwright_wrap.wrap.subprocess.run",
+            return_value=MagicMock(
+                stdout=json.dumps(
+                    {"segments": [["今日はいい天気です。"]]}, ensure_ascii=False
+                ),
+                returncode=0,
+            ),
+        )
+        wrap_captions(inp, out, _opts())
+        call_kwargs = mock_run.call_args[1]
+        # encoding="utf-8" が渡されていること
+        assert call_kwargs.get("encoding") == "utf-8"
+
+    def test_subprocess_input_is_str_not_bytes(
+        self, tmp_path: Path, mocker: Any
+    ) -> None:
+        """subprocess.run の input が str（bytes でない）であること（CR M-3）。
+
+        text=True, encoding='utf-8' 指定時は input を str で渡す必要がある。
+        """
+        wrap_captions = _import_wrap_captions()
+        inp = _make_input_srt(tmp_path)
+        out = str(tmp_path / "output.srt")
+        mock_run: MagicMock = mocker.patch(
+            "clipwright_wrap.wrap.subprocess.run",
+            return_value=MagicMock(
+                stdout=json.dumps(
+                    {"segments": [["今日はいい天気です。"]]}, ensure_ascii=False
+                ),
+                returncode=0,
+            ),
+        )
+        wrap_captions(inp, out, _opts())
+        call_kwargs = mock_run.call_args[1]
+        stdin_data = call_kwargs.get("input")
+        # input は str であること（bytes でないこと）
+        assert isinstance(stdin_data, str), (
+            f"input は str であるべきだが {type(stdin_data)} だった"
+        )
+
+
+# ===========================================================================
+# CR M-4: summary の超過 cue 件数が重複なし（set 和）で表示されること
+# ===========================================================================
+
+
+class TestOverflowSummaryDeduplication:
+    """1 cue が行数超過(a)かつ行幅超過(b)を同時に満たす場合、
+    summary の超過 cue 件数が重複なし（set 和）で表示されることを検証する（CR M-4）。
+
+    現行実装は len(overflow_cue_indices) + len(overflow_width_cue_indices) で
+    重複カウントするため、このテストは Red になる。
+    """
+
+    def test_both_overflow_cue_counted_once_in_summary(
+        self, tmp_path: Path, mocker: Any
+    ) -> None:
+        """行数超過(a)かつ行幅超過(b)の同一 cue を summary で 1 件とカウントすること（CR M-4）。
+
+        max_chars=3・max_lines=1・1 cue（3文節）→ (a) 3行 > 1 行(超過) かつ (b) 各行3文字=3=max_chars（非超過）。
+        より確実にするため単一超大文節（20文字）1行 + max_lines=0（実質何でも超過）で両条件を同時満たす。
+        """
+        wrap_captions = _import_wrap_captions()
+        # 超大文節 1 個: 行数 = 1 > max_lines=0 は設定不可。
+        # max_chars=3・max_lines=1・3文節（各 1 文字）のケース:
+        # wrap_cue_lines(['あ','い','う'], max_chars=3) → ['あいう'] (3文字 = max_chars, 非超過)
+        # → 行数 1 = max_lines=1 (非超過)
+        # 別アプローチ: 超大文節 (20文字)・max_chars=3・max_lines=1
+        # wrap_cue_lines(['あ'*20], max_chars=3) → ['あ'*20] (20文字 > 3 = 行幅超過)
+        # 行数 = 1 = max_lines=1 (非超過) → 両条件が同時 NG にならない
+        # 確実なケース: 3文節・max_chars=1・max_lines=1
+        # wrap_cue_lines(['あ','い','う'], max_chars=1) → ['あ','い','う'] (3行 > 1=超過, 各1文字=max_chars 非超過)
+        # → (a)のみ
+        # 両方同時: 超大文節2個・max_chars=3・max_lines=1
+        # wrap_cue_lines(['あ'*10,'い'*10], max_chars=3)
+        #   → ['あ'*10] (1行で10>3=行幅超過), 次の文節... → ['あ'*10,'い'*10] (2行 > 1=行数超過 AND 各10>3=行幅超過)
+        # これで両条件同時発生 → (a)かつ(b) で 1 cue が 2 重カウントされる
+        inp = _make_input_srt(tmp_path, _srt_1cue("あいうえおかきくけこさしすせそ"))
+        out = str(tmp_path / "output.srt")
+        mocker.patch(
+            "clipwright_wrap.wrap.subprocess.run",
+            return_value=MagicMock(
+                stdout=_wrap_cli_ok([["あいうえおかきく", "けこさしすせそ"]]),
+                returncode=0,
+            ),
+        )
+        # max_chars=3 → 各文節が 8 文字・7 文字 → 分割不可 → 各 1 行
+        # → 2 行 > max_lines=1 (行数超過) かつ 8 文字 > max_chars=3 (行幅超過) → 両条件同時
+        result: dict[str, Any] = wrap_captions(
+            str(inp), out, _opts(max_chars=3, max_lines=1)
+        )
+        assert result["ok"] is True
+        data = result["data"]
+        # overflow_cue_indices と overflow_width_cue_indices に同じ index 0 が含まれること
+        assert 0 in data["overflow_cue_indices"]
+        assert 0 in data["overflow_width_cue_indices"]
+        # summary の超過 cue 件数は set 和（重複なし）= 1 であること
+        # 現行実装は 1 + 1 = 2 になるため Red
+        summary = result["summary"]
+        # "1 cue が超過" のような表現で 1 件であることを確認
+        # "2 cue が超過" などの 2 重カウント文言が含まれないこと
+        assert "2 cue が超過" not in summary, (
+            f"summary に重複カウント（2 cue）が含まれている: {summary!r}"
+        )
+
+    def test_overflow_summary_count_uses_set_union(
+        self, tmp_path: Path, mocker: Any
+    ) -> None:
+        """summary の超過 cue 数が set 和で計算されること（CR M-4 数値検証）。
+
+        1 cue が (a)(b) 両条件を満たすとき total_overflow は 1 であること。
+        現行実装 len(a_list) + len(b_list) = 2 になるため Red。
+        """
+        wrap_captions = _import_wrap_captions()
+        inp = _make_input_srt(tmp_path, _srt_1cue("テスト"))
+        out = str(tmp_path / "output.srt")
+        mocker.patch(
+            "clipwright_wrap.wrap.subprocess.run",
+            return_value=MagicMock(
+                stdout=_wrap_cli_ok([["あいうえおかきく", "けこさしすせそ"]]),
+                returncode=0,
+            ),
+        )
+        result: dict[str, Any] = wrap_captions(
+            str(inp), out, _opts(max_chars=3, max_lines=1)
+        )
+        assert result["ok"] is True
+        # data の両インデックスに同じ cue が含まれること（両条件同時確認）
+        data = result["data"]
+        assert data["overflow_cue_indices"] == [0]
+        assert data["overflow_width_cue_indices"] == [0]
+        # summary に "1 cue が超過" の数値が含まれること（2 ではなく 1）
+        # 現行実装は "2 cue が超過" になるため、このアサートが Red
+        assert "1 cue が超過" in result["summary"], (
+            f"summary で超過件数が 1 になっていない（重複カウントの疑い）: {result['summary']!r}"
+        )
+
+
+# ===========================================================================
+# CR M-1: 未被覆行に到達するテスト（L97・L212-213・L227-228）
+# ===========================================================================
+
+
+class TestUncoveredBranches:
+    """wrap.py の未被覆分岐を到達させるテスト（CR M-1）。
+
+    L131-132（OSError フォールバック）/ L166-167（到達不能 except ClipwrightError）は
+    impl 側で pragma/削除で対処するため、ここではテストを書かない。
+    """
+
+    def test_srt_input_mp4_output_rejected(self, tmp_path: Path) -> None:
+        """input=.srt かつ output=.mp4（出力のみ不正拡張子）→ INVALID_INPUT（L97 到達）。
+
+        入力が有効な .srt でも出力が .mp4 等の非対応拡張子なら L97 で弾かれること。
+        """
+        wrap_captions = _import_wrap_captions()
+        inp = _make_input_srt(tmp_path)
+        out = str(tmp_path / "output.mp4")
+        result: dict[str, Any] = wrap_captions(inp, out, _opts())
+        assert result["ok"] is False
+        assert result["error"]["code"] == "INVALID_INPUT"
+        assert (
+            "mp4" in result["error"]["message"]
+            or "拡張子" in result["error"]["message"]
+        )
+
+    def test_wrap_cli_empty_stdout_returns_subprocess_failed(
+        self, tmp_path: Path, mocker: Any
+    ) -> None:
+        """wrap_cli が空 stdout を返す場合（JSON decode 失敗）→ SUBPROCESS_FAILED（L212-213 到達）。
+
+        プロセス異常終了時に stdout が空文字列になるケース。
+        """
+        wrap_captions = _import_wrap_captions()
+        inp = _make_input_srt(tmp_path)
+        out = str(tmp_path / "output.srt")
+        mocker.patch(
+            "clipwright_wrap.wrap.subprocess.run",
+            return_value=MagicMock(
+                # 空 bytes → decode → "" → json.loads("") で JSONDecodeError
+                stdout=b"",
+                returncode=0,
+            ),
+        )
+        result: dict[str, Any] = wrap_captions(inp, out, _opts())
+        assert result["ok"] is False
+        assert result["error"]["code"] == "SUBPROCESS_FAILED"
+
+    def test_wrap_cli_unknown_error_code_falls_back_to_internal(
+        self, tmp_path: Path, mocker: Any
+    ) -> None:
+        """wrap_cli が既知外の error code を返した場合 → INTERNAL フォールバック（L227-228 到達）。"""
+        wrap_captions = _import_wrap_captions()
+        inp = _make_input_srt(tmp_path)
+        out = str(tmp_path / "output.srt")
+        mocker.patch(
+            "clipwright_wrap.wrap.subprocess.run",
+            return_value=MagicMock(
+                stdout=_wrap_cli_error("UNKNOWN_CUSTOM_ERROR_XYZ", "未知のエラー"),
+                returncode=0,
+            ),
+        )
+        result: dict[str, Any] = wrap_captions(inp, out, _opts())
+        assert result["ok"] is False
+        # UNKNOWN_CUSTOM_ERROR_XYZ は ErrorCode に存在しないため INTERNAL にフォールバック
+        assert result["error"]["code"] == "INTERNAL"
