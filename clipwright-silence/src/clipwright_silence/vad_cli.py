@@ -86,7 +86,7 @@ def _load_audio_as_float32(
     本関数内の import は実質キャッシュ取得になる（NF-M-2: 前提条件の明記）。
     テストやユーティリティから直接呼び出した場合は CR L-2 の疎結合目的が崩れる。
     """
-    import numpy as np  # main() で sys.modules にキャッシュ済み（キャッシュから取得）
+    import numpy as np  # docstring 参照（main() でキャッシュ済みのため再 import なし）
 
     with wave.open(pcm_path, "rb") as wf:
         n_frames = wf.getnframes()

@@ -282,8 +282,7 @@ class TestSpeechSegmentsOutput:
         start_samples = 16000  # 1.0 秒 = 16000 サンプル
         end_samples = 40000  # 2.5 秒 = 40000 サンプル
         mock_module_new = MagicMock()
-        mock_model = MagicMock()
-        mock_module_new.load_silero_vad.return_value = mock_model
+        mock_module_new.load_silero_vad.return_value = MagicMock()
         # サンプル単位整数を返す（return_seconds=False の実挙動）
         mock_module_new.get_speech_timestamps.return_value = [
             {"start": start_samples, "end": end_samples}
