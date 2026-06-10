@@ -271,29 +271,31 @@ class TestSpeechSegmentsOutput:
         for i in range(len(segs) - 1):
             assert segs[i][0] < segs[i + 1][0]
 
-    def test_return_seconds_api_fallback(self) -> None:
-        """get_speech_timestamps が return_seconds=True 対応時は秒値をそのまま使う。
+    def test_speech_timestamps_with_sample_unit_values(self) -> None:
+        """get_speech_timestamps がサンプル単位整数を返した場合に /sample_rate 換算で秒に変換されること。
 
-        silero-vad の新しい API では get_speech_timestamps に return_seconds=True を
-        渡すと {"start": float秒, "end": float秒} が返る場合がある。
-        その場合も正しく [start_sec, end_sec] を組み立てること。
+        vad_cli.py は return_seconds=False（デフォルト）で get_speech_timestamps を呼び出す。
+        そのため戻り値は {"start": int_samples, "end": int_samples} のサンプル単位整数。
+        変換後の speech_segments は [start / sample_rate, end / sample_rate] の秒値になること。
         """
-        # return_seconds=True 経路: {"start": 1.0, "end": 2.5} を返すモック
+        sample_rate = 16000
+        start_samples = 16000  # 1.0 秒 = 16000 サンプル
+        end_samples = 40000  # 2.5 秒 = 40000 サンプル
         mock_module_new = MagicMock()
         mock_model = MagicMock()
         mock_module_new.load_silero_vad.return_value = mock_model
-        # float 値を直接返す（秒単位 API）
+        # サンプル単位整数を返す（return_seconds=False の実挙動）
         mock_module_new.get_speech_timestamps.return_value = [
-            {"start": 1.0, "end": 2.5}
+            {"start": start_samples, "end": end_samples}
         ]
 
         fake_wave_module = MagicMock()
         fake_wave_file = MagicMock()
         fake_wave_file.__enter__ = MagicMock(return_value=fake_wave_file)
         fake_wave_file.__exit__ = MagicMock(return_value=False)
-        fake_wave_file.getnframes.return_value = 16000 * 5
-        fake_wave_file.getframerate.return_value = 16000
-        fake_wave_file.readframes.return_value = b"\x00" * (16000 * 5 * 2)
+        fake_wave_file.getnframes.return_value = sample_rate * 5
+        fake_wave_file.getframerate.return_value = sample_rate
+        fake_wave_file.readframes.return_value = b"\x00" * (sample_rate * 5 * 2)
         fake_wave_module.open.return_value = fake_wave_file
 
         with (
@@ -312,6 +314,10 @@ class TestSpeechSegmentsOutput:
 
         assert exit_code == 0
         assert "speech_segments" in result
+        segs = result["speech_segments"]
+        assert len(segs) == 1
+        assert segs[0][0] == pytest.approx(start_samples / sample_rate)  # 1.0 秒
+        assert segs[0][1] == pytest.approx(end_samples / sample_rate)  # 2.5 秒
 
     def test_exit_zero_on_success(self) -> None:
         """正常終了時は exit 0 を返す。"""
@@ -334,7 +340,7 @@ class TestImportErrorPath:
         # silero_vad が存在していたら一旦 None に
         with patch.dict(
             "sys.modules",
-            {"silero_vad": None},  # type: ignore[dict-item]
+            {"silero_vad": None},
         ):
             exit_code, result = _capture_main(["--media", _DUMMY_MEDIA])
 
@@ -346,7 +352,7 @@ class TestImportErrorPath:
         """DEPENDENCY_MISSING エラーには hint フィールドがあり pip install を示す。"""
         with patch.dict(
             "sys.modules",
-            {"silero_vad": None},  # type: ignore[dict-item]
+            {"silero_vad": None},
         ):
             _, result = _capture_main(["--media", _DUMMY_MEDIA])
 
@@ -359,7 +365,7 @@ class TestImportErrorPath:
         """DEPENDENCY_MISSING エラーには message フィールドがある。"""
         with patch.dict(
             "sys.modules",
-            {"silero_vad": None},  # type: ignore[dict-item]
+            {"silero_vad": None},
         ):
             _, result = _capture_main(["--media", _DUMMY_MEDIA])
 
@@ -691,10 +697,7 @@ class TestMediaDurationArg:
 
         # --media-duration を受け取れる（argparse が SystemExit しない）こと
         assert exit_code == 0
-        assert (
-            "error" not in result
-            or result.get("error", {}).get("code") != "INVALID_INPUT"
-        )
+        assert "error" not in result
 
     def test_ffmpeg_timeout_uses_media_duration(self) -> None:
         """--media-duration 指定時に内側 ffmpeg timeout が total 連動になること。
@@ -842,7 +845,7 @@ class TestImportErrorMessageSanitize:
         # sys.modules を None にすると ImportError が発生する
         with patch.dict(
             "sys.modules",
-            {"silero_vad": None},  # type: ignore[dict-item]
+            {"silero_vad": None},
         ):
             _, result = _capture_main(["--media", _DUMMY_MEDIA])
         return result
@@ -877,3 +880,54 @@ class TestImportErrorMessageSanitize:
         assert "error" in result
         message = result["error"].get("message", "")
         assert len(message) > 0
+
+
+# ---------------------------------------------------------------------------
+# ⑩ 想定外例外ハンドラのサニタイズ（SR NF-L-1）
+# ---------------------------------------------------------------------------
+
+
+class TestUnexpectedExceptionSanitize:
+    """except Exception ハンドラが str(exc) を message に含まないことを検証。
+
+    SR NF-L-1: vad_cli.py の except Exception ハンドラが OSError 等の
+    内部パスを含む例外を捕捉した場合でも、error JSON の message に
+    str(exc) の内容（内部パス断片等）が含まれないことを確認する。
+    impl-fix2-src が修正するまでは Red（機能未修正による失敗）。
+    """
+
+    def test_unexpected_exception_message_excludes_exc_str(self) -> None:
+        """想定外例外発生時の error message に str(exc) が含まれないこと。
+
+        OSError("No such file or directory: '/home/user/private/media.mp4'") を
+        except Exception ハンドラで捕捉させ、message にパス断片が出ないことを確認する。
+        """
+        exc_message = "No such file or directory: '/home/user/private/media.mp4'"
+
+        fake_wave_module = MagicMock()
+        fake_wave_module.open.side_effect = OSError(exc_message)
+
+        with (
+            patch.dict("sys.modules", {"silero_vad": MagicMock()}),
+            patch(
+                "clipwright_silence.vad_cli.resolve_tool",
+                return_value="/usr/bin/ffmpeg",
+            ),
+            patch("clipwright_silence.vad_cli.run") as mock_run,
+            patch("wave.open", fake_wave_module.open),
+            patch("tempfile.NamedTemporaryFile"),
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            exit_code, result = _capture_main(["--media", _DUMMY_MEDIA])
+
+        assert exit_code == 0
+        assert "error" in result
+        assert result["error"]["code"] == "INTERNAL"
+        message = result["error"].get("message", "")
+        # str(exc) が message に含まれていないこと（内部パス漏洩しない）
+        assert "/home/user/private/media.mp4" not in message, (
+            f"message に内部パスが含まれている: {message!r}"
+        )
+        assert exc_message not in message, (
+            f"message に str(exc) がそのまま含まれている: {message!r}"
+        )

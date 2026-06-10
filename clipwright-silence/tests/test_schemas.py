@@ -217,7 +217,7 @@ class TestBackendField:
     def test_invalid_backend_rejected(self, invalid_backend: str) -> None:
         """backend に Literal 外の値 → ValidationError。"""
         with pytest.raises(ValidationError):
-            DetectSilenceOptions(backend=invalid_backend)
+            DetectSilenceOptions(backend=invalid_backend)  # type: ignore[arg-type]
 
 
 class TestVadThresholdField:
