@@ -6,6 +6,8 @@ OTIO 構築・保存 → エンベロープ返却 の一連フローを担う。
 設計判断:
 - _detect_silence_intervals() が ffmpeg 実行とステドエラーパースをカプセル化し、
   将来バックエンドを差し替えられる（アダプタ抽象・AD-1）。
+- _detect_vad_silence_intervals() が VAD CLI の別プロセス起動と発話→無音反転を担う。
+  両者とも (無音区間リスト) を返す共通契約にし、derive_keep_ranges 以降は共通フロー。
 - source_range の rate は inspect_media の MediaInfo.duration.rate を用い、
   value = 秒 × rate で構築する（DC-AS-003）。
 - output は media と同一ディレクトリ配下のパスのみ許可する（DC-AS-001）。
@@ -14,8 +16,10 @@ OTIO 構築・保存 → エンベロープ返却 の一連フローを担う。
 
 from __future__ import annotations
 
+import json
 import math
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -134,6 +138,97 @@ def _detect_silence_intervals(
     ]
     result = run(cmd, timeout=float(timeout))
     return _parse_silence_intervals(result.stderr, total_duration_sec)
+
+
+def _detect_vad_silence_intervals(
+    source: str,
+    options: DetectSilenceOptions,
+    total_duration_sec: float,
+) -> tuple[list[tuple[float, float]], int]:
+    """VAD CLI を別プロセス起動して無音区間リストと speech_count を返す。
+
+    VAD-AD-02/04: VAD CLI が返す発話区間を total_duration_sec に対して反転し
+    無音区間にする。speech_count は VAD summary 生成のみに使用し、
+    共通フローには渡さない（§7.5）。
+
+    Args:
+        source: 入力メディアファイルの絶対パス。
+        options: DetectSilenceOptions（vad_* フィールドを参照）。
+        total_duration_sec: 素材の総尺（秒）。反転に使用。
+
+    Returns:
+        (無音区間リスト, speech_count) のタプル。
+
+    Raises:
+        ClipwrightError: VAD CLI の error JSON を対応 ErrorCode にマップして送出。
+                         run() が非ゼロ終了した場合は SUBPROCESS_FAILED。
+    """
+    timeout = float(max(60, math.ceil(total_duration_sec * 4)))
+    cmd = [
+        sys.executable,
+        "-m",
+        "clipwright_silence.vad_cli",
+        "--media",
+        source,
+        "--threshold",
+        f"{options.vad_threshold}",
+        "--min-speech",
+        f"{options.vad_min_speech_duration}",
+        "--min-silence",
+        f"{options.vad_min_silence_duration}",
+    ]
+    result = run(cmd, timeout=timeout)
+
+    payload: dict[str, Any] = json.loads(result.stdout)
+
+    # エラー JSON の場合は ErrorCode にマップして ClipwrightError を送出（§7.1）
+    if "error" in payload:
+        err = payload["error"]
+        raw_code: str = err.get("code", "INTERNAL")
+        message: str = err.get("message", "VAD CLI でエラーが発生しました")
+        hint: str = err.get("hint", "再現条件を添えて報告してください。")
+
+        # 既知の ErrorCode にマップ。不明なコードは SUBPROCESS_FAILED にフォールバック
+        try:
+            error_code = ErrorCode(raw_code)
+        except ValueError:
+            error_code = ErrorCode.SUBPROCESS_FAILED
+
+        raise ClipwrightError(code=error_code, message=message, hint=hint)
+
+    # 発話区間の前処理（§7.4）: クリップ・退化除去
+    raw_segments: list[dict[str, Any]] = payload.get("speech_segments", [])
+    total = total_duration_sec
+    speech_segments: list[tuple[float, float]] = []
+    for seg in raw_segments:
+        # dict 形式 {"start": ..., "end": ...} または list 形式 [start, end] を許容
+        if isinstance(seg, (list, tuple)):
+            start, end = float(seg[0]), float(seg[1])
+        else:
+            start, end = float(seg["start"]), float(seg["end"])
+        # start < 0 → 0 でクリップ、end > total → total でクリップ
+        start = max(0.0, start)
+        end = min(total, end)
+        # 退化区間（start >= end）を除去
+        if start >= end:
+            continue
+        speech_segments.append((start, end))
+
+    speech_count = len(speech_segments)
+
+    # 発話区間 → 無音区間へ反転（VAD-AD-04）
+    # 発話区間を昇順でソートしてから [0, total] の補集合を取る
+    sorted_speech = sorted(speech_segments, key=lambda iv: iv[0])
+    silence_intervals: list[tuple[float, float]] = []
+    cursor = 0.0
+    for s_start, s_end in sorted_speech:
+        if s_start > cursor:
+            silence_intervals.append((cursor, s_start))
+        cursor = max(cursor, s_end)
+    if cursor < total:
+        silence_intervals.append((cursor, total))
+
+    return silence_intervals, speech_count
 
 
 def detect_silence(
@@ -295,14 +390,25 @@ def _detect_inner(
     total_duration_sec = media_info.duration.value / media_info.duration.rate
     rate = media_info.duration.rate
 
-    # --- 3. ffmpeg silencedetect 実行・stderr パース ---
+    # --- 3. 検出実行（backend で分岐）---
 
-    ffmpeg = resolve_tool("ffmpeg", "CLIPWRIGHT_FFMPEG")
     abs_media = str(media_path.resolve())
 
-    silence_intervals = _detect_silence_intervals(
-        ffmpeg, abs_media, options, total_duration_sec
-    )
+    # speech_count は VAD summary 用途のみ。共通フロー（無音区間リスト）は両経路共通
+    speech_count: int | None = None
+
+    if options.backend == "vad":
+        # VAD 経路: sys.executable -m clipwright_silence.vad_cli で別プロセス起動
+        # resolve_tool は使わない（sys.executable -m で同 venv を保証・VAD-AD-02）
+        silence_intervals, speech_count = _detect_vad_silence_intervals(
+            abs_media, options, total_duration_sec
+        )
+    else:
+        # silencedetect 経路（既存・backend="silencedetect"）
+        ffmpeg = resolve_tool("ffmpeg", "CLIPWRIGHT_FFMPEG")
+        silence_intervals = _detect_silence_intervals(
+            ffmpeg, abs_media, options, total_duration_sec
+        )
 
     # --- 4. KEEP 導出 ---
 
@@ -330,6 +436,7 @@ def _detect_inner(
                 "tool": "clipwright-silence",
                 "version": clipwright_silence.__version__,
                 "kind": "keep",
+                "backend": options.backend,  # VAD-AD-07
             },
         )
 
@@ -342,12 +449,25 @@ def _detect_inner(
     total_silence_seconds = sum(e - s for s, e in silence_intervals)
     total_keep_seconds = sum(e - s for s, e in keep_ranges)
 
-    summary = (
-        f"総尺 {_fmt_sec(total_duration_sec)} の素材から"
-        f"無音 {silence_count} 区間（合計 {_fmt_sec(total_silence_seconds)}）を検出。"
-        f"残す {keep_count} 区間（合計 {_fmt_sec(total_keep_seconds)}）の"
-        f"{output_path.name} を生成しました。"
-    )
+    # summary を backend で出し分け（VAD-AD-08・§7.5）
+    if options.backend == "vad" and speech_count is not None:
+        _silence_fmt = _fmt_sec(total_silence_seconds)
+        _keep_fmt = _fmt_sec(total_keep_seconds)
+        summary = (
+            f"発話 {speech_count} 区間を検出。"
+            f"非発話 {silence_count} 区間（合計 {_silence_fmt}）を除去。"
+            f"残す {keep_count} 区間（合計 {_keep_fmt}）の"
+            f"{output_path.name} を生成しました。"
+        )
+    else:
+        _silence_fmt = _fmt_sec(total_silence_seconds)
+        _keep_fmt = _fmt_sec(total_keep_seconds)
+        summary = (
+            f"総尺 {_fmt_sec(total_duration_sec)} の素材から"
+            f"無音 {silence_count} 区間（合計 {_silence_fmt}）を検出。"
+            f"残す {keep_count} 区間（合計 {_keep_fmt}）の"
+            f"{output_path.name} を生成しました。"
+        )
 
     warnings: list[str] = []
     if keep_count == 0:

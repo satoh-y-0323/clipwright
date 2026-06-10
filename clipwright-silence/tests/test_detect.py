@@ -1922,9 +1922,9 @@ class TestVadDoubleInversionEdgeCases:
             result = detect_silence(media, output, _vad_opts(padding=0.0))
 
         assert result["ok"] is True
-        # クリップ後の発話 (2, 10) → 無音 (0, 2) → KEEP (0, 2)
+        # クリップ後の発話 (2, 10) → 無音 (0, 2) → KEEP (2, 10) = 8.0秒（発話=KEEP）
         assert result["data"]["keep_count"] == 1
-        assert result["data"]["total_keep_seconds"] == pytest.approx(2.0)
+        assert result["data"]["total_keep_seconds"] == pytest.approx(8.0)
 
     def test_speech_start_below_zero_is_clipped(self, tmp_path: Path) -> None:
         """speech_segments の start < 0 の場合、0 でクリップされる（§7.4 前処理）。"""
@@ -1981,8 +1981,8 @@ class TestVadDoubleInversionEdgeCases:
             result = detect_silence(media, output, _vad_opts(padding=0.0))
 
         assert result["ok"] is True
-        # 退化区間除去後の発話 [(3, 7)] → 無音 [(0,3),(7,10)] → KEEP [(0,3),(7,10)]
-        assert result["data"]["keep_count"] == 2
+        # 退化区間除去後の発話 [(3, 7)] → 無音 [(0,3),(7,10)] → KEEP [(3, 7)] = 1区間（発話=KEEP）
+        assert result["data"]["keep_count"] == 1
 
 
 # ---------------------------------------------------------------------------
