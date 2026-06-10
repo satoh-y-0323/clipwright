@@ -136,7 +136,8 @@ class TestArgParsing:
         with (
             patch.dict("sys.modules", {"silero_vad": mock_module}),
             patch(
-                "clipwright_silence.vad_cli.resolve_tool", return_value="/usr/bin/ffmpeg"
+                "clipwright_silence.vad_cli.resolve_tool",
+                return_value="/usr/bin/ffmpeg",
             ),
             patch("clipwright_silence.vad_cli.run") as mock_run,
             patch("wave.open", fake_wave_module.open),
@@ -170,7 +171,8 @@ class TestArgParsing:
         with (
             patch.dict("sys.modules", {"silero_vad": mock_module}),
             patch(
-                "clipwright_silence.vad_cli.resolve_tool", return_value="/usr/bin/ffmpeg"
+                "clipwright_silence.vad_cli.resolve_tool",
+                return_value="/usr/bin/ffmpeg",
             ),
             patch("clipwright_silence.vad_cli.run") as mock_run,
             patch("wave.open", fake_wave_module.open),
@@ -216,7 +218,8 @@ class TestSpeechSegmentsOutput:
         with (
             patch.dict("sys.modules", {"silero_vad": mock_module}),
             patch(
-                "clipwright_silence.vad_cli.resolve_tool", return_value="/usr/bin/ffmpeg"
+                "clipwright_silence.vad_cli.resolve_tool",
+                return_value="/usr/bin/ffmpeg",
             ),
             patch("clipwright_silence.vad_cli.run") as mock_run,
             patch("wave.open", fake_wave_module.open),
@@ -294,7 +297,8 @@ class TestSpeechSegmentsOutput:
         with (
             patch.dict("sys.modules", {"silero_vad": mock_module_new}),
             patch(
-                "clipwright_silence.vad_cli.resolve_tool", return_value="/usr/bin/ffmpeg"
+                "clipwright_silence.vad_cli.resolve_tool",
+                return_value="/usr/bin/ffmpeg",
             ),
             patch("clipwright_silence.vad_cli.run") as mock_run,
             patch("wave.open", fake_wave_module.open),
@@ -369,7 +373,9 @@ class TestImportErrorPath:
         """
         # silero_vad の load_silero_vad が ImportError を送出するシミュレーション
         mock_module = MagicMock(spec=ModuleType)
-        mock_module.load_silero_vad.side_effect = ImportError("No module named 'onnxruntime'")
+        mock_module.load_silero_vad.side_effect = ImportError(
+            "No module named 'onnxruntime'"
+        )
 
         with patch.dict("sys.modules", {"silero_vad": mock_module}):
             exit_code, result = _capture_main(["--media", _DUMMY_MEDIA])
@@ -397,7 +403,8 @@ class TestFfmpegSubprocessFailure:
         with (
             patch.dict("sys.modules", {"silero_vad": mock_module}),
             patch(
-                "clipwright_silence.vad_cli.resolve_tool", return_value="/usr/bin/ffmpeg"
+                "clipwright_silence.vad_cli.resolve_tool",
+                return_value="/usr/bin/ffmpeg",
             ),
             patch("clipwright_silence.vad_cli.run") as mock_run,
             patch("tempfile.NamedTemporaryFile"),
@@ -422,7 +429,8 @@ class TestFfmpegSubprocessFailure:
         with (
             patch.dict("sys.modules", {"silero_vad": mock_module}),
             patch(
-                "clipwright_silence.vad_cli.resolve_tool", return_value="/usr/bin/ffmpeg"
+                "clipwright_silence.vad_cli.resolve_tool",
+                return_value="/usr/bin/ffmpeg",
             ),
             patch("clipwright_silence.vad_cli.run") as mock_run,
             patch("tempfile.NamedTemporaryFile"),
@@ -448,7 +456,8 @@ class TestFfmpegSubprocessFailure:
         with (
             patch.dict("sys.modules", {"silero_vad": mock_module}),
             patch(
-                "clipwright_silence.vad_cli.resolve_tool", return_value="/usr/bin/ffmpeg"
+                "clipwright_silence.vad_cli.resolve_tool",
+                return_value="/usr/bin/ffmpeg",
             ),
             patch("clipwright_silence.vad_cli.run") as mock_run,
             patch("tempfile.NamedTemporaryFile"),
@@ -564,7 +573,8 @@ class TestStdoutStderrSeparation:
             patch("sys.stderr", stderr_buf),
             patch.dict("sys.modules", {"silero_vad": mock_module}),
             patch(
-                "clipwright_silence.vad_cli.resolve_tool", return_value="/usr/bin/ffmpeg"
+                "clipwright_silence.vad_cli.resolve_tool",
+                return_value="/usr/bin/ffmpeg",
             ),
             patch("clipwright_silence.vad_cli.run") as mock_run,
             patch("wave.open", fake_wave_module.open),

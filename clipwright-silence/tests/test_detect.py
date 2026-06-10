@@ -1444,3 +1444,1074 @@ class TestAbnormalIntervalGuard:
         assert result["data"]["silence_count"] == 0
         # 無音なし → 全尺 1 KEEP
         assert result["data"]["keep_count"] == 1
+
+
+# ===========================================================================
+# VAD backend テスト（VAD-AD-01〜08 / §7.1/7.4/7.5/7.7/7.9）
+# 現状 backend="vad" 分岐は未実装 → 全テスト Red（機能未実装による失敗）
+# ===========================================================================
+
+import json
+import sys
+
+
+def _make_vad_speech_json(speech_segments: list[tuple[float, float]]) -> str:
+    """VAD CLI の stdout JSON（成功）を生成するヘルパー。
+
+    各要素は (start_sec, end_sec) の発話区間タプル。
+    """
+    return json.dumps(
+        {"speech_segments": [{"start": s, "end": e} for s, e in speech_segments]}
+    )
+
+
+def _make_vad_error_json(code: str, message: str, hint: str) -> str:
+    """VAD CLI の stdout JSON（エラー）を生成するヘルパー。"""
+    return json.dumps({"error": {"code": code, "message": message, "hint": hint}})
+
+
+def _fake_vad_run(stdout_json: str) -> Any:
+    """VAD CLI run の成功モックを返すクロージャを作る。
+
+    stdoutに JSON を持つ CompletedProcess を返す。
+    """
+
+    def _impl(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+        return CompletedProcess(args=cmd, returncode=0, stdout=stdout_json, stderr="")
+
+    return _impl
+
+
+def _vad_opts(
+    vad_threshold: float = 0.5,
+    vad_min_speech_duration: float = 0.25,
+    vad_min_silence_duration: float = 0.1,
+    padding: float = 0.0,
+    min_keep_duration: float = 0.0,
+) -> DetectSilenceOptions:
+    """backend="vad" の DetectSilenceOptions を構築するヘルパー。"""
+    return DetectSilenceOptions(
+        backend="vad",
+        vad_threshold=vad_threshold,
+        vad_min_speech_duration=vad_min_speech_duration,
+        vad_min_silence_duration=vad_min_silence_duration,
+        padding=padding,
+        min_keep_duration=min_keep_duration,
+    )
+
+
+# ---------------------------------------------------------------------------
+# ① VAD CLI 起動の引数配列検証（VAD-AD-02・DC-AS-001）
+# ---------------------------------------------------------------------------
+
+
+class TestVadCliInvocation:
+    """backend="vad" で VAD CLI が正しい引数配列で起動されること（VAD-AD-02）。
+
+    - sys.executable -m clipwright_silence.vad_cli
+    - --media / --threshold / --min-speech / --min-silence が options から渡る
+    """
+
+    def test_vad_cli_called_with_sys_executable_module_flag(
+        self, tmp_path: Path
+    ) -> None:
+        """VAD CLI が sys.executable -m clipwright_silence.vad_cli で起動される。"""
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+        speech_json = _make_vad_speech_json([(1.0, 9.0)])
+
+        captured_cmds: list[list[str]] = []
+
+        def _capture_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            captured_cmds.append(cmd)
+            return CompletedProcess(
+                args=cmd, returncode=0, stdout=speech_json, stderr=""
+            )
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch("clipwright_silence.detect.run", side_effect=_capture_run),
+        ):
+            detect_silence(media, output, _vad_opts())
+
+        assert len(captured_cmds) >= 1
+        cmd = captured_cmds[0]
+        assert isinstance(cmd, list)
+        # sys.executable -m clipwright_silence.vad_cli の順序で始まる
+        assert cmd[0] == sys.executable
+        assert cmd[1] == "-m"
+        assert cmd[2] == "clipwright_silence.vad_cli"
+
+    def test_vad_cli_receives_media_option(self, tmp_path: Path) -> None:
+        """VAD CLI に --media オプションでメディアパスが渡される。"""
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+        speech_json = _make_vad_speech_json([(1.0, 9.0)])
+
+        captured_cmds: list[list[str]] = []
+
+        def _capture_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            captured_cmds.append(cmd)
+            return CompletedProcess(
+                args=cmd, returncode=0, stdout=speech_json, stderr=""
+            )
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch("clipwright_silence.detect.run", side_effect=_capture_run),
+        ):
+            detect_silence(media, output, _vad_opts())
+
+        cmd = captured_cmds[0]
+        assert "--media" in cmd
+        media_idx = cmd.index("--media")
+        # --media の次の要素がメディアファイルの絶対パス
+        assert cmd[media_idx + 1] == str(Path(media).resolve())
+
+    def test_vad_cli_receives_threshold_option(self, tmp_path: Path) -> None:
+        """VAD CLI に --threshold オプションが options.vad_threshold から渡される。"""
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+        speech_json = _make_vad_speech_json([(1.0, 9.0)])
+        opts = _vad_opts(vad_threshold=0.7)
+
+        captured_cmds: list[list[str]] = []
+
+        def _capture_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            captured_cmds.append(cmd)
+            return CompletedProcess(
+                args=cmd, returncode=0, stdout=speech_json, stderr=""
+            )
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch("clipwright_silence.detect.run", side_effect=_capture_run),
+        ):
+            detect_silence(media, output, opts)
+
+        cmd = captured_cmds[0]
+        assert "--threshold" in cmd
+        thresh_idx = cmd.index("--threshold")
+        assert cmd[thresh_idx + 1] == "0.7"
+
+    def test_vad_cli_receives_min_speech_option(self, tmp_path: Path) -> None:
+        """VAD CLI に --min-speech オプションが options.vad_min_speech_duration から渡される。"""
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+        speech_json = _make_vad_speech_json([(1.0, 9.0)])
+        opts = _vad_opts(vad_min_speech_duration=0.3)
+
+        captured_cmds: list[list[str]] = []
+
+        def _capture_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            captured_cmds.append(cmd)
+            return CompletedProcess(
+                args=cmd, returncode=0, stdout=speech_json, stderr=""
+            )
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch("clipwright_silence.detect.run", side_effect=_capture_run),
+        ):
+            detect_silence(media, output, opts)
+
+        cmd = captured_cmds[0]
+        assert "--min-speech" in cmd
+        idx = cmd.index("--min-speech")
+        assert cmd[idx + 1] == "0.3"
+
+    def test_vad_cli_receives_min_silence_option(self, tmp_path: Path) -> None:
+        """VAD CLI に --min-silence オプションが options.vad_min_silence_duration から渡される。"""
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+        speech_json = _make_vad_speech_json([(1.0, 9.0)])
+        opts = _vad_opts(vad_min_silence_duration=0.2)
+
+        captured_cmds: list[list[str]] = []
+
+        def _capture_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            captured_cmds.append(cmd)
+            return CompletedProcess(
+                args=cmd, returncode=0, stdout=speech_json, stderr=""
+            )
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch("clipwright_silence.detect.run", side_effect=_capture_run),
+        ):
+            detect_silence(media, output, opts)
+
+        cmd = captured_cmds[0]
+        assert "--min-silence" in cmd
+        idx = cmd.index("--min-silence")
+        assert cmd[idx + 1] == "0.2"
+
+    def test_vad_backend_does_not_use_silencedetect_path(self, tmp_path: Path) -> None:
+        """backend="vad" のとき silencedetect 経路（resolve_tool ffmpeg）は呼ばれない。
+
+        VAD 経路は sys.executable -m 直接起動するため resolve_tool を使わない（VAD-AD-02）。
+        """
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+        speech_json = _make_vad_speech_json([(1.0, 9.0)])
+
+        resolve_called_names: list[str] = []
+
+        def _capture_resolve(name: str, env_var: str | None = None) -> str:
+            resolve_called_names.append(name)
+            return f"/usr/bin/{name}"
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch(
+                "clipwright_silence.detect.resolve_tool",
+                side_effect=_capture_resolve,
+            ),
+            patch(
+                "clipwright_silence.detect.run",
+                side_effect=_fake_vad_run(speech_json),
+            ),
+        ):
+            detect_silence(media, output, _vad_opts())
+
+        # silencedetect 経路の resolve_tool("ffmpeg") は呼ばれない
+        assert "ffmpeg" not in resolve_called_names
+
+    def test_silencedetect_backend_uses_resolve_tool_not_vad_cli(
+        self, tmp_path: Path
+    ) -> None:
+        """backend="silencedetect"（既定）では VAD CLI が呼ばれず silencedetect 経路を通る。
+
+        backend 分岐の非回帰（VAD-AD-01）。
+        """
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        stderr = _make_stderr([(2.0, 5.0)])
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        captured_cmds: list[list[str]] = []
+
+        def _capture_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            captured_cmds.append(cmd)
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr=stderr)
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch(
+                "clipwright_silence.detect.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
+            patch("clipwright_silence.detect.run", side_effect=_capture_run),
+        ):
+            result = detect_silence(media, output, _opts())
+
+        assert result["ok"] is True
+        # silencedetect 経路では cmd の先頭が ffmpeg パス（sys.executable ではない）
+        assert len(captured_cmds) >= 1
+        cmd = captured_cmds[0]
+        assert cmd[0] == "/usr/bin/ffmpeg"
+        assert "-m" not in cmd
+
+
+# ---------------------------------------------------------------------------
+# ② 二重反転の端ケース検証（§7.4・DC-AS-003）
+# ---------------------------------------------------------------------------
+
+
+class TestVadDoubleInversionEdgeCases:
+    """VAD 発話区間 → 反転 → KEEP が入力発話に一致する検証（§7.4）。
+
+    detect 反転（発話→無音）→ plan 反転（無音→KEEP）の二重反転で
+    KEEP = 発話区間 になることを期待値固定で検証する（padding=0.0 で確認）。
+    """
+
+    def test_empty_speech_segments_gives_empty_keep(self, tmp_path: Path) -> None:
+        """①発話ゼロ（speech_segments 空）→ 無音 [(0, total)] → KEEP 空（全除去）。"""
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+        speech_json = _make_vad_speech_json([])  # 発話ゼロ
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch(
+                "clipwright_silence.detect.run",
+                side_effect=_fake_vad_run(speech_json),
+            ),
+        ):
+            result = detect_silence(media, output, _vad_opts(padding=0.0))
+
+        assert result["ok"] is True
+        assert result["data"]["keep_count"] == 0
+
+    def test_full_speech_gives_full_keep(self, tmp_path: Path) -> None:
+        """②全区間発話 [(0, total)] → 無音空 → KEEP [(0, total)]（全区間 KEEP）。"""
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        total = 10.0
+        media_info = _make_media_info(path=media, duration_sec=total)
+        speech_json = _make_vad_speech_json([(0.0, total)])
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch(
+                "clipwright_silence.detect.run",
+                side_effect=_fake_vad_run(speech_json),
+            ),
+        ):
+            result = detect_silence(media, output, _vad_opts(padding=0.0))
+
+        assert result["ok"] is True
+        assert result["data"]["keep_count"] == 1
+        assert result["data"]["total_keep_seconds"] == pytest.approx(total)
+
+    def test_head_speech_gives_keep_starting_from_zero(self, tmp_path: Path) -> None:
+        """③先頭発話 [(0, 4)] → KEEP 先頭が (0, 4) になる（先頭無音なし）。"""
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        total = 10.0
+        media_info = _make_media_info(path=media, duration_sec=total, rate=30.0)
+        # 発話: (0, 4) → 無音: (4, 10) → KEEP: (0, 4)
+        speech_json = _make_vad_speech_json([(0.0, 4.0)])
+
+        from clipwright.otio_utils import load_timeline
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch(
+                "clipwright_silence.detect.run",
+                side_effect=_fake_vad_run(speech_json),
+            ),
+        ):
+            result = detect_silence(media, output, _vad_opts(padding=0.0))
+
+        assert result["ok"] is True
+        assert result["data"]["keep_count"] == 1
+        tl = load_timeline(output)
+        v1 = tl.tracks[0]
+        clips = [it for it in v1 if isinstance(it, otio.schema.Clip)]
+        assert len(clips) == 1
+        # start_time.value = 0.0 * 30 = 0, duration.value = 4.0 * 30 = 120
+        assert clips[0].source_range.start_time.value == pytest.approx(0.0)
+        assert clips[0].source_range.duration.value == pytest.approx(120.0)
+
+    def test_tail_speech_gives_keep_ending_at_total(self, tmp_path: Path) -> None:
+        """④末尾発話 [(6, 10)] → KEEP 末尾が (6, total=10) になる（末尾無音なし）。"""
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        total = 10.0
+        media_info = _make_media_info(path=media, duration_sec=total, rate=30.0)
+        # 発話: (6, 10) → 無音: (0, 6) → KEEP: (6, 10)
+        speech_json = _make_vad_speech_json([(6.0, total)])
+
+        from clipwright.otio_utils import load_timeline
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch(
+                "clipwright_silence.detect.run",
+                side_effect=_fake_vad_run(speech_json),
+            ),
+        ):
+            result = detect_silence(media, output, _vad_opts(padding=0.0))
+
+        assert result["ok"] is True
+        assert result["data"]["keep_count"] == 1
+        tl = load_timeline(output)
+        v1 = tl.tracks[0]
+        clips = [it for it in v1 if isinstance(it, otio.schema.Clip)]
+        assert len(clips) == 1
+        # start_time.value = 6.0 * 30 = 180, duration.value = 4.0 * 30 = 120
+        assert clips[0].source_range.start_time.value == pytest.approx(180.0)
+        assert clips[0].source_range.duration.value == pytest.approx(120.0)
+
+    def test_speech_end_beyond_total_is_clipped(self, tmp_path: Path) -> None:
+        """speech_segments の end > total の場合、total でクリップされる（§7.4 前処理）。"""
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        total = 10.0
+        media_info = _make_media_info(path=media, duration_sec=total)
+        # end=15.0 > total=10.0 → クリップされて end=10.0 と同等
+        speech_json = _make_vad_speech_json([(2.0, 15.0)])
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch(
+                "clipwright_silence.detect.run",
+                side_effect=_fake_vad_run(speech_json),
+            ),
+        ):
+            result = detect_silence(media, output, _vad_opts(padding=0.0))
+
+        assert result["ok"] is True
+        # クリップ後の発話 (2, 10) → 無音 (0, 2) → KEEP (0, 2)
+        assert result["data"]["keep_count"] == 1
+        assert result["data"]["total_keep_seconds"] == pytest.approx(2.0)
+
+    def test_speech_start_below_zero_is_clipped(self, tmp_path: Path) -> None:
+        """speech_segments の start < 0 の場合、0 でクリップされる（§7.4 前処理）。"""
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        total = 10.0
+        media_info = _make_media_info(path=media, duration_sec=total)
+        # start=-3.0 < 0 → クリップされて start=0.0 と同等
+        speech_json = _make_vad_speech_json([(-3.0, 8.0)])
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch(
+                "clipwright_silence.detect.run",
+                side_effect=_fake_vad_run(speech_json),
+            ),
+        ):
+            result = detect_silence(media, output, _vad_opts(padding=0.0))
+
+        assert result["ok"] is True
+        # クリップ後の発話 (0, 8) → 無音 (8, 10) → KEEP (0, 8)
+        assert result["data"]["keep_count"] == 1
+        assert result["data"]["total_keep_seconds"] == pytest.approx(8.0)
+
+    def test_degenerate_segment_start_ge_end_is_removed(self, tmp_path: Path) -> None:
+        """退化区間（start >= end）は除去される（§7.4 前処理）。"""
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        total = 10.0
+        media_info = _make_media_info(path=media, duration_sec=total)
+        # (5.0, 5.0) は退化区間（start==end） → 除去
+        # (3.0, 7.0) は有効な発話区間
+        speech_json = _make_vad_speech_json([(5.0, 5.0), (3.0, 7.0)])
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch(
+                "clipwright_silence.detect.run",
+                side_effect=_fake_vad_run(speech_json),
+            ),
+        ):
+            result = detect_silence(media, output, _vad_opts(padding=0.0))
+
+        assert result["ok"] is True
+        # 退化区間除去後の発話 [(3, 7)] → 無音 [(0,3),(7,10)] → KEEP [(0,3),(7,10)]
+        assert result["data"]["keep_count"] == 2
+
+
+# ---------------------------------------------------------------------------
+# ③ metadata["clipwright"] の backend キー検証（VAD-AD-07・DC-GP-001）
+# ---------------------------------------------------------------------------
+
+
+class TestVadMetadataBackend:
+    """backend="vad" 時の metadata["clipwright"] に backend="vad" が含まれる（VAD-AD-07）。
+
+    silencedetect 経路は backend="silencedetect" を含む。
+    既存テスト test_clip_metadata_has_clipwright_key は tool/version/kind のみを
+    assert しており backend キーは assert していない → backend 追加後も壊れない（DC-GP-001）。
+    """
+
+    def test_vad_backend_metadata_contains_backend_key(self, tmp_path: Path) -> None:
+        """backend="vad" 時に clip.metadata["clipwright"]["backend"] == "vad"。"""
+        from clipwright.otio_utils import load_timeline
+
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+        speech_json = _make_vad_speech_json([(1.0, 9.0)])
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch(
+                "clipwright_silence.detect.run",
+                side_effect=_fake_vad_run(speech_json),
+            ),
+        ):
+            result = detect_silence(media, output, _vad_opts())
+
+        assert result["ok"] is True
+        tl = load_timeline(output)
+        v1 = tl.tracks[0]
+        clips = [it for it in v1 if isinstance(it, otio.schema.Clip)]
+        assert len(clips) > 0
+        for clip in clips:
+            cw = clip.metadata.get("clipwright")
+            assert cw is not None
+            assert cw.get("tool") == "clipwright-silence"
+            assert "version" in cw
+            assert cw.get("kind") == "keep"
+            assert cw.get("backend") == "vad"
+
+    def test_silencedetect_backend_metadata_contains_backend_key(
+        self, tmp_path: Path
+    ) -> None:
+        """backend="silencedetect" 時に clip.metadata["clipwright"]["backend"] == "silencedetect"。"""
+        from clipwright.otio_utils import load_timeline
+
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        stderr = _make_stderr([(3.0, 7.0)])
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch(
+                "clipwright_silence.detect.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
+            patch("clipwright_silence.detect.run", side_effect=_fake_run_ok(stderr)),
+        ):
+            result = detect_silence(media, output, _opts())
+
+        assert result["ok"] is True
+        tl = load_timeline(output)
+        v1 = tl.tracks[0]
+        clips = [it for it in v1 if isinstance(it, otio.schema.Clip)]
+        for clip in clips:
+            cw = clip.metadata.get("clipwright")
+            assert cw is not None
+            assert cw.get("backend") == "silencedetect"
+
+
+# ---------------------------------------------------------------------------
+# ④ VAD エラーマップ検証（VAD-AD-06・§7.1）
+# ---------------------------------------------------------------------------
+
+
+class TestVadErrorMapping:
+    """VAD CLI の error JSON が対応 ErrorCode にマップされること（VAD-AD-06・§7.1）。"""
+
+    def test_dependency_missing_error_maps_to_dependency_missing(
+        self, tmp_path: Path
+    ) -> None:
+        """VAD CLI が DEPENDENCY_MISSING error JSON を返す → DEPENDENCY_MISSING エンベロープ。
+
+        hint に pip install clipwright-silence[vad] が含まれること。
+        """
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+        error_json = _make_vad_error_json(
+            code="DEPENDENCY_MISSING",
+            message="silero-vad がインストールされていません",
+            hint="pip install clipwright-silence[vad] で VAD 依存を導入してください",
+        )
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch(
+                "clipwright_silence.detect.run",
+                side_effect=_fake_vad_run(error_json),
+            ),
+        ):
+            result = detect_silence(media, output, _vad_opts())
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.DEPENDENCY_MISSING
+        # hint に pip install の案内が含まれること
+        hint = result["error"]["hint"]
+        assert "pip install" in hint or "clipwright-silence[vad]" in hint
+
+    def test_subprocess_failed_error_maps_to_subprocess_failed(
+        self, tmp_path: Path
+    ) -> None:
+        """VAD CLI が SUBPROCESS_FAILED error JSON を返す → SUBPROCESS_FAILED エンベロープ。"""
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+        error_json = _make_vad_error_json(
+            code="SUBPROCESS_FAILED",
+            message="ffmpeg の実行に失敗しました",
+            hint="ffmpeg が PATH に存在するか確認してください",
+        )
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch(
+                "clipwright_silence.detect.run",
+                side_effect=_fake_vad_run(error_json),
+            ),
+        ):
+            result = detect_silence(media, output, _vad_opts())
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.SUBPROCESS_FAILED
+
+    def test_probe_failed_error_maps_to_probe_failed(self, tmp_path: Path) -> None:
+        """VAD CLI が PROBE_FAILED error JSON を返す → PROBE_FAILED エンベロープ。"""
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+        error_json = _make_vad_error_json(
+            code="PROBE_FAILED",
+            message="音声プローブに失敗しました",
+            hint="メディアファイルが有効か確認してください",
+        )
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch(
+                "clipwright_silence.detect.run",
+                side_effect=_fake_vad_run(error_json),
+            ),
+        ):
+            result = detect_silence(media, output, _vad_opts())
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.PROBE_FAILED
+
+
+# ---------------------------------------------------------------------------
+# ⑤ VAD summary 文言（§7.5・DC-AM-003）
+# ---------------------------------------------------------------------------
+
+
+class TestVadSummary:
+    """VAD backend 時の summary に speech_count が反映されること（§7.5）。
+
+    「発話 N 区間」形式の summary が生成され、
+    silencedetect 経路の summary と区別できること。
+    """
+
+    def test_vad_summary_contains_speech_count(self, tmp_path: Path) -> None:
+        """VAD summary に「発話 N 区間」の形式が含まれる（§7.5・DC-AM-003）。"""
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=20.0)
+        # 3 区間の発話
+        speech_json = _make_vad_speech_json([(1.0, 4.0), (8.0, 12.0), (15.0, 18.0)])
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch(
+                "clipwright_silence.detect.run",
+                side_effect=_fake_vad_run(speech_json),
+            ),
+        ):
+            result = detect_silence(media, output, _vad_opts(padding=0.0))
+
+        assert result["ok"] is True
+        summary = result["summary"]
+        assert isinstance(summary, str)
+        assert len(summary) > 0
+        # speech_count=3 が summary に反映されること（「発話 3 区間」等の形式）
+        assert "3" in summary
+        # 発話 or speech に関する言及があること
+        assert "発話" in summary or "speech" in summary.lower()
+
+    def test_vad_summary_contains_non_speech_count(self, tmp_path: Path) -> None:
+        """VAD summary に非発話区間（除去区間）の件数が含まれる（§7.5）。"""
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        total = 10.0
+        media_info = _make_media_info(path=media, duration_sec=total)
+        # 発話 1 区間 → 非発話（無音）2 区間
+        speech_json = _make_vad_speech_json([(3.0, 7.0)])
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch(
+                "clipwright_silence.detect.run",
+                side_effect=_fake_vad_run(speech_json),
+            ),
+        ):
+            result = detect_silence(media, output, _vad_opts(padding=0.0))
+
+        assert result["ok"] is True
+        summary = result["summary"]
+        # 非発話 2 区間 or 「除去 2」等の数値が含まれること
+        assert "2" in summary
+
+    def test_silencedetect_summary_unchanged(self, tmp_path: Path) -> None:
+        """silencedetect 経路の summary 文言が VAD 追加後も変わらない（非回帰）。"""
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        stderr = _make_stderr([(2.0, 5.0)])
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch(
+                "clipwright_silence.detect.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
+            patch("clipwright_silence.detect.run", side_effect=_fake_run_ok(stderr)),
+        ):
+            result = detect_silence(media, output, _opts())
+
+        assert result["ok"] is True
+        summary = result["summary"]
+        # 既存 summary は「無音」キーワードを含む
+        assert "無音" in summary
+
+
+# ---------------------------------------------------------------------------
+# ⑥ 共通入力検証が VAD 経路でも適用（VAD-AD-04・§7.9）
+# ---------------------------------------------------------------------------
+
+
+class TestVadCommonInputValidation:
+    """VAD 経路でも共通入力検証（出力 .otio・同一ディレクトリ・映像+音声・rate）が機能する。
+
+    silencedetect と同じ共通パスを通るため VAD 経路でも同一エラーになることを確認する。
+    """
+
+    def test_vad_audio_stream_missing_returns_unsupported_operation(
+        self, tmp_path: Path
+    ) -> None:
+        """VAD 経路でも音声ストリーム無し → UNSUPPORTED_OPERATION。"""
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(
+            path=media, duration_sec=10.0, has_video=True, audio_streams=0
+        )
+
+        with patch(
+            "clipwright_silence.detect.inspect_media",
+            return_value=media_info,
+        ):
+            result = detect_silence(media, output, _vad_opts())
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.UNSUPPORTED_OPERATION
+
+    def test_vad_video_stream_missing_returns_unsupported_operation(
+        self, tmp_path: Path
+    ) -> None:
+        """VAD 経路でも映像ストリーム無し → UNSUPPORTED_OPERATION。"""
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(
+            path=media, duration_sec=10.0, has_video=False, audio_streams=1
+        )
+
+        with patch(
+            "clipwright_silence.detect.inspect_media",
+            return_value=media_info,
+        ):
+            result = detect_silence(media, output, _vad_opts())
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.UNSUPPORTED_OPERATION
+
+    def test_vad_duration_none_returns_probe_failed(self, tmp_path: Path) -> None:
+        """VAD 経路でも duration=None → PROBE_FAILED。"""
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=None)
+
+        with patch(
+            "clipwright_silence.detect.inspect_media",
+            return_value=media_info,
+        ):
+            result = detect_silence(media, output, _vad_opts())
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.PROBE_FAILED
+
+    def test_vad_output_invalid_extension_returns_invalid_input(
+        self, tmp_path: Path
+    ) -> None:
+        """VAD 経路でも output 拡張子 .otio 以外 → INVALID_INPUT。"""
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.mp4")
+
+        with patch(
+            "clipwright_silence.detect.inspect_media",
+            return_value=_make_media_info(path=media, duration_sec=10.0),
+        ):
+            result = detect_silence(media, output, _vad_opts())
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+
+    def test_vad_output_in_different_dir_returns_invalid_input(
+        self, tmp_path: Path
+    ) -> None:
+        """VAD 経路でも output が media と異なるディレクトリ → INVALID_INPUT。"""
+        from clipwright_silence.detect import detect_silence
+
+        media_dir = tmp_path / "src"
+        media_dir.mkdir()
+        out_dir = tmp_path / "other"
+        out_dir.mkdir()
+        media = str(media_dir / "video.mp4")
+        Path(media).touch()
+        output = str(out_dir / "out.otio")
+
+        with patch(
+            "clipwright_silence.detect.inspect_media",
+            return_value=_make_media_info(path=media, duration_sec=10.0),
+        ):
+            result = detect_silence(media, output, _vad_opts())
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+
+    def test_vad_source_range_rate_matches_media_info_duration_rate(
+        self, tmp_path: Path
+    ) -> None:
+        """VAD 経路でも source_range.rate が MediaInfo.duration.rate と一致する（DC-AS-003）。"""
+        from clipwright.otio_utils import load_timeline
+
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        custom_rate = 25.0
+        media_info = _make_media_info(path=media, duration_sec=10.0, rate=custom_rate)
+        speech_json = _make_vad_speech_json([(2.0, 8.0)])
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch(
+                "clipwright_silence.detect.run",
+                side_effect=_fake_vad_run(speech_json),
+            ),
+        ):
+            result = detect_silence(media, output, _vad_opts(padding=0.0))
+
+        assert result["ok"] is True
+        tl = load_timeline(output)
+        v1 = tl.tracks[0]
+        clips = [it for it in v1 if isinstance(it, otio.schema.Clip)]
+        for clip in clips:
+            assert clip.source_range is not None
+            assert clip.source_range.start_time.rate == pytest.approx(custom_rate)
+            assert clip.source_range.duration.rate == pytest.approx(custom_rate)
+
+
+# ---------------------------------------------------------------------------
+# ⑦ VAD timeout の外側設定（§7.7・DC-AM-004）
+# ---------------------------------------------------------------------------
+
+
+class TestVadTimeout:
+    """VAD CLI 起動時の外側 timeout が max(60, ceil(total*4)) であること（§7.7）。"""
+
+    def test_vad_timeout_uses_max_60_or_duration_times_4(self, tmp_path: Path) -> None:
+        """VAD timeout = max(60, ceil(total_duration * 4)) で run が呼ばれる（§7.7）。
+
+        total_duration=10.0s → max(60, ceil(40)) = 60。
+        """
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+        speech_json = _make_vad_speech_json([(1.0, 9.0)])
+
+        captured_timeouts: list[float] = []
+
+        def _capture_run(
+            cmd: list[str], *, timeout: float = 60.0, **kwargs: Any
+        ) -> CompletedProcess[str]:
+            captured_timeouts.append(timeout)
+            return CompletedProcess(
+                args=cmd, returncode=0, stdout=speech_json, stderr=""
+            )
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch("clipwright_silence.detect.run", side_effect=_capture_run),
+        ):
+            detect_silence(media, output, _vad_opts())
+
+        assert len(captured_timeouts) >= 1
+        # total=10s → max(60, ceil(10*4))=max(60,40)=60
+        assert captured_timeouts[0] == pytest.approx(
+            max(60, math.ceil(10.0 * 4)), abs=1
+        )
+
+    def test_vad_timeout_exceeds_silencedetect_timeout_for_long_video(
+        self, tmp_path: Path
+    ) -> None:
+        """長尺素材（100s）の VAD timeout が silencedetect より大きい。
+
+        VAD: max(60, ceil(100*4))=400。silencedetect: max(60, ceil(100*2))=200。
+        """
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=100.0)
+        speech_json = _make_vad_speech_json([(10.0, 90.0)])
+
+        captured_timeouts: list[float] = []
+
+        def _capture_run(
+            cmd: list[str], *, timeout: float = 60.0, **kwargs: Any
+        ) -> CompletedProcess[str]:
+            captured_timeouts.append(timeout)
+            return CompletedProcess(
+                args=cmd, returncode=0, stdout=speech_json, stderr=""
+            )
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch("clipwright_silence.detect.run", side_effect=_capture_run),
+        ):
+            detect_silence(media, output, _vad_opts())
+
+        assert len(captured_timeouts) >= 1
+        # total=100s → max(60, ceil(100*4))=400
+        assert captured_timeouts[0] == pytest.approx(400, abs=1)

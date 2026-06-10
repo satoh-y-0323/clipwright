@@ -265,7 +265,9 @@ class TestVadMinSpeechDurationField:
         "duration",
         [0.0, -0.001, -0.1, -1.0],
     )
-    def test_non_positive_vad_min_speech_duration_rejected(self, duration: float) -> None:
+    def test_non_positive_vad_min_speech_duration_rejected(
+        self, duration: float
+    ) -> None:
         """vad_min_speech_duration に 0 以下 → ValidationError（制約: > 0）。"""
         with pytest.raises(ValidationError):
             DetectSilenceOptions(vad_min_speech_duration=duration)
@@ -292,7 +294,9 @@ class TestVadMinSilenceDurationField:
         "duration",
         [0.0, -0.001, -0.1, -1.0],
     )
-    def test_non_positive_vad_min_silence_duration_rejected(self, duration: float) -> None:
+    def test_non_positive_vad_min_silence_duration_rejected(
+        self, duration: float
+    ) -> None:
         """vad_min_silence_duration に 0 以下 → ValidationError（制約: > 0）。"""
         with pytest.raises(ValidationError):
             DetectSilenceOptions(vad_min_silence_duration=duration)
