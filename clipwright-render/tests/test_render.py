@@ -260,6 +260,7 @@ class TestProbe:
         from clipwright_render.render import _probe
 
         source = "/abs/path/to/link.mp4"
+        expected_hint = "シンボリックリンクではなく実ファイルを指定してください。"
 
         with (
             patch(
@@ -267,7 +268,7 @@ class TestProbe:
                 side_effect=ClipwrightError(
                     code=ErrorCode.FILE_NOT_FOUND,
                     message="シンボリックリンクは受け付けません: /abs/path/to/link.mp4",
-                    hint="シンボリックリンクではなく実ファイルを指定してください。",
+                    hint=expected_hint,
                 ),
             ),
             pytest.raises(ClipwrightError) as exc_info,
@@ -279,6 +280,8 @@ class TestProbe:
         assert "/abs/path/to" not in exc_info.value.message
         # basename のみ含まれる
         assert "link.mp4" in exc_info.value.message
+        # hint は inspect_media のものを引き継ぐ（差し替えで欠落しないこと・CR-T-004）
+        assert exc_info.value.hint == expected_hint
 
 
 # ---------------------------------------------------------------------------
