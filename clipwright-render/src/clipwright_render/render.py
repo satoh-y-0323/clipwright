@@ -126,8 +126,9 @@ def _check_source_within_timeline_dir(timeline_path: Path, source: str) -> None:
     except ClipwrightError:
         raise
     except OSError:
-        # resolve() が失敗する場合（パスが存在しない等）は検証をスキップし、
-        # 後続の source ファイル存在確認で FILE_NOT_FOUND として検出させる。
+        # resolve() 失敗（パス不存在・PermissionError・極端に長いパス等）は
+        # best-effort 境界検証としてスキップする。実際にアクセス不能な source は
+        # 後続の存在確認で FILE_NOT_FOUND として顕在化するため握りつぶしではない。
         pass
 
 
@@ -159,7 +160,7 @@ def _check_path_not_allowed(output_path: Path, source: str) -> None:
                         "出力ファイルパスを入力ソースファイルとは別のパスに変更してください。"
                     ),
                 ) from exc
-        except OSError:
+        except OSError as exc2:
             if str(output_path) == source:
                 raise ClipwrightError(
                     code=ErrorCode.PATH_NOT_ALLOWED,
@@ -167,7 +168,7 @@ def _check_path_not_allowed(output_path: Path, source: str) -> None:
                     hint=(
                         "出力ファイルパスを入力ソースファイルとは別のパスに変更してください。"
                     ),
-                ) from exc
+                ) from exc2
 
 
 def render_timeline(

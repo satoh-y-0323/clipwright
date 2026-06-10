@@ -148,10 +148,7 @@ def resolve_kept_ranges(timeline: otio.schema.Timeline) -> list[KeptRange]:
             elif source != first_source:
                 raise ClipwrightError(
                     code=ErrorCode.UNSUPPORTED_OPERATION,
-                    message=(
-                        "複数の source が検出されました:"
-                        f" {first_source!r} と {source!r}。"
-                    ),
+                    message="複数の source が検出されました（単一ソースのみ対応）。",
                     hint="単一ソースファイルのみを使用してください。",
                 )
             source_range = item.source_range
