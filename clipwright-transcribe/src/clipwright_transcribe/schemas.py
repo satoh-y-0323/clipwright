@@ -23,9 +23,12 @@ class TranscribeOptions(BaseModel):
         str | None,
         Field(
             default=None,
+            max_length=10,
+            pattern=r"^[a-zA-Z]{2,}$|^auto$",
             description=(
                 '文字起こしの言語コード（例: "ja", "en"）。'
                 "None（既定）の場合は whisper が言語を自動検出する。"
+                "ISO639-1 相当の2文字以上英字 または 'auto'。それ以外は拒否。"
             ),
         ),
     ] = None
@@ -34,8 +37,10 @@ class TranscribeOptions(BaseModel):
         str | None,
         Field(
             default=None,
+            max_length=4096,
             description=(
-                "whisper.cpp の ggml モデルファイルへのパス。"
+                "whisper.cpp の ggml モデルファイルへのパス"
+                "（OS パス長上限相当: 4096）。"
                 "None（既定）の場合は環境変数 CLIPWRIGHT_WHISPER_MODEL を使う。"
                 "どちらも無い・ファイルが存在しない場合はエラーになる。"
             ),
@@ -46,9 +51,11 @@ class TranscribeOptions(BaseModel):
         str | None,
         Field(
             default=None,
+            max_length=2048,
             description=(
                 "whisper に与える文脈ヒント（固有名詞・専門用語など）。"
                 "None（既定）の場合はプロンプトなし。認識精度の調整に使う。"
+                "whisper.cpp コンテキスト長相当の上限 2048 文字。"
             ),
         ),
     ] = None

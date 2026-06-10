@@ -41,8 +41,8 @@ from clipwright_transcribe.schemas import TranscribeOptions
 # whisper.cpp の実行ファイル名（spike-whisper 確定値・最新版 whisper-cli・旧版 main）。
 # env CLIPWRIGHT_WHISPER が指す実体名と一致させる（DC-AS-003-R）。e2e で照合する。
 WHISPER_BINARY_NAME = "whisper-cli"
-# 言語自動検出フラグ（spike 仮置き・e2e で実フラグへ差し替え可能・DC-AM-002）。
-LANG_AUTO_FLAG = "-l auto"
+# 言語自動検出フラグ（spike 確定値・e2e 照合で差替可能（リストのまま）・DC-AM-002）
+LANG_AUTO_FLAG: list[str] = ["-l", "auto"]
 # marker name の最大表示文字数（超過分は省略・本文は metadata.text に全文・DC-GP-003）。
 _MARKER_NAME_MAX = 40
 # SUBPROCESS_FAILED/TIMEOUT 時のサニタイズ済み文言（stderr パス漏洩防止・TR-AD-09）。
@@ -161,7 +161,7 @@ def _build_whisper_cmd(
     """
     cmd = [whisper, "-m", model_path, "-f", wav_path, "-oj", "-of", prefix]
     if options.language is None:
-        cmd.extend(LANG_AUTO_FLAG.split())
+        cmd.extend(LANG_AUTO_FLAG)
     else:
         cmd.extend(["-l", options.language])
     if options.initial_prompt is not None:
@@ -220,7 +220,7 @@ def _run_whisper(
         try:
             with open(json_path, encoding="utf-8") as f:
                 whisper_json: dict[str, Any] = json.load(f)
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, json.JSONDecodeError):
             raise ClipwrightError(
                 code=ErrorCode.SUBPROCESS_FAILED,
                 message="whisper の出力 JSON を読み込めませんでした",
@@ -228,11 +228,14 @@ def _run_whisper(
                     "whisper.cpp のバージョン・引数を確認してください。"
                     "再現条件を添えて報告してください。"
                 ),
-            ) from exc
+            ) from None
 
-    segments = normalize_segments(whisper_json)
-    result = whisper_json.get("result")
-    language = result.get("language") if isinstance(result, dict) else None
+        # JSON 読み込み・正規化を with ブロック内で完結させ、一時 dir が残存している
+        # 間にのみデータを参照することを明示する（CR M-2）
+        segments = normalize_segments(whisper_json)
+        result = whisper_json.get("result")
+        language = result.get("language") if isinstance(result, dict) else None
+
     return segments, language
 
 
@@ -320,7 +323,8 @@ def _transcribe_inner(
             ) from exc
         raise
 
-    # output が media と同一ディレクトリ配下にあることを検証（TR-AD-08）
+    # output が media と同一ディレクトリ配下にあることを検証（TR-AD-08）。
+    # ClipwrightError はこのブロック外で伝播する。OSError は best-effort でスキップ
     try:
         media_dir = media_path.resolve().parent
         output_dir = output_path.parent.resolve()
@@ -336,8 +340,6 @@ def _transcribe_inner(
                     "変更してください。"
                 ),
             )
-    except ClipwrightError:
-        raise
     except OSError:
         # resolve 失敗（ネットワークパス等）は best-effort でスキップ
         pass

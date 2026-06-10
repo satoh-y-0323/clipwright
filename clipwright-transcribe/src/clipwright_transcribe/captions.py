@@ -87,7 +87,7 @@ def _format_timecode(total_seconds: float, *, ms_separator: str) -> str:
 
     ms_separator で SRT（","）と VTT（"."）を切り替える。
     SRT/VTT で同一の秒値・ミリ秒値を共有させ一貫性を保つ（DC-AS-005）。
-    ミリ秒は切り捨て（int 変換）で算出する。
+    ミリ秒は四捨五入（round → int 変換）で算出する。
 
     Args:
         total_seconds: 秒数。
