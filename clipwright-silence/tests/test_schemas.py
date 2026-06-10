@@ -1,6 +1,6 @@
 """test_schemas.py — DetectSilenceOptions の Red テスト。
 
-architecture §AD-2/AD-3・DC-AM-001 の DetectSilenceOptions 確定仕様を観点として固定する。
+architecture §AD-2/AD-3・DC-AM-001 の DetectSilenceOptions 仕様を観点に固定する。
 このファイルは schemas.py が存在しない / DetectSilenceOptions が未実装の段階で
 機能未実装により失敗することを意図した Red テスト群。
 """
@@ -11,7 +11,6 @@ import pytest
 from pydantic import ValidationError
 
 from clipwright_silence.schemas import DetectSilenceOptions
-
 
 # ===========================================================================
 # デフォルト構築
@@ -47,7 +46,7 @@ class TestDetectSilenceOptionsDefaults:
         assert opts.padding >= 0.0
 
     def test_default_min_keep_duration_is_zero(self) -> None:
-        """min_keep_duration の既定値は 0.0（DC-AM-001: opt-in ガード・既定は無破棄）。"""
+        """min_keep_duration 既定は 0.0（DC-AM-001: opt-in ガード）。"""
         opts = DetectSilenceOptions()
         assert opts.min_keep_duration == pytest.approx(0.0)
 
@@ -167,7 +166,7 @@ def test_all_fields_specified_accepted() -> None:
 
 
 def test_detect_silence_options_does_not_redefine_core_types() -> None:
-    """DetectSilenceOptions が core 共通型（MediaRef/Artifact/ToolResult）を再定義しないこと。"""
+    """core 共通型（MediaRef/Artifact/ToolResult）を再定義しないこと。"""
     # core の共通型が import できること
     from clipwright.schemas import Artifact, MediaRef, ToolResult  # noqa: F401
 
@@ -175,11 +174,11 @@ def test_detect_silence_options_does_not_redefine_core_types() -> None:
     import clipwright_silence.schemas as silence_schemas
 
     assert not hasattr(silence_schemas, "MediaRef"), (
-        "DetectSilenceOptions を定義する schemas.py が core の MediaRef を再定義している"
+        "schemas.py が core の MediaRef を再定義している"
     )
     assert not hasattr(silence_schemas, "Artifact"), (
-        "DetectSilenceOptions を定義する schemas.py が core の Artifact を再定義している"
+        "schemas.py が core の Artifact を再定義している"
     )
     assert not hasattr(silence_schemas, "ToolResult"), (
-        "DetectSilenceOptions を定義する schemas.py が core の ToolResult を再定義している"
+        "schemas.py が core の ToolResult を再定義している"
     )

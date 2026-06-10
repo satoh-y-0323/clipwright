@@ -21,7 +21,6 @@ import pytest
 from clipwright_silence.plan import derive_keep_ranges
 from clipwright_silence.schemas import DetectSilenceOptions
 
-
 # ===========================================================================
 # ヘルパー
 # ===========================================================================
@@ -115,9 +114,7 @@ class TestTrailingAndMultipleSilence:
     def test_three_silences_four_keeps(self) -> None:
         """無音 3 つ → KEEP 4 区間。"""
         # 無音: 1〜2, 4〜5, 7〜8 → KEEP: (0,1),(2,4),(5,7),(8,10)
-        keeps = derive_keep_ranges(
-            10.0, [(1.0, 2.0), (4.0, 5.0), (7.0, 8.0)], _opts()
-        )
+        keeps = derive_keep_ranges(10.0, [(1.0, 2.0), (4.0, 5.0), (7.0, 8.0)], _opts())
         assert len(keeps) == 4
         assert keeps[0] == pytest.approx((0.0, 1.0))
         assert keeps[1] == pytest.approx((2.0, 4.0))
@@ -224,9 +221,7 @@ class TestMinKeepDuration:
         (0,0.5) は 0.5s, (9.5,10) は 0.5s
         min_keep_duration=1.0 → 両方破棄
         """
-        keeps = derive_keep_ranges(
-            10.0, [(0.5, 9.5)], _opts(min_keep_duration=1.0)
-        )
+        keeps = derive_keep_ranges(10.0, [(0.5, 9.5)], _opts(min_keep_duration=1.0))
         for start, end in keeps:
             assert (end - start) >= 1.0 - 1e-9
 
@@ -234,18 +229,14 @@ class TestMinKeepDuration:
         """min_keep_duration 設定でも、長い KEEP は保持される。"""
         # 無音 (2,3) → KEEP (0,2),(3,10)
         # (0,2)=2s, (3,10)=7s → min_keep=1.5 → 両方保持
-        keeps = derive_keep_ranges(
-            10.0, [(2.0, 3.0)], _opts(min_keep_duration=1.5)
-        )
+        keeps = derive_keep_ranges(10.0, [(2.0, 3.0)], _opts(min_keep_duration=1.5))
         assert len(keeps) == 2
 
     def test_min_keep_exact_boundary_kept(self) -> None:
-        """min_keep_duration と同値の KEEP は破棄されない（境界値: ちょうど equal は保持）。"""
+        """min_keep と同値の KEEP は破棄されない（境界値=equal は保持）。"""
         # 無音 (1,2) → KEEP (0,1),(2,10)
         # (0,1)=1.0s → min_keep=1.0 → 保持
-        keeps = derive_keep_ranges(
-            10.0, [(1.0, 2.0)], _opts(min_keep_duration=1.0)
-        )
+        keeps = derive_keep_ranges(10.0, [(1.0, 2.0)], _opts(min_keep_duration=1.0))
         # 1.0s の KEEP が残っていること
         durations = [end - start for start, end in keeps]
         assert any(abs(d - 1.0) < 1e-9 for d in durations)
@@ -309,9 +300,7 @@ class TestShortSilenceBridging:
         KEEP after padding:  (0,5.1),(4.9,10)  ← 重なる
         merged:              (0, 10)
         """
-        keeps = derive_keep_ranges(
-            10.0, [(4.8, 5.2)], _opts(padding=0.3)
-        )
+        keeps = derive_keep_ranges(10.0, [(4.8, 5.2)], _opts(padding=0.3))
         assert len(keeps) == 1
         assert keeps[0][0] == pytest.approx(0.0)
         assert keeps[0][1] == pytest.approx(10.0)
@@ -326,9 +315,9 @@ class TestShortSilenceBridging:
         # 無音 (4.9, 5.1) → KEEP (0,4.9),(5.1,10) → padding=0.2 → bridge
         keeps = derive_keep_ranges(10.0, [(4.9, 5.1)], _opts(padding=0.2))
         assert len(keeps) == 1
-        # 元の (0, 10) 全体が保持されている
-        assert keeps[0][0] <= pytest.approx(0.0 + 1e-9)
-        assert keeps[0][1] >= pytest.approx(10.0 - 1e-9)
+        # 元の (0, 10) 全体が保持されている（クランプで端は 0.0 / 10.0）
+        assert keeps[0][0] == pytest.approx(0.0)
+        assert keeps[0][1] == pytest.approx(10.0)
 
     def test_multiple_short_silences_all_bridged(self) -> None:
         """複数の短い無音が全て padding でまたがれる → 全体が 1 KEEP に連結。
@@ -387,7 +376,7 @@ class TestEdgeCases:
         )
         for i in range(len(keeps) - 1):
             assert keeps[i][1] <= keeps[i + 1][0] + 1e-9, (
-                f"KEEP 区間が重複している: {keeps[i]} と {keeps[i+1]}"
+                f"KEEP 区間が重複している: {keeps[i]} と {keeps[i + 1]}"
             )
 
     def test_keep_intervals_are_ordered(self) -> None:
