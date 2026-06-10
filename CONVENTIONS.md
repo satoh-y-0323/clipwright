@@ -1,7 +1,7 @@
-# Clipwright ツール作者コントラクト（CONVENTIONS）— ドラフト骨子
+# Clipwright ツール作者コントラクト（CONVENTIONS）
 
-> ステータス: **ドラフト（骨子）**。`docs/clipwright-spec.md` 第6章を「新しく道具を足す人（人間 / AI）」向けに独立させた公開コントラクトの叩き台。
-> 確定後に root `CONVENTIONS.md` へ昇格する想定（spec §12）。
+> ステータス: **正式（canonical）**。`docs/clipwright-spec.md` 第6章を「新しく道具を足す人（人間 / AI）」向けに独立させた公開コントラクト。
+> 出典スペックは `docs/clipwright-spec.md`（§2 設計原則・§6 規約・§11 今後の方向性）。仕様変更時は spec を canonical source とし、本書を追従させる。
 
 ## 0. これは何か
 
@@ -164,13 +164,16 @@ MCP Inspector の疎通確認（§5）は「ツールが起動し応答する」
 
 ---
 
-## 8. 参照・未確定事項（ドラフト段階）
+## 8. 参照・今後の課題
 
-- 出典: `docs/clipwright-spec.md` §2（設計原則）/ §4（OTIO）/ §6（規約）/ §9（ライセンス）。
-- **TODO（確定前に詰める）**:
-  - [ ] 配置: root `CONVENTIONS.md` へ昇格するか docs/ 据え置きか。
-  - [x] `ErrorCode` の許可リストを一覧化して公開 → §3 に記載（全13コード）。
-  - [x] ネット接続ツール用のエラーコード方針を決定 → §3 運用ルール末尾・§4 に記載。**YAGNI: 当面 `SUBPROCESS_FAILED` / `SUBPROCESS_TIMEOUT` / `DEPENDENCY_MISSING` で代用し、最初のネットツール実装時に専用コードを検討。`errors.py` は変更しない。**
-  - [x] eval（§11: AI が実タスクを解けるかの評価）をコントラクトの一部にするか、別ガイドにするか → §6 に **SHOULD 章として自己完結で記載**（MUST にはしない）。YAGNI で別ガイドは作らない。
+- 出典: `docs/clipwright-spec.md` §2（設計原則）/ §4（OTIO）/ §6（規約）/ §9（ライセンス）/ §11（今後の方向性）。
+- 雛形: `templates/clipwright-tool/`（§5）。新ツールはこれをコピーして作る。
+- **決定済み（沿革）**:
+  - [x] 配置: root `CONVENTIONS.md` へ昇格（spec §12 と整合）。本書がその正式版。
+  - [x] `ErrorCode` の許可リストを一覧化して公開 → §3（全13コード）。
+  - [x] ネット接続ツール用のエラーコード方針 → §3 運用ルール末尾・§4。YAGNI: 当面 `SUBPROCESS_FAILED` / `SUBPROCESS_TIMEOUT` / `DEPENDENCY_MISSING` で代用し、最初のネットツール実装時に専用コードを検討。`errors.py` は変更しない。
+  - [x] eval（§11）の扱い → §6 に SHOULD 章として自己完結で記載（MUST にはしない）。別ガイドは YAGNI で作らない。
+  - [x] scaffold テンプレート化 → `templates/clipwright-tool/`（cookiecutter 非依存・素のコピー + 文字列置換）。
+- **今後の課題（実装で実証されてから詰める）**:
   - [ ] eval セクション（§6）が将来肥大化したら独立 `EVAL-GUIDE` へ切り出すか判断する。
-  - [ ] 外部コントリビュータ向けに最小 scaffold をテンプレート化（cookiecutter 等）するか。
+  - [ ] 最初のネット接続ツール実装時に `NETWORK_ERROR` 等の専用 `ErrorCode` の要否を判断する（§3/§4）。

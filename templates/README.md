@@ -5,7 +5,7 @@
 動く骨格（MCP サーバー + CLI シム + tests）が手に入る。
 
 > 方針: cookiecutter 等の依存は足さない（YAGNI）。素のコピー + 文字列置換で済ませる。
-> 規約の出典は `docs/CONVENTIONS.draft.md`（確定後 root `CONVENTIONS.md`）。
+> 規約の出典は root `CONVENTIONS.md`。
 
 ## プレースホルダ
 
@@ -93,5 +93,5 @@ clipwright-tool/
 - [ ] detect/inspect 系か render 系かで `server.py` の annotations を合わせる
       （render 系は `readOnlyHint=False`）。ネット接続なら `openWorldHint=True`。
 - [ ] README のパラメータ表・前提（OSS の PATH 要否）を更新する。
-- [ ] `docs/CONVENTIONS.draft.md` §7 の PR 前セルフチェックリストを通す。
+- [ ] `CONVENTIONS.md` §7 の PR 前セルフチェックリストを通す。
 - [ ] （任意）`evals/` に AI 実タスク評価を用意する（CONVENTIONS §6）。
