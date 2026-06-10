@@ -24,11 +24,14 @@ _VTT_TIMELINE_RE = re.compile(
 )
 
 # SRT タイムライン行: "HH:MM:SS,mmm --> HH:MM:SS,mmm" にマッチする正規表現
-# 秒・分・時の桁数は 2桁以上を許容する（テスト生成で 3桁秒になる場合を含む）
-_SRT_TIMELINE_RE = re.compile(r"^(\d+:\d+:\d+,\d+)\s+-->\s+(\d+:\d+:\d+,\d+)\s*$")
+# HH:MM:SS,mmm 固定桁・WR-AD-12 準拠（transcribe to_srt は固定桁を保証する）
+_SRT_TIMELINE_RE = re.compile(
+    r"^(\d{2}:\d{2}:\d{2},\d{3})\s+-->\s+(\d{2}:\d{2}:\d{2},\d{3})\s*$"
+)
 
 # VTT インラインタグ（<c> <b> <i> <v> <ruby> 等）の検出
-_VTT_INLINE_TAG_RE = re.compile(r"<[a-zA-Z/][^>]*>")
+# [^>]{0,200} の上限で ReDoS を緩和する（CWE-1333）
+_VTT_INLINE_TAG_RE = re.compile(r"<[a-zA-Z/][^>]{0,200}>")
 
 
 @dataclass
@@ -63,7 +66,8 @@ def _parse_srt(text: str) -> list[Cue]:
     - 末尾 cue に空行が無い（単一改行 EOF）ケースで最終 cue を取りこぼさない
     - 0 件（空文字列・改行のみ）→ []
     - cue 内複数行テキストは空文字結合（半角空白挿入なし・WR-AD-14）
-    - 不正な timecode 行 → ClipwrightError(INVALID_INPUT)
+    - 不正な timecode 行 → ValueError を送出
+      （呼び出し側 wrap.py が INVALID_INPUT に変換）
     """
     if not text.strip():
         return []
@@ -101,6 +105,15 @@ def _parse_srt(text: str) -> list[Cue]:
 
         start = m.group(1)
         end = m.group(2)
+
+        # 値範囲チェック: MM/SS は 0-59 の範囲内であること（WR-AD-12 / SRT 仕様）
+        for tc in (start, end):
+            mm, ss = int(tc[3:5]), int(tc[6:8])
+            if mm > 59 or ss > 59:
+                raise ValueError(
+                    f"SRT タイムコードの値が範囲外です: {tc!r}"
+                    f" (分・秒は 0-59 の範囲内である必要があります)"
+                )
 
         # 行3以降: テキスト（複数行は空文字結合・半角空白挿入なし）
         text_lines = lines[2:] if len(lines) > 2 else []
@@ -207,7 +220,8 @@ def parse_captions(text: str, fmt: str) -> list[Cue]:
     fmt は "srt" または "vtt" を指定する。
     タイムコード文字列は不変保持する（WR-AD-06）。
     cue 内の複数行テキストは空文字結合する（WR-AD-14）。
-    不正な timecode 行は ClipwrightError(INVALID_INPUT) を送出する（WR-AD-09）。
+    不正な timecode 行は _parse_srt が ValueError を送出し、
+    wrap.py が ClipwrightError(INVALID_INPUT) に変換する（WR-AD-09）。
 
     Args:
         text: SRT または VTT 形式の文字列。
