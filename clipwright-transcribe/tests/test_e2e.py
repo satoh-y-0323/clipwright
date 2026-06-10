@@ -72,7 +72,7 @@ _SKIP_E2E_REASON = (
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 _HYPOTHETICAL_BINARY_NAME = "whisper-cli"
-_HYPOTHETICAL_LANG_AUTO_FLAG = "-l auto"
+_HYPOTHETICAL_LANG_AUTO_FLAG = ["-l", "auto"]
 
 
 # ===========================================================================
@@ -98,28 +98,36 @@ def _probe_flite_duration(ffmpeg: str, text: str) -> float:
     ffmpeg の libflite が利用できない環境では pytest.skip を呼ぶ。
     フォールバック値での継続は避ける（CR-E-002）。
     """
-    result = subprocess.run(
-        [
-            ffmpeg,
-            "-y",
-            "-f",
-            "lavfi",
-            "-i",
-            f"flite=text='{text}':voice=kal16",
-            "-t",
-            "10",
-            "-ar",
-            "16000",
-            "-ac",
-            "1",
-            "-f",
-            "null",
-            "-",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    # SR H-1: lavfi フィルタ文字列への展開前に許可文字のみ受け付けるガード
+    # ':' / '\'' / '[' / ']' 等の特殊文字が混入するとフィルタインジェクションになるため
+    # ASCII 英数字と空白のみを許容する（e2e テストインフラの意図的制限）
+    if not re.fullmatch(r"[A-Za-z0-9 ]+", text):
+        pytest.skip(f"speech_text に lavfi 特殊文字が含まれるためスキップ: {text!r}")
+    try:
+        result = subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                f"flite=text='{text}':voice=kal16",
+                "-t",
+                "10",
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-f",
+                "null",
+                "-",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.skip("ffmpeg libflite の尺計測がタイムアウトしました（30秒）。")
     if result.returncode != 0:
         pytest.skip(
             f"ffmpeg libflite が利用できません（returncode={result.returncode}）。"
@@ -153,6 +161,12 @@ def _make_tts_video(
     Returns:
         生成した素材の総尺（秒）。
     """
+    # SR H-1: lavfi フィルタ文字列への展開前に許可文字のみ受け付けるガード
+    # _probe_flite_duration と同じ制約を適用（二重チェックで安全マージンを確保）
+    if not re.fullmatch(r"[A-Za-z0-9 ]+", speech_text):
+        pytest.skip(
+            f"speech_text に lavfi 特殊文字が含まれるためスキップ: {speech_text!r}"
+        )
     speech_dur = _probe_flite_duration(ffmpeg, speech_text)
 
     # filter_complex で testsrc 映像と flite TTS 音声を多重化する
@@ -213,8 +227,7 @@ def _probe_whisper_json(
         "-oj",
         "-of",
         tmp_prefix,
-        "-l",
-        "auto",
+        *LANG_AUTO_FLAG,
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     assert result.returncode == 0, (
@@ -401,15 +414,20 @@ def test_transcribe_e2e(tmp_path: Path) -> None:
     # -l auto フラグ（LANG_AUTO_FLAG）のパース確認
     # 実行が returncode=0 で完了していれば -l auto が受け入れられていることを意味する
     # （spike 照合手順: ④ -l auto がエラーにならないこと）
-    lang_auto_parts = LANG_AUTO_FLAG.split()
-    assert len(lang_auto_parts) == 2, (  # noqa: PLR2004
+    # CR M-4: LANG_AUTO_FLAG は list[str] なので .split() は不要（DC-AM-002）
+    assert len(LANG_AUTO_FLAG) == 2, (  # noqa: PLR2004
         f"LANG_AUTO_FLAG の形式が予期しない値です: {LANG_AUTO_FLAG!r}"
     )
-    assert lang_auto_parts[0] == "-l", (
+    assert LANG_AUTO_FLAG[0] == "-l", (
         f"LANG_AUTO_FLAG の先頭が '-l' でありません: {LANG_AUTO_FLAG!r}"
     )
-    assert lang_auto_parts[1] == "auto", (
+    assert LANG_AUTO_FLAG[1] == "auto", (
         f"LANG_AUTO_FLAG の値が 'auto' でありません: {LANG_AUTO_FLAG!r}"
+    )
+    # 仮説定数（_HYPOTHETICAL_LANG_AUTO_FLAG）との一致確認（DC-AM-002 定数隔離照合）
+    assert LANG_AUTO_FLAG == _HYPOTHETICAL_LANG_AUTO_FLAG, (
+        f"LANG_AUTO_FLAG と仮説定数が一致しません: "
+        f"{LANG_AUTO_FLAG!r} != {_HYPOTHETICAL_LANG_AUTO_FLAG!r}"
     )
 
 
