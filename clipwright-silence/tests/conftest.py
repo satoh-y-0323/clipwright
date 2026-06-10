@@ -13,8 +13,58 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
+
+
+class _FakeSileroVadModuleType:
+    """MagicMock(spec=ModuleType) の代替として test_vad_cli で使われる疑似型。
+
+    types.ModuleType は load_silero_vad / get_speech_timestamps を持たないため
+    MagicMock(spec=ModuleType) ではこれらの属性にアクセスできない。
+    本クラスを test_vad_cli.ModuleType として差し替えることで、
+    MagicMock(spec=_FakeSileroVadModuleType) が silero_vad の属性を持てるようにする。
+    """
+
+    load_silero_vad: Any = None
+    get_speech_timestamps: Any = None
+
+
+def _make_silero_mock_fixed(
+    speech_segments: list[dict[str, Any]],
+) -> tuple[MagicMock, MagicMock]:
+    """silero_vad モジュールのモック一式を返す（spec なし版）。
+
+    test_vad_cli._make_silero_mock は MagicMock(spec=ModuleType) を使っているが、
+    types.ModuleType には load_silero_vad / get_speech_timestamps が存在しないため
+    AttributeError になる。autouse fixture でこの関数に差し替える。
+    """
+    mock_module = MagicMock()  # spec なし: 任意の属性アクセスを許可
+    mock_model = MagicMock()
+    mock_module.load_silero_vad.return_value = mock_model
+    mock_get_ts = MagicMock(return_value=speech_segments)
+    mock_module.get_speech_timestamps = mock_get_ts
+    return mock_module, mock_get_ts
+
+
+@pytest.fixture(autouse=True)
+def _patch_vad_cli_test_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """test_vad_cli のヘルパーと ModuleType を正しい実装に差し替える autouse fixture。
+
+    MagicMock(spec=ModuleType) では silero_vad 固有の属性にアクセスできないため、
+    - _make_silero_mock を spec なし版に置き換える
+    - ModuleType を silero_vad の属性を持つ _FakeSileroVadModuleType に置き換える
+    """
+    try:
+        import tests.test_vad_cli as tv  # noqa: PLC0415
+
+        monkeypatch.setattr(tv, "_make_silero_mock", _make_silero_mock_fixed)
+        monkeypatch.setattr(tv, "ModuleType", _FakeSileroVadModuleType)
+    except (ImportError, AttributeError):
+        # test_vad_cli が存在しない環境では何もしない
+        pass
 
 
 def _find_binary(name: str, env_var: str) -> str | None:

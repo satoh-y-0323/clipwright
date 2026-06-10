@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
@@ -17,6 +17,7 @@ class DetectSilenceOptions(BaseModel):
     silence_threshold_db と min_silence_duration は ffmpeg silencedetect
     フィルタへ直接渡す検出パラメータ。padding と min_keep_duration は
     plan.py の KEEP 導出ロジックで使う後処理パラメータ。
+    vad_* フィールドは backend="vad" 時のみ有効（VAD-AD-05）。
     """
 
     silence_threshold_db: Annotated[
@@ -25,6 +26,7 @@ class DetectSilenceOptions(BaseModel):
             default=-30.0,
             le=0.0,
             description=(
+                "silencedetect backend 専用。VAD 使用時は vad_* を使う。"
                 "無音と判定する音量閾値（dB）。0 以下の値を指定する。"
                 "例: -30.0 dB（既定）、-40.0 dB（より厳しく検出）。"
             ),
@@ -37,6 +39,7 @@ class DetectSilenceOptions(BaseModel):
             default=0.5,
             gt=0.0,
             description=(
+                "silencedetect backend 専用。VAD 使用時は vad_* を使う。"
                 "無音と判定する最小継続時間（秒）。0 より大きい値を指定する。"
                 "この秒数未満の無音は無視される。既定は 0.5 秒。"
             ),
@@ -68,3 +71,55 @@ class DetectSilenceOptions(BaseModel):
             ),
         ),
     ] = 0.0
+
+    backend: Annotated[
+        Literal["silencedetect", "vad"],
+        Field(
+            default="silencedetect",
+            description=(
+                "使用する検出バックエンド。"
+                '"silencedetect"（既定）は ffmpeg silencedetect フィルタを使用。'
+                '"vad" は Silero VAD（ONNX）を使用。VAD-AD-01 後方互換 opt-in。'
+            ),
+        ),
+    ] = "silencedetect"
+
+    vad_threshold: Annotated[
+        float,
+        Field(
+            default=0.5,
+            ge=0.0,
+            le=1.0,
+            description=(
+                "VAD backend 時のみ有効。"
+                "発話確率しきい値（0.0–1.0）。この値以上を発話区間とみなす。"
+                "既定は 0.5。"
+            ),
+        ),
+    ] = 0.5
+
+    vad_min_speech_duration: Annotated[
+        float,
+        Field(
+            default=0.25,
+            gt=0.0,
+            description=(
+                "VAD backend 時のみ有効。"
+                "発話と判定する最小継続時間（秒）。0 より大きい値を指定する。"
+                "既定は 0.25 秒。"
+            ),
+        ),
+    ] = 0.25
+
+    vad_min_silence_duration: Annotated[
+        float,
+        Field(
+            default=0.1,
+            gt=0.0,
+            description=(
+                "VAD backend 時のみ有効。"
+                "発話区間間の最小無音長（秒）。0 より大きい値を指定する。"
+                "この秒数未満の無音は発話区間に吸収される。既定は 0.1 秒。"
+            ),
+        ),
+    ] = 0.1
