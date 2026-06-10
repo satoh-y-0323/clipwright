@@ -495,7 +495,13 @@ class TestInputValidation:
         real_file = tmp_path / "real.mp4"
         real_file.touch()
         symlink_source = tmp_path / "link.mp4"
-        symlink_source.symlink_to(real_file)
+        # Windows では symlink 作成に権限が要るため失敗を skip でガード（core と同方針）
+        try:
+            symlink_source.symlink_to(real_file)
+        except (OSError, NotImplementedError) as exc:
+            pytest.skip(
+                f"symlink の作成に失敗しました（権限不足または未対応環境）: {exc}"
+            )
 
         # timeline は symlink を source に参照する
         tl_path = tmp_path / "tl.otio"

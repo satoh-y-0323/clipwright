@@ -4,24 +4,24 @@ ffprobe による probe と ffmpeg による再エンコードを統合し、
 入力検証 → OTIO 解析 → probe → 計画構築 → 実行 の一連フローを担う。
 
 設計判断:
-- _probe() は render.py が独自に ffprobe を呼ぶ（DC-AS-001/ADR-6）。
-  core の inspect_media は拡張せず、plan.py は ProbeInfo を引数で受ける純ロジック。
+- _probe() は core inspect_media を呼び出し MediaInfo → ProbeInfo に変換する（AD-3）。
+  独自 ffprobe 呼び出しを廃止し重複を解消する（DC-AS-001/ADR-6 暫定対応を解消）。
 - ffmpeg timeout = max(300, ceil(出力総尺秒 × 10)) 秒（ADR-4/DC-AM-006）。
   再エンコードの最悪ケース (~10x 実時間) を見込んだ安全マージン。
-- パース失敗（JSON 不正/必須キー欠落）は PROBE_FAILED に変換する（DC-GP-001）。
+- PROBE_FAILED 等のエラーは inspect_media が送出するものをそのまま伝播する。
 - ffmpeg stderr 生文字列・内部パスは summary/data/error に露出しない。
   core の process.run が先頭 200 文字要約のみ message に含めることで実現する。
 """
 
 from __future__ import annotations
 
-import json
 import math
 from pathlib import Path
 from typing import Any
 
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
+from clipwright.media import inspect_media
 from clipwright.otio_utils import load_timeline
 from clipwright.process import resolve_tool, run
 
@@ -33,13 +33,11 @@ _ALLOWED_EXTENSIONS = frozenset({".mp4", ".mkv", ".mov", ".webm"})
 
 
 def _probe(source: str) -> ProbeInfo:
-    """ffprobe を実行して ProbeInfo を返す（DC-AS-001/ADR-6/DC-GP-001）。
+    """inspect_media を呼び出して ProbeInfo を返す（AD-3）。
 
-    - resolve_tool("ffprobe", "CLIPWRIGHT_FFPROBE") でバイナリを解決する。
-    - 引数配列・shell=False で実行する（コマンドインジェクション対策）。
-    - format.bit_rate を int に変換（欠落時は None）。
-    - video stream 有無・audio stream 数をカウントする。
-    - JSON 不正・必須キー欠落 → ClipwrightError(PROBE_FAILED)。
+    core の inspect_media に ffprobe 実行を委譲し、返された MediaInfo を
+    plan.py が必要とする ProbeInfo 形式に変換する純粋なアダプタ。
+    PROBE_FAILED 等のエラーは inspect_media の送出をそのまま伝播する。
 
     Args:
         source: probe 対象のメディアファイルパス。
@@ -48,47 +46,15 @@ def _probe(source: str) -> ProbeInfo:
         ProbeInfo(has_video, audio_count, bit_rate)。
 
     Raises:
-        ClipwrightError: PROBE_FAILED（パース失敗）または DEPENDENCY_MISSING/
-            SUBPROCESS_FAILED/SUBPROCESS_TIMEOUT（プロセス実行失敗）。
+        ClipwrightError: PROBE_FAILED / DEPENDENCY_MISSING / SUBPROCESS_FAILED /
+            SUBPROCESS_TIMEOUT / FILE_NOT_FOUND（inspect_media が送出）。
     """
-    ffprobe = resolve_tool("ffprobe", "CLIPWRIGHT_FFPROBE")
-    cmd = [
-        ffprobe,
-        "-v",
-        "quiet",
-        "-print_format",
-        "json",
-        "-show_format",
-        "-show_streams",
-        source,
-    ]
-    result = run(cmd)
-
-    try:
-        data: dict[str, Any] = json.loads(result.stdout)
-        streams: list[dict[str, Any]] = data["streams"]
-    except (json.JSONDecodeError, KeyError) as exc:
-        raise ClipwrightError(
-            code=ErrorCode.PROBE_FAILED,
-            message="ffprobe 出力のパースに失敗しました。",
-            hint="有効なメディアファイルを指定してください。",
-        ) from exc
-
-    has_video = any(s.get("codec_type") == "video" for s in streams)
-    audio_count = sum(1 for s in streams if s.get("codec_type") == "audio")
-
-    fmt: dict[str, Any] = data.get("format", {})
-    bit_rate_raw = fmt.get("bit_rate")
-    # ffprobe が "N/A" や空文字を返すケースを try/except で吸収し、
-    # 変換失敗時は bit_rate=None にフォールバックする（M-3）。
-    bit_rate: int | None = None
-    if bit_rate_raw is not None:
-        try:
-            bit_rate = int(bit_rate_raw)
-        except (ValueError, TypeError):
-            bit_rate = None
-
-    return ProbeInfo(has_video=has_video, audio_count=audio_count, bit_rate=bit_rate)
+    info = inspect_media(source)
+    has_video = any(s.codec_type == "video" for s in info.streams)
+    audio_count = sum(1 for s in info.streams if s.codec_type == "audio")
+    return ProbeInfo(
+        has_video=has_video, audio_count=audio_count, bit_rate=info.bit_rate
+    )
 
 
 def _check_source_within_timeline_dir(timeline_path: Path, source: str) -> None:
