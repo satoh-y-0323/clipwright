@@ -19,6 +19,7 @@ WR-AD-15(1): overflow 判定 = 行数超過 (a) + 行幅超過 (b) 両方。
 from __future__ import annotations
 
 import pytest
+
 from clipwright_wrap.captions import (
     Cue,
     parse_captions,
@@ -789,3 +790,200 @@ class TestDefensiveCases:
     def test_wrap_cue_lines_empty_segments_no_exception(self) -> None:
         """空 segments の wrap_cue_lines が例外なく [] を返すこと。"""
         assert wrap_cue_lines([], max_chars=16) == []
+
+
+# ===========================================================================
+# カバレッジ補完テスト（到達可能な未被覆行）
+# ===========================================================================
+
+
+class TestParseSrtNonNumericIndex:
+    """L85-87: SRT ブロックの index 行が非数値の場合にスキップされること。"""
+
+    def test_non_numeric_index_block_skipped(self) -> None:
+        """index 行が数値でないブロックはスキップされ、後続の正常ブロックは取得されること。"""
+        # 1番目のブロック: index が "abc"（非数値）→ スキップ
+        # 2番目のブロック: 正常
+        srt = "abc\n00:00:00,000 --> 00:00:01,000\nスキップ\n\n1\n00:00:01,000 --> 00:00:02,000\nOK\n"
+        cues = parse_captions(srt, "srt")
+        assert len(cues) == 1
+        assert cues[0].text == "OK"
+
+    def test_non_numeric_index_only_block_returns_empty(self) -> None:
+        """非数値 index ブロックのみの SRT は [] を返すこと。"""
+        srt = "NOTE\n00:00:00,000 --> 00:00:01,000\nテスト\n"
+        cues = parse_captions(srt, "srt")
+        assert cues == []
+
+
+class TestParseSrtIndexOnlyBlock:
+    """L90: SRT ブロックに index 行のみ（timeline 行なし）の場合にスキップされること。"""
+
+    def test_index_only_block_skipped(self) -> None:
+        """index 行 1 行のみのブロックはスキップされ、後続の正常ブロックは取得されること。"""
+        # 1番目のブロック: index 行のみ（タイムライン行なし）
+        # 2番目のブロック: 正常
+        srt = "1\n\n2\n00:00:01,000 --> 00:00:02,000\nOK\n"
+        cues = parse_captions(srt, "srt")
+        assert len(cues) == 1
+        assert cues[0].text == "OK"
+
+
+class TestParseVttNoHeader:
+    """L130: WEBVTT ヘッダがない（空文字列 or 非 WEBVTT）入力は [] を返すこと。"""
+
+    def test_empty_string_returns_empty_list(self) -> None:
+        """VTT 空文字列入力は [] を返すこと。"""
+        result = parse_captions("", "vtt")
+        assert result == []
+
+    def test_non_webvtt_header_returns_empty_list(self) -> None:
+        """WEBVTT ではないヘッダで始まるテキストは [] を返すこと。"""
+        result = parse_captions(
+            "NOTWEBVTT\n\n00:00:00.000 --> 00:00:01.000\nテスト\n", "vtt"
+        )
+        assert result == []
+
+    def test_srt_content_as_vtt_returns_empty_list(self) -> None:
+        """SRT 形式のテキストを vtt として渡すと [] を返すこと（WEBVTT ヘッダなし）。"""
+        srt = "1\n00:00:00,000 --> 00:00:01,000\nテスト\n"
+        result = parse_captions(srt, "vtt")
+        assert result == []
+
+
+class TestParseVttNoteMultiline:
+    """L153: NOTE ブロック複数行の本文が正しく読み飛ばされること。"""
+
+    def test_multiline_note_body_skipped(self) -> None:
+        """NOTE ブロックの複数行本文がスキップされ、後続 cue が取得されること。"""
+        vtt = (
+            "WEBVTT\n"
+            "\n"
+            "NOTE\n"
+            "これはコメントの1行目です。\n"
+            "これはコメントの2行目です。\n"
+            "\n"
+            "00:00:00.000 --> 00:00:01.000\n"
+            "テスト\n"
+        )
+        cues = parse_captions(vtt, "vtt")
+        assert len(cues) == 1
+        assert cues[0].text == "テスト"
+
+    def test_multiple_note_blocks_all_skipped(self) -> None:
+        """複数の NOTE ブロックがすべてスキップされ、cue だけが取得されること。"""
+        vtt = (
+            "WEBVTT\n"
+            "\n"
+            "NOTE block1 line1\n"
+            "block1 line2\n"
+            "\n"
+            "00:00:00.000 --> 00:00:01.000\n"
+            "cue1\n"
+            "\n"
+            "NOTE block2\n"
+            "block2 body\n"
+            "\n"
+            "00:00:01.000 --> 00:00:02.000\n"
+            "cue2\n"
+        )
+        cues = parse_captions(vtt, "vtt")
+        assert len(cues) == 2
+        assert cues[0].text == "cue1"
+        assert cues[1].text == "cue2"
+
+
+class TestParseVttCueIdAtEnd:
+    """L168: cue-id 行が VTT の末尾（その後コンテンツなし）の場合に安全に終了すること。"""
+
+    def test_cue_id_at_eof_terminates_safely(self) -> None:
+        """cue-id 行が末尾にあるだけで後続がない場合、既存 cue のみ返され例外が出ないこと。"""
+        vtt = (
+            "WEBVTT\n"
+            "\n"
+            "00:00:00.000 --> 00:00:01.000\n"
+            "テスト\n"
+            "\n"
+            "dangling-cue-id"  # タイムライン行なし・末尾
+        )
+        cues = parse_captions(vtt, "vtt")
+        # 正常な cue は取得されること
+        assert len(cues) == 1
+        assert cues[0].text == "テスト"
+
+
+class TestParseVttCueIdFollowedByBlankLine:
+    """L172-173: cue-id 直後が空行の場合にスキップされること。"""
+
+    def test_cue_id_followed_by_blank_line_skipped(self) -> None:
+        """cue-id の次が空行（タイムライン行なし）のブロックはスキップされること。"""
+        vtt = (
+            "WEBVTT\n"
+            "\n"
+            "dangling-cue-id\n"
+            "\n"  # cue-id 直後が空行 → L172 で pos が空行を踏む
+            "00:00:00.000 --> 00:00:01.000\n"
+            "OK\n"
+        )
+        cues = parse_captions(vtt, "vtt")
+        # cue-id ブロックはスキップされ、後続の正常 cue が取得されること
+        assert any(c.text == "OK" for c in cues)
+
+
+class TestParseCaptionsUnsupportedFmt:
+    """L224: parse_captions に未対応の fmt を渡すと ClipwrightError(INVALID_INPUT) が送出されること。"""
+
+    def test_unsupported_fmt_raises_clipwright_error(self) -> None:
+        """未対応の fmt → ClipwrightError(INVALID_INPUT) が送出されること。"""
+        from clipwright.errors import ClipwrightError, ErrorCode
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            parse_captions("some text", "ass")
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_unsupported_fmt_error_message_contains_fmt(self) -> None:
+        """ClipwrightError のメッセージに渡した fmt が含まれること。"""
+        from clipwright.errors import ClipwrightError
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            parse_captions("some text", "xml")
+        assert "xml" in exc_info.value.message
+
+    def test_unsupported_fmt_hint_mentions_valid_options(self) -> None:
+        """ClipwrightError の hint に有効なオプション（srt/vtt）が示されること。"""
+        from clipwright.errors import ClipwrightError
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            parse_captions("some text", "unknown")
+        assert "srt" in exc_info.value.hint or "vtt" in exc_info.value.hint
+
+
+class TestSerializeCaptionsUnsupportedFmt:
+    """L328: serialize_captions に未対応の fmt を渡すと ClipwrightError(INVALID_INPUT) が送出されること。"""
+
+    def test_unsupported_fmt_raises_clipwright_error(self) -> None:
+        """未対応の fmt → ClipwrightError(INVALID_INPUT) が送出されること。"""
+        from clipwright.errors import ClipwrightError, ErrorCode
+
+        cues = [Cue(index=1, start="00:00:00,000", end="00:00:01,000", text="テスト")]
+        with pytest.raises(ClipwrightError) as exc_info:
+            serialize_captions(cues, "ass")
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_unsupported_fmt_error_message_contains_fmt(self) -> None:
+        """ClipwrightError のメッセージに渡した fmt が含まれること。"""
+        from clipwright.errors import ClipwrightError
+
+        cues = [Cue(index=1, start="00:00:00,000", end="00:00:01,000", text="テスト")]
+        with pytest.raises(ClipwrightError) as exc_info:
+            serialize_captions(cues, "xml")
+        assert "xml" in exc_info.value.message
+
+    def test_unsupported_fmt_hint_mentions_valid_options(self) -> None:
+        """ClipwrightError の hint に有効なオプション（srt/vtt）が示されること。"""
+        from clipwright.errors import ClipwrightError
+
+        cues = [Cue(index=1, start="00:00:00,000", end="00:00:01,000", text="テスト")]
+        with pytest.raises(ClipwrightError) as exc_info:
+            serialize_captions(cues, "unknown")
+        assert "srt" in exc_info.value.hint or "vtt" in exc_info.value.hint

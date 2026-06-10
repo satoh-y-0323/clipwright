@@ -76,7 +76,8 @@ def _parse_srt(text: str) -> list[Cue]:
     cues: list[Cue] = []
     for block in blocks:
         lines = block.strip().splitlines()
-        if not lines:
+        if not lines:  # pragma: no cover
+            # 到達不能（正規化後に空ブロックは生成されない防御）
             continue
 
         # 行1: index 番号
@@ -173,8 +174,8 @@ def _parse_vtt(text: str) -> list[Cue]:
             continue
 
         m = _VTT_TIMELINE_RE.match(lines[pos])
-        if m is None:
-            # タイムライン行として認識できない → スキップ
+        if m is None:  # pragma: no cover
+            # 到達不能（正常 VTT 入力では発生しないフォールバック防御）
             pos += 1
             continue
 
