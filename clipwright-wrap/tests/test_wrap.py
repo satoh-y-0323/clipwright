@@ -72,17 +72,17 @@ def _segments_from_texts(*texts: str) -> list[list[str]]:
     return [[t] for t in texts]
 
 
-def _wrap_cli_ok(segments: list[list[str]]) -> bytes:
-    """wrap_cli が返す成功 JSON (bytes) を生成する。"""
-    return json.dumps({"segments": segments}, ensure_ascii=False).encode()
+def _wrap_cli_ok(segments: list[list[str]]) -> str:
+    """wrap_cli が返す成功 JSON (str) を生成する。text=True モード前提。"""
+    return json.dumps({"segments": segments}, ensure_ascii=False)
 
 
-def _wrap_cli_error(code: str, message: str, hint: str = "確認してください。") -> bytes:
-    """wrap_cli が返すエラー JSON (bytes) を生成する。"""
+def _wrap_cli_error(code: str, message: str, hint: str = "確認してください。") -> str:
+    """wrap_cli が返すエラー JSON (str) を生成する。text=True モード前提。"""
     return json.dumps(
         {"error": {"code": code, "message": message, "hint": hint}},
         ensure_ascii=False,
-    ).encode()
+    )
 
 
 def _opts(**kwargs: Any) -> WrapCaptionsOptions:
@@ -110,7 +110,7 @@ def _make_input_vtt(tmp_path: Path, content: str | None = None) -> str:
 
 def _import_wrap_captions() -> Any:
     """wrap_captions を遅延 import して返す。wrap.py 未実装なら ImportError。"""
-    from clipwright_wrap.wrap import wrap_captions  # type: ignore[import-not-found]
+    from clipwright_wrap.wrap import wrap_captions
 
     return wrap_captions
 
@@ -304,11 +304,11 @@ class TestLanguageValidation:
 class TestWrapCliInvocation:
     """wrap.py が sys.executable -m wrap_cli を subprocess 起動する流れを検証する。"""
 
-    def _patch_subprocess(self, mocker: Any, stdout_bytes: bytes) -> MagicMock:
-        """subprocess.run をモックして stdout_bytes を返す。"""
+    def _patch_subprocess(self, mocker: Any, stdout_val: str) -> MagicMock:
+        """subprocess.run をモックして stdout_val を返す。text=True モード前提。"""
         mock_run: MagicMock = mocker.patch(
             "clipwright_wrap.wrap.subprocess.run",
-            return_value=MagicMock(stdout=stdout_bytes, returncode=0),
+            return_value=MagicMock(stdout=stdout_val, returncode=0),
         )
         return mock_run
 
@@ -1307,8 +1307,8 @@ class TestUncoveredBranches:
         mocker.patch(
             "clipwright_wrap.wrap.subprocess.run",
             return_value=MagicMock(
-                # 空 bytes → decode → "" → json.loads("") で JSONDecodeError
-                stdout=b"",
+                # 空文字列 → json.loads("") で JSONDecodeError（text=True モード）
+                stdout="",
                 returncode=0,
             ),
         )
