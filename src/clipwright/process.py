@@ -53,7 +53,7 @@ def resolve_tool(name: str, env_var: str | None = None) -> str:
                 code=ErrorCode.DEPENDENCY_MISSING,
                 message=(
                     f"{name} が見つかりません"
-                    f"（{env_var}={env_path} は存在しないか実行不可なファイルです）"
+                    f"（環境変数 {env_var} が指すファイルが存在しないか実行不可です）"
                 ),
                 hint=(
                     f"{env_var} に有効な実行可能ファイルのフルパスを設定するか、"

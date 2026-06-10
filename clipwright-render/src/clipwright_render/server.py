@@ -136,7 +136,15 @@ def main() -> None:
             overwrite=args.overwrite,
         )
     except ValidationError as exc:
-        print(f"オプションのバリデーションエラー: {exc}", file=sys.stderr)
+        # Pydantic 内部詳細は露出させず、不正なフィールド名のみ提示する（Sec Low-2）
+        fields = ", ".join(str(e["loc"][0]) for e in exc.errors() if e.get("loc"))
+        detail = (
+            f"{fields} の値が制約を満たしていません" if fields else "入力が不正です"
+        )
+        print(
+            f"オプションのバリデーションエラー: {detail}。--help で確認してください。",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     result = render_timeline(
