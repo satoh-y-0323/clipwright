@@ -1329,6 +1329,9 @@ class TestFileNotFoundMessageSafety:
         assert full_dir not in error_msg
         # basename は含まれること
         assert "missing_video.mp4" in error_msg
+        # hint は inspect_media のものを引き継ぐ（差し替えで欠落しないこと・N-2）
+        exp_hint = "有効なメディアファイルのパスを指定してください。"
+        assert result["error"]["hint"] == exp_hint
 
     def test_symlink_file_not_found_message_contains_only_basename(
         self, tmp_path: Path
@@ -1357,6 +1360,8 @@ class TestFileNotFoundMessageSafety:
         assert full_dir not in error_msg
         # basename は含まれること
         assert "link.mp4" in error_msg
+        # hint は inspect_media のものを引き継ぐ（N-2）
+        assert result["error"]["hint"] == "実ファイルを指定してください。"
 
 
 # ===========================================================================

@@ -71,6 +71,9 @@ def _parse_silence_intervals(
             continue
 
         m_end = _RE_SILENCE_END.search(line)
+        # CR L-2: 対応する silence_start が無い孤立 silence_end の行は無視する。
+        # silencedetect は正常時 start→end の対で出力するため孤立 end は異常出力とみなす
+        # （先頭からの無音も start が出力されるので対で拾える）。
         if m_end and pending_start is not None:
             end = float(m_end.group(1))
             # SR L-3: end < start の異常区間はスキップする

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import pytest
 
-from clipwright_silence.plan import derive_keep_ranges
+from clipwright_silence.plan import _EPSILON, derive_keep_ranges
 from clipwright_silence.schemas import DetectSilenceOptions
 
 # ===========================================================================
@@ -222,7 +222,7 @@ class TestMinKeepDuration:
         """
         keeps = derive_keep_ranges(10.0, [(0.5, 9.5)], _opts(min_keep_duration=1.0))
         for start, end in keeps:
-            assert (end - start) >= 1.0 - 1e-9
+            assert (end - start) >= 1.0 - _EPSILON
 
     def test_min_keep_keeps_long_interval(self) -> None:
         """min_keep_duration 設定でも、長い KEEP は保持される。"""
@@ -238,7 +238,7 @@ class TestMinKeepDuration:
         keeps = derive_keep_ranges(10.0, [(1.0, 2.0)], _opts(min_keep_duration=1.0))
         # 1.0s の KEEP が残っていること
         durations = [end - start for start, end in keeps]
-        assert any(abs(d - 1.0) < 1e-9 for d in durations)
+        assert any(abs(d - 1.0) < _EPSILON for d in durations)
 
     def test_min_keep_applied_after_padding_merge(self) -> None:
         """min_keep_duration はパディング・マージ後に適用される。
@@ -374,7 +374,7 @@ class TestEdgeCases:
             _opts(padding=0.0),
         )
         for i in range(len(keeps) - 1):
-            assert keeps[i][1] <= keeps[i + 1][0] + 1e-9, (
+            assert keeps[i][1] <= keeps[i + 1][0] + _EPSILON, (
                 f"KEEP 区間が重複している: {keeps[i]} と {keeps[i + 1]}"
             )
 
