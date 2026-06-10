@@ -12,6 +12,7 @@ members = [
     "clipwright-render",
     "clipwright-silence",
     "clipwright-transcribe",
+    "clipwright-wrap",
 ]
 
 [[package]]
@@ -92,6 +93,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/9a/8e/82a0fe20a541c03148528be8cac2408564a6c9a0cc7e9171802bc1d26985/attrs-26.1.0.tar.gz", hash = "sha256:d03ceb89cb322a8fd706d4fb91940737b6642aa36998fe130a9bc96c985eff32", size = 952055, upload-time = "2026-03-19T14:22:25.026Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/64/b4/17d4b0b2a2dc85a6df63d1157e028ed19f90d4cd97c36717afef2bc2f395/attrs-26.1.0-py3-none-any.whl", hash = "sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309", size = 67548, upload-time = "2026-03-19T14:22:23.645Z" },
+]
+
+[[package]]
+name = "budoux"
+version = "0.8.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/52/5c/57f8bf230311d6a0b1096cdf31e48c4a3fe763c9185724ba62b35bb49c21/budoux-0.8.4.tar.gz", hash = "sha256:cbbb5c1185955caafaa18394fcb802e36f1fcc220a138212372a78c9f9ddd289", size = 106395, upload-time = "2026-05-18T01:47:35.366Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7a/33/f9fc20d531782c71211effdb22ceea76bf1bbd8246b2cdd08f8955febf5d/budoux-0.8.4-py3-none-any.whl", hash = "sha256:e3d0ae89dd6d1b52b1b54b8a81d312229041d715603bf1c45391b90499eeb9da", size = 101831, upload-time = "2026-05-18T01:47:34.116Z" },
 ]
 
 [[package]]
@@ -335,6 +345,45 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "mypy", specifier = ">=2.1.0" },
+    { name = "pytest", specifier = ">=9.0.3" },
+    { name = "pytest-cov", specifier = ">=7.1.0" },
+    { name = "pytest-mock", specifier = ">=3.15.1" },
+    { name = "ruff", specifier = ">=0.15.16" },
+]
+
+[[package]]
+name = "clipwright-wrap"
+version = "0.1.0"
+source = { editable = "clipwright-wrap" }
+dependencies = [
+    { name = "budoux" },
+    { name = "clipwright" },
+    { name = "mcp", extra = ["cli"] },
+    { name = "pydantic" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "clipwright-transcribe" },
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "pytest-mock" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "budoux" },
+    { name = "clipwright", editable = "." },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.27.2" },
+    { name = "pydantic", specifier = ">=2" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "clipwright-transcribe", editable = "clipwright-transcribe" },
     { name = "mypy", specifier = ">=2.1.0" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
