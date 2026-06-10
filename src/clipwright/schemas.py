@@ -122,6 +122,7 @@ class MediaInfo(BaseModel):
     container: str | None
     duration: RationalTimeModel | None
     streams: list[StreamInfo]
+    bit_rate: int | None = None
 
 
 # ===========================================================================

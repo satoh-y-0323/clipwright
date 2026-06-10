@@ -36,8 +36,10 @@ def inspect_media(path: str) -> MediaInfo:
 
     cmd = [
         ffprobe,
-        "-v", "quiet",
-        "-print_format", "json",
+        "-v",
+        "quiet",
+        "-print_format",
+        "json",
         "-show_format",
         "-show_streams",
         path,
@@ -212,4 +214,5 @@ def _parse_ffprobe_json(path: str, stdout: str) -> MediaInfo:
         container=container,
         duration=duration,
         streams=streams,
+        bit_rate=_to_optional_int(raw_format.get("bit_rate")),
     )
