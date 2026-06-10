@@ -188,15 +188,14 @@ class TestPaddingMerge:
         assert len(keeps) == 2
 
     def test_padding_merges_three_keeps_into_two(self) -> None:
-        """padding で 3 KEEP の隣接 2 つが重なる → 2 KEEP になる。"""
+        """padding で 3 KEEP が全てマージされて 1 区間になる（CR L-4: 計算上確定）。"""
         # 無音: (2,3),(5,6) → KEEP: (0,2),(3,5),(6,10)
         # padding=0.6 → (0,2.6),(2.4,5.6),(5.4,10)
         # (0,2.6) と (2.4,5.6) が重なる → merge (0, 5.6)
         # (0,5.6) と (5.4,10) が重なる → merge (0, 10)
+        # → 全体が 1 区間に連結される（計算上確定）
         keeps = derive_keep_ranges(10.0, [(2.0, 3.0), (5.0, 6.0)], _opts(padding=0.6))
-        # 全体が連結されて 1 区間になる場合もある
-        assert len(keeps) >= 1
-        assert len(keeps) < 3
+        assert len(keeps) == 1
 
 
 # ===========================================================================

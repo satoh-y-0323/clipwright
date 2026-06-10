@@ -92,17 +92,19 @@ def _make_stderr(
     for i, (start, end) in enumerate(intervals):
         lines.append(f"[silencedetect @ 0xabcdef] silence_start: {start:.6f}")
         if not (omit_last_end and i == len(intervals) - 1):
-            lines.append(f"[silencedetect @ 0xabcdef] silence_end: {end:.6f} | "
-                         f"silence_duration: {end - start:.6f}")
+            lines.append(
+                f"[silencedetect @ 0xabcdef] silence_end: {end:.6f} | "
+                f"silence_duration: {end - start:.6f}"
+            )
     return "\n".join(lines)
 
 
 def _fake_run_ok(stderr: str) -> Any:
     """run の成功モックを返すクロージャを作る。"""
+
     def _impl(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
-        return CompletedProcess(
-            args=cmd, returncode=0, stdout="", stderr=stderr
-        )
+        return CompletedProcess(args=cmd, returncode=0, stdout="", stderr=stderr)
+
     return _impl
 
 
@@ -316,9 +318,7 @@ class TestTrailingSilenceCompletion:
         # KEEP は末尾無音を除いた部分のみ（1 clip）
         assert result["data"]["keep_count"] == 1
 
-    def test_only_silence_start_no_end_keeps_before_start(
-        self, tmp_path: Path
-    ) -> None:
+    def test_only_silence_start_no_end_keeps_before_start(self, tmp_path: Path) -> None:
         """silence_start=3.0 のみ（silence_end なし）→ KEEP は (0, 3.0) のみ。
 
         補完後の無音: (3.0, total_duration=10.0)
@@ -398,6 +398,7 @@ class TestKeepClipOtio:
     def test_v1_track_has_keep_clips(self, tmp_path: Path) -> None:
         """V1 トラックに clip が1件以上存在すること（AD-4）。"""
         from clipwright.otio_utils import load_timeline
+
         from clipwright_silence.detect import detect_silence
 
         media = str(tmp_path / "video.mp4")
@@ -431,6 +432,7 @@ class TestKeepClipOtio:
     ) -> None:
         """source_range.rate が MediaInfo.duration.rate と一致すること（DC-AS-003）。"""
         from clipwright.otio_utils import load_timeline
+
         from clipwright_silence.detect import detect_silence
 
         media = str(tmp_path / "video.mp4")
@@ -439,9 +441,7 @@ class TestKeepClipOtio:
         # rate=25.0 で構築（FPS と異なる値でテスト）
         custom_rate = 25.0
         stderr = _make_stderr([(2.0, 6.0)])
-        media_info = _make_media_info(
-            path=media, duration_sec=10.0, rate=custom_rate
-        )
+        media_info = _make_media_info(path=media, duration_sec=10.0, rate=custom_rate)
 
         with (
             patch(
@@ -473,6 +473,7 @@ class TestKeepClipOtio:
         KEEP (0.0, 3.0) の場合、rate=30 なら start_time.value=0, duration.value=90。
         """
         from clipwright.otio_utils import load_timeline
+
         from clipwright_silence.detect import detect_silence
 
         media = str(tmp_path / "video.mp4")
@@ -508,6 +509,7 @@ class TestKeepClipOtio:
     def test_target_url_is_absolute_path_of_media(self, tmp_path: Path) -> None:
         """clip の target_url が media の絶対パスであること（DC-AS-001）。"""
         from clipwright.otio_utils import load_timeline
+
         from clipwright_silence.detect import detect_silence
 
         media = str(tmp_path / "video.mp4")
@@ -541,6 +543,7 @@ class TestKeepClipOtio:
     def test_clip_metadata_has_clipwright_key(self, tmp_path: Path) -> None:
         """clip.metadata["clipwright"] に tool/version/kind="keep" が含まれる。"""
         from clipwright.otio_utils import load_timeline
+
         from clipwright_silence.detect import detect_silence
 
         media = str(tmp_path / "video.mp4")
@@ -576,6 +579,7 @@ class TestKeepClipOtio:
     def test_clip_count_matches_keep_count(self, tmp_path: Path) -> None:
         """V1 の clip 数が data["keep_count"] と一致する。"""
         from clipwright.otio_utils import load_timeline
+
         from clipwright_silence.detect import detect_silence
 
         media = str(tmp_path / "video.mp4")
@@ -664,9 +668,7 @@ class TestInputValidation:
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
         output = str(tmp_path / "out.otio")
-        media_info = _make_media_info(
-            path=media, duration_sec=None
-        )
+        media_info = _make_media_info(path=media, duration_sec=None)
 
         with patch(
             "clipwright_silence.detect.inspect_media",
@@ -677,9 +679,7 @@ class TestInputValidation:
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.PROBE_FAILED
 
-    def test_ffmpeg_not_found_returns_dependency_missing(
-        self, tmp_path: Path
-    ) -> None:
+    def test_ffmpeg_not_found_returns_dependency_missing(self, tmp_path: Path) -> None:
         """ffmpeg 不在 → DEPENDENCY_MISSING（AD-1・DC-GP-004）。"""
         from clipwright_silence.detect import detect_silence
 
@@ -710,9 +710,7 @@ class TestInputValidation:
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.DEPENDENCY_MISSING
 
-    def test_inspect_media_file_not_found_propagates(
-        self, tmp_path: Path
-    ) -> None:
+    def test_inspect_media_file_not_found_propagates(self, tmp_path: Path) -> None:
         """inspect_media が FILE_NOT_FOUND を送出 → エンベロープに伝播する。"""
         from clipwright_silence.detect import detect_silence
 
@@ -732,9 +730,7 @@ class TestInputValidation:
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
 
-    def test_symlink_media_propagates_file_not_found(
-        self, tmp_path: Path
-    ) -> None:
+    def test_symlink_media_propagates_file_not_found(self, tmp_path: Path) -> None:
         """symlink media → inspect_media 由来の FILE_NOT_FOUND が伝播する。"""
         from clipwright_silence.detect import detect_silence
 
@@ -914,7 +910,8 @@ class TestEnvelope:
         assert len(artifacts) >= 1
         # artifacts は dict または Artifact モデルのいずれか
         timeline_artifacts = [
-            a for a in artifacts
+            a
+            for a in artifacts
             if (
                 (isinstance(a, dict) and a.get("role") == "timeline")
                 or (hasattr(a, "role") and a.role == "timeline")
@@ -1018,6 +1015,7 @@ class TestEdgeCases:
     ) -> None:
         """全無音 → ok=True + warning + V1 空（AD-3 §2 / 設計方針: エラーにしない）。"""
         from clipwright.otio_utils import load_timeline
+
         from clipwright_silence.detect import detect_silence
 
         media = str(tmp_path / "video.mp4")
@@ -1053,6 +1051,7 @@ class TestEdgeCases:
     def test_no_silence_returns_single_full_clip(self, tmp_path: Path) -> None:
         """無音ゼロ → 全尺1clip（AD-3 §2）。"""
         from clipwright.otio_utils import load_timeline
+
         from clipwright_silence.detect import detect_silence
 
         media = str(tmp_path / "video.mp4")
@@ -1088,6 +1087,7 @@ class TestEdgeCases:
     def test_no_silence_clip_covers_full_duration(self, tmp_path: Path) -> None:
         """無音ゼロの1clip が全尺をカバーすること。rate=30.0, total=10.0s。"""
         from clipwright.otio_utils import load_timeline
+
         from clipwright_silence.detect import detect_silence
 
         media = str(tmp_path / "video.mp4")
@@ -1155,9 +1155,7 @@ class TestNonDestructiveAndPathSafety:
 
         assert media_path.read_bytes() == original
 
-    def test_error_message_does_not_expose_directory_path(
-        self, tmp_path: Path
-    ) -> None:
+    def test_error_message_does_not_expose_directory_path(self, tmp_path: Path) -> None:
         """エラー message にディレクトリパスが含まれない（basename のみ・Sec M-1）。"""
         from clipwright_silence.detect import detect_silence
 
@@ -1179,9 +1177,7 @@ class TestNonDestructiveAndPathSafety:
         error_msg = result["error"]["message"]
         assert full_dir not in error_msg
 
-    def test_error_message_does_not_expose_raw_stderr(
-        self, tmp_path: Path
-    ) -> None:
+    def test_error_message_does_not_expose_raw_stderr(self, tmp_path: Path) -> None:
         """エラー message に ffmpeg 生 stderr が含まれない（Sec M-1）。"""
         from clipwright_silence.detect import detect_silence
 
@@ -1191,9 +1187,7 @@ class TestNonDestructiveAndPathSafety:
         raw_secret = "INTERNAL_SECRET_PATH /home/user/private"
         media_info = _make_media_info(path=media, duration_sec=10.0)
 
-        def _fake_run_fail(
-            cmd: list[str], **kwargs: Any
-        ) -> CompletedProcess[str]:
+        def _fake_run_fail(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             raise ClipwrightError(
                 code=ErrorCode.SUBPROCESS_FAILED,
                 message="コマンドが終了コード 1 で失敗しました",
@@ -1220,9 +1214,7 @@ class TestNonDestructiveAndPathSafety:
         error_msg = result["error"]["message"]
         assert raw_secret not in error_msg
 
-    def test_ffmpeg_called_with_list_not_shell_string(
-        self, tmp_path: Path
-    ) -> None:
+    def test_ffmpeg_called_with_list_not_shell_string(self, tmp_path: Path) -> None:
         """run に渡すコマンドが list[str] であること（shell=False 相当・規約§6.5）。"""
         from clipwright_silence.detect import detect_silence
 
@@ -1233,9 +1225,7 @@ class TestNonDestructiveAndPathSafety:
 
         captured_cmds: list[list[str]] = []
 
-        def _capture_run(
-            cmd: list[str], **kwargs: Any
-        ) -> CompletedProcess[str]:
+        def _capture_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             captured_cmds.append(cmd)
             return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
@@ -1298,3 +1288,154 @@ class TestNonDestructiveAndPathSafety:
         assert captured_timeouts[0] == pytest.approx(
             max(60, math.ceil(10.0 * 2)), abs=1
         )
+
+
+# ===========================================================================
+# ⑧ SR L-2: FILE_NOT_FOUND / symlink 拒否時の message にディレクトリ部が含まれない
+# ===========================================================================
+
+
+class TestFileNotFoundMessageSafety:
+    """FILE_NOT_FOUND 時の message が basename のみであること（SR L-2）。
+
+    detect 層で ClipwrightError(FILE_NOT_FOUND) を捕捉して差し替えるため、
+    呼び出し元のエラー message にディレクトリ部が含まれないことを確認する。
+    """
+
+    def test_file_not_found_message_contains_only_basename(
+        self, tmp_path: Path
+    ) -> None:
+        """FILE_NOT_FOUND 時の message にディレクトリパスが含まれない（SR L-2）。"""
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "missing_video.mp4")
+        output = str(tmp_path / "out.otio")
+        full_dir = str(tmp_path)
+
+        with patch(
+            "clipwright_silence.detect.inspect_media",
+            side_effect=ClipwrightError(
+                code=ErrorCode.FILE_NOT_FOUND,
+                message=f"ファイルが見つかりません: {media}",  # フルパスを含む
+                hint="有効なメディアファイルのパスを指定してください。",
+            ),
+        ):
+            result = detect_silence(media, output, _opts())
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
+        error_msg = result["error"]["message"]
+        # ディレクトリ部（フルパス）が含まれないこと
+        assert full_dir not in error_msg
+        # basename は含まれること
+        assert "missing_video.mp4" in error_msg
+
+    def test_symlink_file_not_found_message_contains_only_basename(
+        self, tmp_path: Path
+    ) -> None:
+        """symlink 拒否の message にもディレクトリパスが含まれない（SR L-2）。"""
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "link.mp4")
+        output = str(tmp_path / "out.otio")
+        full_dir = str(tmp_path)
+
+        with patch(
+            "clipwright_silence.detect.inspect_media",
+            side_effect=ClipwrightError(
+                code=ErrorCode.FILE_NOT_FOUND,
+                message=f"シンボリックリンクは受け付けません: {media}",  # フルパス
+                hint="実ファイルを指定してください。",
+            ),
+        ):
+            result = detect_silence(media, output, _opts())
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
+        error_msg = result["error"]["message"]
+        # ディレクトリ部が含まれないこと
+        assert full_dir not in error_msg
+        # basename は含まれること
+        assert "link.mp4" in error_msg
+
+
+# ===========================================================================
+# ⑨ SR L-3: silence_end < silence_start の異常区間がスキップされる
+# ===========================================================================
+
+
+class TestAbnormalIntervalGuard:
+    """end < start の異常区間が無視されること（SR L-3）。
+
+    将来バックエンド差替え時の防御として、_parse_silence_intervals が
+    end < start の区間をスキップする。
+    """
+
+    def test_inverted_interval_is_ignored(self, tmp_path: Path) -> None:
+        """end < start の異常区間が silence_count に計上されない（SR L-3）。"""
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        # 異常区間: start=5.0 > end=3.0 → スキップされる
+        # 正常区間: start=1.0, end=2.0 → 計上される
+        stderr = (
+            "[silencedetect @ 0xabcdef] silence_start: 1.000000\n"
+            "[silencedetect @ 0xabcdef] silence_end: 2.000000 | "
+            "silence_duration: 1.000000\n"
+            "[silencedetect @ 0xabcdef] silence_start: 5.000000\n"
+            "[silencedetect @ 0xabcdef] silence_end: 3.000000 | "
+            "silence_duration: -2.000000\n"
+        )
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch(
+                "clipwright_silence.detect.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
+            patch("clipwright_silence.detect.run", side_effect=_fake_run_ok(stderr)),
+        ):
+            result = detect_silence(media, output, _opts())
+
+        assert result["ok"] is True
+        # 異常区間はスキップされ、正常区間1件のみ計上される
+        assert result["data"]["silence_count"] == 1
+
+    def test_only_inverted_interval_results_in_no_silence(self, tmp_path: Path) -> None:
+        """全て異常区間の場合、silence_count=0 で全尺が KEEP になる（SR L-3）。"""
+        from clipwright_silence.detect import detect_silence
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        # 全て異常区間（end < start）→ 全スキップ
+        stderr = (
+            "[silencedetect @ 0xabcdef] silence_start: 7.000000\n"
+            "[silencedetect @ 0xabcdef] silence_end: 2.000000 | "
+            "silence_duration: -5.000000\n"
+        )
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=media_info,
+            ),
+            patch(
+                "clipwright_silence.detect.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
+            patch("clipwright_silence.detect.run", side_effect=_fake_run_ok(stderr)),
+        ):
+            result = detect_silence(media, output, _opts())
+
+        assert result["ok"] is True
+        assert result["data"]["silence_count"] == 0
+        # 無音なし → 全尺 1 KEEP
+        assert result["data"]["keep_count"] == 1

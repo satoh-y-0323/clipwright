@@ -8,6 +8,10 @@ from __future__ import annotations
 
 from clipwright_silence.schemas import DetectSilenceOptions
 
+# CR-Q-004: 浮動小数点比較の許容誤差。境界値の equal を保持するために使用する
+# （DC-AM-001: min_keep の equal 保持 / _merge_intervals の隣接区間結合）。
+_EPSILON = 1e-9
+
 
 def derive_keep_ranges(
     total_duration_sec: float,
@@ -69,8 +73,10 @@ def derive_keep_ranges(
 
     # 5. min_keep_duration 未満を破棄する（既定 0.0 は破棄なし）。
     if min_keep > 0.0:
+        # DC-AM-001: min_keep と同値の区間を破棄しないよう
+        # _EPSILON で equal を保持する
         keeps = [
-            (start, end) for start, end in keeps if (end - start) >= min_keep - 1e-9
+            (start, end) for start, end in keeps if (end - start) >= min_keep - _EPSILON
         ]
 
     return keeps
@@ -91,7 +97,7 @@ def _merge_intervals(
 
     for start, end in sorted_ivs[1:]:
         prev_start, prev_end = merged[-1]
-        if start <= prev_end + 1e-12:
+        if start <= prev_end + _EPSILON:
             # 重なりまたは隣接 → マージ。
             merged[-1] = (prev_start, max(prev_end, end))
         else:

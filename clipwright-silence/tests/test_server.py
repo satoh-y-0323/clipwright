@@ -85,8 +85,10 @@ class TestMcpAnnotations:
     """
 
     def _get_annotations(self) -> Any:
-        # FastMCP の公開 API でツール情報を取得する手段がないため、
-        # プライベート API (_tool_manager) に依存している（L-2 相当）。
+        # CR L-1: FastMCP の公開 API でツール情報を取得する手段がないため、
+        # プライベート API (_tool_manager) に依存している。
+        # FastMCP のバージョンアップで _tool_manager が変更・削除された場合に
+        # このテストが壊れるリスクがある。公開 API が整備され次第移行すること。
         tool = mcp._tool_manager.get_tool(  # type: ignore[attr-defined]
             "clipwright_detect_silence"
         )
@@ -95,6 +97,7 @@ class TestMcpAnnotations:
 
     def test_tool_is_registered(self) -> None:
         """clipwright_detect_silence が mcp に登録されていること。"""
+        # CR L-1: _tool_manager はプライベート API。FastMCP 更新で壊れるリスクあり
         tool = mcp._tool_manager.get_tool(  # type: ignore[attr-defined]
             "clipwright_detect_silence"
         )

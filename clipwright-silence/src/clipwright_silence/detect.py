@@ -35,6 +35,16 @@ _RE_SILENCE_START = re.compile(r"silence_start:\s*([0-9]+(?:\.[0-9]+)?)")
 _RE_SILENCE_END = re.compile(r"silence_end:\s*([0-9]+(?:\.[0-9]+)?)")
 
 
+def _fmt_sec(sec: float) -> str:
+    """秒を「分秒」の人間可読表現に変換する（summary 生成用）。
+
+    フォーマット例: 90.0 → "1分30.0秒"、45.5 → "45.5秒"
+    """
+    m = int(sec) // 60
+    s = sec - m * 60
+    return f"{m}分{s:.1f}秒" if m > 0 else f"{s:.1f}秒"
+
+
 def _parse_silence_intervals(
     stderr: str,
     total_duration_sec: float,
@@ -63,6 +73,11 @@ def _parse_silence_intervals(
         m_end = _RE_SILENCE_END.search(line)
         if m_end and pending_start is not None:
             end = float(m_end.group(1))
+            # SR L-3: end < start の異常区間はスキップする
+            # （将来バックエンド差替え時の防御）
+            if end < pending_start:
+                pending_start = None
+                continue
             intervals.append((pending_start, end))
             pending_start = None
 
@@ -201,8 +216,19 @@ def _detect_inner(
 
     # --- 2. inspect_media → ストリーム・duration 確認 ---
 
-    # inspect_media は FILE_NOT_FOUND / symlink 拒否 / PROBE_FAILED 等を送出する
-    media_info = inspect_media(media)
+    # inspect_media は FILE_NOT_FOUND（symlink 拒否含む）/ PROBE_FAILED 等を送出する。
+    # SR L-2: FILE_NOT_FOUND の message は basename のみに差し替える
+    # （フルパス露出を防ぐ・render._probe の M-1 対応と同方針）。
+    try:
+        media_info = inspect_media(media)
+    except ClipwrightError as exc:
+        if exc.code == ErrorCode.FILE_NOT_FOUND:
+            raise ClipwrightError(
+                code=ErrorCode.FILE_NOT_FOUND,
+                message=f"ファイルが見つかりません: {media_path.name}",
+                hint=exc.hint,
+            ) from exc
+        raise
 
     # output が media と同一ディレクトリ配下にあることを検証（DC-AS-001）
     # inspect_media 後に行う（存在確認済みの状態で resolve する）
@@ -312,12 +338,6 @@ def _detect_inner(
     keep_count = len(keep_ranges)
     total_silence_seconds = sum(e - s for s, e in silence_intervals)
     total_keep_seconds = sum(e - s for s, e in keep_ranges)
-
-    # 尺の人間可読表現（秒→分秒）
-    def _fmt_sec(sec: float) -> str:
-        m = int(sec) // 60
-        s = sec - m * 60
-        return f"{m}分{s:.1f}秒" if m > 0 else f"{s:.1f}秒"
 
     summary = (
         f"総尺 {_fmt_sec(total_duration_sec)} の素材から"
