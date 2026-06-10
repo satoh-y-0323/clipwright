@@ -85,7 +85,11 @@ M2 の `error.code` は下記の共通 `ErrorCode`（コア `clipwright.errors.E
 運用ルール（SHOULD）:
 - **入力起因は `INVALID_INPUT` / `FILE_NOT_FOUND` / `PATH_NOT_ALLOWED` を使い分ける**（AI が「直せる入力ミス」か「環境問題」かを判別できる）。
 - 外部 OSS 由来の失敗は `SUBPROCESS_FAILED` / `SUBPROCESS_TIMEOUT` に正規化し、**stderr 全文を `message` に載せない**（秘密・パス露出防止）。
-- ネット接続ツール（§4）の到達不能・タイムアウトをどのコードに割り当てるか（既存の `DEPENDENCY_MISSING`/`SUBPROCESS_*` で代用するか、`NETWORK_ERROR` 等を新設するか）は要検討（§7 TODO）。
+- **ネット接続ツール（§4）の到達不能・タイムアウトは、当面 §3 の既存コードで表現する（YAGNI — 現状ネット接続ツールは0個）**。専用コードを先回りで増やさず、次のように正規化する:
+  - 接続失敗・HTTP エラー・到達不能 → `SUBPROCESS_FAILED`（外部 API も CLI シム＝サブプロセス経由なら自然に該当する）。
+  - タイムアウト → `SUBPROCESS_TIMEOUT`。
+  - 認証情報・API キー不備など「環境が整っていない」系 → `DEPENDENCY_MISSING`（hint に設定手順を書く）。
+  - `NETWORK_ERROR` 等の専用コードは、**最初のネット接続ツールを実装する PR で必要性が実証された時点**でコア `ErrorCode` に追加し、全ツール共有にする（→ §4）。それまで `errors.py` は変更しない。
 - 既存で表現できないときだけコア `ErrorCode` に追加し、全ツールで共有する。
 
 ---
@@ -98,6 +102,7 @@ M2 の `error.code` は下記の共通 `ErrorCode`（コア `clipwright.errors.E
   - 認証情報・URL・パスなど秘密や入力値を `summary` / `data` / エラー `message` に露出させない。
   - タイムアウトと失敗時の `hint`（再試行・オフライン代替の有無）を用意する。
   - 可能ならオフライン代替バックエンドを併設し、パラメータで切替（例: silence の silencedetect / VAD）。
+  - **エラーコードは当面 §3 の既存コードで表現する（YAGNI）**: 到達不能・HTTP エラーは `SUBPROCESS_FAILED`、タイムアウトは `SUBPROCESS_TIMEOUT`、認証・API キー不備は `DEPENDENCY_MISSING` に正規化する。`NETWORK_ERROR` 等の専用コードは、最初のネット接続ツールを実装する際に必要性が実証されてからコア `ErrorCode` へ追加する（先回りで `errors.py` に足さない）。
 - **M4 の射程に注意**: M4 は「OSS をライブラリリンクしない」話。外部 **API 呼び出し**（HTTP）は OSS リンクではないので M4 の対象外。ネットツールは M1/M2/M3/M5 ＋ `openWorldHint:true` を満たせばよい。
 
 ---
@@ -147,6 +152,6 @@ M2 の `error.code` は下記の共通 `ErrorCode`（コア `clipwright.errors.E
 - **TODO（確定前に詰める）**:
   - [ ] 配置: root `CONVENTIONS.md` へ昇格するか docs/ 据え置きか。
   - [x] `ErrorCode` の許可リストを一覧化して公開 → §3 に記載（全13コード）。
-  - [ ] ネット接続ツール用のエラーコード（`NETWORK_ERROR` 等を新設するか既存で代用するか）を決める。
+  - [x] ネット接続ツール用のエラーコード方針を決定 → §3 運用ルール末尾・§4 に記載。**YAGNI: 当面 `SUBPROCESS_FAILED` / `SUBPROCESS_TIMEOUT` / `DEPENDENCY_MISSING` で代用し、最初のネットツール実装時に専用コードを検討。`errors.py` は変更しない。**
   - [ ] eval（§11: AI が実タスクを解けるかの評価）をコントラクトの一部にするか、別ガイドにするか。
   - [ ] 外部コントリビュータ向けに最小 scaffold をテンプレート化（cookiecutter 等）するか。
