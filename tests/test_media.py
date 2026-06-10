@@ -888,6 +888,12 @@ class TestToOptionalInt:
             (-1, -1),
             # float 入力 → int に変換する（SR-V-001）
             (1.5, 1),
+            # inf/nan → OverflowError/ValueError を捕捉して None（SR-V-001）
+            (float("inf"), None),
+            (float("nan"), None),
+            # bool → int サブクラスのため True→1 / False→0（CR-CT-002）
+            (True, 1),
+            (False, 0),
             # 数値文字列 → int に変換する
             ("44100", 44100),
             ("0", 0),
@@ -906,6 +912,10 @@ class TestToOptionalInt:
             "int_positive",
             "int_negative",
             "float_input",
+            "float_inf",
+            "float_nan",
+            "bool_true",
+            "bool_false",
             "str_44100",
             "str_zero",
             "str_1920",

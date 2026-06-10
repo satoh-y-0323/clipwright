@@ -70,7 +70,10 @@ def _to_optional_int(val: object) -> int | None:
     if val is None:
         return None
     if isinstance(val, (int, float)):
-        return int(val)
+        try:
+            return int(val)
+        except (ValueError, OverflowError):
+            return None
     if isinstance(val, str):
         try:
             return int(val)

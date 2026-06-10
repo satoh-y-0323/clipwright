@@ -250,6 +250,36 @@ class TestProbe:
 
         assert info.audio_count == 1
 
+    def test_probe_file_not_found_replaces_abspath_with_basename(self) -> None:
+        """FILE_NOT_FOUND 時に _probe が message を basename のみに差し替えること。
+
+        inspect_media が FILE_NOT_FOUND を送出した場合、_probe が再送出する
+        ClipwrightError の message に絶対パスが含まれず basename のみを含む（Sec M-1）。
+        symlink を実際に作らないため Windows でも実行される（CR-T-001）。
+        """
+        from clipwright_render.render import _probe
+
+        source = "/abs/path/to/link.mp4"
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                side_effect=ClipwrightError(
+                    code=ErrorCode.FILE_NOT_FOUND,
+                    message="シンボリックリンクは受け付けません: /abs/path/to/link.mp4",
+                    hint="シンボリックリンクではなく実ファイルを指定してください。",
+                ),
+            ),
+            pytest.raises(ClipwrightError) as exc_info,
+        ):
+            _probe(source)
+
+        assert exc_info.value.code == ErrorCode.FILE_NOT_FOUND
+        # 絶対パス（ディレクトリ部分）が露出していない
+        assert "/abs/path/to" not in exc_info.value.message
+        # basename のみ含まれる
+        assert "link.mp4" in exc_info.value.message
+
 
 # ---------------------------------------------------------------------------
 # (d) codec_type 欠落・空文字のエッジケース（DC-AM-002）
@@ -259,23 +289,36 @@ class TestProbe:
 class TestProbeEdgeCases:
     """_probe の codec_type 欠落・空文字等価性検証（DC-AM-002）。"""
 
-    def test_probe_codec_type_empty_not_counted(self, tmp_path: Path) -> None:
-        """codec_type 欠落・空文字ストリームを含む MediaInfo で
+    def test_probe_codec_type_missing_or_empty_not_counted(
+        self, tmp_path: Path
+    ) -> None:
+        """codec_type 欠落（""に正規化済み）・空文字ストリームを含む MediaInfo で
         has_video=False / audio_count=0 になる（旧実装と等価）。
 
         旧実装: s.get("codec_type") == "video" → 欠落は None で不一致 → 数えない。
         新実装: StreamInfo.codec_type は str(s.get("codec_type", "")) で "" に正規化 →
                 "video"/"audio" に一致しない → 数えない。両者は等価（DC-AM-002）。
+
+        空文字（ffprobe 欠落を "" に正規化したケース）と "data"/"subtitle" 等の
+        非 video/audio codec_type の両方を含めて、カウントされないことを検証する。
         """
         from clipwright_render.render import _probe
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
 
-        # codec_type が "" のストリームを2本含む MediaInfo
+        # codec_type が "" の空文字（欠落を正規化）と非 video/audio 値を含む MediaInfo
         extra_streams = [
-            StreamInfo(index=0, codec_type="", codec_name=None),
-            StreamInfo(index=1, codec_type="", codec_name="data"),
+            StreamInfo(index=0, codec_type="", codec_name=None),  # 欠落を "" に正規化
+            StreamInfo(
+                index=1, codec_type="", codec_name="data"
+            ),  # 欠落を "" に正規化（codec_name あり）
+            StreamInfo(
+                index=2, codec_type="data", codec_name=None
+            ),  # data ストリーム（非 video/audio）
+            StreamInfo(
+                index=3, codec_type="subtitle", codec_name=None
+            ),  # subtitle（非 video/audio）
         ]
         media_info = MediaInfo(
             path=source,
