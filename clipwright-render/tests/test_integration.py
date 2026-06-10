@@ -24,7 +24,7 @@ from typing import Any
 import opentimelineio as otio
 import pytest
 
-from clipwright_render.render import clipwright_render
+from clipwright_render.render import render_timeline
 from clipwright_render.schemas import RenderOptions
 
 # ===========================================================================
@@ -171,7 +171,7 @@ def test_render_two_segments_produces_single_output(
     )
 
     output = tmp_path / "output.mp4"
-    result = clipwright_render(
+    result = render_timeline(
         timeline=str(otio_path),
         output=str(output),
         options=RenderOptions(),
@@ -223,7 +223,7 @@ def test_render_output_duration_matches_segments(
     )
 
     output = tmp_path / "output.mp4"
-    result = clipwright_render(
+    result = render_timeline(
         timeline=str(otio_path),
         output=str(output),
         options=RenderOptions(),
@@ -280,7 +280,7 @@ def test_render_preserves_source_and_otio(
     otio_hash_before = _sha256(otio_path)
 
     output = tmp_path / "output.mp4"
-    result = clipwright_render(
+    result = render_timeline(
         timeline=str(otio_path),
         output=str(output),
         options=RenderOptions(),
@@ -302,3 +302,45 @@ def test_render_preserves_source_and_otio(
     # 出力は新規生成で元素材と別ファイル
     assert output.resolve() != source.resolve(), "出力と元素材が同一パスです"
     assert output.exists(), "出力ファイルが生成されていません"
+
+
+@pytest.mark.integration
+def test_render_with_width_height_produces_output(
+    tmp_path: Path,
+    require_ffmpeg: str,
+    require_ffprobe: str,
+) -> None:
+    """L-4 検証: width/height 指定時に実 ffmpeg が正常に動作すること。
+
+    scale を filter_complex 内に統合した実装（-vf 廃止）が
+    実バイナリで動作することを確認する。
+    """
+    source = tmp_path / "source.mp4"
+    _make_test_video(require_ffmpeg, source, duration=4.0)
+
+    otio_path = tmp_path / "timeline.otio"
+    _build_two_segment_timeline(
+        source_path=source,
+        otio_path=otio_path,
+        clip1_start=0.0,
+        clip1_duration=1.5,
+        clip2_start=2.0,
+        clip2_duration=1.5,
+    )
+
+    output = tmp_path / "output_scaled.mp4"
+    # width=160, height=120 にスケールする（元素材の 320x240 の半分）
+    result = render_timeline(
+        timeline=str(otio_path),
+        output=str(output),
+        options=RenderOptions(width=160, height=120),
+        dry_run=False,
+    )
+
+    assert result["ok"] is True, f"width/height 指定の render が失敗しました: {result}"
+    assert output.exists(), "出力ファイルが生成されていません"
+    assert output.stat().st_size > 0, "出力ファイルのサイズが 0 です"
+
+    # ffprobe で出力ファイルを読めること（有効な動画ファイルである）
+    duration = _probe_duration(require_ffprobe, output)
+    assert duration > 0.0, "出力動画の尺が 0 秒です"

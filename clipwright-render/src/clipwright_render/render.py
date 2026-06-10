@@ -79,16 +79,64 @@ def _probe(source: str) -> ProbeInfo:
 
     fmt: dict[str, Any] = data.get("format", {})
     bit_rate_raw = fmt.get("bit_rate")
-    bit_rate: int | None = int(bit_rate_raw) if bit_rate_raw is not None else None
+    # ffprobe が "N/A" や空文字を返すケースを try/except で吸収し、
+    # 変換失敗時は bit_rate=None にフォールバックする（M-3）。
+    bit_rate: int | None = None
+    if bit_rate_raw is not None:
+        try:
+            bit_rate = int(bit_rate_raw)
+        except (ValueError, TypeError):
+            bit_rate = None
 
     return ProbeInfo(has_video=has_video, audio_count=audio_count, bit_rate=bit_rate)
+
+
+def _check_source_within_timeline_dir(timeline_path: Path, source: str) -> None:
+    """source パスが timeline 親ディレクトリ配下にあることを検証する（Sec M-2）。
+
+    OTIO target_url に任意パスが埋め込まれた悪意ある OTIO への対策。
+    単一 source は OTIO と同一ディレクトリ配下に配置することを前提とする。
+
+    Args:
+        timeline_path: OTIO タイムラインファイルのパス。
+        source: OTIO target_url から取得したメディアソースパス。
+
+    Raises:
+        ClipwrightError: PATH_NOT_ALLOWED（source がプロジェクト境界外を指す場合）。
+    """
+    try:
+        allowed_base = timeline_path.parent.resolve()
+        source_resolved = Path(source).resolve()
+        # パス区切り文字を含めて比較し、ディレクトリ名の前方一致誤検知を防ぐ
+        source_str = str(source_resolved)
+        base_str = str(allowed_base)
+        if not (
+            source_str == base_str
+            or source_str.startswith(base_str + "/")
+            or source_str.startswith(base_str + "\\")
+        ):
+            raise ClipwrightError(
+                code=ErrorCode.PATH_NOT_ALLOWED,
+                message="source ファイルがプロジェクト境界外を指しています。",
+                hint=(
+                    "OTIO タイムラインと同じディレクトリ配下の"
+                    "ソースファイルを使用してください。"
+                ),
+            )
+    except ClipwrightError:
+        raise
+    except OSError:
+        # resolve() が失敗する場合（パスが存在しない等）は検証をスキップし、
+        # 後続の source ファイル存在確認で FILE_NOT_FOUND として検出させる。
+        pass
 
 
 def _check_path_not_allowed(output_path: Path, source: str) -> None:
     """output と source が同一パスを指していないか確認する（DC-AM-002）。
 
     resolve() を用いてシンボリックリンク等を考慮した比較を行う。
-    resolve() が失敗する場合（パスが存在しない等）は文字列比較にフォールバックする。
+    resolve() が失敗する場合（パスが存在しない等）は absolute() 比較に、
+    それも失敗した場合のみ文字列比較にフォールバックする（Sec L-1）。
     """
     try:
         if output_path.resolve() == Path(source).resolve():
@@ -99,18 +147,30 @@ def _check_path_not_allowed(output_path: Path, source: str) -> None:
                     "出力ファイルパスを入力ソースファイルとは別のパスに変更してください。"
                 ),
             )
-    except OSError:
-        if str(output_path) == source:
-            raise ClipwrightError(
-                code=ErrorCode.PATH_NOT_ALLOWED,
-                message="出力パスと入力ソースパスが同一です。",
-                hint=(
-                    "出力ファイルパスを入力ソースファイルとは別のパスに変更してください。"
-                ),
-            ) from None
+    except OSError as exc:
+        # resolve() 失敗時（ネットワークパス・極端に長いパス等）は
+        # absolute() 比較を試み、それも失敗した場合のみ文字列比較にフォールバック。
+        try:
+            if Path(output_path).absolute() == Path(source).absolute():
+                raise ClipwrightError(
+                    code=ErrorCode.PATH_NOT_ALLOWED,
+                    message="出力パスと入力ソースパスが同一です。",
+                    hint=(
+                        "出力ファイルパスを入力ソースファイルとは別のパスに変更してください。"
+                    ),
+                ) from exc
+        except OSError:
+            if str(output_path) == source:
+                raise ClipwrightError(
+                    code=ErrorCode.PATH_NOT_ALLOWED,
+                    message="出力パスと入力ソースパスが同一です。",
+                    hint=(
+                        "出力ファイルパスを入力ソースファイルとは別のパスに変更してください。"
+                    ),
+                ) from exc
 
 
-def clipwright_render(
+def render_timeline(
     timeline: str,
     output: str,
     options: RenderOptions,
@@ -183,10 +243,14 @@ def _render_inner(
         )
 
     # 出力親ディレクトリ存在確認（自動作成しない・DC-GP-005）
+    # フルパスを error.message に含めない（Sec M-1）
     if not output_path.parent.exists():
         raise ClipwrightError(
             code=ErrorCode.FILE_NOT_FOUND,
-            message=(f"出力先ディレクトリが存在しません: {output_path.parent}"),
+            message=(
+                "出力先ディレクトリが存在しません。"
+                "指定 output の親ディレクトリを確認してください。"
+            ),
             hint="出力先ディレクトリを先に作成してから再実行してください。",
         )
 
@@ -201,6 +265,11 @@ def _render_inner(
 
     # source パスを取得（resolve_kept_ranges が単一ソースであることを保証済み）
     source = ranges[0].source
+
+    # source がタイムラインと同一ディレクトリ配下にあることを検証する（Sec M-2）。
+    # OTIO target_url に任意パスが埋め込まれた悪意ある OTIO への対策。
+    # 単一 source は OTIO と同一ディレクトリ配下前提（設計上の制約）。
+    _check_source_within_timeline_dir(timeline_path, source)
 
     # output == source チェック（PATH_NOT_ALLOWED・DC-AM-002）
     # overwrite チェックより前に行うことで適切なエラーコードを返す
@@ -243,7 +312,7 @@ def _render_inner(
         return ok_result(
             summary,
             data={
-                "ffmpeg_args": [str(a) for a in plan.ffmpeg_args],
+                "ffmpeg_args": plan.ffmpeg_args,
                 "filter_complex": plan.filter_complex,
                 "segment_count": plan.segment_count,
                 "total_duration_seconds": plan.total_duration_seconds,
@@ -259,13 +328,8 @@ def _render_inner(
     # overwrite フラグ（-y / -n）
     overwrite_flag = ["-y"] if options.overwrite else ["-n"]
 
-    cmd = (
-        [ffmpeg]
-        + overwrite_flag
-        + ["-i", source]
-        + [str(a) for a in plan.ffmpeg_args]
-        + [str(output)]
-    )
+    # plan.ffmpeg_args は list[str] のため変換不要（M-1）
+    cmd = [ffmpeg] + overwrite_flag + ["-i", source] + plan.ffmpeg_args + [str(output)]
 
     run(cmd, timeout=float(timeout))
 

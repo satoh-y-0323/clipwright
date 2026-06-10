@@ -17,7 +17,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field, ValidationError
 
-from clipwright_render.render import clipwright_render as render_timeline  # noqa: F401
+from clipwright_render.render import render_timeline
 from clipwright_render.schemas import RenderOptions
 
 # FastMCP インスタンス（サーバー名）

@@ -56,7 +56,7 @@ class RenderPlan:
     """build_plan が返す実行計画。
 
     filter_complex: ffmpeg -filter_complex 引数の単一文字列（インジェクション防止）。
-    ffmpeg_args: ffmpeg へ渡す引数リスト（-filter_complex 以外の部分）。
+    ffmpeg_args: ffmpeg へ渡す引数リスト（-fc 以外）。str のみ（M-1）。
     segment_count: 残区間数。
     total_duration_seconds: 出力総尺（秒）。
     estimated_size_bytes: 概算ファイルサイズ（bytes）。bit_rate None 時は None。
@@ -64,7 +64,7 @@ class RenderPlan:
     """
 
     filter_complex: str
-    ffmpeg_args: list[str | int | float]
+    ffmpeg_args: list[str]
     segment_count: int
     total_duration_seconds: float
     estimated_size_bytes: float | None = None
@@ -103,7 +103,7 @@ def resolve_kept_ranges(timeline: otio.schema.Timeline) -> list[KeptRange]:
 
     if len(video_tracks) == 0:
         raise ClipwrightError(
-            code=ErrorCode.INVALID_INPUT,
+            code=ErrorCode.UNSUPPORTED_OPERATION,
             message="video トラックが見つかりません。",
             hint="video トラックを含む OTIO タイムラインを使用してください。",
         )
@@ -125,7 +125,17 @@ def resolve_kept_ranges(timeline: otio.schema.Timeline) -> list[KeptRange]:
             )
         if isinstance(item, otio.schema.Clip):
             mr = item.media_reference
+            if isinstance(mr, otio.schema.MissingReference):
+                # MissingReference はタイムラインのデータ不正（参照欠落）を意味する。
+                # 「サポートしていない構成」（UNSUPPORTED_OPERATION）ではなく
+                # 「データが不正」（INVALID_INPUT）として扱う。
+                raise ClipwrightError(
+                    code=ErrorCode.INVALID_INPUT,
+                    message="メディア参照が欠落しています（MissingReference）。",
+                    hint="target_url を持つ ExternalReference を使用してください。",
+                )
             if not isinstance(mr, otio.schema.ExternalReference):
+                # 非対応構成（GeneratorReference 等）は UNSUPPORTED_OPERATION。
                 raise ClipwrightError(
                     code=ErrorCode.UNSUPPORTED_OPERATION,
                     message="ExternalReference 以外のメディア参照は非対応です。",
@@ -237,14 +247,26 @@ def build_plan(
         f"{input_labels}concat=n={n}:v={v_count}:a={a_count}{concat_output}"
     )
 
+    # width/height 指定時: scale を filter_complex 内に統合する（ADR-1 準拠）。
+    # -vf と -filter_complex を同時指定すると ffmpeg がエラーを返すため、
+    # concat 出力 [outv] に対して scale フィルタを連結して [outvscaled] を生成し
+    # -map [outvscaled] に差し替える。
+    use_scale = options.width is not None and options.height is not None
+    if use_scale:
+        filter_parts.append(f"[outv]scale={options.width}:{options.height}[outvscaled]")
+        video_map_label = "[outvscaled]"
+    else:
+        video_map_label = "[outv]"
+
     filter_complex = ";".join(filter_parts)
 
     # ---------- ffmpeg_args 構築 ----------
-    ffmpeg_args: list[str | int | float] = [
+    # ffmpeg_args は list[str] に統一する。数値は str() で変換して格納する（M-1）。
+    ffmpeg_args: list[str] = [
         "-filter_complex",
         filter_complex,
         "-map",
-        "[outv]",
+        video_map_label,
     ]
     if has_audio:
         ffmpeg_args += ["-map", "[outa]"]
@@ -254,12 +276,11 @@ def build_plan(
         ffmpeg_args += ["-c:v", options.video_codec]
     if options.audio_codec is not None:
         ffmpeg_args += ["-c:a", options.audio_codec]
-    if options.width is not None and options.height is not None:
-        ffmpeg_args += ["-vf", f"scale={options.width}:{options.height}"]
+    # width/height は filter_complex 内に統合済みのため -vf は追加しない（L-4）
     if options.fps is not None:
-        ffmpeg_args += ["-r", options.fps]
+        ffmpeg_args += ["-r", str(options.fps)]
     if options.crf is not None:
-        ffmpeg_args += ["-crf", options.crf]
+        ffmpeg_args += ["-crf", str(options.crf)]
 
     # ---------- dry_run 概算 ----------
     total_duration = sum(_to_seconds(r.source_range.duration) for r in ranges)

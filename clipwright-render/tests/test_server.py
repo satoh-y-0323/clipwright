@@ -87,6 +87,10 @@ class TestMcpAnnotations:
     """clipwright_render ツールの MCP annotations が §5 仕様どおりか検証する。"""
 
     def _get_annotations(self) -> Any:
+        # FastMCP の公開 API でツール情報を取得する手段がないため、
+        # プライベート API (_tool_manager) に依存している（L-2）。
+        # FastMCP のバージョンアップで壊れる可能性があるが、
+        # Inspector による疎通確認で別途担保する方針とする。
         tool = mcp._tool_manager.get_tool(  # type: ignore[attr-defined]
             "clipwright_render"
         )
@@ -95,6 +99,7 @@ class TestMcpAnnotations:
 
     def test_tool_is_registered(self) -> None:
         """clipwright_render が mcp に登録されていること。"""
+        # FastMCP 公開 API 不在のため内部依存・Inspector 疎通で別途担保（L-2）
         tool = mcp._tool_manager.get_tool(  # type: ignore[attr-defined]
             "clipwright_render"
         )

@@ -11,13 +11,13 @@ OTIO Timeline はテスト内で直接構築する。
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 import opentimelineio as otio
 import pytest
 from clipwright.errors import ClipwrightError, ErrorCode
 
+from clipwright_render.plan import ProbeInfo
 from clipwright_render.schemas import RenderOptions
 
 # ---------------------------------------------------------------------------
@@ -64,20 +64,6 @@ def _make_timeline_with_clips(
     timeline = otio.schema.Timeline()
     timeline.tracks.append(track)
     return timeline
-
-
-# ---------------------------------------------------------------------------
-# ヘルパー: ProbeInfo 相当のデータクラス（plan.py が受け取る型を想定）
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class ProbeInfo:
-    """probe 結果を表す値オブジェクト（DC-AM-007・plan.py が受け取る型の想定）。"""
-
-    has_video: bool
-    audio_count: int
-    bit_rate: int | None = None  # bps。None 時は概算 null + warning
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +127,23 @@ class TestResolveKeptRanges:
             resolve_kept_ranges(tl)
         assert exc_info.value.code == ErrorCode.UNSUPPORTED_OPERATION
 
+    def test_no_video_track_raises_unsupported(self) -> None:
+        """video トラック 0 本 → UNSUPPORTED_OPERATION（architecture §5・DC-AS-002）。
+
+        M-2: video トラックが存在しない場合は「サポートしていない構成」として
+        UNSUPPORTED_OPERATION を返す（設計書の INVALID_INPUT から変更）。
+        """
+        from clipwright_render.plan import resolve_kept_ranges
+
+        # audio トラックのみ含む Timeline（video トラックなし）
+        audio_track = otio.schema.Track(kind=otio.schema.TrackKind.Audio)
+        audio_track.append(_make_clip("/src/a.mp4", 0.0, 3.0))
+        tl = otio.schema.Timeline()
+        tl.tracks.append(audio_track)
+        with pytest.raises(ClipwrightError) as exc_info:
+            resolve_kept_ranges(tl)
+        assert exc_info.value.code == ErrorCode.UNSUPPORTED_OPERATION
+
     def test_two_video_tracks_raises_unsupported(self) -> None:
         """video トラック 2 本以上 → UNSUPPORTED_OPERATION（DC-AS-006）。"""
         from clipwright_render.plan import resolve_kept_ranges
@@ -168,6 +171,22 @@ class TestResolveKeptRanges:
         with pytest.raises(ClipwrightError) as exc_info:
             resolve_kept_ranges(tl)
         assert exc_info.value.code == ErrorCode.UNSUPPORTED_OPERATION
+
+    def test_missing_reference_raises_invalid_input(self) -> None:
+        """MissingReference → INVALID_INPUT（L-3: データ不正の意味）。
+
+        MissingReference はタイムラインのデータが不正（参照欠落）であることを示す。
+        「非対応構成」（UNSUPPORTED_OPERATION）ではなく「データ不正」（INVALID_INPUT）。
+        """
+        from clipwright_render.plan import resolve_kept_ranges
+
+        clip = otio.schema.Clip()
+        clip.media_reference = otio.schema.MissingReference()
+        clip.source_range = _tr(0.0, 5.0)
+        tl = _make_timeline_with_clips([clip])
+        with pytest.raises(ClipwrightError) as exc_info:
+            resolve_kept_ranges(tl)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_zero_clips_raises_invalid_input(self) -> None:
         """Clip 0 件（Gap のみ等）→ INVALID_INPUT（DC-AS-005）。"""
@@ -395,8 +414,8 @@ class TestBuildPlanAudioVideoMatrix:
         assert "[outv]" in args_str
         assert "[outa]" in args_str
 
-    def test_ffmpeg_args_is_list(self) -> None:
-        """ffmpeg_args は文字列連結ではなくリスト（コマンドインジェクション防止）。"""
+    def test_ffmpeg_args_is_list_of_str(self) -> None:
+        """ffmpeg_args は list[str]（M-1: str 統一・コマンドインジェクション防止）。"""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
@@ -405,7 +424,7 @@ class TestBuildPlanAudioVideoMatrix:
         plan = build_plan(ranges, probe, RenderOptions())
         assert isinstance(plan.ffmpeg_args, list)
         for item in plan.ffmpeg_args:
-            assert isinstance(item, str | int | float)
+            assert isinstance(item, str), f"ffmpeg_args の要素が str でない: {item!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -440,16 +459,27 @@ class TestBuildPlanRenderOptions:
         idx = plan.ffmpeg_args.index("-c:a")
         assert plan.ffmpeg_args[idx + 1] == "aac"
 
-    def test_scale_filter_mapped_when_width_height(self) -> None:
-        """-vf scale=W:H が ffmpeg_args に含まれる。"""
+    def test_scale_filter_in_filter_complex_when_width_height(self) -> None:
+        """width/height 指定: scale が filter_complex 内統合され -vf 不使用（L-4）。
+
+        -filter_complex と -vf の同時指定で ffmpeg エラーになるため、
+        scale は filter_complex 内の concat 出力後に連結する。
+        """
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
         ranges = resolve_kept_ranges(tl)
         probe = ProbeInfo(has_video=True, audio_count=0, bit_rate=None)
         plan = build_plan(ranges, probe, RenderOptions(width=1280, height=720))
-        args_str = " ".join(str(a) for a in plan.ffmpeg_args)
-        assert "scale=1280:720" in args_str
+        # scale は filter_complex 内に含まれる
+        assert "scale=1280:720" in plan.filter_complex
+        # -vf は ffmpeg_args に含まれない（filter_complex と競合するため禁止）
+        assert "-vf" not in plan.ffmpeg_args
+        # [outvscaled] ラベルが filter_complex に含まれる
+        assert "[outvscaled]" in plan.filter_complex
+        # -map [outvscaled] が ffmpeg_args に含まれる
+        args_str = " ".join(plan.ffmpeg_args)
+        assert "[outvscaled]" in args_str
 
     def test_fps_mapped(self) -> None:
         """-r が ffmpeg_args に含まれる。"""

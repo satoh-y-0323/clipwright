@@ -3,7 +3,7 @@
 対象:
   - _probe(source) -> ProbeInfo
     ffprobe 実行・JSON パース・bit_rate/has_video/audio_count の抽出
-  - clipwright_render(timeline, source, output, options, dry_run) のオーケストレーション
+  - render_timeline(timeline, source, output, options, dry_run) のオーケストレーション
     入力検証・dry_run 経路・実行経路・エラー伝播
 
 process.run / resolve_tool は clipwright.process をモックして検証する。
@@ -168,6 +168,31 @@ class TestProbe:
 
         assert info.bit_rate is None
 
+    def test_probe_bit_rate_na_string_returns_none(self, tmp_path: Path) -> None:
+        """bit_rate='N/A' → ProbeInfo.bit_rate=None（PROBE_FAILED にしない・M-3）。
+
+        ffprobe が 'N/A' や空文字を返す場合は ValueError をキャッチし
+        None にフォールバックすること。
+        """
+        from clipwright_render.render import _probe
+
+        source = str(tmp_path / "a.mp4")
+        Path(source).touch()
+
+        with (
+            patch(
+                "clipwright_render.render.resolve_tool", return_value="/usr/bin/ffprobe"
+            ),
+            patch(
+                "clipwright_render.render.run",
+                return_value=_fake_probe_result(bit_rate="N/A"),
+            ),
+        ):
+            info = _probe(source)
+
+        # "N/A" は int() 変換不可 → None フォールバック（PROBE_FAILED にしない）
+        assert info.bit_rate is None
+
     def test_probe_has_video_true(self, tmp_path: Path) -> None:
         """video stream がある場合 has_video=True（DC-GP-001）。"""
         from clipwright_render.render import _probe
@@ -304,11 +329,11 @@ class TestInputValidation:
 
     def test_timeline_not_found_raises_file_not_found(self, tmp_path: Path) -> None:
         """timeline(.otio) 不在 → FILE_NOT_FOUND（DC-GP-005）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         missing_tl = str(tmp_path / "nonexistent.otio")
         output = str(tmp_path / "out.mp4")
-        result = clipwright_render(
+        result = render_timeline(
             timeline=missing_tl, output=output, options=RenderOptions()
         )
         assert result["ok"] is False
@@ -316,14 +341,14 @@ class TestInputValidation:
 
     def test_source_not_found_raises_file_not_found(self, tmp_path: Path) -> None:
         """ソースファイル不在 → FILE_NOT_FOUND（DC-GP-005）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         tl_path = tmp_path / "tl.otio"
         missing_source = str(tmp_path / "missing.mp4")
         _write_timeline(tl_path, [_make_clip(missing_source, 0.0, 5.0)])
         output = str(tmp_path / "out.mp4")
 
-        result = clipwright_render(
+        result = render_timeline(
             timeline=str(tl_path), output=output, options=RenderOptions()
         )
         assert result["ok"] is False
@@ -333,7 +358,7 @@ class TestInputValidation:
         self, tmp_path: Path
     ) -> None:
         """出力親ディレクトリ不在 → FILE_NOT_FOUND（自動作成しない・DC-GP-005）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
@@ -342,7 +367,7 @@ class TestInputValidation:
         # 存在しないサブディレクトリ
         output = str(tmp_path / "nonexistent_dir" / "out.mp4")
 
-        result = clipwright_render(
+        result = render_timeline(
             timeline=str(tl_path), output=output, options=RenderOptions()
         )
         assert result["ok"] is False
@@ -353,7 +378,7 @@ class TestInputValidation:
         self, tmp_path: Path, ext: str
     ) -> None:
         """不正拡張子（ホワイトリスト外）→ INVALID_INPUT（DC-AM-003）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
@@ -361,7 +386,7 @@ class TestInputValidation:
         _write_timeline(tl_path, [_make_clip(source, 0.0, 5.0)])
         output = str(tmp_path / f"out{ext}")
 
-        result = clipwright_render(
+        result = render_timeline(
             timeline=str(tl_path), output=output, options=RenderOptions()
         )
         assert result["ok"] is False
@@ -370,7 +395,7 @@ class TestInputValidation:
     @pytest.mark.parametrize("ext", [".mp4", ".mkv", ".mov", ".webm"])
     def test_valid_extensions_pass_validation(self, tmp_path: Path, ext: str) -> None:
         """ホワイトリスト内拡張子は入力検証を通過する（dry_run で確認・DC-AM-003）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
@@ -387,7 +412,7 @@ class TestInputValidation:
                 return_value=_fake_probe_result(),
             ),
         ):
-            result = clipwright_render(
+            result = render_timeline(
                 timeline=str(tl_path),
                 output=output,
                 options=RenderOptions(),
@@ -401,7 +426,7 @@ class TestInputValidation:
         self, tmp_path: Path
     ) -> None:
         """既存 output かつ overwrite=False → INVALID_INPUT（DC-AM-002）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
@@ -410,7 +435,7 @@ class TestInputValidation:
         output = str(tmp_path / "out.mp4")
         Path(output).touch()  # 既存ファイルを作成
 
-        result = clipwright_render(
+        result = render_timeline(
             timeline=str(tl_path),
             output=output,
             options=RenderOptions(overwrite=False),
@@ -422,7 +447,7 @@ class TestInputValidation:
 
     def test_existing_output_with_overwrite_true_passes(self, tmp_path: Path) -> None:
         """overwrite=True の場合は既存ファイルでも検証を通過する（DC-AM-002）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
@@ -440,7 +465,7 @@ class TestInputValidation:
                 return_value=_fake_probe_result(),
             ),
         ):
-            result = clipwright_render(
+            result = render_timeline(
                 timeline=str(tl_path),
                 output=output,
                 options=RenderOptions(overwrite=True),
@@ -452,16 +477,47 @@ class TestInputValidation:
 
     def test_output_equals_source_raises_path_not_allowed(self, tmp_path: Path) -> None:
         """output == source → PATH_NOT_ALLOWED（DC-AM-002）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
         tl_path = tmp_path / "tl.otio"
         _write_timeline(tl_path, [_make_clip(source, 0.0, 5.0)])
 
-        result = clipwright_render(
+        result = render_timeline(
             timeline=str(tl_path),
             output=source,  # output == source
+            options=RenderOptions(),
+        )
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
+
+    def test_source_outside_timeline_dir_raises_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """timeline 外の source → PATH_NOT_ALLOWED（Sec M-2: OTIO 境界チェック）。
+
+        悪意ある OTIO に任意パスが埋め込まれた場合の境界チェック。
+        """
+        from clipwright_render.render import render_timeline
+
+        # timeline は subdir1 に配置
+        subdir1 = tmp_path / "project"
+        subdir1.mkdir()
+        tl_path = subdir1 / "tl.otio"
+
+        # source は別ディレクトリ（境界外）
+        subdir2 = tmp_path / "outside"
+        subdir2.mkdir()
+        outside_source = str(subdir2 / "secret.mp4")
+        Path(outside_source).touch()
+
+        _write_timeline(tl_path, [_make_clip(outside_source, 0.0, 5.0)])
+        output = str(subdir1 / "out.mp4")
+
+        result = render_timeline(
+            timeline=str(tl_path),
+            output=output,
             options=RenderOptions(),
         )
         assert result["ok"] is False
@@ -478,7 +534,7 @@ class TestDryRun:
 
     def test_dry_run_does_not_call_ffmpeg(self, tmp_path: Path) -> None:
         """dry_run=True のとき ffmpeg が呼ばれない（ffprobe は呼ぶ）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
@@ -495,11 +551,11 @@ class TestDryRun:
         with (
             patch(
                 "clipwright_render.render.resolve_tool",
-                side_effect=lambda name, env=None: f"/usr/bin/{name}",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
             patch("clipwright_render.render.run", side_effect=_fake_run),
         ):
-            result = clipwright_render(
+            result = render_timeline(
                 timeline=str(tl_path),
                 output=output,
                 options=RenderOptions(),
@@ -513,7 +569,7 @@ class TestDryRun:
 
     def test_dry_run_returns_ok_envelope(self, tmp_path: Path) -> None:
         """dry_run=True の返り値が ok=True エンベロープ形式。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
@@ -524,14 +580,14 @@ class TestDryRun:
         with (
             patch(
                 "clipwright_render.render.resolve_tool",
-                side_effect=lambda name, env=None: f"/usr/bin/{name}",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
             patch(
                 "clipwright_render.render.run",
                 return_value=_fake_probe_result(bit_rate="8000000"),
             ),
         ):
-            result = clipwright_render(
+            result = render_timeline(
                 timeline=str(tl_path),
                 output=output,
                 options=RenderOptions(),
@@ -548,7 +604,7 @@ class TestDryRun:
         self, tmp_path: Path
     ) -> None:
         """dry_run summary に残区間数と想定尺が含まれる（§3 データフロー 6a）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
@@ -565,14 +621,14 @@ class TestDryRun:
         with (
             patch(
                 "clipwright_render.render.resolve_tool",
-                side_effect=lambda name, env=None: f"/usr/bin/{name}",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
             patch(
                 "clipwright_render.render.run",
                 return_value=_fake_probe_result(bit_rate="8000000"),
             ),
         ):
-            result = clipwright_render(
+            result = render_timeline(
                 timeline=str(tl_path),
                 output=output,
                 options=RenderOptions(),
@@ -586,7 +642,7 @@ class TestDryRun:
 
     def test_dry_run_data_contains_planned_command(self, tmp_path: Path) -> None:
         """dry_run data に予定コマンドが含まれる（§3 データフロー 6a）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
@@ -597,14 +653,14 @@ class TestDryRun:
         with (
             patch(
                 "clipwright_render.render.resolve_tool",
-                side_effect=lambda name, env=None: f"/usr/bin/{name}",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
             patch(
                 "clipwright_render.render.run",
                 return_value=_fake_probe_result(),
             ),
         ):
-            result = clipwright_render(
+            result = render_timeline(
                 timeline=str(tl_path),
                 output=output,
                 options=RenderOptions(),
@@ -617,7 +673,7 @@ class TestDryRun:
 
     def test_dry_run_summary_contains_estimated_size(self, tmp_path: Path) -> None:
         """bit_rate あり の dry_run summary に概算サイズ情報が含まれる（ADR-3）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
@@ -628,14 +684,14 @@ class TestDryRun:
         with (
             patch(
                 "clipwright_render.render.resolve_tool",
-                side_effect=lambda name, env=None: f"/usr/bin/{name}",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
             patch(
                 "clipwright_render.render.run",
                 return_value=_fake_probe_result(bit_rate="8000000"),
             ),
         ):
-            result = clipwright_render(
+            result = render_timeline(
                 timeline=str(tl_path),
                 output=output,
                 options=RenderOptions(),
@@ -657,7 +713,7 @@ class TestExecutionPath:
 
     def test_ffprobe_called_before_ffmpeg(self, tmp_path: Path) -> None:
         """ffprobe → ffmpeg の順で process.run が呼ばれる（§3 データフロー）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
@@ -679,11 +735,11 @@ class TestExecutionPath:
         with (
             patch(
                 "clipwright_render.render.resolve_tool",
-                side_effect=lambda name, env=None: f"/usr/bin/{name}",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
             patch("clipwright_render.render.run", side_effect=_fake_run),
         ):
-            clipwright_render(
+            render_timeline(
                 timeline=str(tl_path),
                 output=output,
                 options=RenderOptions(overwrite=True),
@@ -694,7 +750,7 @@ class TestExecutionPath:
 
     def test_ffmpeg_called_with_array_args(self, tmp_path: Path) -> None:
         """ffmpeg が引数配列で呼ばれる（コマンドインジェクション防止・ADR-4）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
@@ -715,11 +771,11 @@ class TestExecutionPath:
         with (
             patch(
                 "clipwright_render.render.resolve_tool",
-                side_effect=lambda name, env=None: f"/usr/bin/{name}",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
             patch("clipwright_render.render.run", side_effect=_fake_run),
         ):
-            clipwright_render(
+            render_timeline(
                 timeline=str(tl_path),
                 output=output,
                 options=RenderOptions(overwrite=True),
@@ -734,7 +790,7 @@ class TestExecutionPath:
 
     def test_ffmpeg_cmd_starts_with_resolved_path(self, tmp_path: Path) -> None:
         """ffmpeg コマンド先頭が resolve_tool で返ったパスである（ADR-4）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
@@ -754,11 +810,11 @@ class TestExecutionPath:
         with (
             patch(
                 "clipwright_render.render.resolve_tool",
-                side_effect=lambda name, env=None: f"/custom/path/{name}",
+                side_effect=lambda name, env_var=None: f"/custom/path/{name}",
             ),
             patch("clipwright_render.render.run", side_effect=_fake_run),
         ):
-            clipwright_render(
+            render_timeline(
                 timeline=str(tl_path),
                 output=output,
                 options=RenderOptions(overwrite=True),
@@ -771,7 +827,7 @@ class TestExecutionPath:
         self, tmp_path: Path
     ) -> None:
         """ffmpeg timeout = max(300, ceil(総尺秒 × 10))（DC-AM-006）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         # 総尺 = 5s → 5×10=50 < 300 → timeout=300
         source = str(tmp_path / "a.mp4")
@@ -794,11 +850,11 @@ class TestExecutionPath:
         with (
             patch(
                 "clipwright_render.render.resolve_tool",
-                side_effect=lambda name, env=None: f"/usr/bin/{name}",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
             patch("clipwright_render.render.run", side_effect=_fake_run),
         ):
-            clipwright_render(
+            render_timeline(
                 timeline=str(tl_path),
                 output=output,
                 options=RenderOptions(overwrite=True),
@@ -809,7 +865,7 @@ class TestExecutionPath:
 
     def test_ffmpeg_timeout_long_video(self, tmp_path: Path) -> None:
         """総尺 60s → timeout = max(300, ceil(600)) = 600（DC-AM-006）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
@@ -831,11 +887,11 @@ class TestExecutionPath:
         with (
             patch(
                 "clipwright_render.render.resolve_tool",
-                side_effect=lambda name, env=None: f"/usr/bin/{name}",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
             patch("clipwright_render.render.run", side_effect=_fake_run),
         ):
-            clipwright_render(
+            render_timeline(
                 timeline=str(tl_path),
                 output=output,
                 options=RenderOptions(overwrite=True),
@@ -846,7 +902,7 @@ class TestExecutionPath:
 
     def test_success_returns_ok_envelope_with_artifact(self, tmp_path: Path) -> None:
         """成功時に ok=True エンベロープと出力パスを Artifact として返す（§3）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
@@ -863,11 +919,11 @@ class TestExecutionPath:
         with (
             patch(
                 "clipwright_render.render.resolve_tool",
-                side_effect=lambda name, env=None: f"/usr/bin/{name}",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
             patch("clipwright_render.render.run", side_effect=_fake_run),
         ):
-            result = clipwright_render(
+            result = render_timeline(
                 timeline=str(tl_path),
                 output=output,
                 options=RenderOptions(overwrite=True),
@@ -881,7 +937,7 @@ class TestExecutionPath:
         self, tmp_path: Path
     ) -> None:
         """成功時 summary に総尺と連結クリップ数が含まれる（§3 データフロー 6b）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
@@ -904,11 +960,11 @@ class TestExecutionPath:
         with (
             patch(
                 "clipwright_render.render.resolve_tool",
-                side_effect=lambda name, env=None: f"/usr/bin/{name}",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
             patch("clipwright_render.render.run", side_effect=_fake_run),
         ):
-            result = clipwright_render(
+            result = render_timeline(
                 timeline=str(tl_path),
                 output=output,
                 options=RenderOptions(overwrite=True),
@@ -929,7 +985,7 @@ class TestErrorPropagation:
 
     def test_ffmpeg_failed_returns_subprocess_failed(self, tmp_path: Path) -> None:
         """ffmpeg 失敗 → SUBPROCESS_FAILED エンベロープ（DC-GP-004）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
@@ -949,11 +1005,11 @@ class TestErrorPropagation:
         with (
             patch(
                 "clipwright_render.render.resolve_tool",
-                side_effect=lambda name, env=None: f"/usr/bin/{name}",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
             patch("clipwright_render.render.run", side_effect=_fake_run),
         ):
-            result = clipwright_render(
+            result = render_timeline(
                 timeline=str(tl_path), output=output, options=RenderOptions()
             )
 
@@ -962,7 +1018,7 @@ class TestErrorPropagation:
 
     def test_ffmpeg_timeout_returns_subprocess_timeout(self, tmp_path: Path) -> None:
         """ffmpeg timeout → SUBPROCESS_TIMEOUT エンベロープ（DC-GP-004）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
@@ -982,11 +1038,11 @@ class TestErrorPropagation:
         with (
             patch(
                 "clipwright_render.render.resolve_tool",
-                side_effect=lambda name, env=None: f"/usr/bin/{name}",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
             patch("clipwright_render.render.run", side_effect=_fake_run),
         ):
-            result = clipwright_render(
+            result = render_timeline(
                 timeline=str(tl_path), output=output, options=RenderOptions()
             )
 
@@ -995,7 +1051,7 @@ class TestErrorPropagation:
 
     def test_ffmpeg_not_found_returns_dependency_missing(self, tmp_path: Path) -> None:
         """ffmpeg 不在 → DEPENDENCY_MISSING エンベロープ（DC-GP-004）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
@@ -1019,7 +1075,7 @@ class TestErrorPropagation:
                 return_value=_fake_probe_result(),
             ),
         ):
-            result = clipwright_render(
+            result = render_timeline(
                 timeline=str(tl_path), output=output, options=RenderOptions()
             )
 
@@ -1028,7 +1084,7 @@ class TestErrorPropagation:
 
     def test_ffprobe_not_found_returns_dependency_missing(self, tmp_path: Path) -> None:
         """ffprobe 不在 → DEPENDENCY_MISSING エンベロープ（DC-GP-004）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
@@ -1044,7 +1100,7 @@ class TestErrorPropagation:
                 hint="PATH に追加してください。",
             ),
         ):
-            result = clipwright_render(
+            result = render_timeline(
                 timeline=str(tl_path), output=output, options=RenderOptions()
             )
 
@@ -1053,7 +1109,7 @@ class TestErrorPropagation:
 
     def test_probe_failure_returns_probe_failed(self, tmp_path: Path) -> None:
         """probe 失敗 → PROBE_FAILED エンベロープ（DC-GP-004 / GP-001）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
@@ -1064,7 +1120,7 @@ class TestErrorPropagation:
         with (
             patch(
                 "clipwright_render.render.resolve_tool",
-                side_effect=lambda name, env=None: f"/usr/bin/{name}",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
             patch(
                 "clipwright_render.render.run",
@@ -1073,7 +1129,7 @@ class TestErrorPropagation:
                 ),
             ),
         ):
-            result = clipwright_render(
+            result = render_timeline(
                 timeline=str(tl_path), output=output, options=RenderOptions()
             )
 
@@ -1082,7 +1138,7 @@ class TestErrorPropagation:
 
     def test_error_does_not_expose_raw_stderr(self, tmp_path: Path) -> None:
         """エラーメッセージに ffmpeg stderr 生文字列を露出しない（DC-GP-004）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
@@ -1104,11 +1160,11 @@ class TestErrorPropagation:
         with (
             patch(
                 "clipwright_render.render.resolve_tool",
-                side_effect=lambda name, env=None: f"/usr/bin/{name}",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
             patch("clipwright_render.render.run", side_effect=_fake_run),
         ):
-            result = clipwright_render(
+            result = render_timeline(
                 timeline=str(tl_path), output=output, options=RenderOptions()
             )
 
@@ -1119,7 +1175,7 @@ class TestErrorPropagation:
 
     def test_error_does_not_expose_internal_exception(self, tmp_path: Path) -> None:
         """エラーエンベロープに生例外/スタックトレースが含まれない（DC-GP-004）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
@@ -1130,7 +1186,7 @@ class TestErrorPropagation:
         with (
             patch(
                 "clipwright_render.render.resolve_tool",
-                side_effect=lambda name, env=None: f"/usr/bin/{name}",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
             patch(
                 "clipwright_render.render.run",
@@ -1139,7 +1195,7 @@ class TestErrorPropagation:
                 ),
             ),
         ):
-            result = clipwright_render(
+            result = render_timeline(
                 timeline=str(tl_path), output=output, options=RenderOptions()
             )
 
@@ -1160,7 +1216,7 @@ class TestNonDestructive:
 
     def test_source_file_unchanged_after_render(self, tmp_path: Path) -> None:
         """レンダリング後も元素材ファイルの内容が変化しない（非破壊）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         source = tmp_path / "a.mp4"
         source.write_bytes(b"dummy source content")
@@ -1178,11 +1234,11 @@ class TestNonDestructive:
         with (
             patch(
                 "clipwright_render.render.resolve_tool",
-                side_effect=lambda name, env=None: f"/usr/bin/{name}",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
             patch("clipwright_render.render.run", side_effect=_fake_run),
         ):
-            clipwright_render(
+            render_timeline(
                 timeline=str(tl_path),
                 output=output,
                 options=RenderOptions(overwrite=True),
@@ -1192,7 +1248,7 @@ class TestNonDestructive:
 
     def test_timeline_file_unchanged_after_render(self, tmp_path: Path) -> None:
         """レンダリング後も timeline(.otio) の内容が変化しない（非破壊）。"""
-        from clipwright_render.render import clipwright_render
+        from clipwright_render.render import render_timeline
 
         source = tmp_path / "a.mp4"
         source.touch()
@@ -1210,11 +1266,11 @@ class TestNonDestructive:
         with (
             patch(
                 "clipwright_render.render.resolve_tool",
-                side_effect=lambda name, env=None: f"/usr/bin/{name}",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
             ),
             patch("clipwright_render.render.run", side_effect=_fake_run),
         ):
-            clipwright_render(
+            render_timeline(
                 timeline=str(tl_path),
                 output=output,
                 options=RenderOptions(overwrite=True),

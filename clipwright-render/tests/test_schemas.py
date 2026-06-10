@@ -47,18 +47,71 @@ class TestRenderOptionsDefaults:
         ("copy", None),
         (None, "mp3"),
         (None, None),
+        ("libvpx-vp9", "opus"),
+        ("h264_nvenc", "pcm_s16le"),
     ],
 )
 def test_valid_codecs_accepted(
     video_codec: str | None, audio_codec: str | None
 ) -> None:
-    """有効なコーデック文字列（および None）を受理すること。"""
+    """有効なコーデック文字列（英数字・アンスコ・ハイフン）を受理する（Sec M-3）。"""
     # Arrange / Act
     opts = RenderOptions(video_codec=video_codec, audio_codec=audio_codec)
 
     # Assert
     assert opts.video_codec == video_codec
     assert opts.audio_codec == audio_codec
+
+
+# ===========================================================================
+# codec 文字種・長さ制約（Sec M-3）
+# ===========================================================================
+
+
+@pytest.mark.parametrize(
+    "codec",
+    [
+        "libx264 -preset slow",  # スペースを含む
+        "libx264; rm -rf /",  # セミコロン・スペースを含む
+        "codec|pipe",  # パイプを含む
+        "codec && other",  # && を含む
+        "a" * 65,  # 65 文字（最大64文字超過）
+    ],
+)
+def test_invalid_video_codec_rejected(codec: str) -> None:
+    """不正 video_codec（スペース/記号含む・65文字超）→ ValidationError（Sec M-3）。"""
+    with pytest.raises(ValidationError):
+        RenderOptions(video_codec=codec)
+
+
+@pytest.mark.parametrize(
+    "codec",
+    [
+        "aac; rm -rf /",  # セミコロン・スペースを含む
+        "opus -vbr on",  # スペースを含む
+        "a" * 65,  # 65 文字（最大64文字超過）
+    ],
+)
+def test_invalid_audio_codec_rejected(codec: str) -> None:
+    """不正 audio_codec（スペース/記号含む・65文字超）→ ValidationError（Sec M-3）。"""
+    with pytest.raises(ValidationError):
+        RenderOptions(audio_codec=codec)
+
+
+@pytest.mark.parametrize(
+    "codec",
+    [
+        "a" * 64,  # ちょうど64文字（境界値・受理）
+        "libx264",
+        "copy",
+        "libvpx-vp9",
+        "h264_nvenc",
+    ],
+)
+def test_valid_codec_boundary_accepted(codec: str) -> None:
+    """64文字以内・英数字/アンスコ/ハイフンのみのコーデックは受理される（Sec M-3）。"""
+    opts = RenderOptions(video_codec=codec)
+    assert opts.video_codec == codec
 
 
 @pytest.mark.parametrize(

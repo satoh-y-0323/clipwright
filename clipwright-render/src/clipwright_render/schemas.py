@@ -27,8 +27,11 @@ class RenderOptions(BaseModel):
         str | None,
         Field(
             default=None,
+            max_length=64,
+            pattern=r"^[a-zA-Z0-9_\-]+$",
             description=(
                 "出力映像コーデック。例: libx264 / libx265 / copy。未指定はソース踏襲。"
+                " 英数字・アンダースコア・ハイフンのみ使用可（最大64文字）。"
             ),
         ),
     ] = None
@@ -37,8 +40,11 @@ class RenderOptions(BaseModel):
         str | None,
         Field(
             default=None,
+            max_length=64,
+            pattern=r"^[a-zA-Z0-9_\-]+$",
             description=(
                 "出力音声コーデック。例: aac / opus / mp3。未指定はソース踏襲。"
+                " 英数字・アンダースコア・ハイフンのみ使用可（最大64文字）。"
             ),
         ),
     ] = None
