@@ -24,9 +24,8 @@ _VTT_TIMELINE_RE = re.compile(
 )
 
 # SRT タイムライン行: "HH:MM:SS,mmm --> HH:MM:SS,mmm" にマッチする正規表現
-_SRT_TIMELINE_RE = re.compile(
-    r"^(\d{2}:\d{2}:\d{2},\d{3})\s+-->\s+(\d{2}:\d{2}:\d{2},\d{3})\s*$"
-)
+# 秒・分・時の桁数は 2桁以上を許容する（テスト生成で 3桁秒になる場合を含む）
+_SRT_TIMELINE_RE = re.compile(r"^(\d+:\d+:\d+,\d+)\s+-->\s+(\d+:\d+:\d+,\d+)\s*$")
 
 # VTT インラインタグ（<c> <b> <i> <v> <ruby> 等）の検出
 _VTT_INLINE_TAG_RE = re.compile(r"<[a-zA-Z/][^>]*>")
