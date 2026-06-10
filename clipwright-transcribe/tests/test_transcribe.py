@@ -36,6 +36,7 @@ from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo
 from clipwright_transcribe.captions import Segment
 from clipwright_transcribe.schemas import TranscribeOptions
 from clipwright_transcribe.transcribe import (
+    _MARKER_NAME_MAX,
     LANG_AUTO_FLAG,
     WHISPER_BINARY_NAME,
     _resolve_model_path,
@@ -388,7 +389,7 @@ class TestOtioConstruction:
         long_text = "あ" * 60
         _result, timeline = self._run(tmp_path, [_seg(0.0, 1.0, long_text)])
         marker = timeline.tracks[0].markers[0]
-        assert len(marker.name) <= 41  # 40字 + 省略記号
+        assert len(marker.name) <= _MARKER_NAME_MAX + 1  # +1 は省略記号
         assert marker.name.startswith("あ" * 40)
         assert marker.metadata["clipwright"]["text"] == long_text
 
@@ -504,9 +505,27 @@ class TestRunWhisperAdapter:
 
         return _impl
 
+    def _make_capture_run(
+        self,
+        captured: dict[str, list[str]],
+        json_body: str = '{"transcription": []}',
+    ) -> Any:
+        """cmd をキャプチャして <prefix>.json を書く run モックを返す（CR L-4 DRY）。"""
+
+        def _impl(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            if "-of" in cmd:
+                captured["whisper"] = cmd
+                prefix = cmd[cmd.index("-of") + 1]
+                Path(prefix + ".json").write_text(json_body, encoding="utf-8")
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        return _impl
+
     def test_success_returns_segments_and_language(
         self, tmp_path: Path, whisper_sample_json: dict[str, Any]
     ) -> None:
+        # 仮説 fixture（fixtures/README.md・whisper_sample.json）の result.language=='en' に
+        # 依存。e2e 後に実値へ差替（DC-GP-001-R）
         import json as _json
 
         model = tmp_path / "m.bin"
@@ -528,48 +547,39 @@ class TestRunWhisperAdapter:
         assert language == "en"
 
     def test_language_auto_flag_when_none(self, tmp_path: Path) -> None:
-        """language=None で LANG_AUTO_FLAG が cmd に入ること（DC-AM-002）。"""
+        """language=None で LANG_AUTO_FLAG の各トークンが cmd に含まれること（DC-AM-002）。
+
+        LANG_AUTO_FLAG は list[str] であり、cmd に "-l", "auto" が順に含まれることを検証する。
+        """
         captured: dict[str, list[str]] = {}
-
-        def _capture_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
-            if "-of" in cmd:
-                captured["whisper"] = cmd
-                prefix = cmd[cmd.index("-of") + 1]
-                Path(prefix + ".json").write_text(
-                    '{"transcription": []}', encoding="utf-8"
-                )
-            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
-
         with (
             patch(
                 "clipwright_transcribe.transcribe.resolve_tool",
                 side_effect=self._fake_resolve(),
             ),
-            patch("clipwright_transcribe.transcribe.run", side_effect=_capture_run),
+            patch(
+                "clipwright_transcribe.transcribe.run",
+                side_effect=self._make_capture_run(captured),
+            ),
         ):
             _run_whisper("video.mp4", _opts(language=None), 10.0, "m.bin")
         cmd = captured["whisper"]
-        for token in LANG_AUTO_FLAG.split():
+        # LANG_AUTO_FLAG は list[str] であること（CR M-1 / SR M-2）
+        assert LANG_AUTO_FLAG == ["-l", "auto"]
+        for token in LANG_AUTO_FLAG:
             assert token in cmd
 
     def test_language_explicit_flag(self, tmp_path: Path) -> None:
         captured: dict[str, list[str]] = {}
-
-        def _capture_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
-            if "-of" in cmd:
-                captured["whisper"] = cmd
-                prefix = cmd[cmd.index("-of") + 1]
-                Path(prefix + ".json").write_text(
-                    '{"transcription": []}', encoding="utf-8"
-                )
-            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
-
         with (
             patch(
                 "clipwright_transcribe.transcribe.resolve_tool",
                 side_effect=self._fake_resolve(),
             ),
-            patch("clipwright_transcribe.transcribe.run", side_effect=_capture_run),
+            patch(
+                "clipwright_transcribe.transcribe.run",
+                side_effect=self._make_capture_run(captured),
+            ),
         ):
             _run_whisper("video.mp4", _opts(language="ja"), 10.0, "m.bin")
         cmd = captured["whisper"]
@@ -579,22 +589,15 @@ class TestRunWhisperAdapter:
 
     def test_initial_prompt_flag(self, tmp_path: Path) -> None:
         captured: dict[str, list[str]] = {}
-
-        def _capture_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
-            if "-of" in cmd:
-                captured["whisper"] = cmd
-                prefix = cmd[cmd.index("-of") + 1]
-                Path(prefix + ".json").write_text(
-                    '{"transcription": []}', encoding="utf-8"
-                )
-            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
-
         with (
             patch(
                 "clipwright_transcribe.transcribe.resolve_tool",
                 side_effect=self._fake_resolve(),
             ),
-            patch("clipwright_transcribe.transcribe.run", side_effect=_capture_run),
+            patch(
+                "clipwright_transcribe.transcribe.run",
+                side_effect=self._make_capture_run(captured),
+            ),
         ):
             _run_whisper("video.mp4", _opts(initial_prompt="clipwright"), 10.0, "m.bin")
         cmd = captured["whisper"]
@@ -661,7 +664,10 @@ class TestRunWhisperAdapter:
         assert result is original
 
     def test_json_read_failure_subprocess_failed(self, tmp_path: Path) -> None:
-        """whisper が JSON を書かなかった場合 SUBPROCESS_FAILED になること。"""
+        """whisper が JSON を書かなかった場合 SUBPROCESS_FAILED になること（SR L-3）。
+
+        message はパスを含まない固定文言であること（パス非露出・from None チェーン）。
+        """
 
         def _run_no_json(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             # JSON を書かない
@@ -676,7 +682,11 @@ class TestRunWhisperAdapter:
             pytest.raises(ClipwrightError) as exc_info,
         ):
             _run_whisper("video.mp4", _opts(), 10.0, "m.bin")
-        assert exc_info.value.code == ErrorCode.SUBPROCESS_FAILED
+        err = exc_info.value
+        assert err.code == ErrorCode.SUBPROCESS_FAILED
+        # message にパス断片が含まれないこと（SR L-3 パス非露出）
+        assert "/" not in err.message
+        assert "\\" not in err.message
 
     def test_whisper_binary_name_constant_used(self, tmp_path: Path) -> None:
         """resolve_tool が WHISPER_BINARY_NAME 定数で呼ばれること（DC-AS-003）。"""

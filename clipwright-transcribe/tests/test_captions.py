@@ -480,3 +480,83 @@ class TestTimecodeConsistency:
         assert "00:00:01.001" in vtt
         assert "00:00:02,999" in srt
         assert "00:00:02.999" in vtt
+
+
+# ===========================================================================
+# CR L-8 — _format_timecode 丸め挙動の明文化（四捨五入仕様の固定）
+# ===========================================================================
+
+
+class TestFormatTimecodeRounding:
+    """_format_timecode の四捨五入挙動を境界値で固定する（CR L-8 対応）。
+
+    実装は int(round(total_seconds * 1000)) であり「四捨五入」が正仕様。
+    docstring が「切り捨て」と誤記していたため（CR L-8）、
+    impl-captions-fix で docstring を修正する前に仕様を境界値テストで固定する。
+
+    以下のテストはすべて「四捨五入なら pass・切り捨てなら fail」となる境界値を選んでいる。
+    実装が既に round 済みのため現時点で Green になる。
+    docstring 修正後（impl-captions-fix）も引き続き Green であることで仕様整合を保証する。
+    """
+
+    def _make_segment(self, start_sec: float, end_sec: float, text: str) -> Segment:
+        return {"start_sec": start_sec, "end_sec": end_sec, "text": text}
+
+    def test_round_up_at_0_5ms_boundary(self) -> None:
+        """1.9999 秒（小数部分が 0.9ms 超）が四捨五入で 2000ms になること。
+
+        1.9999 * 1000 = 1999.9 → round(1999.9) = 2000 → "00:00:02,000"
+        切り捨て（int(1999.9) = 1999）なら "00:00:01,999" になるため、
+        四捨五入仕様を一意に識別できる境界値。
+        """
+        segments = [self._make_segment(0.0, 1.9999, "RoundUp")]
+        srt = to_srt(segments)
+        assert "00:00:02,000" in srt, (
+            f"四捨五入で 2000ms になるはず（切り捨てなら 1999ms）: {srt}"
+        )
+
+    def test_round_up_at_0_5ms_boundary_vtt(self) -> None:
+        """1.9999 秒（小数部分が 0.9ms 超）が VTT でも四捨五入で 2000ms になること。
+
+        SRT/VTT で同一 ms 値が導出されることを確認する（DC-AS-005 非回帰）。
+        """
+        segments = [self._make_segment(0.0, 1.9999, "RoundUpVtt")]
+        vtt = to_vtt(segments)
+        assert "00:00:02.000" in vtt, (
+            f"四捨五入で 2000ms になるはず（切り捨てなら 1999ms）: {vtt}"
+        )
+
+    def test_srt_and_vtt_same_ms_at_rounding_boundary(self) -> None:
+        """1.9999 秒の SRT と VTT で同一 ms 値が導出されること（DC-AS-005 非回帰）。
+
+        セパレータのみ異なり（SRT=","・VTT="."）、ms 値は一致しなければならない。
+        """
+        segments = [self._make_segment(0.0, 1.9999, "Consistency")]
+        srt = to_srt(segments)
+        vtt = to_vtt(segments)
+        assert "00:00:02,000" in srt, f"SRT 四捨五入 2000ms: {srt}"
+        assert "00:00:02.000" in vtt, f"VTT 四捨五入 2000ms: {vtt}"
+
+    def test_minute_rollover_at_rounding_boundary(self) -> None:
+        """59.9996 秒（小数部分が 0.6ms 超）が四捨五入で 60000ms → 分繰り上がりになること。
+
+        59.9996 * 1000 = 59999.6 → round(59999.6) = 60000ms = 1分0秒0ms
+        切り捨て（int(59999.6) = 59999ms = 59秒999ms）なら "00:00:59,999" のまま。
+        """
+        segments = [self._make_segment(0.0, 59.9996, "MinuteRollover")]
+        srt = to_srt(segments)
+        assert "00:01:00,000" in srt, (
+            f"四捨五入で分繰り上がり（00:01:00,000）になるはず: {srt}"
+        )
+
+    def test_hour_rollover_at_rounding_boundary(self) -> None:
+        """3599.9996 秒（小数部分が 0.6ms 超）が四捨五入で時間繰り上がりになること。
+
+        3599.9996 * 1000 = 3599999.6 → round(3599999.6) = 3600000ms = 1時間0分0秒0ms
+        切り捨てなら "00:59:59,999" のまま。
+        """
+        segments = [self._make_segment(0.0, 3599.9996, "HourRollover")]
+        srt = to_srt(segments)
+        assert "01:00:00,000" in srt, (
+            f"四捨五入で時間繰り上がり（01:00:00,000）になるはず: {srt}"
+        )
