@@ -127,7 +127,7 @@ def _wrap_inner(
                 message="出力パスと入力パスが同一です。",
                 hint="出力ファイルパスを入力とは別のパスに変更してください。",
             )
-    except OSError:
+    except OSError:  # pragma: no cover
         if str(output_path) == str(input_path):
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
@@ -153,18 +153,16 @@ def _wrap_inner(
 
     try:
         cues = parse_captions(raw_text, fmt)
-    except ValueError as exc:
-        # captions._parse_srt / _parse_vtt が送出する ValueError を INVALID_INPUT に変換
+    except ValueError:
+        # ValueError を INVALID_INPUT に変換。str(exc) は使わず固定文言（CWE-209）
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message=f"字幕ファイルのパースに失敗しました: {str(exc)}",
+            message="字幕ファイルのパースに失敗しました（タイムコード形式エラー）。",
             hint=(
                 "タイムコード行の形式を確認してください"
                 "（例: 00:00:00,000 --> 00:00:01,000）。"
             ),
-        ) from exc
-    except ClipwrightError:
-        raise
+        ) from None
 
     # --- 5. wrap_cli 起動（WR-AD-02・DC-AS-007）---
 
@@ -183,8 +181,10 @@ def _wrap_inner(
         try:
             proc = subprocess.run(
                 [sys.executable, "-m", "clipwright_wrap.wrap_cli"],
-                input=stdin_payload.encode("utf-8"),
+                input=stdin_payload,
                 capture_output=True,
+                text=True,
+                encoding="utf-8",
                 timeout=timeout,
             )
         except subprocess.TimeoutExpired:
@@ -208,7 +208,7 @@ def _wrap_inner(
 
         # wrap_cli は常に return 0 → exit code でなく "error" キーで判定（DC-AS-007）
         try:
-            parsed: dict[str, Any] = json.loads(proc.stdout.decode("utf-8"))
+            parsed: dict[str, Any] = json.loads(proc.stdout)
         except (json.JSONDecodeError, ValueError):
             raise ClipwrightError(
                 code=ErrorCode.SUBPROCESS_FAILED,
@@ -284,7 +284,7 @@ def _wrap_inner(
             "情報欠落を避けるため切り捨てずそのまま出力しました。"
         )
 
-    total_overflow = len(overflow_cue_indices) + len(overflow_width_cue_indices)
+    total_overflow = len(set(overflow_cue_indices) | set(overflow_width_cue_indices))
     summary = (
         f"{cue_count} cue を文節改行整形"
         f"（うち {wrapped_count} cue に改行挿入"

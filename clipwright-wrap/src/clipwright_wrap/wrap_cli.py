@@ -110,13 +110,31 @@ def main(argv: list[str] | None = None) -> int:  # noqa: ARG001
             )
             return 0
 
+        if not all(isinstance(t, str) for t in texts):
+            _error_output(
+                code=str(ErrorCode.INVALID_INPUT),
+                message="'texts' の各要素は文字列である必要があります",
+                hint="stdin JSON の 'texts' を文字列のリストにしてください。",
+            )
+            return 0
+
         # --- parser ロード関数を取得（DC-AS-002: texts ループの外で 1 回のみ）---
+        # budoux 未インストール時（_PARSER_LOADERS が空）は DEPENDENCY_MISSING を返す
+        # CR L-2 対応: INVALID_INPUT ではなく DEPENDENCY_MISSING + install hint
+        if not _PARSER_LOADERS:
+            _error_output(
+                code=str(ErrorCode.DEPENDENCY_MISSING),
+                message="budoux がインストールされていません",
+                hint=_WRAP_INSTALL_HINT,
+            )
+            return 0
+
         if language not in _PARSER_LOADERS:
             _error_output(
                 code=str(ErrorCode.INVALID_INPUT),
-                message=f"対応していない language: {language!r}",
+                message="対応していない language が指定されました",
                 hint=(
-                    f"language は {list(_PARSER_LOADERS.keys())}"
+                    "language は ja / zh-hans / zh-hant / th"
                     " のいずれかを指定してください。"
                 ),
             )
@@ -158,5 +176,5 @@ def main(argv: list[str] | None = None) -> int:  # noqa: ARG001
         return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     sys.exit(main())
