@@ -83,7 +83,7 @@ def _make_media_info(
     streams: list[StreamInfo] = []
     if has_video:
         streams.append(StreamInfo(index=0, codec_type="video", codec_name="h264"))
-    for i in range(audio_streams):
+    for _i in range(audio_streams):
         streams.append(
             StreamInfo(
                 index=len(streams),
@@ -116,13 +116,18 @@ class TestProbe:
     """
 
     def test_probe_video_audio_bit_rate(self, tmp_path: Path) -> None:
-        """video+audio+bit_rate を持つ MediaInfo → ProbeInfo(has_video=True, audio_count=1, bit_rate=8000000)。"""
+        """video+audio+bit_rate を持つ MediaInfo → ProbeInfo への変換確認。
+
+        has_video=True, audio_count=1, bit_rate=8000000 になる（DC-GP-001）。
+        """
         from clipwright_render.render import _probe
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
 
-        media_info = _make_media_info(path=source, bit_rate=8_000_000, has_video=True, audio_streams=1)
+        media_info = _make_media_info(
+            path=source, bit_rate=8_000_000, has_video=True, audio_streams=1
+        )
 
         with patch(
             "clipwright_render.render.inspect_media",
@@ -187,7 +192,10 @@ class TestProbe:
         assert info.bit_rate is None
 
     def test_probe_propagates_probe_failed(self, tmp_path: Path) -> None:
-        """inspect_media が PROBE_FAILED を送出 → _probe がそれを伝播する（DC-GP-001）。"""
+        """inspect_media が PROBE_FAILED を送出 → _probe がそれを伝播する。
+
+        FILE_NOT_FOUND 以外のエラーコードはそのまま伝播すること（DC-GP-001）。
+        """
         from clipwright_render.render import _probe
 
         source = str(tmp_path / "a.mp4")
@@ -251,7 +259,7 @@ class TestProbe:
 class TestProbeEdgeCases:
     """_probe の codec_type 欠落・空文字等価性検証（DC-AM-002）。"""
 
-    def test_probe_codec_type_missing_or_empty_not_counted(self, tmp_path: Path) -> None:
+    def test_probe_codec_type_empty_not_counted(self, tmp_path: Path) -> None:
         """codec_type 欠落・空文字ストリームを含む MediaInfo で
         has_video=False / audio_count=0 になる（旧実装と等価）。
 
@@ -482,12 +490,14 @@ class TestInputValidation:
         assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
 
     def test_symlink_source_raises_file_not_found(self, tmp_path: Path) -> None:
-        """symlink ソースを持つ render_timeline 呼び出しが FILE_NOT_FOUND を返す（DC-AS-001）。
+        """symlink ソースを render_timeline に渡すと FILE_NOT_FOUND を返す（DC-AS-001）
 
-        _probe → inspect_media._validate_existing_file がシンボリックリンクを
-        FILE_NOT_FOUND で拒否することを render_timeline 経由で確認する回帰テスト。
-        render.py:288 の Path.exists() は symlink 先が存在すれば True を返すため通過するが、
+        _probe → inspect_media が symlink を FILE_NOT_FOUND で拒否することを
+        render_timeline 経由で確認する回帰テスト。
+        source の Path.exists() は symlink 先が存在すれば True を返すため通過するが、
         _probe 内の inspect_media で発火する。
+        error.message には絶対パス（ディレクトリ等）が露出せず、
+        basename のみが含まれることを確認する（Sec M-1）。
         """
         from clipwright_render.render import render_timeline
 
@@ -508,7 +518,7 @@ class TestInputValidation:
         _write_timeline(tl_path, [_make_clip(str(symlink_source), 0.0, 5.0)])
         output = str(tmp_path / "out.mp4")
 
-        # inspect_media を実際に通す（シンボリックリンク拒否は _validate_existing_file が担う）
+        # inspect_media を実際に通す（symlink 拒否は _validate_existing_file が担う）
         # patch しないことで実装の symlink 拒否挙動が発火することを確認する
         result = render_timeline(
             timeline=str(tl_path),
@@ -518,6 +528,12 @@ class TestInputValidation:
 
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
+        # error.message に絶対パス（real_file の親ディレクトリ等）が含まれず
+        # basename のみであることを確認する（Sec M-1）
+        error_message: str = result["error"]["message"]
+        assert str(tmp_path) not in error_message
+        assert str(real_file.parent) not in error_message
+        assert "link.mp4" in error_message
 
 
 # ---------------------------------------------------------------------------
@@ -1089,7 +1105,10 @@ class TestErrorPropagation:
         assert result["error"]["code"] == ErrorCode.DEPENDENCY_MISSING
 
     def test_probe_failure_returns_probe_failed(self, tmp_path: Path) -> None:
-        """probe 失敗（inspect_media 送出）→ PROBE_FAILED エンベロープ（DC-GP-004 / GP-001）。"""
+        """probe 失敗（inspect_media 送出）→ PROBE_FAILED エンベロープ（DC-GP-004）。
+
+        ClipwrightError が error_result に変換されることを確認する（GP-001）。
+        """
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")

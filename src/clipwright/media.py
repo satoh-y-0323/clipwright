@@ -56,8 +56,10 @@ def inspect_media(path: str) -> MediaInfo:
 def _to_optional_int(val: object) -> int | None:
     """任意の値を int に変換する。変換できない場合は None を返す。
 
-    JSON パース後のフィールド値（int / 数値文字列 / None 等）を安全に int へ変換する
-    ためのヘルパー（L-2: CR-Q-002）。float 文字列（"1.5" 等）は変換不可として None。
+    JSON パース後のフィールド値（int / float / 数値文字列 / None 等）を
+    安全に int へ変換するためのヘルパー（L-2: CR-Q-002 / SR-V-001）。
+    float 文字列（"1.5" 等）は変換不可として None。
+    bool は int のサブクラスのため True→1 / False→0 と変換される（既存挙動）。
 
     Args:
         val: 変換対象の値。
@@ -67,8 +69,8 @@ def _to_optional_int(val: object) -> int | None:
     """
     if val is None:
         return None
-    if isinstance(val, int):
-        return val
+    if isinstance(val, (int, float)):
+        return int(val)
     if isinstance(val, str):
         try:
             return int(val)

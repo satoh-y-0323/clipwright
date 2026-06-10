@@ -37,7 +37,9 @@ def _probe(source: str) -> ProbeInfo:
 
     core の inspect_media に ffprobe 実行を委譲し、返された MediaInfo を
     plan.py が必要とする ProbeInfo 形式に変換する純粋なアダプタ。
-    PROBE_FAILED 等のエラーは inspect_media の送出をそのまま伝播する。
+    FILE_NOT_FOUND 時は message を basename のみに差し替えて再送出し、
+    OTIO target_url の絶対パスを露出しない（Sec M-1）。
+    PROBE_FAILED 等、FILE_NOT_FOUND 以外のエラーはそのまま伝播する。
 
     Args:
         source: probe 対象のメディアファイルパス。
@@ -49,7 +51,18 @@ def _probe(source: str) -> ProbeInfo:
         ClipwrightError: PROBE_FAILED / DEPENDENCY_MISSING / SUBPROCESS_FAILED /
             SUBPROCESS_TIMEOUT / FILE_NOT_FOUND（inspect_media が送出）。
     """
-    info = inspect_media(source)
+    try:
+        info = inspect_media(source)
+    except ClipwrightError as exc:
+        if exc.code == ErrorCode.FILE_NOT_FOUND:
+            raise ClipwrightError(
+                code=ErrorCode.FILE_NOT_FOUND,
+                message=(
+                    f"ソースメディアファイルが見つかりません: {Path(source).name}"
+                ),
+                hint=exc.hint,
+            ) from exc
+        raise
     has_video = any(s.codec_type == "video" for s in info.streams)
     audio_count = sum(1 for s in info.streams if s.codec_type == "audio")
     return ProbeInfo(

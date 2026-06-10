@@ -1,4 +1,4 @@
-"""test_media.py — media.py (ffprobe ラッパー) のテスト（Red フェーズ）。
+"""test_media.py — media.py (ffprobe ラッパー) のテスト。
 
 対象: inspect_media(path: str) -> MediaInfo
 
@@ -17,13 +17,11 @@ rate 決定規則（§13.3 DC-AS-006）:
 - ffmpeg/ffprobe がマシンに到達可能な場合は skip せず必須実行（§13.4 DC-AM-006）
 - 生成 mp4 を inspect し duration / streams を検証
 
-セキュリティ・品質テスト（Red フェーズ追加）:
+セキュリティ・品質テスト:
 - F-04: _validate_existing_file がシンボリックリンクを拒否すること（SR-V-002）
   Windows では symlink 作成に要権限のため、失敗時は pytest.skip でガード
 - L-2: _to_optional_int ヘルパーの変換ロジックを固定するユニットテスト（CR-Q-002）
-  None / int / 数値文字列 / 不正値の各入力パターンを parametrize で検証
-
-[RED] media.py は未実装のため ImportError で失敗する。
+  None / int / float / 数値文字列 / 不正値の各入力パターンを parametrize で検証
 """
 
 from __future__ import annotations
@@ -36,7 +34,7 @@ import pytest
 
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.media import (
-    inspect_media,  # noqa: E402 — media.py 未実装で ImportError（Red）
+    inspect_media,
 )
 from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo
 
@@ -787,8 +785,6 @@ class TestValidateExistingFileSymlink:
 
     Windows での symlink 作成には管理者権限または Developer Mode が必要。
     作成失敗時は pytest.skip でガードし、CI/他環境では実行される。
-
-    [RED] _validate_existing_file は現在 is_symlink() チェックを持たないため失敗する。
     """
 
     def test_symlink_to_regular_file_is_rejected(self, tmp_path) -> None:
@@ -879,8 +875,6 @@ class TestToOptionalInt:
     変換契約を parametrize で固定する。
 
     対象ヘルパー: `clipwright.media._to_optional_int`
-
-    [RED] _to_optional_int は media.py に未定義のため ImportError で失敗する。
     """
 
     @pytest.mark.parametrize(
@@ -892,6 +886,8 @@ class TestToOptionalInt:
             (0, 0),
             (320, 320),
             (-1, -1),
+            # float 入力 → int に変換する（SR-V-001）
+            (1.5, 1),
             # 数値文字列 → int に変換する
             ("44100", 44100),
             ("0", 0),
@@ -909,6 +905,7 @@ class TestToOptionalInt:
             "int_zero",
             "int_positive",
             "int_negative",
+            "float_input",
             "str_44100",
             "str_zero",
             "str_1920",
@@ -992,10 +989,9 @@ class TestMediaInfoBitRate:
 
     設計判断 AD-1（architecture-report-20260610-125203）:
     - schemas.py の MediaInfo に `bit_rate: int | None = None` を追加する。
-    - _parse_ffprobe_json で `_to_optional_int(raw_format.get("bit_rate"))` でパースする。
+    - _parse_ffprobe_json で
+      `_to_optional_int(raw_format.get("bit_rate"))` でパースする。
     - "N/A" / キー欠落は None になる（既存 _to_optional_int の "N/A" 吸収を再利用）。
-
-    [RED] 現状 MediaInfo に bit_rate フィールドが無いため AttributeError で失敗する。
     """
 
     @pytest.mark.parametrize(
@@ -1043,5 +1039,4 @@ class TestMediaInfoBitRate:
 
         result = inspect_media(str(media_file))
 
-        # [RED] MediaInfo に bit_rate フィールドが無いため AttributeError で失敗する
         assert result.bit_rate == expected
