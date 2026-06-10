@@ -50,8 +50,12 @@ def _make_ffprobe_json(
     duration: str = "3.000000",
     streams: list[dict] | None = None,
     container_format: str = "mov,mp4,m4a,3gp,3g2,mj2",
+    bit_rate: str | None = None,
 ) -> str:
-    """ffprobe -print_format json -show_format -show_streams の出力を模倣する。"""
+    """ffprobe -print_format json -show_format -show_streams の出力を模倣する。
+
+    bit_rate: format.bit_rate に設定する値。None の場合はキーを含めない。
+    """
     if streams is None:
         streams = [
             {
@@ -70,13 +74,16 @@ def _make_ffprobe_json(
                 "channels": 2,
             },
         ]
+    fmt: dict[str, object] = {
+        "format_name": container_format,
+        "duration": duration,
+    }
+    if bit_rate is not None:
+        fmt["bit_rate"] = bit_rate
     return json.dumps(
         {
             "streams": streams,
-            "format": {
-                "format_name": container_format,
-                "duration": duration,
-            },
+            "format": fmt,
         }
     )
 
@@ -973,3 +980,68 @@ class TestToOptionalInt:
         result = _to_optional_int("abc")
 
         assert result is None
+
+
+# ===========================================================================
+# AD-1: MediaInfo.bit_rate パーステスト（schemas.py / media.py 契約面 100%）
+# ===========================================================================
+
+
+class TestMediaInfoBitRate:
+    """AD-1: format.bit_rate → MediaInfo.bit_rate のパース契約を固定する。
+
+    設計判断 AD-1（architecture-report-20260610-125203）:
+    - schemas.py の MediaInfo に `bit_rate: int | None = None` を追加する。
+    - _parse_ffprobe_json で `_to_optional_int(raw_format.get("bit_rate"))` でパースする。
+    - "N/A" / キー欠落は None になる（既存 _to_optional_int の "N/A" 吸収を再利用）。
+
+    [RED] 現状 MediaInfo に bit_rate フィールドが無いため AttributeError で失敗する。
+    """
+
+    @pytest.mark.parametrize(
+        "bit_rate_value, include_in_json, expected",
+        [
+            # ケース1: 数値文字列 → int に変換する
+            ("128000", True, 128000),
+            # ケース2: "N/A" → None を返す（_to_optional_int の "N/A" 吸収）
+            ("N/A", True, None),
+            # ケース3: キー欠落 → None を返す（raw_format.get の デフォルト None）
+            (None, False, None),
+        ],
+        ids=[
+            "numeric_string_128000",
+            "na_string",
+            "key_missing",
+        ],
+    )
+    def test_bit_rate_parsed_from_format(
+        self,
+        mocker: MagicMock,
+        tmp_path,
+        bit_rate_value: str | None,
+        include_in_json: bool,
+        expected: int | None,
+    ) -> None:
+        """format.bit_rate の各入力パターンで MediaInfo.bit_rate が期待値になること。
+
+        Arrange: bit_rate_value / include_in_json に応じた ffprobe JSON を用意する
+        Act: inspect_media を呼ぶ（process.run をモック）
+        Assert: result.bit_rate == expected
+        """
+        media_file = tmp_path / "video.mp4"
+        media_file.write_bytes(b"dummy")
+
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch(
+            "clipwright.process.run",
+            return_value=_make_completed_process(
+                _make_ffprobe_json(
+                    bit_rate=bit_rate_value if include_in_json else None,
+                )
+            ),
+        )
+
+        result = inspect_media(str(media_file))
+
+        # [RED] MediaInfo に bit_rate フィールドが無いため AttributeError で失敗する
+        assert result.bit_rate == expected
