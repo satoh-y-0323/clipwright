@@ -109,7 +109,8 @@ M2 の `error.code` は下記の共通 `ErrorCode`（コア `clipwright.errors.E
 
 ## 5. 新ツールの作り方（scaffold 指針）
 
-- **既存ツールを雛形にする**: `clipwright-silence` / `clipwright-transcribe` / `clipwright-wrap` が同型 scaffold。OSS を包む薄い CLI が要るなら `vad_cli.py` / `wrap_cli.py` をコピー元にする。
+- **雛形をコピーする**: `templates/clipwright-tool/` がコピー元の動く骨格（MUST M1〜M5 充足済み）。`templates/README.md` の置換手順（`__TOOL__` / `__ACTION__` / `__Action__` を置換 → ファイル名リネーム → workspace 登録）に従う。cookiecutter 等の依存は使わない（素のコピー + 文字列置換）。
+- **既存ツールを参考にする**: `clipwright-silence` / `clipwright-transcribe` / `clipwright-wrap` が同型 scaffold の実例。OSS を包む薄い CLI が要るなら `vad_cli.py` / `wrap_cli.py` を参照する。
 - **パッケージ構成（src layout）**:
   ```
   clipwright-<tool>/
