@@ -55,10 +55,12 @@ coverage.xml
 .DS_Store
 Thumbs.db
 
-# Claude Code / C3 ランタイム生成物
-.claude/state/
-.claude/hooks/__pycache__/
-.claude/worktrees/
+# Claude Code / C3 開発フレームワーク（公開リポジトリには含めない・ローカル開発専用）
+.claude/
+.codex/
+AGENTS.md
+.cursor/
+.opencode/
 
 # プロジェクト生成物（テスト用 tmp は pytest が管理）
 outputs/
