@@ -1,11 +1,11 @@
-"""analyze.py — ffmpeg loudnorm/volumedetect によるラウドネス測定。
+"""analyze.py — Loudness measurement using ffmpeg loudnorm/volumedetect.
 
-設計 §3.1・ADR-L1/L2 参照。
+Design §3.1, ADR-L1/L2.
 
-実 ffmpeg 8.1.1 Windows 出力形式（ADR-L3 実機確認済み）:
+Actual ffmpeg 8.1.1 Windows output format (ADR-L3, verified on real hardware):
 
   loudnorm print_format=json:
-    [Parsed_loudnorm_0 @ 0x...] ← 空行
+    [Parsed_loudnorm_0 @ 0x...] <- empty line
     {
     \t"input_i" : "-21.75",
     \t"input_tp" : "-18.06",
@@ -15,15 +15,16 @@
     ...
     \t"target_offset" : "0.03"
     }
-    ※ 値は文字列として引用符付きで出力される。"-inf" の場合がある（無音素材）。
+    Note: values are output as quoted strings. "-inf" may appear (silent input).
 
   volumedetect:
     [Parsed_volumedetect_0 @ 0x...] max_volume: -18.1 dB
-    ※ "max_volume: <VALUE> dB" 形式。
+    Note: "max_volume: <VALUE> dB" format.
 
-測定不能時は measured=None + warning を返す（U-1 確定方針・DC-AM-003）。
-失敗 ClipwrightError はそのまま伝播させる。
-message に絶対パスを混入させない（固定文言）。
+When measurement is not possible, returns measured=None + warning
+(U-1 confirmed policy, DC-AM-003).
+ClipwrightError failures are propagated as-is.
+Absolute paths are never included in messages (fixed wording).
 """
 
 from __future__ import annotations
@@ -39,27 +40,29 @@ from pydantic import ValidationError
 
 from clipwright_loudness.schemas import LoudnormMeasured, PeakMeasured
 
-# ffmpeg 実行 timeout（秒）
-# 測定のみ（loudnorm 1パス / volumedetect）は再エンコードより大幅に高速なため、
-# 一律 300 秒あれば長尺素材でも十分に完了する。動的計算は不要と判断。
+# ffmpeg execution timeout (seconds).
+# Measurement-only passes (loudnorm 1-pass / volumedetect) complete much faster
+# than re-encoding, so 300 seconds is sufficient even for long-duration media.
+# Dynamic calculation is not needed.
 _TIMEOUT_SECONDS: float = 300.0
 
 
 def _parse_loudnorm_measured(stderr: str) -> dict[str, Any] | None:
-    """loudnorm print_format=json の stderr 末尾 JSON から測定値を抽出する。
+    """Extract measured values from the loudnorm print_format=json stderr JSON block.
 
-    ffmpeg は stderr に JSON ブロックを出力する。値は文字列で引用符付き。
-    "-inf" / "inf" が含まれる場合は LoudnormMeasured の allow_inf_nan=False により
-    ValidationError になり None を返す（U-1）。
+    ffmpeg writes a JSON block to stderr. Values are quoted strings.
+    If "-inf" / "inf" is present, LoudnormMeasured's allow_inf_nan=False causes
+    a ValidationError and None is returned (U-1).
 
     Returns:
-        {input_i, input_tp, input_lra, input_thresh, target_offset} の dict、
-        または抽出不能な場合 None。
+        Dict of {input_i, input_tp, input_lra, input_thresh, target_offset},
+        or None if extraction fails.
     """
-    # stderr に含まれる全 JSON ブロック候補（{ ... }）を取得する。
-    # re.search は先頭一致のため、先行する {} が loudnorm JSON より前に来た場合に
-    # 正しい末尾ブロックを取りこぼす恐れがある（H-1）。
-    # re.findall で全候補を取得し、末尾から required_keys を全て含む最初を採用する。
+    # Collect all JSON block candidates ({ ... }) from stderr.
+    # re.search only matches the first occurrence, so if an earlier {} appears
+    # before the loudnorm JSON block it may be missed (H-1).
+    # Use re.findall to collect all candidates, then search in reverse for the
+    # last block containing all required_keys.
     candidates = re.findall(r"\{[^{}]+\}", stderr, re.DOTALL)
     if not candidates:
         return None
@@ -85,7 +88,7 @@ def _parse_loudnorm_measured(stderr: str) -> dict[str, Any] | None:
     if raw is None:
         return None
 
-    # 必要なフィールドを文字列 → float に変換する
+    # Convert required fields from string to float
     extracted: dict[str, Any] = {}
     for key in required_keys:
         val = raw[key]
@@ -94,7 +97,7 @@ def _parse_loudnorm_measured(stderr: str) -> dict[str, Any] | None:
         except (ValueError, TypeError):
             return None
 
-    # LoudnormMeasured で検証（inf/nan → ValidationError → None に縮退）
+    # Validate with LoudnormMeasured (inf/nan -> ValidationError -> degrade to None)
     try:
         validated = LoudnormMeasured(**extracted)
     except ValidationError:
@@ -104,12 +107,12 @@ def _parse_loudnorm_measured(stderr: str) -> dict[str, Any] | None:
 
 
 def _parse_volumedetect_measured(stderr: str) -> dict[str, Any] | None:
-    """volumedetect の stderr から max_volume を抽出する。
+    """Extract max_volume from volumedetect stderr.
 
-    形式: "[Parsed_volumedetect_0 @ 0x...] max_volume: -X.X dB"
+    Format: "[Parsed_volumedetect_0 @ 0x...] max_volume: -X.X dB"
 
     Returns:
-        {max_volume_db: float} の dict、または抽出不能な場合 None。
+        Dict of {max_volume_db: float}, or None if extraction fails.
     """
     m = re.search(r"max_volume:\s*(-?\d+\.?\d*)\s*dB", stderr)
     if not m:
@@ -120,7 +123,7 @@ def _parse_volumedetect_measured(stderr: str) -> dict[str, Any] | None:
     except ValueError:
         return None
 
-    # PeakMeasured で検証（範囲外 → ValidationError → None に縮退）
+    # Validate with PeakMeasured (out-of-range -> ValidationError -> degrade to None)
     try:
         validated = PeakMeasured(max_volume_db=val)
     except ValidationError:
@@ -138,33 +141,35 @@ def measure_loudness(
     target_lra: float = 11.0,
     target_peak_db: float = -1.0,
 ) -> dict[str, Any]:
-    """メディアの音声をラウドネス測定し、測定値を返す（ADR-L1/L2/L7）。
+    """Measure audio loudness of media and return the measured values (ADR-L1/L2/L7).
 
     Args:
-        media: 入力メディアファイルのパス（映像＋音声）。
-        mode: "loudnorm" または "peak"。
-        target_i: loudnorm 統合ラウドネス目標値（LUFS）。
-        target_tp: loudnorm トゥルーピーク目標値（dBTP）。
-        target_lra: loudnorm LRA 目標値（LU）。
-        target_peak_db: peak ピーク目標値（dB）。
+        media: Path to the input media file (video + audio).
+        mode: "loudnorm" or "peak".
+        target_i: loudnorm integrated loudness target (LUFS).
+        target_tp: loudnorm true peak target (dBTP).
+        target_lra: loudnorm LRA target (LU).
+        target_peak_db: peak mode peak target (dB).
 
     Returns:
         {
-            "measured": dict | None,  # mode 別の測定値。None は U-1 測定不能。
+            "measured": dict | None,  # Mode-specific measured values.
+                                      # None means U-1 (not measurable).
             "warnings": list[str],
         }
 
     Raises:
         clipwright.errors.ClipwrightError:
-            DEPENDENCY_MISSING / SUBPROCESS_FAILED / SUBPROCESS_TIMEOUT。
+            DEPENDENCY_MISSING / SUBPROCESS_FAILED / SUBPROCESS_TIMEOUT.
     """
-    # ffmpeg 実行ファイルを解決する（PATH 非依存）
+    # Resolve ffmpeg binary (PATH-independent)
     ffmpeg_bin = resolve_tool("ffmpeg", "CLIPWRIGHT_FFMPEG")
 
     warnings: list[str] = []
 
     if mode == "loudnorm":
-        # loudnorm=I=<I>:TP=<TP>:LRA=<LRA>:print_format=json で1パス測定（ADR-L1）
+        # Single-pass measurement with
+        # loudnorm=I=<I>:TP=<TP>:LRA=<LRA>:print_format=json (ADR-L1)
         af_filter = (
             f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}:print_format=json"
         )
@@ -182,27 +187,27 @@ def measure_loudness(
         try:
             result = run(cmd, timeout=_TIMEOUT_SECONDS)
         except ClipwrightError as exc:
-            # run が送出する ClipwrightError の message に絶対パスが混入することを防ぐ。
-            # ErrorCode は維持して固定文言で再送出する（セキュリティ: CWE-209）。
-            # from None で __cause__ に元例外が残らないようにする（SR L-1）。
+            # Prevent absolute paths from leaking into the error message from run().
+            # Preserve the ErrorCode and re-raise with fixed wording (CWE-209).
+            # Use "from None" to avoid chaining __cause__ (SR L-1).
             raise ClipwrightError(
                 code=exc.code,
-                message="ffmpeg loudnorm コマンドが失敗しました。",
-                hint="ffmpeg のバージョンや引数を確認してください。",
+                message="ffmpeg loudnorm command failed.",
+                hint="Check the ffmpeg version and arguments.",
             ) from None
         measured = _parse_loudnorm_measured(result.stderr)
 
         if measured is None:
             warnings.append(
-                "loudnorm 測定値を取得できませんでした。"
-                " loudness 指示は書き込みません（U-1・DC-AM-003）。"
-                " ffmpeg stderr に有効な loudnorm JSON が含まれませんでした。"
+                "Could not retrieve loudnorm measured values."
+                " loudness directive will not be written (U-1, DC-AM-003)."
+                " ffmpeg stderr did not contain a valid loudnorm JSON block."
             )
 
         return {"measured": measured, "warnings": warnings}
 
     else:
-        # mode == "peak": volumedetect で max_volume を測定（ADR-L2）
+        # mode == "peak": measure max_volume with volumedetect (ADR-L2)
         cmd = [
             ffmpeg_bin,
             "-i",
@@ -217,19 +222,19 @@ def measure_loudness(
         try:
             result = run(cmd, timeout=_TIMEOUT_SECONDS)
         except ClipwrightError as exc:
-            # from None で __cause__ に元例外が残らないようにする（SR L-1）。
+            # Use "from None" to avoid chaining __cause__ (SR L-1).
             raise ClipwrightError(
                 code=exc.code,
-                message="ffmpeg volumedetect コマンドが失敗しました。",
-                hint="ffmpeg のバージョンや引数を確認してください。",
+                message="ffmpeg volumedetect command failed.",
+                hint="Check the ffmpeg version and arguments.",
             ) from None
         measured = _parse_volumedetect_measured(result.stderr)
 
         if measured is None:
             warnings.append(
-                "volumedetect 測定値を取得できませんでした。"
-                " loudness 指示は書き込みません（U-1・DC-AM-003）。"
-                " ffmpeg stderr に max_volume フィールドが含まれませんでした。"
+                "Could not retrieve volumedetect measured values."
+                " loudness directive will not be written (U-1, DC-AM-003)."
+                " ffmpeg stderr did not contain a max_volume field."
             )
 
         return {"measured": measured, "warnings": warnings}

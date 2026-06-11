@@ -1,17 +1,20 @@
-"""wrap.py — clipwright-wrap オーケストレーション層。
+"""wrap.py — clipwright-wrap orchestration layer.
 
-出力検証 → 入力存在検査 → 字幕パース → wrap_cli 起動（文節分割）→
-captions で貪欲行詰め・再シリアライズ → 出力書き込み → エンベロープ返却。
+Output validation → input existence check → subtitle parsing →
+wrap_cli launch (phrase segmentation) →
+greedy line-filling and re-serialisation via captions → output write → envelope return.
 
-設計判断:
-- wrap_cli は sys.executable -m clipwright_wrap.wrap_cli で起動する（WR-AD-01）。
-- wrap_cli エラー判定は stdout JSON の "error" キー有無で行う（DC-AS-007）。
-- subprocess 失敗/timeout 時は _SUBPROCESS_SAFE_MESSAGE 同型サニタイズ。
-- FILE_NOT_FOUND の message は basename のみ（フルパス非露出・WR-AD-09）。
-- overflow 判定は行数超過(a) + 行幅超過(b) の両方（WR-AD-15(1)）。
-- warnings は集約1文 + data に index 配列（WR-AD-13(2)・DC-AM-002）。
-- artifacts は dict（Artifact モデル非インスタンス化・DC-AS-005）。
-- OTIO は生成しない・使わない（WR-AD-06）。
+Design decisions:
+- wrap_cli is launched as sys.executable -m clipwright_wrap.wrap_cli (WR-AD-01).
+- wrap_cli error detection is based on the "error" key in stdout JSON (DC-AS-007).
+- subprocess failure/timeout uses the sanitised message in _SUBPROCESS_SAFE_MESSAGE.
+- FILE_NOT_FOUND message contains only the basename (no full path exposure; WR-AD-09).
+- Overflow detection covers both line-count excess (a) and line-width excess (b)
+  (WR-AD-15(1)).
+- Warnings use a single aggregated sentence + index arrays in data
+  (WR-AD-13(2); DC-AM-002).
+- artifacts are dicts (Artifact model not instantiated; DC-AS-005).
+- OTIO is neither generated nor used (WR-AD-06).
 """
 
 from __future__ import annotations
@@ -34,16 +37,19 @@ from clipwright_wrap.captions import (
 )
 from clipwright_wrap.schemas import WrapCaptionsOptions
 
-# subprocess 失敗/timeout 時のサニタイズ済み文言（stderr パス漏洩防止）
-_SUBPROCESS_SAFE_MESSAGE = "内部サブプロセスが失敗しました"
+# Sanitised message for subprocess failure/timeout (prevents stderr path leakage)
+_SUBPROCESS_SAFE_MESSAGE = "internal subprocess failed"
 
-# cue 数連動 timeout 係数（WR-AD-11/WR-AD-15(2)）
+# Timeout coefficient proportional to cue count (WR-AD-11/WR-AD-15(2))
 _TIMEOUT_COEFFICIENT = 0.05
 _TIMEOUT_MIN = 30
 
 
 def _compute_timeout(cue_count: int) -> float:
-    """cue 数連動 timeout を計算する（max(30, ceil(cue_count * 0.05))）。"""
+    """Calculate the cue-count-proportional timeout.
+
+    Returns max(30, ceil(cue_count * 0.05)).
+    """
     return float(max(_TIMEOUT_MIN, math.ceil(cue_count * _TIMEOUT_COEFFICIENT)))
 
 
@@ -52,18 +58,18 @@ def wrap_captions(
     output: str,
     options: WrapCaptionsOptions,
 ) -> dict[str, Any]:
-    """字幕ファイルに文節改行を挿入して整形済み字幕を生成する（WR-AD-04）。
+    """Insert phrase-boundary line breaks into a subtitle file (WR-AD-04).
 
-    非破壊: 入力字幕ファイルは一切書き換えない。
-    出力は新規生成した SRT/VTT のパスを artifacts に返す。
+    Non-destructive: the input subtitle file is never modified.
+    The output is the path of the newly generated SRT/VTT, returned in artifacts.
 
     Args:
-        input: 入力字幕ファイルパス（.srt または .vtt）。
-        output: 出力字幕ファイルパス（input と同一拡張子）。
-        options: WrapCaptionsOptions（language/max_chars/max_lines）。
+        input: Input subtitle file path (.srt or .vtt).
+        output: Output subtitle file path (same extension as input).
+        options: WrapCaptionsOptions (language/max_chars/max_lines).
 
     Returns:
-        ok_result または error_result のエンベロープ dict。
+        Envelope dict as ok_result or error_result.
     """
     try:
         return _wrap_inner(input, output, options)
@@ -76,98 +82,98 @@ def _wrap_inner(
     output: str,
     options: WrapCaptionsOptions,
 ) -> dict[str, Any]:
-    """wrap_captions の内部実装。ClipwrightError をそのまま送出する。"""
+    """Internal implementation of wrap_captions. Raises ClipwrightError directly."""
     input_path = Path(input)
     output_path = Path(output)
 
-    # --- 1. 出力検証（WR-AD-07/08）---
+    # --- 1. Output validation (WR-AD-07/08) ---
 
-    # 拡張子が srt/vtt であることを確認
+    # Verify that extensions are srt/vtt
     input_ext = input_path.suffix.lower()
     output_ext = output_path.suffix.lower()
 
     if input_ext not in (".srt", ".vtt"):
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message=f"未対応の字幕形式です: {input_ext!r}",
-            hint="入力ファイルの拡張子を .srt または .vtt にしてください。",
+            message=f"Unsupported subtitle format: {input_ext!r}",
+            hint="Set the input file extension to .srt or .vtt.",
         )
 
     if output_ext not in (".srt", ".vtt"):
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message=f"未対応の出力拡張子です: {output_ext!r}",
-            hint="出力ファイルの拡張子を .srt または .vtt にしてください。",
+            message=f"Unsupported output extension: {output_ext!r}",
+            hint="Set the output file extension to .srt or .vtt.",
         )
 
-    # 入力・出力の拡張子一致を確認（SRT↔VTT 混在変換はスコープ外）
+    # Verify extensions match (SRT↔VTT cross-conversion is out of scope)
     if input_ext != output_ext:
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
             message=(
-                f"入力と出力の拡張子が一致しません"
-                f"（入力: {input_ext!r} / 出力: {output_ext!r}）。"
+                f"Input and output extensions do not match"
+                f" (input: {input_ext!r} / output: {output_ext!r})."
             ),
-            hint="入力と同一拡張子の出力パスを指定してください。",
+            hint="Specify an output path with the same extension as the input.",
         )
 
-    # 出力先の親ディレクトリ存在確認
+    # Verify that the output parent directory exists
     if not output_path.parent.exists():
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message="出力先ディレクトリが存在しません。",
-            hint="出力先ディレクトリを先に作成してから再実行してください。",
+            message="Output directory does not exist.",
+            hint="Create the output directory first, then run again.",
         )
 
-    # output == input 禁止
+    # Prohibit output == input
     try:
         if output_path.resolve() == input_path.resolve():
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
-                message="出力パスと入力パスが同一です。",
-                hint="出力ファイルパスを入力とは別のパスに変更してください。",
+                message="Output path and input path are the same.",
+                hint="Change the output file path to a path different from the input.",
             )
     except OSError:  # pragma: no cover
         if str(output_path) == str(input_path):
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
-                message="出力パスと入力パスが同一です。",
-                hint="出力ファイルパスを入力とは別のパスに変更してください。",
+                message="Output path and input path are the same.",
+                hint="Change the output file path to a path different from the input.",
             ) from None
 
-    # --- 2. 入力存在検査（WR-AD-09・FILE_NOT_FOUND basename 化）---
+    # --- 2. Input existence check (WR-AD-09; FILE_NOT_FOUND uses basename only) ---
 
     if not input_path.exists():
         raise ClipwrightError(
             code=ErrorCode.FILE_NOT_FOUND,
-            message=f"ファイルが見つかりません: {input_path.name}",
-            hint="入力ファイルのパスが正しいか確認してください。",
+            message=f"File not found: {input_path.name}",
+            hint="Check that the input file path is correct.",
         )
 
-    # --- 3. 入力読み込み ---
+    # --- 3. Read input ---
 
     raw_text = input_path.read_text(encoding="utf-8")
-    fmt = input_ext.lstrip(".")  # "srt" または "vtt"
+    fmt = input_ext.lstrip(".")  # "srt" or "vtt"
 
-    # --- 4. captions.parse_captions（不正 timecode → INVALID_INPUT + hint）---
+    # --- 4. captions.parse_captions (invalid timecode → INVALID_INPUT + hint) ---
 
     try:
         cues = parse_captions(raw_text, fmt)
     except ValueError:
-        # ValueError を INVALID_INPUT に変換。str(exc) は使わず固定文言（CWE-209）
+        # Convert ValueError to INVALID_INPUT; fixed message (not str(exc)); CWE-209
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message="字幕ファイルのパースに失敗しました（タイムコード形式エラー）。",
+            message="Failed to parse subtitle file (timecode format error).",
             hint=(
-                "タイムコード行の形式を確認してください"
-                "（例: 00:00:00,000 --> 00:00:01,000）。"
+                "Check the format of the timecode line"
+                " (e.g. 00:00:00,000 --> 00:00:01,000)."
             ),
         ) from None
 
-    # --- 5. wrap_cli 起動（WR-AD-02・DC-AS-007）---
+    # --- 5. Launch wrap_cli (WR-AD-02; DC-AS-007) ---
 
     cue_count = len(cues)
-    # 0 件の場合は wrap_cli を呼ばず直接シリアライズ
+    # For 0 entries, skip wrap_cli and serialise directly
     if cue_count > 0:
         stdin_payload = json.dumps(
             {
@@ -190,10 +196,10 @@ def _wrap_inner(
         except subprocess.TimeoutExpired:
             raise ClipwrightError(
                 code=ErrorCode.SUBPROCESS_TIMEOUT,
-                message=f"{_SUBPROCESS_SAFE_MESSAGE}（タイムアウト）",
+                message=f"{_SUBPROCESS_SAFE_MESSAGE} (timeout)",
                 hint=(
-                    "字幕ファイルの cue 数が多すぎる可能性があります。"
-                    "再度試すか、cue 数を減らしてください。"
+                    "The subtitle file may contain too many cues. "
+                    "Try again or reduce the number of cues."
                 ),
             ) from None
         except OSError:
@@ -201,27 +207,27 @@ def _wrap_inner(
                 code=ErrorCode.SUBPROCESS_FAILED,
                 message=_SUBPROCESS_SAFE_MESSAGE,
                 hint=(
-                    "wrap_cli の起動に失敗しました。"
-                    "clipwright-wrap が正しくインストールされているか確認してください。"
+                    "Failed to launch wrap_cli. "
+                    "Check that clipwright-wrap is correctly installed."
                 ),
             ) from None
 
-        # wrap_cli は常に return 0 → exit code でなく "error" キーで判定（DC-AS-007）
+        # wrap_cli returns 0; errors detected via "error" key in stdout JSON (DC-AS-007)
         try:
             parsed: dict[str, Any] = json.loads(proc.stdout)
         except (json.JSONDecodeError, ValueError):
             raise ClipwrightError(
                 code=ErrorCode.SUBPROCESS_FAILED,
                 message=_SUBPROCESS_SAFE_MESSAGE,
-                hint="wrap_cli の出力 JSON パースに失敗しました。再実行してください。",
+                hint="Failed to parse wrap_cli output JSON. Please run again.",
             ) from None
 
         if "error" in parsed:
             err = parsed["error"]
             code_str: str = err.get("code", str(ErrorCode.INTERNAL))
-            msg: str = err.get("message", "wrap_cli でエラーが発生しました")
-            hint: str = err.get("hint", "再現条件を添えて報告してください。")
-            # ErrorCode への変換（DEPENDENCY_MISSING は伝播）
+            msg: str = err.get("message", "An error occurred in wrap_cli")
+            hint: str = err.get("hint", "Please report with reproduction steps.")
+            # Convert to ErrorCode (DEPENDENCY_MISSING propagated as-is)
             try:
                 code = ErrorCode(code_str)
             except ValueError:
@@ -232,7 +238,7 @@ def _wrap_inner(
     else:
         segments = []
 
-    # --- 6. 各 cue に wrap_cue_lines を適用 → overflow 判定 ---
+    # --- 6. Apply wrap_cue_lines to each cue → overflow detection ---
 
     overflow_cue_indices: list[int] = []
     overflow_width_cue_indices: list[int] = []
@@ -242,55 +248,55 @@ def _wrap_inner(
         seg = segments[i] if i < len(segments) else [cue.text]
         lines = wrap_cue_lines(seg, options.max_chars)
 
-        # テキストが変化した（改行挿入）場合は wrapped_count を増やす
+        # Increment wrapped_count when the text has changed (line break inserted)
         new_text = "\n".join(lines)
         if new_text != cue.text:
             wrapped_count += 1
 
-        # overflow 判定（WR-AD-15(1)）
+        # Overflow detection (WR-AD-15(1))
         overflow = check_overflow(lines, options.max_chars, options.max_lines)
         if overflow["line_count_overflow"]:
             overflow_cue_indices.append(i)
         if overflow["line_width_overflow"]:
             overflow_width_cue_indices.append(i)
 
-        # cue.text を整形済みテキストに更新（切り捨てなし・全文保持）
+        # Update cue.text to the formatted text (no truncation; full text preserved)
         cue.text = new_text
 
-    # --- 7. captions.serialize_captions → output 書き込み ---
+    # --- 7. captions.serialize_captions → write output ---
 
     serialized = serialize_captions(cues, fmt)
     output_path.write_text(serialized, encoding="utf-8")
 
-    # --- 8. エンベロープ構築（WR-AD-13）---
+    # --- 8. Build envelope (WR-AD-13) ---
 
     warnings: list[str] = []
 
-    # 行数超過 warnings（集約1文・0件時は出さない・DC-AM-002）
+    # Line-count overflow warnings (aggregated; omitted when 0 entries; DC-AM-002)
     if overflow_cue_indices:
         warnings.append(
-            f"max_lines（{options.max_lines}）を超える行数になった cue が"
-            f" {len(overflow_cue_indices)} 件あります"
-            f"（index: data.overflow_cue_indices を参照）。"
-            "情報欠落を避けるため切り捨てずそのまま出力しました。"
+            f"{len(overflow_cue_indices)} cue(s) exceeded max_lines"
+            f" ({options.max_lines})"
+            " (see data.overflow_cue_indices for indices)."
+            " Output without truncation to avoid information loss."
         )
 
-    # 行幅超過 warnings（集約1文・0件時は出さない）
+    # Line-width overflow warnings (single aggregated sentence; omitted when 0 entries)
     if overflow_width_cue_indices:
         warnings.append(
-            f"max_chars（{options.max_chars}）を超える行幅になった cue が"
-            f" {len(overflow_width_cue_indices)} 件あります"
-            f"（index: data.overflow_width_cue_indices を参照）。"
-            "情報欠落を避けるため切り捨てずそのまま出力しました。"
+            f"{len(overflow_width_cue_indices)} cue(s) exceeded max_chars"
+            f" ({options.max_chars})"
+            " (see data.overflow_width_cue_indices for indices)."
+            " Output without truncation to avoid information loss."
         )
 
     total_overflow = len(set(overflow_cue_indices) | set(overflow_width_cue_indices))
     summary = (
-        f"{cue_count} cue を文節改行整形"
-        f"（うち {wrapped_count} cue に改行挿入"
-        f"・{total_overflow} cue が超過"
-        f"）。言語: {options.language}。"
-        f"{output_path.name} を生成しました。"
+        f"Phrase-boundary line breaks applied to {cue_count} cue(s)"
+        f" ({wrapped_count} cue(s) had line breaks inserted;"
+        f" {total_overflow} cue(s) exceeded limits)."
+        f" Language: {options.language}."
+        f" Generated {output_path.name}."
     )
 
     artifacts = [

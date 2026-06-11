@@ -1,3 +1,3 @@
-"""clipwright-silence: 無音検出 → OTIO タイムライン生成 MCP ツール。"""
+"""clipwright-silence: silence detection → OTIO timeline generation MCP tool."""
 
 __version__ = "0.1.0"

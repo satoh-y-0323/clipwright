@@ -1,12 +1,13 @@
-"""test_schemas.py — TranscribeOptions の Red テスト。
+"""test_schemas.py — Red tests for TranscribeOptions.
 
-architecture TR-AD-06 の TranscribeOptions 仕様を観点に固定する。
-このファイルは schemas.py が存在しない段階で import 失敗により
-機能未実装として失敗することを意図した Red テスト群。
+Pins the TranscribeOptions specification from architecture TR-AD-06.
+This file is intended to fail at import when schemas.py does not exist, thereby
+signalling that the feature is not yet implemented (Red test suite).
 
-SR M-1 / SR L-1 対応: TranscribeOptions 入力検証強化テストを末尾セクションに追加。
-language は ISO639-1 相当 2 文字以上英字または "auto" のみ許可（^[a-zA-Z]{2,}$|^auto$）、
-max_length=10。model_path は max_length=4096。initial_prompt は max_length=2048。
+SR M-1 / SR L-1: Input validation hardening tests are appended at the end.
+language: only ISO 639-1 compatible 2+ ASCII letters or "auto" are accepted
+(^[a-zA-Z]{2,}$|^auto$), max_length=10. model_path: max_length=4096.
+initial_prompt: max_length=2048.
 """
 
 from __future__ import annotations
@@ -17,12 +18,12 @@ from pydantic import ValidationError
 from clipwright_transcribe.schemas import TranscribeOptions
 
 # ===========================================================================
-# デフォルト構築
+# Default construction
 # ===========================================================================
 
 
 class TestTranscribeOptionsDefaults:
-    """全フィールド省略でモデルが構築でき、各フィールドが既定値を持つこと。"""
+    """Model can be constructed with no arguments; each field has its default value."""
 
     def test_build_with_no_args(self) -> None:
         opts = TranscribeOptions()
@@ -31,54 +32,54 @@ class TestTranscribeOptionsDefaults:
         assert opts.initial_prompt is None
 
     def test_language_default_is_none(self) -> None:
-        """language の既定値は None（自動検出）であること（TR-AD-06）。"""
+        """language default is None (auto-detect; TR-AD-06)."""
         opts = TranscribeOptions()
         assert opts.language is None
 
     def test_model_path_default_is_none(self) -> None:
-        """model_path の既定値は None（env フォールバック）であること（TR-AD-06）。"""
+        """model_path default is None (env fallback; TR-AD-06)."""
         opts = TranscribeOptions()
         assert opts.model_path is None
 
     def test_initial_prompt_default_is_none(self) -> None:
-        """initial_prompt の既定値は None（プロンプトなし）であること（TR-AD-06）。"""
+        """initial_prompt default is None (no prompt; TR-AD-06)."""
         opts = TranscribeOptions()
         assert opts.initial_prompt is None
 
 
 # ===========================================================================
-# None 許容と str 受理
+# None acceptance and str acceptance
 # ===========================================================================
 
 
 class TestLanguageField:
-    """language フィールドの型・None 許容・str 受理を検証する。"""
+    """Verify the language field type, None acceptance, and str acceptance."""
 
     def test_language_none_accepted(self) -> None:
-        """language=None を明示指定しても構築できること。"""
+        """Explicit language=None is accepted."""
         opts = TranscribeOptions(language=None)
         assert opts.language is None
 
     def test_language_str_accepted(self) -> None:
-        """language に str を渡して受理されること。"""
+        """A str value for language is accepted."""
         opts = TranscribeOptions(language="ja")
         assert opts.language == "ja"
 
     @pytest.mark.parametrize("lang", ["en", "ja", "zh", "auto", "fr", "de"])
     def test_various_language_codes_accepted(self, lang: str) -> None:
-        """各種言語コード文字列を受理すること。"""
+        """Various language code strings are accepted."""
         opts = TranscribeOptions(language=lang)
         assert opts.language == lang
 
     def test_language_type_is_str_or_none(self) -> None:
-        """language フィールドの型注釈が str | None であること。"""
+        """language field annotation is str | None."""
         field_info = TranscribeOptions.model_fields["language"]
-        # Pydantic v2: annotation を確認する
+        # Pydantic v2: check annotation
         import typing
 
         annotation = field_info.annotation
         args = typing.get_args(annotation)
-        # str と NoneType が含まれること
+        # str and NoneType must both be present
         assert (
             str in args
             or annotation is str
@@ -88,20 +89,20 @@ class TestLanguageField:
 
 
 class TestModelPathField:
-    """model_path フィールドの型・None 許容・str 受理を検証する。"""
+    """Verify the model_path field type, None acceptance, and str acceptance."""
 
     def test_model_path_none_accepted(self) -> None:
-        """model_path=None を明示指定しても構築できること。"""
+        """Explicit model_path=None is accepted."""
         opts = TranscribeOptions(model_path=None)
         assert opts.model_path is None
 
     def test_model_path_str_accepted(self) -> None:
-        """model_path に str を渡して受理されること。"""
+        """A str value for model_path is accepted."""
         opts = TranscribeOptions(model_path="/path/to/ggml-base.bin")
         assert opts.model_path == "/path/to/ggml-base.bin"
 
     def test_model_path_type_is_str_or_none(self) -> None:
-        """model_path フィールドの型注釈が str | None であること。"""
+        """model_path field annotation is str | None."""
         field_info = TranscribeOptions.model_fields["model_path"]
         import typing
 
@@ -111,31 +112,36 @@ class TestModelPathField:
 
 
 class TestInitialPromptField:
-    """initial_prompt フィールドの型・None 許容・str 受理を検証する。"""
+    """Verify the initial_prompt field type, None acceptance, and str acceptance."""
 
     def test_initial_prompt_none_accepted(self) -> None:
-        """initial_prompt=None を明示指定しても構築できること。"""
+        """Explicit initial_prompt=None is accepted."""
         opts = TranscribeOptions(initial_prompt=None)
         assert opts.initial_prompt is None
 
     def test_initial_prompt_str_accepted(self) -> None:
-        """initial_prompt に str を渡して受理されること。"""
+        """A str value for initial_prompt is accepted."""
         opts = TranscribeOptions(initial_prompt="clipwright project meeting")
         assert opts.initial_prompt == "clipwright project meeting"
 
     def test_initial_prompt_empty_str_accepted(self) -> None:
-        """initial_prompt に空文字列を渡しても受理されること。"""
+        """An empty string for initial_prompt is accepted."""
         opts = TranscribeOptions(initial_prompt="")
         assert opts.initial_prompt == ""
 
 
 # ===========================================================================
-# 全フィールド正常指定
+# All fields specified with valid values
 # ===========================================================================
 
 
 def test_all_fields_specified_accepted() -> None:
-    """全フィールドを明示的に正常値で指定してモデルが構築できること。"""
+    """Model can be constructed with all fields set to valid values.
+
+    initial_prompt uses a Japanese string intentionally — this validates that
+    arbitrary Unicode text is accepted as a hint value (ii: test data, do not
+    translate).
+    """
     opts = TranscribeOptions(
         language="ja",
         model_path="/models/ggml-base.bin",
@@ -147,254 +153,275 @@ def test_all_fields_specified_accepted() -> None:
 
 
 # ===========================================================================
-# 共通型の再定義なし確認
+# No redefinition of core types
 # ===========================================================================
 
 
 def test_transcribe_options_does_not_redefine_core_types() -> None:
-    """core 共通型（MediaRef/Artifact/ToolResult）を再定義しないこと。"""
+    """core common types (MediaRef/Artifact/ToolResult) are not redefined."""
     from clipwright.schemas import Artifact, MediaRef, ToolResult  # noqa: F401
 
     import clipwright_transcribe.schemas as transcribe_schemas
 
     assert not hasattr(transcribe_schemas, "MediaRef"), (
-        "schemas.py が core の MediaRef を再定義している"
+        "schemas.py redefines core MediaRef"
     )
     assert not hasattr(transcribe_schemas, "Artifact"), (
-        "schemas.py が core の Artifact を再定義している"
+        "schemas.py redefines core Artifact"
     )
     assert not hasattr(transcribe_schemas, "ToolResult"), (
-        "schemas.py が core の ToolResult を再定義している"
+        "schemas.py redefines core ToolResult"
     )
 
 
 # ===========================================================================
-# Field description の確認（AI が読む説明として必要）
+# Field description check (required for AI-readable schema)
 # ===========================================================================
 
 
 class TestFieldDescriptions:
-    """Field に description が設定されていること。"""
+    """Each field must have a description set."""
 
     def test_language_has_description(self) -> None:
-        """language フィールドに description が設定されていること。"""
+        """language field has a description."""
         field_info = TranscribeOptions.model_fields["language"]
         assert field_info.description is not None and field_info.description != ""
 
     def test_model_path_has_description(self) -> None:
-        """model_path フィールドに description が設定されていること。"""
+        """model_path field has a description."""
         field_info = TranscribeOptions.model_fields["model_path"]
         assert field_info.description is not None and field_info.description != ""
 
     def test_initial_prompt_has_description(self) -> None:
-        """initial_prompt フィールドに description が設定されていること。"""
+        """initial_prompt field has a description."""
         field_info = TranscribeOptions.model_fields["initial_prompt"]
         assert field_info.description is not None and field_info.description != ""
 
 
 # ===========================================================================
-# SR M-1 / SR L-1: 入力検証強化（language / model_path / initial_prompt）
+# SR M-1 / SR L-1: Input validation hardening (language / model_path /
+# initial_prompt)
 # ===========================================================================
 
 
 class TestLanguageValidation:
-    """language フィールドの制約違反が ValidationError を送出すること（SR M-1）。
+    """language field constraint violations raise ValidationError (SR M-1).
 
-    実装予定の制約:
+    Constraints being implemented:
       - pattern: ^[a-zA-Z]{2,}$|^auto$
       - max_length: 10
     """
 
     # -----------------------------------------------------------------------
-    # 有効値: 制約範囲内は受理されること（非回帰）
+    # Valid values: within constraint range are accepted (non-regression)
     # -----------------------------------------------------------------------
 
     @pytest.mark.parametrize("lang", ["ja", "en", "auto", "zh", "fr", "de"])
     def test_valid_language_codes_accepted(self, lang: str) -> None:
-        """ISO639-1 相当の 2 文字以上英字・および "auto" は受理されること。"""
+        """ISO 639-1 compatible 2+ ASCII letters and "auto" are accepted."""
         opts = TranscribeOptions(language=lang)
         assert opts.language == lang
 
     def test_language_none_still_accepted(self) -> None:
-        """language=None（既定）は制約追加後も引き続き受理されること。"""
+        """language=None (default) continues to be accepted after constraint addition."""
         opts = TranscribeOptions(language=None)
         assert opts.language is None
 
     # -----------------------------------------------------------------------
-    # 制約違反: max_length 超過
+    # Constraint violation: max_length exceeded
     # -----------------------------------------------------------------------
 
     def test_language_too_long_rejected(self) -> None:
-        """language が max_length=10 を超える文字列 → ValidationError。"""
+        """language exceeding max_length=10 -> ValidationError."""
         with pytest.raises(ValidationError):
             TranscribeOptions(language="x" * 11)
 
     def test_language_exactly_max_length_accepted(self) -> None:
-        """language が max_length=10 ちょうど（有効英字列）は受理されること。"""
+        """language exactly at max_length=10 (valid ASCII letters) is accepted."""
         opts = TranscribeOptions(language="abcdefghij")
         assert opts.language == "abcdefghij"
 
     # -----------------------------------------------------------------------
-    # 制約違反: pattern 不一致（ハイフン始まり・非英字・空白）
+    # Constraint violation: pattern mismatch (hyphen prefix, non-alpha,
+    # whitespace)
     # -----------------------------------------------------------------------
 
     def test_language_hyphen_prefix_rejected(self) -> None:
-        """language にハイフン始まり文字列（例: "-m"）→ ValidationError（CWE-78 対策）。"""
+        """language starting with a hyphen (e.g. "-m") -> ValidationError (CWE-78
+        mitigation)."""
         with pytest.raises(ValidationError):
             TranscribeOptions(language="-m")
 
     def test_language_with_digit_rejected(self) -> None:
-        """language に数字混じり（例: "ja1"）→ ValidationError（pattern 不一致）。"""
+        """language containing a digit (e.g. "ja1") -> ValidationError (pattern
+        mismatch)."""
         with pytest.raises(ValidationError):
             TranscribeOptions(language="ja1")
 
     def test_language_with_space_rejected(self) -> None:
-        """language に空白含む文字列（例: "ja en"）→ ValidationError（pattern 不一致）。"""
+        """language containing whitespace (e.g. "ja en") -> ValidationError (pattern
+        mismatch)."""
         with pytest.raises(ValidationError):
             TranscribeOptions(language="ja en")
 
     def test_language_single_char_rejected(self) -> None:
-        """language が 1 文字英字（例: "j"）→ ValidationError（2 文字以上の制約）。"""
+        """Single-character language (e.g. "j") -> ValidationError (min 2 chars)."""
         with pytest.raises(ValidationError):
             TranscribeOptions(language="j")
 
     def test_language_empty_string_rejected(self) -> None:
-        """language が空文字列（""）→ ValidationError（pattern 不一致）。"""
+        """Empty string language ("") -> ValidationError (pattern mismatch)."""
         with pytest.raises(ValidationError):
             TranscribeOptions(language="")
 
     @pytest.mark.parametrize(
         "invalid_lang",
         [
-            "-m",  # ハイフン始まり（コマンドインジェクション対策）
-            "--model",  # 長いオプション風
-            "ja1",  # 数字混じり
-            "ja en",  # 空白含む
-            "j",  # 1 文字（短すぎる）
-            "",  # 空文字列
-            "ja_JP",  # アンダースコア含む
-            "123",  # 数字のみ
+            "-m",  # hyphen prefix (command injection mitigation)
+            "--model",  # long option style
+            "ja1",  # contains digit
+            "ja en",  # contains whitespace
+            "j",  # single character (too short)
+            "",  # empty string
+            "ja_JP",  # contains underscore
+            "123",  # digits only
         ],
     )
     def test_invalid_language_patterns_rejected(self, invalid_lang: str) -> None:
-        """各種不正 language 文字列 → ValidationError（パラメータ化）。"""
+        """Various invalid language strings -> ValidationError (parametrized)."""
         with pytest.raises(ValidationError):
             TranscribeOptions(language=invalid_lang)
 
 
 class TestModelPathValidation:
-    """model_path フィールドの制約違反が ValidationError を送出すること（SR L-1）。
+    """model_path field constraint violations raise ValidationError (SR L-1).
 
-    実装予定の制約:
+    Constraints being implemented:
       - max_length: 4096
     """
 
     # -----------------------------------------------------------------------
-    # 有効値: 制約範囲内は受理されること（非回帰）
+    # Valid values: within constraint range are accepted (non-regression)
     # -----------------------------------------------------------------------
 
     def test_model_path_none_still_accepted(self) -> None:
-        """model_path=None（既定）は制約追加後も引き続き受理されること。"""
+        """model_path=None (default) continues to be accepted after constraint
+        addition."""
         opts = TranscribeOptions(model_path=None)
         assert opts.model_path is None
 
     def test_model_path_normal_path_accepted(self) -> None:
-        """通常のファイルパス文字列は受理されること。"""
+        """A normal file path string is accepted."""
         path = "/models/ggml-base.bin"
         opts = TranscribeOptions(model_path=path)
         assert opts.model_path == path
 
     def test_model_path_exactly_max_length_accepted(self) -> None:
-        """model_path が max_length=4096 ちょうどは受理されること。"""
+        """model_path exactly at max_length=4096 is accepted."""
         path = "a" * 4096
         opts = TranscribeOptions(model_path=path)
         assert opts.model_path == path
 
     # -----------------------------------------------------------------------
-    # 制約違反: max_length 超過
+    # Constraint violation: max_length exceeded
     # -----------------------------------------------------------------------
 
     def test_model_path_too_long_rejected(self) -> None:
-        """model_path が max_length=4096 を超える → ValidationError。"""
+        """model_path exceeding max_length=4096 -> ValidationError."""
         with pytest.raises(ValidationError):
             TranscribeOptions(model_path="a" * 4097)
 
     def test_model_path_4097_chars_rejected(self) -> None:
-        """model_path が 4097 文字（超過 1 文字）→ ValidationError（境界値）。"""
+        """model_path at 4097 chars (1 over limit) -> ValidationError (boundary
+        value)."""
         with pytest.raises(ValidationError):
             TranscribeOptions(model_path="/models/" + "x" * 4089)
 
     def test_model_path_very_long_rejected(self) -> None:
-        """model_path が極端に長い文字列 → ValidationError。"""
+        """Extremely long model_path -> ValidationError."""
         with pytest.raises(ValidationError):
             TranscribeOptions(model_path="x" * 10000)
 
 
 class TestInitialPromptValidation:
-    """initial_prompt フィールドの制約違反が ValidationError を送出すること（SR L-1）。
+    """initial_prompt field constraint violations raise ValidationError (SR L-1).
 
-    実装予定の制約:
+    Constraints being implemented:
       - max_length: 2048
     """
 
     # -----------------------------------------------------------------------
-    # 有効値: 制約範囲内は受理されること（非回帰）
+    # Valid values: within constraint range are accepted (non-regression)
     # -----------------------------------------------------------------------
 
     def test_initial_prompt_none_still_accepted(self) -> None:
-        """initial_prompt=None（既定）は制約追加後も引き続き受理されること。"""
+        """initial_prompt=None (default) continues to be accepted after constraint
+        addition."""
         opts = TranscribeOptions(initial_prompt=None)
         assert opts.initial_prompt is None
 
     def test_initial_prompt_normal_str_accepted(self) -> None:
-        """通常の文字列は受理されること。"""
+        """A normal string is accepted.
+
+        The Japanese value is intentional test data (a sample prompt that a user
+        might supply; ii: do not translate).
+        """
         prompt = "クリップライト会議の議事録"
         opts = TranscribeOptions(initial_prompt=prompt)
         assert opts.initial_prompt == prompt
 
     def test_initial_prompt_empty_str_still_accepted(self) -> None:
-        """initial_prompt=空文字列は制約追加後も引き続き受理されること。"""
+        """initial_prompt='' continues to be accepted after constraint addition."""
         opts = TranscribeOptions(initial_prompt="")
         assert opts.initial_prompt == ""
 
     def test_initial_prompt_exactly_max_length_accepted(self) -> None:
-        """initial_prompt が max_length=2048 ちょうどは受理されること。"""
+        """initial_prompt exactly at max_length=2048 is accepted."""
         prompt = "a" * 2048
         opts = TranscribeOptions(initial_prompt=prompt)
         assert opts.initial_prompt == prompt
 
     # -----------------------------------------------------------------------
-    # 制約違反: max_length 超過
+    # Constraint violation: max_length exceeded
     # -----------------------------------------------------------------------
 
     def test_initial_prompt_too_long_rejected(self) -> None:
-        """initial_prompt が max_length=2048 を超える → ValidationError。"""
+        """initial_prompt exceeding max_length=2048 -> ValidationError."""
         with pytest.raises(ValidationError):
             TranscribeOptions(initial_prompt="a" * 2049)
 
     def test_initial_prompt_2049_chars_rejected(self) -> None:
-        """initial_prompt が 2049 文字（超過 1 文字）→ ValidationError（境界値）。"""
+        """initial_prompt at 2049 chars (1 over limit) -> ValidationError (boundary
+        value)."""
         with pytest.raises(ValidationError):
             TranscribeOptions(initial_prompt="x" * 2049)
 
     def test_initial_prompt_very_long_rejected(self) -> None:
-        """initial_prompt が極端に長い文字列 → ValidationError。"""
+        """Extremely long initial_prompt -> ValidationError.
+
+        Uses a Japanese character to confirm multi-byte strings are counted correctly
+        (ii: test data — do not translate).
+        """
         with pytest.raises(ValidationError):
             TranscribeOptions(initial_prompt="あ" * 5000)
 
 
 class TestValidationNonRegression:
-    """制約追加後も既存の正常系テストが壊れないことを確認する（契約面 100% 非回帰）。"""
+    """Existing success-path tests remain Green after constraint additions
+    (contract 100% non-regression)."""
 
     def test_all_none_defaults_still_work(self) -> None:
-        """全フィールド省略（全 None 既定）でモデルが構築できること。"""
+        """All-None defaults still construct the model successfully."""
         opts = TranscribeOptions()
         assert opts.language is None
         assert opts.model_path is None
         assert opts.initial_prompt is None
 
     def test_all_fields_with_valid_values_still_work(self) -> None:
-        """全フィールドを正常値で指定してモデルが構築できること。"""
+        """All fields set to valid values still construct the model successfully.
+
+        The Japanese initial_prompt is intentional test data (ii: do not translate).
+        """
         opts = TranscribeOptions(
             language="ja",
             model_path="/models/ggml-base.bin",
@@ -405,11 +432,11 @@ class TestValidationNonRegression:
         assert opts.initial_prompt == "クリップライト会議"
 
     def test_language_en_accepted(self) -> None:
-        """language="en" は制約追加後も受理されること。"""
+        """language="en" continues to be accepted after constraint addition."""
         opts = TranscribeOptions(language="en")
         assert opts.language == "en"
 
     def test_language_auto_accepted(self) -> None:
-        """language="auto" は制約追加後も受理されること（特例許可値）。"""
+        """language="auto" continues to be accepted (special allowed value)."""
         opts = TranscribeOptions(language="auto")
         assert opts.language == "auto"

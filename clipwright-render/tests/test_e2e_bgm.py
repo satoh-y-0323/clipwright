@@ -1,36 +1,37 @@
-"""test_e2e_bgm.py — clipwright-render BGM ミックスの実 e2e テスト（task_id: e2e-bgm）。
+"""test_e2e_bgm.py — Real e2e tests for clipwright-render BGM mixing (task_id: e2e-bgm).
 
-設計根拠:
-  - architecture-report-20260611-172611 §7 改訂 v2
-  - ADR-B5-r2/B5-r3: has_main_audio/has_audio_output 分離・amix+alimiter
-  - ADR-B5-r3: amix 配線・aformat 必須・sidechaincompress 入力順序（DC-AS-005/006/007・DC-AM-001）
-  - ADR-B6-r2: -stream_loop -1 + atrim 尺合わせ（aloop 廃止）
-  - ADR-B9-r3: fade 既定 0・afade は > 0 のみ注入
-  - DC-AM-001: amix 後 alimiter=limit=1.0 必須・出力ピーク ≤ 0dBFS 実証
-  - DC-AS-004: 本編無音 + BGM 単独系統実証
-  - DC-GP-003: 全フィクスチャ・出力を tmp_path 配下に閉じ自動 teardown
+Design rationale:
+  - architecture-report-20260611-172611 §7 revision v2
+  - ADR-B5-r2/B5-r3: has_main_audio/has_audio_output separation, amix+alimiter
+  - ADR-B5-r3: amix wiring, mandatory aformat, sidechaincompress input order
+    (DC-AS-005/006/007, DC-AM-001)
+  - ADR-B6-r2: -stream_loop -1 + atrim duration matching (aloop removed)
+  - ADR-B9-r3: fade defaults to 0; afade is injected only when > 0
+  - DC-AM-001: alimiter=limit=1.0 required after amix; output peak ≤ 0 dBFS verified
+  - DC-AS-004: silent main + BGM-only signal path verified
+  - DC-GP-003: all fixtures and outputs confined to tmp_path for automatic teardown
 
-テスト構成:
-  1. フィクスチャ: testsrc 映像 + sine 音声（5秒・440Hz）本編
-     短い BGM: sine 2秒・880Hz（本編と弁別可能）→ -stream_loop ループ実証
-     長い BGM: sine 8秒 → atrim 末尾トリム実証
-     本編無音クリップ（音声なし testsrc）→ BGM 単独系統実証
+Test layout:
+  1. Fixtures: testsrc video + sine audio (5 s, 440 Hz) as the main clip
+     Short BGM: sine 2 s, 880 Hz (distinguishable from main) -> -stream_loop loop verified
+     Long BGM: sine 8 s -> atrim tail-trim verified
+     Silent main clip (testsrc, no audio) -> BGM-only signal path verified
 
-  2. assert 一覧（必須）:
-     assert-1: render_timeline(dry_run=False) で ok=True・出力ファイル生成
-     assert-2: 出力に音声ストリームが含まれ BGM が実際に混ざる（音量変化で確認）
-     assert-3: 出力ピークが 0dBFS を超えない（DC-AM-001・alimiter 実証）
-     assert-4: fade_in/out が効く（先頭/末尾が中央より低い・afade 実証）
-     assert-4b: fade=0 ケースで無フェード確認
-     assert-5: BGM が本編尺に合う（短い BGM ループ・長い BGM トリム・出力尺 ≒ 本編尺）
-     assert-6: ducking ON 時に BGM 寄与が減衰する（ducking OFF との比較）
-     assert-7: ネガティブ対照 — BGM 注記なし timeline は本編のみ出力
-     assert-8: 本編無音 + BGM で BGM 単独系統出力（DC-AS-004）
+  2. Assert list (required):
+     assert-1: render_timeline(dry_run=False) returns ok=True and output file is created
+     assert-2: output contains an audio stream and BGM is actually mixed (volume change)
+     assert-3: output peak does not exceed 0 dBFS (DC-AM-001, alimiter verified)
+     assert-4: fade_in/out works (beginning/end lower than mid; afade verified)
+     assert-4b: fade=0 case verifies no fade is applied
+     assert-5: BGM matches main duration (short BGM loops, long BGM trimmed; output ≈ main)
+     assert-6: ducking ON attenuates BGM contribution (compared with ducking OFF)
+     assert-7: Negative control — timeline without BGM annotation outputs main only
+     assert-8: silent main + BGM -> BGM-only signal path output (DC-AS-004)
 
-実行方法（ffmpeg 不在時は skip）:
+How to run (skipped when ffmpeg is absent):
   uv run --package clipwright-render pytest -k e2e_bgm
 
-ffmpeg を PATH に通すか CLIPWRIGHT_FFMPEG / CLIPWRIGHT_FFPROBE 環境変数で指定すること。
+Set ffmpeg on PATH or specify via CLIPWRIGHT_FFMPEG / CLIPWRIGHT_FFPROBE env vars.
 """
 
 from __future__ import annotations
@@ -50,12 +51,12 @@ from clipwright_render.render import render_timeline
 from clipwright_render.schemas import RenderOptions
 
 # ===========================================================================
-# ffmpeg / ffprobe パス解決（conftest.py の require_ffmpeg と同パターン）
+# ffmpeg / ffprobe binary resolution (same pattern as conftest.py require_ffmpeg)
 # ===========================================================================
 
 
 def _find_binary(name: str, env_var: str) -> str | None:
-    """バイナリを PATH → env_var の順で探す。"""
+    """Search for a binary in PATH first, then fall back to env_var."""
     found = shutil.which(name)
     if found:
         return found
@@ -73,51 +74,51 @@ pytestmark = pytest.mark.e2e
 requires_ffmpeg = pytest.mark.skipif(
     _FFMPEG is None,
     reason=(
-        "ffmpeg が見つかりません。"
-        "PATH に ffmpeg を追加するか "
-        "CLIPWRIGHT_FFMPEG 環境変数にフルパスを設定してください。"
+        "ffmpeg not found. "
+        "Add ffmpeg to PATH or "
+        "set the CLIPWRIGHT_FFMPEG environment variable to its full path."
     ),
 )
 
 requires_ffprobe = pytest.mark.skipif(
     _FFPROBE is None,
     reason=(
-        "ffprobe が見つかりません。"
-        "PATH に ffprobe を追加するか "
-        "CLIPWRIGHT_FFPROBE 環境変数にフルパスを設定してください。"
+        "ffprobe not found. "
+        "Add ffprobe to PATH or "
+        "set the CLIPWRIGHT_FFPROBE environment variable to its full path."
     ),
 )
 
 # ===========================================================================
-# 定数
+# Constants
 # ===========================================================================
 
-# e2e テスト全体の subprocess タイムアウト秒数
+# Subprocess timeout in seconds for all e2e tests
 _E2E_TIMEOUT: int = int(os.environ.get("E2E_TIMEOUT_SEC", "120"))
 
-# フィクスチャ設定
-_MAIN_DUR = 5.0  # 本編: 5 秒
-_BGM_SHORT_DUR = 2.0  # 短い BGM: 2 秒（本編より短い → -stream_loop でループ）
-_BGM_LONG_DUR = 8.0  # 長い BGM: 8 秒（本編より長い → atrim でトリム）
-_MAIN_FREQ = 440  # 本編 sine 周波数 Hz（A4）
-_BGM_SHORT_FREQ = 880  # 短い BGM sine 周波数 Hz（A5・本編と弁別可能）
-_BGM_LONG_FREQ = 880  # 長い BGM sine 周波数 Hz（同）
-_RATE = 25.0  # 映像 fps
+# Fixture parameters
+_MAIN_DUR = 5.0  # Main clip: 5 s
+_BGM_SHORT_DUR = 2.0  # Short BGM: 2 s (shorter than main -> loops via -stream_loop)
+_BGM_LONG_DUR = 8.0  # Long BGM: 8 s (longer than main -> trimmed via atrim)
+_MAIN_FREQ = 440  # Main sine frequency Hz (A4)
+_BGM_SHORT_FREQ = 880  # Short BGM sine frequency Hz (A5, distinguishable from main)
+_BGM_LONG_FREQ = 880  # Long BGM sine frequency Hz (same)
+_RATE = 25.0  # Video fps
 
-# 尺許容誤差: ±1 フレーム相当（出力 fps=25 → 1 フレーム = 0.04 秒）
-# ADR-B6-r2: -stream_loop + atrim なので 1 フレーム余裕で十分
-_FRAME_TOLERANCE = 1.0 / _RATE  # 0.04 秒
+# Duration tolerance: ±1 frame (output fps=25 -> 1 frame = 0.04 s)
+# ADR-B6-r2: -stream_loop + atrim, so 1-frame margin is sufficient
+_FRAME_TOLERANCE = 1.0 / _RATE  # 0.04 s
 
-# volumedetect の音量計測用定数
-# BGM あり/なし比較で有意な差 (3 dB 以上) を確認する
+# Constants for volumedetect volume measurement
+# Verify a significant difference (>= 3 dB) between BGM-present and BGM-absent outputs
 _BGM_EFFECT_MIN_DB_DIFF = 3.0
 
-# ducking 減衰確認: ducking ON で BGM 単体経路が ducking OFF より低い
-# 完全混合出力の差ではなく、ducking 効果は filter_complex の dry_run で確認する
-# ducking ON の filter_complex に sidechaincompress が含まれることで機能確認
+# Ducking attenuation check: ducking ON should lower the BGM-only path vs ducking OFF.
+# Rather than comparing fully mixed outputs, ducking effect is confirmed via dry_run
+# filter_complex by verifying that sidechaincompress is present when ducking is ON.
 
 # ===========================================================================
-# ヘルパー: フィクスチャ生成
+# Helpers: fixture generation
 # ===========================================================================
 
 
@@ -127,9 +128,9 @@ def _make_main_video(
     duration: float = _MAIN_DUR,
     freq: int = _MAIN_FREQ,
 ) -> None:
-    """本編フィクスチャ: testsrc 映像 + sine 音声（デフォルト 5 秒・440Hz）を生成する。
+    """Generate the main fixture: testsrc video + sine audio (default 5 s, 440 Hz).
 
-    DC-GP-003: tmp_path 配下に生成し自動 teardown。
+    DC-GP-003: generated under tmp_path for automatic teardown.
     """
     cmd = [
         ffmpeg,
@@ -165,7 +166,7 @@ def _make_main_video(
         timeout=_E2E_TIMEOUT,
     )
     assert result.returncode == 0, (
-        f"本編フィクスチャ生成に失敗しました: {result.stderr[:400]}"
+        f"Main fixture generation failed: {result.stderr[:400]}"
     )
 
 
@@ -174,9 +175,9 @@ def _make_silent_video(
     output: Path,
     duration: float = _MAIN_DUR,
 ) -> None:
-    """本編無音フィクスチャ: testsrc 映像のみ（音声なし）を生成する。
+    """Generate a silent main fixture: testsrc video only (no audio).
 
-    DC-AS-004 の BGM 単独系統実証用（has_main_audio=False + BGM）。
+    Used to verify the BGM-only signal path for DC-AS-004 (has_main_audio=False + BGM).
     """
     cmd = [
         ffmpeg,
@@ -202,7 +203,7 @@ def _make_silent_video(
         timeout=_E2E_TIMEOUT,
     )
     assert result.returncode == 0, (
-        f"無音本編フィクスチャ生成に失敗しました: {result.stderr[:400]}"
+        f"Silent main fixture generation failed: {result.stderr[:400]}"
     )
 
 
@@ -213,10 +214,10 @@ def _make_bgm_audio(
     freq: int = _BGM_SHORT_FREQ,
     amplitude: float = 0.3,
 ) -> None:
-    """BGM フィクスチャ（音声のみ mp4）を生成する。
+    """Generate a BGM fixture (audio-only mp4).
 
-    sine 単音で生成し、本編（440Hz）と弁別できる周波数（880Hz）を使う。
-    amplitude は volumedetect で計測可能なレベルに設定する。
+    Uses a single sine tone at a frequency (880 Hz) distinguishable from the main clip
+    (440 Hz). The amplitude is set to a level measurable by volumedetect.
     """
     cmd = [
         ffmpeg,
@@ -252,17 +253,17 @@ def _make_bgm_audio(
         timeout=_E2E_TIMEOUT,
     )
     assert result.returncode == 0, (
-        f"BGM フィクスチャ生成に失敗しました: {result.stderr[:400]}"
+        f"BGM fixture generation failed: {result.stderr[:400]}"
     )
 
 
 # ===========================================================================
-# ヘルパー: 音声計測
+# Helpers: audio measurement
 # ===========================================================================
 
 
 def _measure_max_volume(ffmpeg: str, media: Path) -> float:
-    """volumedetect で max_volume を測定して返す（dB）。"""
+    """Measure and return max_volume via volumedetect (dB)."""
     cmd = [
         ffmpeg,
         "-i",
@@ -281,15 +282,15 @@ def _measure_max_volume(ffmpeg: str, media: Path) -> float:
         timeout=_E2E_TIMEOUT,
     )
     assert result.returncode == 0, (
-        f"volumedetect 測定に失敗しました: {result.stderr[:400]}"
+        f"volumedetect measurement failed: {result.stderr[:400]}"
     )
     m = re.search(r"max_volume:\s*([-0-9.]+)\s*dB", result.stderr)
-    assert m is not None, f"max_volume が見つかりません:\n{result.stderr[-400:]}"
+    assert m is not None, f"max_volume not found:\n{result.stderr[-400:]}"
     return float(m.group(1))
 
 
 def _measure_mean_volume(ffmpeg: str, media: Path) -> float:
-    """volumedetect で mean_volume を測定して返す（dB）。"""
+    """Measure and return mean_volume via volumedetect (dB)."""
     cmd = [
         ffmpeg,
         "-i",
@@ -308,19 +309,19 @@ def _measure_mean_volume(ffmpeg: str, media: Path) -> float:
         timeout=_E2E_TIMEOUT,
     )
     assert result.returncode == 0, (
-        f"volumedetect 測定に失敗しました: {result.stderr[:400]}"
+        f"volumedetect measurement failed: {result.stderr[:400]}"
     )
     m = re.search(r"mean_volume:\s*([-0-9.]+)\s*dB", result.stderr)
-    assert m is not None, f"mean_volume が見つかりません:\n{result.stderr[-400:]}"
+    assert m is not None, f"mean_volume not found:\n{result.stderr[-400:]}"
     return float(m.group(1))
 
 
 def _measure_segment_volume(
     ffmpeg: str, media: Path, start: float, duration: float
 ) -> float:
-    """指定区間の mean_volume を測定して返す（dB）。
+    """Measure and return mean_volume of a specified segment (dB).
 
-    afade 前後比較（assert-4）に使用する。
+    Used for before/after afade comparison (assert-4).
     """
     cmd = [
         ffmpeg,
@@ -344,17 +345,17 @@ def _measure_segment_volume(
         timeout=_E2E_TIMEOUT,
     )
     assert result.returncode == 0, (
-        f"区間 volumedetect 測定に失敗しました: {result.stderr[:400]}"
+        f"Segment volumedetect measurement failed: {result.stderr[:400]}"
     )
     m = re.search(r"mean_volume:\s*([-0-9.]+)\s*dB", result.stderr)
-    # 無音区間は mean_volume が得られないことがある
+    # mean_volume may not be available for silent segments
     if m is None:
         return -100.0
     return float(m.group(1))
 
 
 def _get_duration_seconds(ffprobe: str, media: Path) -> float:
-    """ffprobe で動画の尺を秒で返す。"""
+    """Return the duration of a video in seconds using ffprobe."""
     cmd = [
         ffprobe,
         "-v",
@@ -371,15 +372,15 @@ def _get_duration_seconds(ffprobe: str, media: Path) -> float:
         errors="replace",
         timeout=_E2E_TIMEOUT,
     )
-    assert result.returncode == 0, f"ffprobe に失敗しました: {result.stderr[:400]}"
+    assert result.returncode == 0, f"ffprobe failed: {result.stderr[:400]}"
     info = json.loads(result.stdout)
     duration_str = info.get("format", {}).get("duration")
-    assert duration_str is not None, "duration が取得できませんでした"
+    assert duration_str is not None, "Could not retrieve duration"
     return float(duration_str)
 
 
 def _get_audio_stream_count(ffprobe: str, media: Path) -> int:
-    """ffprobe で音声ストリーム数を返す。"""
+    """Return the number of audio streams using ffprobe."""
     cmd = [
         ffprobe,
         "-v",
@@ -396,13 +397,13 @@ def _get_audio_stream_count(ffprobe: str, media: Path) -> int:
         errors="replace",
         timeout=_E2E_TIMEOUT,
     )
-    assert result.returncode == 0, f"ffprobe に失敗しました: {result.stderr[:400]}"
+    assert result.returncode == 0, f"ffprobe failed: {result.stderr[:400]}"
     info = json.loads(result.stdout)
     return sum(1 for s in info.get("streams", []) if s.get("codec_type") == "audio")
 
 
 # ===========================================================================
-# ヘルパー: OTIO タイムライン構築
+# Helpers: OTIO timeline construction
 # ===========================================================================
 
 
@@ -411,7 +412,7 @@ def _make_base_timeline(
     duration_sec: float = _MAIN_DUR,
     rate: float = _RATE,
 ) -> otio.schema.Timeline:
-    """単一クリップ本編の OTIO タイムラインを生成する（Video トラックのみ）。"""
+    """Generate a single-clip main OTIO timeline (Video track only)."""
     ref = otio.schema.ExternalReference(target_url=str(source_path))
     clip = otio.schema.Clip(
         name=source_path.name,
@@ -440,10 +441,10 @@ def _add_bgm_track(
     ducking_threshold: float = 0.05,
     ducking_ratio: float = 4.0,
 ) -> None:
-    """timeline に A2 BGM トラックを追加する（add_bgm が書くのと同等の OTIO 構造）。
+    """Add an A2 BGM track to the timeline (equivalent OTIO structure to what add_bgm writes).
 
-    e2e テストで add_bgm ツールを経由せずに直接 OTIO を組み立てるヘルパー。
-    BGM クリップの metadata には BgmDirective 相当の dict を書く（ADR-B3/B9-r2）。
+    Builds the OTIO structure directly in e2e tests without going through the add_bgm tool.
+    BGM clip metadata contains a BgmDirective-equivalent dict (ADR-B3/B9-r2).
     """
     bgm_directive: dict[str, Any] = {
         "tool": "clipwright-bgm",
@@ -460,7 +461,7 @@ def _add_bgm_track(
     }
 
     ref = otio.schema.ExternalReference(target_url=str(bgm_path))
-    # source_range = BGM メディア全長固定（ADR-B2-r2/DC-AS-003）
+    # source_range = fixed to the full BGM media length (ADR-B2-r2/DC-AS-003)
     bgm_clip = otio.schema.Clip(
         name=bgm_path.name,
         media_reference=ref,
@@ -477,22 +478,22 @@ def _add_bgm_track(
 
 
 def _save_timeline(timeline: otio.schema.Timeline, path: Path) -> None:
-    """OTIO タイムラインをファイルに保存する。"""
+    """Save an OTIO timeline to a file."""
     otio.adapters.write_to_file(timeline, str(path))
 
 
 # ===========================================================================
-# テスト: assert-1 + assert-2 + assert-3（基本ミックス・ピーク検証）
+# Tests: assert-1 + assert-2 + assert-3 (basic mix, peak verification)
 # ===========================================================================
 
 
 @requires_ffmpeg
 @requires_ffprobe
 class TestBgmBasicMix:
-    """BGM ミックスの基本動作実証（assert-1/2/3）。"""
+    """Verify basic BGM mixing behaviour (assert-1/2/3)."""
 
     def test_render_with_bgm_returns_ok(self, tmp_path: Path) -> None:
-        """BGM 付き timeline で render が ok=True を返し出力ファイルが生成される（assert-1）。"""
+        """BGM-annotated timeline returns ok=True and output file is created (assert-1)."""
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
         bgm_src = tmp_path / "bgm_short.mp4"
@@ -509,12 +510,12 @@ class TestBgmBasicMix:
         result = render_timeline(
             str(timeline_path), str(out_path), RenderOptions(), dry_run=False
         )
-        assert result["ok"] is True, f"render が失敗しました: {result}"
-        assert out_path.exists(), "出力ファイルが生成されていません"
-        assert out_path.stat().st_size > 0, "出力ファイルのサイズが 0 です"
+        assert result["ok"] is True, f"render failed: {result}"
+        assert out_path.exists(), "Output file was not created"
+        assert out_path.stat().st_size > 0, "Output file size is 0"
 
     def test_bgm_output_has_audio_stream(self, tmp_path: Path) -> None:
-        """BGM 付き出力に音声ストリームが含まれる（assert-2 前提確認）。"""
+        """BGM-mixed output contains an audio stream (prerequisite for assert-2)."""
         assert _FFMPEG is not None
         assert _FFPROBE is not None
         main_src = tmp_path / "main.mp4"
@@ -532,20 +533,20 @@ class TestBgmBasicMix:
         result = render_timeline(
             str(timeline_path), str(out_path), RenderOptions(), dry_run=False
         )
-        assert result["ok"] is True, f"render が失敗しました: {result}"
+        assert result["ok"] is True, f"render failed: {result}"
 
         audio_count = _get_audio_stream_count(_FFPROBE, out_path)
         assert audio_count >= 1, (
-            f"出力に音声ストリームがありません（assert-2）:\n"
-            f"  音声ストリーム数: {audio_count}"
+            f"No audio stream in output (assert-2):\n"
+            f"  audio stream count: {audio_count}"
         )
 
     def test_bgm_increases_mean_volume(self, tmp_path: Path) -> None:
-        """BGM 混合により mean_volume が BGM なしより高くなる（assert-2・混合実証）。
+        """Mixing BGM raises mean_volume compared with no-BGM output (assert-2, mix verified).
 
-        本編 440Hz sine + BGM 880Hz sine を amix した場合、
-        BGM なし本編のみより出力音量が有意に高くなることを確認する。
-        BGM volume_db=0.0 で相対調整なし（最大効果）。
+        When main 440 Hz sine + BGM 880 Hz sine are combined via amix, the output
+        volume should be significantly higher than the main-only output.
+        BGM volume_db=0.0 means no relative adjustment (maximum effect).
         """
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
@@ -554,7 +555,7 @@ class TestBgmBasicMix:
         _make_main_video(_FFMPEG, main_src)
         _make_bgm_audio(_FFMPEG, bgm_src, _BGM_SHORT_DUR)
 
-        # BGM ありの出力
+        # Output with BGM
         timeline_bgm = _make_base_timeline(main_src)
         _add_bgm_track(timeline_bgm, bgm_src, _BGM_SHORT_DUR, volume_db=0.0)
         tl_path_bgm = tmp_path / "timeline_bgm.otio"
@@ -563,9 +564,9 @@ class TestBgmBasicMix:
         result_bgm = render_timeline(
             str(tl_path_bgm), str(out_bgm), RenderOptions(), dry_run=False
         )
-        assert result_bgm["ok"] is True, f"BGM あり render が失敗しました: {result_bgm}"
+        assert result_bgm["ok"] is True, f"BGM render failed: {result_bgm}"
 
-        # BGM なしの出力（ネガティブ対照）
+        # Output without BGM (negative control)
         timeline_no_bgm = _make_base_timeline(main_src)
         tl_path_no_bgm = tmp_path / "timeline_no_bgm.otio"
         _save_timeline(timeline_no_bgm, tl_path_no_bgm)
@@ -573,39 +574,37 @@ class TestBgmBasicMix:
         result_no_bgm = render_timeline(
             str(tl_path_no_bgm), str(out_no_bgm), RenderOptions(), dry_run=False
         )
-        assert result_no_bgm["ok"] is True, (
-            f"BGM なし render が失敗しました: {result_no_bgm}"
-        )
+        assert result_no_bgm["ok"] is True, f"No-BGM render failed: {result_no_bgm}"
 
         mean_bgm = _measure_mean_volume(_FFMPEG, out_bgm)
         mean_no_bgm = _measure_mean_volume(_FFMPEG, out_no_bgm)
         diff = mean_bgm - mean_no_bgm
 
         assert diff >= _BGM_EFFECT_MIN_DB_DIFF, (
-            f"BGM 混合による音量変化が不十分です（assert-2）:\n"
-            f"  BGM あり mean_volume: {mean_bgm:.2f} dB\n"
-            f"  BGM なし mean_volume: {mean_no_bgm:.2f} dB\n"
-            f"  差: {diff:.2f} dB（期待: >= {_BGM_EFFECT_MIN_DB_DIFF} dB）\n"
-            f"  BGM が実際に混ざっていれば本編のみより音量が高くなるはず"
+            f"Volume change from BGM mixing is insufficient (assert-2):\n"
+            f"  BGM mean_volume: {mean_bgm:.2f} dB\n"
+            f"  No-BGM mean_volume: {mean_no_bgm:.2f} dB\n"
+            f"  diff: {diff:.2f} dB (expected: >= {_BGM_EFFECT_MIN_DB_DIFF} dB)\n"
+            f"  If BGM is actually mixed, volume should be higher than main-only output"
         )
 
     def test_output_peak_does_not_exceed_0dbfs(self, tmp_path: Path) -> None:
-        """出力ピークが 0dBFS を超えない（assert-3・DC-AM-001・alimiter=limit=1.0 実証）。
+        """Output peak does not exceed 0 dBFS (assert-3, DC-AM-001, alimiter=limit=1.0 verified).
 
-        本編フルスケール sine + BGM を amix しても alimiter でクリッピングが防止されることを
-        実機確認する。本編 amplitude=1.0 は実際には AAC エンコードによりピークが変わるため、
-        出力の max_volume を計測し 0 dBFS 以下（≤ 0.0）であることを確認する。
+        Verify on real hardware that alimiter prevents clipping even when main full-scale
+        sine + BGM are combined via amix. Because amplitude=1.0 peak shifts with AAC
+        encoding, the measured max_volume of the output must be ≤ 0.0 dBFS.
 
-        volumedetect の max_volume は PCM 解析値のため 0 dBFS が 0.0 dB に相当する。
-        ただし AAC エンコード後の再デコードによりわずかに超過することがある（±1 dB 許容）。
+        volumedetect max_volume is a PCM analysis value where 0 dBFS = 0.0 dB.
+        A tolerance of ±1 dB is allowed for minor overshoot after AAC decode.
         """
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
         bgm_src = tmp_path / "bgm_short.mp4"
 
-        # 本編: できるだけ大きい音量（volume=0.9 で接近）
-        # ffmpeg 8.1.1 の sine フィルタは amplitude オプション非対応のため
-        # volume フィルタで音量調整する
+        # Main clip: as loud as possible (volume=0.9 approximation)
+        # ffmpeg 8.1.1 sine filter does not support the amplitude option,
+        # so use the volume filter to adjust loudness instead
         cmd_main = [
             _FFMPEG,
             "-y",
@@ -641,9 +640,11 @@ class TestBgmBasicMix:
             errors="replace",
             timeout=_E2E_TIMEOUT,
         )
-        assert r.returncode == 0, f"大音量本編生成失敗: {r.stderr[:400]}"
+        assert r.returncode == 0, (
+            f"High-volume main fixture generation failed: {r.stderr[:400]}"
+        )
 
-        # BGM も volume_db=0.0 で最大加算
+        # BGM also at volume_db=0.0 for maximum additive effect
         _make_bgm_audio(_FFMPEG, bgm_src, _BGM_SHORT_DUR)
 
         timeline = _make_base_timeline(main_src)
@@ -655,34 +656,34 @@ class TestBgmBasicMix:
         result = render_timeline(
             str(timeline_path), str(out_path), RenderOptions(), dry_run=False
         )
-        assert result["ok"] is True, f"render が失敗しました: {result}"
+        assert result["ok"] is True, f"render failed: {result}"
 
         max_vol = _measure_max_volume(_FFMPEG, out_path)
 
-        # AAC エンコード後の再デコードによる ±1 dB を考慮
+        # Allow ±1 dB for minor overshoot after AAC encode/decode
         assert max_vol <= 1.0, (
-            f"出力ピークが 0dBFS を超過しています（assert-3・DC-AM-001 違反）:\n"
+            f"Output peak exceeds 0 dBFS (assert-3, DC-AM-001 violation):\n"
             f"  max_volume: {max_vol:.2f} dB\n"
-            f"  期待: ≤ 1.0 dB（alimiter=limit=1.0 でクリッピングが防止されるはず）"
+            f"  expected: ≤ 1.0 dB (alimiter=limit=1.0 should prevent clipping)"
         )
 
 
 # ===========================================================================
-# テスト: assert-4 / assert-4b（fade_in/out 実証）
+# Tests: assert-4 / assert-4b (fade_in/out verification)
 # ===========================================================================
 
 
 @requires_ffmpeg
 class TestBgmFade:
-    """BGM の fade_in/out 効果を実証するテスト（assert-4/4b）。
+    """Verify BGM fade_in/out effect (assert-4/4b).
 
-    先頭区間の音量が中央区間より低いことで afade in が機能することを確認する。
-    末尾区間の音量が中央区間より低いことで afade out が機能することを確認する。
-    fade=0 ケースでは先頭/末尾が中央と同程度になることを確認する（assert-4b）。
+    Confirms afade in works by checking that the beginning segment is quieter than mid.
+    Confirms afade out works by checking that the ending segment is quieter than mid.
+    For fade=0, verifies that beginning/end are similar to mid (assert-4b).
     """
 
     def test_fade_in_reduces_beginning_volume(self, tmp_path: Path) -> None:
-        """fade_in_sec > 0 のとき先頭区間の音量が中央より低い（assert-4・afade in 実証）。"""
+        """When fade_in_sec > 0, beginning segment is quieter than mid (assert-4, afade in)."""
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
         bgm_src = tmp_path / "bgm_long.mp4"
@@ -690,7 +691,7 @@ class TestBgmFade:
         _make_main_video(_FFMPEG, main_src)
         _make_bgm_audio(_FFMPEG, bgm_src, _BGM_LONG_DUR)
 
-        fade_sec = 1.5  # 先頭 1.5 秒でフェードイン
+        fade_sec = 1.5  # fade in over the first 1.5 s
 
         timeline = _make_base_timeline(main_src)
         _add_bgm_track(
@@ -708,22 +709,22 @@ class TestBgmFade:
         result = render_timeline(
             str(timeline_path), str(out_path), RenderOptions(), dry_run=False
         )
-        assert result["ok"] is True, f"render が失敗しました: {result}"
+        assert result["ok"] is True, f"render failed: {result}"
 
-        # 先頭 0.5 秒（フェードイン途中）の音量
+        # Volume of first 0.5 s (mid fade-in)
         vol_start = _measure_segment_volume(_FFMPEG, out_path, start=0.0, duration=0.5)
-        # 中央 2.0〜2.5 秒（フェード影響外）の音量
+        # Volume of centre 2.0-2.5 s (outside fade influence)
         vol_mid = _measure_segment_volume(_FFMPEG, out_path, start=2.0, duration=0.5)
 
         assert vol_start < vol_mid, (
-            f"fade_in が効いていません（assert-4）:\n"
-            f"  先頭 0.5 秒 mean_volume: {vol_start:.2f} dB\n"
-            f"  中央 2.0〜2.5 秒 mean_volume: {vol_mid:.2f} dB\n"
-            f"  期待: 先頭 < 中央（フェードインで音量が増加するはず）"
+            f"fade_in is not working (assert-4):\n"
+            f"  beginning 0.5 s mean_volume: {vol_start:.2f} dB\n"
+            f"  centre 2.0-2.5 s mean_volume: {vol_mid:.2f} dB\n"
+            f"  expected: beginning < centre (volume should increase during fade-in)"
         )
 
     def test_fade_out_reduces_ending_volume(self, tmp_path: Path) -> None:
-        """fade_out_sec > 0 のとき末尾区間の音量が中央より低い（assert-4・afade out 実証）。"""
+        """When fade_out_sec > 0, ending segment is quieter than mid (assert-4, afade out)."""
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
         bgm_src = tmp_path / "bgm_long.mp4"
@@ -731,7 +732,7 @@ class TestBgmFade:
         _make_main_video(_FFMPEG, main_src)
         _make_bgm_audio(_FFMPEG, bgm_src, _BGM_LONG_DUR)
 
-        fade_sec = 1.5  # 末尾 1.5 秒でフェードアウト
+        fade_sec = 1.5  # fade out over the last 1.5 s
 
         timeline = _make_base_timeline(main_src)
         _add_bgm_track(
@@ -749,25 +750,25 @@ class TestBgmFade:
         result = render_timeline(
             str(timeline_path), str(out_path), RenderOptions(), dry_run=False
         )
-        assert result["ok"] is True, f"render が失敗しました: {result}"
+        assert result["ok"] is True, f"render failed: {result}"
 
-        # 中央 2.0〜2.5 秒（フェード影響外）の音量
+        # Volume of centre 2.0-2.5 s (outside fade influence)
         vol_mid = _measure_segment_volume(_FFMPEG, out_path, start=2.0, duration=0.5)
-        # 末尾 4.0〜4.5 秒（フェードアウト途中）の音量
+        # Volume of ending 4.0-4.5 s (mid fade-out)
         vol_end = _measure_segment_volume(_FFMPEG, out_path, start=4.0, duration=0.4)
 
         assert vol_end < vol_mid, (
-            f"fade_out が効いていません（assert-4）:\n"
-            f"  中央 2.0〜2.5 秒 mean_volume: {vol_mid:.2f} dB\n"
-            f"  末尾 4.0〜4.5 秒 mean_volume: {vol_end:.2f} dB\n"
-            f"  期待: 末尾 < 中央（フェードアウトで音量が減少するはず）"
+            f"fade_out is not working (assert-4):\n"
+            f"  centre 2.0-2.5 s mean_volume: {vol_mid:.2f} dB\n"
+            f"  ending 4.0-4.5 s mean_volume: {vol_end:.2f} dB\n"
+            f"  expected: ending < centre (volume should decrease during fade-out)"
         )
 
     def test_no_fade_does_not_reduce_volume_at_boundaries(self, tmp_path: Path) -> None:
-        """fade=0 のとき先頭/末尾の音量が中央と同程度（assert-4b・無フェード確認）。
+        """When fade=0, beginning/end volume is similar to mid (assert-4b, no-fade check).
 
-        ADR-B9-r3: fade_in_sec=0/fade_out_sec=0 のとき afade を注入しない。
-        dry_run で filter_complex に afade が含まれないことも確認する。
+        ADR-B9-r3: afade is not injected when fade_in_sec=0 / fade_out_sec=0.
+        Also verified via dry_run that filter_complex does not contain afade.
         """
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
@@ -788,58 +789,57 @@ class TestBgmFade:
         timeline_path = tmp_path / "timeline_no_fade.otio"
         _save_timeline(timeline, timeline_path)
 
-        # dry_run で filter_complex に afade が含まれないことを確認
+        # Verify via dry_run that filter_complex does not contain afade
         out_path_dry = tmp_path / "out_no_fade_dry.mp4"
         result_dry = render_timeline(
             str(timeline_path), str(out_path_dry), RenderOptions(), dry_run=True
         )
-        assert result_dry["ok"] is True, f"dry_run が失敗しました: {result_dry}"
+        assert result_dry["ok"] is True, f"dry_run failed: {result_dry}"
         fc = result_dry["data"]["filter_complex"]
         assert "afade" not in fc, (
-            f"fade=0 なのに filter_complex に afade が含まれています（assert-4b・ADR-B9-r3 違反）:\n"
+            f"filter_complex contains afade despite fade=0 (assert-4b, ADR-B9-r3 violation):\n"
             f"  filter_complex: {fc}"
         )
 
-        # 実機: 先頭/末尾の音量が中央と大きくは差がないことを確認
+        # Real hardware: verify that beginning/end volume is not significantly different from mid
         out_path = tmp_path / "out_no_fade.mp4"
         result = render_timeline(
             str(timeline_path), str(out_path), RenderOptions(), dry_run=False
         )
-        assert result["ok"] is True, f"render が失敗しました: {result}"
+        assert result["ok"] is True, f"render failed: {result}"
 
         vol_start = _measure_segment_volume(_FFMPEG, out_path, start=0.0, duration=0.5)
         vol_mid = _measure_segment_volume(_FFMPEG, out_path, start=2.0, duration=0.5)
 
-        # 無フェードなので先頭と中央の差は小さいはず（5 dB 以内）
+        # Without fade, difference between beginning and mid should be small (within 5 dB)
         diff = vol_mid - vol_start
         assert diff <= 5.0, (
-            f"fade=0 なのに先頭と中央の音量差が大きすぎます（assert-4b）:\n"
-            f"  先頭 0.5 秒 mean_volume: {vol_start:.2f} dB\n"
-            f"  中央 mean_volume: {vol_mid:.2f} dB\n"
-            f"  差: {diff:.2f} dB（許容: 5 dB 以内）"
+            f"Beginning vs mid volume gap too large despite fade=0 (assert-4b):\n"
+            f"  beginning 0.5 s mean_volume: {vol_start:.2f} dB\n"
+            f"  centre mean_volume: {vol_mid:.2f} dB\n"
+            f"  diff: {diff:.2f} dB (allowed: within 5 dB)"
         )
 
 
 # ===========================================================================
-# テスト: assert-5（BGM 尺合わせ・-stream_loop ループ・atrim トリム）
+# Tests: assert-5 (BGM duration matching, -stream_loop loop, atrim trim)
 # ===========================================================================
 
 
 @requires_ffmpeg
 @requires_ffprobe
 class TestBgmDurationMatch:
-    """BGM の本編尺合わせ実証（assert-5・ADR-B6-r2）。
+    """Verify BGM duration matching against main clip (assert-5, ADR-B6-r2).
 
-    短い BGM（2秒）が -stream_loop でループして本編尺（5秒）に合うこと。
-    長い BGM（8秒）が atrim で末尾トリムされて本編尺（5秒）に合うこと。
-    出力尺 ≒ 本編尺（±1 フレーム許容）を ffprobe で確認する。
+    Short BGM (2 s) must loop via -stream_loop to match main duration (5 s).
+    Long BGM (8 s) must be trimmed via atrim to match main duration (5 s).
+    Output duration ≈ main duration (±1 frame tolerance) verified by ffprobe.
     """
 
     def test_short_bgm_loops_to_main_duration(self, tmp_path: Path) -> None:
-        """短い BGM（2秒）が -stream_loop でループして出力尺が本編尺（5秒）になる（assert-5）。
+        """Short BGM (2 s) loops via -stream_loop so output equals main duration (5 s) (assert-5).
 
-        ADR-B6-r2: -stream_loop -1 + atrim=0:{main_dur} により
-        BGM が本編尺にぴったり合う。
+        ADR-B6-r2: -stream_loop -1 + atrim=0:{main_dur} aligns BGM exactly to main duration.
         """
         assert _FFMPEG is not None
         assert _FFPROBE is not None
@@ -858,21 +858,21 @@ class TestBgmDurationMatch:
         result = render_timeline(
             str(timeline_path), str(out_path), RenderOptions(), dry_run=False
         )
-        assert result["ok"] is True, f"render が失敗しました: {result}"
+        assert result["ok"] is True, f"render failed: {result}"
 
         actual_dur = _get_duration_seconds(_FFPROBE, out_path)
         diff = abs(actual_dur - _MAIN_DUR)
 
         assert diff <= _FRAME_TOLERANCE, (
-            f"短い BGM ループ後の出力尺が本編尺と乖離しています（assert-5）:\n"
-            f"  期待尺: {_MAIN_DUR:.3f} 秒\n"
-            f"  実出力尺: {actual_dur:.3f} 秒\n"
-            f"  差分: {diff:.4f} 秒（許容: ±{_FRAME_TOLERANCE:.4f} 秒 = ±1 フレーム）\n"
-            f"  -stream_loop -1 + atrim で本編尺ぴったりになるはず（ADR-B6-r2）"
+            f"Short BGM loop output duration deviates from main duration (assert-5):\n"
+            f"  expected: {_MAIN_DUR:.3f} s\n"
+            f"  actual:   {actual_dur:.3f} s\n"
+            f"  diff:     {diff:.4f} s (allowed: ±{_FRAME_TOLERANCE:.4f} s = ±1 frame)\n"
+            f"  -stream_loop -1 + atrim should match main duration exactly (ADR-B6-r2)"
         )
 
     def test_long_bgm_trimmed_to_main_duration(self, tmp_path: Path) -> None:
-        """長い BGM（8秒）が atrim で末尾トリムされ出力尺が本編尺（5秒）になる（assert-5）。"""
+        """Long BGM (8 s) is trimmed by atrim so output equals main duration (5 s) (assert-5)."""
         assert _FFMPEG is not None
         assert _FFPROBE is not None
         main_src = tmp_path / "main.mp4"
@@ -890,27 +890,27 @@ class TestBgmDurationMatch:
         result = render_timeline(
             str(timeline_path), str(out_path), RenderOptions(), dry_run=False
         )
-        assert result["ok"] is True, f"render が失敗しました: {result}"
+        assert result["ok"] is True, f"render failed: {result}"
 
         actual_dur = _get_duration_seconds(_FFPROBE, out_path)
         diff = abs(actual_dur - _MAIN_DUR)
 
         assert diff <= _FRAME_TOLERANCE, (
-            f"長い BGM トリム後の出力尺が本編尺と乖離しています（assert-5）:\n"
-            f"  期待尺: {_MAIN_DUR:.3f} 秒\n"
-            f"  実出力尺: {actual_dur:.3f} 秒\n"
-            f"  差分: {diff:.4f} 秒（許容: ±{_FRAME_TOLERANCE:.4f} 秒 = ±1 フレーム）\n"
-            f"  atrim=0:{_MAIN_DUR} で末尾トリムされるはず（ADR-B6-r2）"
+            f"Long BGM trim output duration deviates from main duration (assert-5):\n"
+            f"  expected: {_MAIN_DUR:.3f} s\n"
+            f"  actual:   {actual_dur:.3f} s\n"
+            f"  diff:     {diff:.4f} s (allowed: ±{_FRAME_TOLERANCE:.4f} s = ±1 frame)\n"
+            f"  atrim=0:{_MAIN_DUR} should trim tail to match main duration (ADR-B6-r2)"
         )
 
     def test_dry_run_has_stream_loop_in_render_command(self, tmp_path: Path) -> None:
-        """-stream_loop -1 が filter_complex の BGM チェーンに atrim を含む（ADR-B6-r2 内部確認）。
+        """-stream_loop -1 BGM chain in filter_complex contains atrim (ADR-B6-r2 internal check).
 
-        dry_run で filter_complex を取得し:
-        1. filter_complex に atrim が含まれる（BGM チェーンの尺合わせ）
-        2. filter_complex に alimiter が含まれる（DC-AM-001）
-        3. filter_complex に aformat が含まれる（DC-AS-007）
-        4. filter_complex に amix が含まれる（混合）
+        Retrieve filter_complex via dry_run and assert:
+        1. filter_complex contains atrim (BGM chain duration matching)
+        2. filter_complex contains alimiter (DC-AM-001)
+        3. filter_complex contains aformat (DC-AS-007)
+        4. filter_complex contains amix (mixing)
         """
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
@@ -928,48 +928,48 @@ class TestBgmDurationMatch:
         result = render_timeline(
             str(timeline_path), str(out_path), RenderOptions(), dry_run=True
         )
-        assert result["ok"] is True, f"dry_run が失敗しました: {result}"
+        assert result["ok"] is True, f"dry_run failed: {result}"
 
         fc = result["data"]["filter_complex"]
 
         assert "atrim" in fc, (
-            f"filter_complex に atrim が含まれていません（ADR-B6-r2 違反）:\n"
+            f"filter_complex does not contain atrim (ADR-B6-r2 violation):\n"
             f"  filter_complex: {fc}"
         )
         assert "alimiter" in fc, (
-            f"filter_complex に alimiter が含まれていません（DC-AM-001 違反）:\n"
+            f"filter_complex does not contain alimiter (DC-AM-001 violation):\n"
             f"  filter_complex: {fc}"
         )
         assert "aformat" in fc, (
-            f"filter_complex に aformat が含まれていません（DC-AS-007 違反）:\n"
+            f"filter_complex does not contain aformat (DC-AS-007 violation):\n"
             f"  filter_complex: {fc}"
         )
         assert "amix" in fc, (
-            f"filter_complex に amix が含まれていません（BGM ミックス欠落）:\n"
+            f"filter_complex does not contain amix (BGM mix missing):\n"
             f"  filter_complex: {fc}"
         )
 
 
 # ===========================================================================
-# テスト: assert-6（ducking ON 実証）
+# Tests: assert-6 (ducking ON verified)
 # ===========================================================================
 
 
 @requires_ffmpeg
 class TestBgmDucking:
-    """ducking ON 時に BGM が抑制されることを実証するテスト（assert-6）。
+    """Verify that BGM is attenuated when ducking is ON (assert-6).
 
-    ducking ON/OFF を比較し:
-    - dry_run の filter_complex で sidechaincompress の有無を確認（内部確認）。
-    - 実機出力でダッキング効果を確認（ducking ON は OFF より BGM 寄与が小さい）。
+    Compares ducking ON vs OFF:
+    - Internal check: sidechaincompress presence in dry_run filter_complex.
+    - Real hardware: ducking ON output has less BGM contribution than OFF.
     """
 
     def test_ducking_on_filter_complex_has_sidechaincompress(
         self, tmp_path: Path
     ) -> None:
-        """ducking ON のとき filter_complex に sidechaincompress が含まれる（assert-6・内部確認）。
+        """When ducking ON, filter_complex contains sidechaincompress (assert-6, internal check).
 
-        ADR-B5-r3: sidechaincompress の第1入力=BGM・第2入力=本編（DC-AS-006）。
+        ADR-B5-r3: sidechaincompress input1=BGM, input2=main (DC-AS-006).
         """
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
@@ -995,26 +995,26 @@ class TestBgmDucking:
         result_on = render_timeline(
             str(tl_path_on), str(out_dry_on), RenderOptions(), dry_run=True
         )
-        assert result_on["ok"] is True, f"dry_run (ducking ON) が失敗: {result_on}"
+        assert result_on["ok"] is True, f"dry_run (ducking ON) failed: {result_on}"
         fc_on = result_on["data"]["filter_complex"]
 
         assert "sidechaincompress" in fc_on, (
-            f"ducking ON なのに filter_complex に sidechaincompress がありません（assert-6・DC-AS-006 違反）:\n"
+            f"filter_complex does not contain sidechaincompress despite ducking ON (assert-6, DC-AS-006 violation):\n"
             f"  filter_complex: {fc_on}"
         )
 
-        # sidechaincompress 入力順序の確認（ADR-B5-r3: BGM=第1・本編=第2）
-        # [bgm][main_sc]sidechaincompress の順序であることを確認
+        # Verify sidechaincompress input order (ADR-B5-r3: BGM=first, main=second)
+        # Confirm the order is [bgm][main_sc]sidechaincompress
         assert "bgm][main_sc]sidechaincompress" in fc_on, (
-            f"sidechaincompress の入力順序が不正です（DC-AS-006 違反）:\n"
-            f"  期待: [bgm][main_sc]sidechaincompress\n"
+            f"sidechaincompress input order is incorrect (DC-AS-006 violation):\n"
+            f"  expected: [bgm][main_sc]sidechaincompress\n"
             f"  filter_complex: {fc_on}"
         )
 
     def test_ducking_off_filter_complex_has_no_sidechaincompress(
         self, tmp_path: Path
     ) -> None:
-        """ducking OFF のとき filter_complex に sidechaincompress が含まれない（assert-6・切り分け）。"""
+        """When ducking OFF, filter_complex does not contain sidechaincompress (assert-6, isolation)."""
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
         bgm_src = tmp_path / "bgm_short.mp4"
@@ -1037,24 +1037,24 @@ class TestBgmDucking:
         result_off = render_timeline(
             str(tl_path_off), str(out_dry_off), RenderOptions(), dry_run=True
         )
-        assert result_off["ok"] is True, f"dry_run (ducking OFF) が失敗: {result_off}"
+        assert result_off["ok"] is True, f"dry_run (ducking OFF) failed: {result_off}"
         fc_off = result_off["data"]["filter_complex"]
 
         assert "sidechaincompress" not in fc_off, (
-            f"ducking OFF なのに filter_complex に sidechaincompress があります（切り分け失敗）:\n"
+            f"filter_complex contains sidechaincompress despite ducking OFF (isolation failure):\n"
             f"  filter_complex: {fc_off}"
         )
 
     def test_ducking_on_reduces_bgm_mean_volume_vs_off(self, tmp_path: Path) -> None:
-        """ducking ON の出力は ducking OFF より mean_volume が低い（assert-6・実機確認）。
+        """Ducking ON output has lower mean_volume than ducking OFF (assert-6, real hardware).
 
-        本編に強い sine 音声があるため sidechaincompress が BGM を抑制する。
-        ducking ON の mean_volume <= ducking OFF の mean_volume + 1.0 dB を期待する
-        （ducking の効果は本編信号の大きさに依存するため差の絶対値は不定）。
+        The strong sine audio in the main clip causes sidechaincompress to attenuate BGM.
+        Expected: ducking ON mean_volume <= ducking OFF mean_volume + 1.0 dB
+        (absolute magnitude of the ducking effect depends on the main signal level).
 
-        注: 実機で ducking 効果が出るには本編信号が threshold を超える必要がある。
-        本編は amplitude=1.0 相当の AAC エンコード済み sine なので threshold=0.05 を超え
-        ducking が発動するはず。
+        Note: ducking effect on real hardware requires main signal to exceed threshold.
+        The main clip is AAC-encoded sine at amplitude≈1.0, which exceeds threshold=0.05,
+        so ducking should activate.
         """
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
@@ -1080,7 +1080,7 @@ class TestBgmDucking:
         r_on = render_timeline(
             str(tl_path_on), str(out_on), RenderOptions(), dry_run=False
         )
-        assert r_on["ok"] is True, f"ducking ON render が失敗: {r_on}"
+        assert r_on["ok"] is True, f"ducking ON render failed: {r_on}"
 
         # ducking OFF
         timeline_off = _make_base_timeline(main_src)
@@ -1097,38 +1097,38 @@ class TestBgmDucking:
         r_off = render_timeline(
             str(tl_path_off), str(out_off), RenderOptions(), dry_run=False
         )
-        assert r_off["ok"] is True, f"ducking OFF render が失敗: {r_off}"
+        assert r_off["ok"] is True, f"ducking OFF render failed: {r_off}"
 
         mean_on = _measure_mean_volume(_FFMPEG, out_on)
         mean_off = _measure_mean_volume(_FFMPEG, out_off)
 
-        # ducking ON が OFF より音量が低いこと（BGM 抑制効果）
-        # ducking の強さと本編信号次第だが、ratio=4.0 で threshold=0.05 なら
-        # sine 音声（振幅 >> 0.05）が常にサイドチェーンに効くため ON < OFF が成立するはず
+        # Ducking ON should be quieter than OFF (BGM attenuation effect).
+        # With ratio=4.0 and threshold=0.05, the sine audio (amplitude >> 0.05)
+        # continuously activates the sidechain, so ON < OFF should hold.
         assert mean_on <= mean_off + 1.0, (
-            f"ducking ON が OFF より音量を下げていません（assert-6）:\n"
+            f"Ducking ON did not lower volume compared to OFF (assert-6):\n"
             f"  ducking ON mean_volume: {mean_on:.2f} dB\n"
             f"  ducking OFF mean_volume: {mean_off:.2f} dB\n"
-            f"  ducking ON の音量が OFF より低くなるはず（BGM が本編音声でダッキング）\n"
-            f"  本編 sine（threshold=0.05 超）が sidechaincompress を発動するはず"
+            f"  Expected ducking ON < OFF (BGM attenuated by main audio)\n"
+            f"  Main sine (exceeds threshold=0.05) should activate sidechaincompress"
         )
 
 
 # ===========================================================================
-# テスト: assert-7（ネガティブ対照）
+# Tests: assert-7 (negative control)
 # ===========================================================================
 
 
 @requires_ffmpeg
 class TestBgmNegativeControl:
-    """ネガティブ対照: BGM 注記なし timeline は本編のみ出力（assert-7・B-3 教訓）。
+    """Negative control: timeline without BGM annotation outputs main only (assert-7, B-3 lesson).
 
-    BGM 起因の音量変化を切り分けるために必要。
-    BGM なし → render しても入力音量のまま（BGM あり時と有意差がある）。
+    Required to isolate the volume change caused by BGM.
+    No BGM -> render leaves input volume unchanged (significant difference from BGM present).
     """
 
     def test_no_bgm_directive_does_not_mix_bgm(self, tmp_path: Path) -> None:
-        """BGM 注記なし timeline は本編のみで render し音量が BGM あり時と異なる（assert-7）。"""
+        """Timeline without BGM annotation renders main only; volume differs from BGM output (assert-7)."""
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
         bgm_src = tmp_path / "bgm_short.mp4"
@@ -1136,7 +1136,7 @@ class TestBgmNegativeControl:
         _make_main_video(_FFMPEG, main_src)
         _make_bgm_audio(_FFMPEG, bgm_src, _BGM_SHORT_DUR)
 
-        # BGM あり
+        # With BGM
         timeline_bgm = _make_base_timeline(main_src)
         _add_bgm_track(timeline_bgm, bgm_src, _BGM_SHORT_DUR, volume_db=0.0)
         tl_path_bgm = tmp_path / "timeline_bgm.otio"
@@ -1145,9 +1145,9 @@ class TestBgmNegativeControl:
         r_bgm = render_timeline(
             str(tl_path_bgm), str(out_bgm), RenderOptions(), dry_run=False
         )
-        assert r_bgm["ok"] is True, f"BGM あり render が失敗: {r_bgm}"
+        assert r_bgm["ok"] is True, f"BGM render failed: {r_bgm}"
 
-        # BGM なし（ネガティブ対照）
+        # Without BGM (negative control)
         timeline_no = _make_base_timeline(main_src)
         tl_path_no = tmp_path / "timeline_no_bgm.otio"
         _save_timeline(timeline_no, tl_path_no)
@@ -1155,22 +1155,22 @@ class TestBgmNegativeControl:
         r_no = render_timeline(
             str(tl_path_no), str(out_no), RenderOptions(), dry_run=False
         )
-        assert r_no["ok"] is True, f"BGM なし render が失敗: {r_no}"
+        assert r_no["ok"] is True, f"No-BGM render failed: {r_no}"
 
         mean_bgm = _measure_mean_volume(_FFMPEG, out_bgm)
         mean_no = _measure_mean_volume(_FFMPEG, out_no)
         diff = mean_bgm - mean_no
 
         assert diff >= _BGM_EFFECT_MIN_DB_DIFF, (
-            f"BGM なし時の音量が BGM あり時と有意差がありません（assert-7・切り分け失敗）:\n"
-            f"  BGM あり mean_volume: {mean_bgm:.2f} dB\n"
-            f"  BGM なし mean_volume: {mean_no:.2f} dB\n"
-            f"  差: {diff:.2f} dB（期待: >= {_BGM_EFFECT_MIN_DB_DIFF} dB）\n"
-            f"  音量差が BGM 混合起因であることを確認するための対照実験"
+            f"No-BGM volume not significantly different from BGM output (assert-7, isolation failure):\n"
+            f"  BGM mean_volume: {mean_bgm:.2f} dB\n"
+            f"  No-BGM mean_volume: {mean_no:.2f} dB\n"
+            f"  diff: {diff:.2f} dB (expected: >= {_BGM_EFFECT_MIN_DB_DIFF} dB)\n"
+            f"  Control experiment to confirm that volume diff is caused by BGM mixing"
         )
 
     def test_no_bgm_dry_run_no_amix_in_filter(self, tmp_path: Path) -> None:
-        """BGM なし timeline の dry_run filter_complex に amix が含まれない（assert-7・内部確認）。"""
+        """No-BGM timeline dry_run filter_complex does not contain amix (assert-7, internal check)."""
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
 
@@ -1184,35 +1184,35 @@ class TestBgmNegativeControl:
         result = render_timeline(
             str(tl_path), str(out_path), RenderOptions(), dry_run=True
         )
-        assert result["ok"] is True, f"dry_run が失敗しました: {result}"
+        assert result["ok"] is True, f"dry_run failed: {result}"
 
         fc = result["data"]["filter_complex"]
         assert "amix" not in fc, (
-            f"BGM なし timeline の filter_complex に amix が含まれています（assert-7）:\n"
+            f"No-BGM timeline filter_complex contains amix (assert-7):\n"
             f"  filter_complex: {fc}"
         )
         assert "alimiter" not in fc, (
-            f"BGM なし timeline の filter_complex に alimiter が含まれています（assert-7）:\n"
+            f"No-BGM timeline filter_complex contains alimiter (assert-7):\n"
             f"  filter_complex: {fc}"
         )
 
 
 # ===========================================================================
-# テスト: assert-8（本編無音 + BGM 単独系統・DC-AS-004）
+# Tests: assert-8 (silent main + BGM-only signal path, DC-AS-004)
 # ===========================================================================
 
 
 @requires_ffmpeg
 @requires_ffprobe
 class TestBgmSilentMainAudio:
-    """本編無音 + BGM で BGM のみが音声として出力される実証（assert-8・DC-AS-004）。
+    """Verify that silent main + BGM outputs BGM only as audio (assert-8, DC-AS-004).
 
-    ADR-B5-r2: has_main_audio=False のとき BGM 単独系統を使う。
-    amix なし・BGM が唯一の音声出力。
+    ADR-B5-r2: use BGM-only signal path when has_main_audio=False.
+    No amix; BGM is the sole audio output.
     """
 
     def test_silent_main_plus_bgm_has_audio_output(self, tmp_path: Path) -> None:
-        """本編無音 + BGM で出力に音声ストリームが含まれる（assert-8）。"""
+        """Silent main + BGM output contains an audio stream (assert-8)."""
         assert _FFMPEG is not None
         assert _FFPROBE is not None
         main_src = tmp_path / "main_silent.mp4"
@@ -1230,20 +1230,20 @@ class TestBgmSilentMainAudio:
         result = render_timeline(
             str(timeline_path), str(out_path), RenderOptions(), dry_run=False
         )
-        assert result["ok"] is True, f"本編無音 + BGM render が失敗しました: {result}"
-        assert out_path.exists(), "出力ファイルが生成されていません"
+        assert result["ok"] is True, f"Silent main + BGM render failed: {result}"
+        assert out_path.exists(), "Output file was not created"
 
         audio_count = _get_audio_stream_count(_FFPROBE, out_path)
         assert audio_count >= 1, (
-            f"本編無音 + BGM の出力に音声ストリームがありません（assert-8・DC-AS-004）:\n"
-            f"  音声ストリーム数: {audio_count}\n"
-            f"  BGM 単独系統により BGM が唯一の音声として出力されるはず"
+            f"Silent main + BGM output has no audio stream (assert-8, DC-AS-004):\n"
+            f"  audio stream count: {audio_count}\n"
+            f"  BGM-only signal path should output BGM as the sole audio"
         )
 
     def test_silent_main_plus_bgm_has_audible_sound(self, tmp_path: Path) -> None:
-        """本編無音 + BGM の出力に実際に音声が含まれる（assert-8・BGM 単独系統実証）。
+        """Silent main + BGM output actually contains audible audio (assert-8, BGM-only path).
 
-        出力の mean_volume が無音でないことを確認する（-80 dB 超）。
+        Verify that the output mean_volume is not silent (> -80 dB).
         """
         assert _FFMPEG is not None
         main_src = tmp_path / "main_silent.mp4"
@@ -1261,20 +1261,20 @@ class TestBgmSilentMainAudio:
         result = render_timeline(
             str(timeline_path), str(out_path), RenderOptions(), dry_run=False
         )
-        assert result["ok"] is True, f"render が失敗しました: {result}"
+        assert result["ok"] is True, f"render failed: {result}"
 
         mean_vol = _measure_mean_volume(_FFMPEG, out_path)
 
         assert mean_vol > -80.0, (
-            f"本編無音 + BGM の出力が無音になっています（assert-8・DC-AS-004 違反）:\n"
+            f"Silent main + BGM output is silent (assert-8, DC-AS-004 violation):\n"
             f"  mean_volume: {mean_vol:.2f} dB\n"
-            f"  BGM 単独系統で BGM が音声として出力されるはず"
+            f"  BGM-only signal path should output BGM as audio"
         )
 
     def test_silent_main_plus_bgm_dry_run_no_amix(self, tmp_path: Path) -> None:
-        """本編無音 + BGM の dry_run filter_complex に amix が含まれない（assert-8・内部確認）。
+        """Silent main + BGM dry_run filter_complex does not contain amix (assert-8, internal check).
 
-        ADR-B5-r2: has_main_audio=False のとき BGM 単独系統を使うため amix しない。
+        ADR-B5-r2: when has_main_audio=False, BGM-only signal path is used, so amix is not added.
         """
         assert _FFMPEG is not None
         main_src = tmp_path / "main_silent.mp4"
@@ -1292,21 +1292,21 @@ class TestBgmSilentMainAudio:
         result = render_timeline(
             str(timeline_path), str(out_path), RenderOptions(), dry_run=True
         )
-        assert result["ok"] is True, f"dry_run が失敗しました: {result}"
+        assert result["ok"] is True, f"dry_run failed: {result}"
 
         fc = result["data"]["filter_complex"]
 
-        # 本編無音 + BGM 単独系統: amix が入らないことを確認
+        # Silent main + BGM-only path: verify amix is not present
         assert "amix" not in fc, (
-            f"本編無音 + BGM なのに filter_complex に amix が含まれています（assert-8・ADR-B5-r2 違反）:\n"
+            f"filter_complex contains amix despite silent main + BGM (assert-8, ADR-B5-r2 violation):\n"
             f"  filter_complex: {fc}"
         )
-        # BGM 単独系統でも alimiter は含まれる（DC-AM-001・本編無音時は省略されうる）
-        # 実装確認: _append_bgm_pipe の has_main_audio=False 分岐では alimiter なし
-        # BGM chain が [outa_bgm] に直接出力されるため alimiter は不要
+        # alimiter is also absent in the BGM-only path (DC-AM-001 applies to amix output only).
+        # Implementation note: _append_bgm_pipe has_main_audio=False branch omits alimiter.
+        # The BGM chain outputs directly to [outa_bgm], so alimiter is not required.
 
-        # atrim が含まれることで尺合わせが機能していることを確認
+        # Verify atrim is present to confirm duration matching is working
         assert "atrim" in fc, (
-            f"filter_complex に atrim が含まれていません（BGM 尺合わせ欠落）:\n"
+            f"filter_complex does not contain atrim (BGM duration matching missing):\n"
             f"  filter_complex: {fc}"
         )

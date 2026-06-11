@@ -1,21 +1,25 @@
-"""loudness.py — clipwright-loudness オーケストレーション層（設計 §3.2・ADR-L4/L7）。
+"""loudness.py — clipwright-loudness orchestration layer (design §3.2, ADR-L4/L7).
 
-フロー:
-  1. 出力検証（拡張子・親dir・output==media・output==timeline・同一dir）
-  2. inspect_media: 映像＋音声必須チェック
-  3. timeline 解決（None → 新規生成 / path → load + 検証）
-  4. measure_loudness: ラウドネス測定
-  5. measured が None なら loudness 注記を書かず warning（U-1・DC-AM-003）
-     measured ありなら loudness 注記を timeline-level metadata に部分更新
-  6. save_timeline → ok_result 返却
+Flow:
+  1. Output validation (extension, parent dir, output==media,
+     output==timeline, same dir)
+  2. inspect_media: require both video and audio streams
+  3. Timeline resolution (None -> create new / path -> load + validate)
+  4. measure_loudness: measure loudness
+  5. If measured is None, skip loudness directive and emit warning
+     (U-1, DC-AM-003).
+     If measured is present, partial-update timeline-level metadata
+     with loudness directive.
+  6. save_timeline -> return ok_result
 
-設計判断:
-- FILE_NOT_FOUND / message は basename のみ（DC-GP-005）。
-- output は media と同一ディレクトリ（MUST・DC-AS-002）。
-- source==media の比較は Path.resolve() で正規化（B-4）。
-- timeline 検証: Video kind トラックがちょうど1本（B-5）。
-- measured=None: loudness 注記を書かず warning を返す（U-1・DC-AM-003）。
-- noise.py の _same_path / _add_full_clip / _load_and_validate_timeline 構造をミラー。
+Design decisions:
+- FILE_NOT_FOUND / message uses basename only (DC-GP-005).
+- output must be in the same directory as media (MUST, DC-AS-002).
+- output==media comparison uses Path.resolve() for normalization (B-4).
+- timeline validation: exactly one Video-kind track (B-5).
+- measured=None: skip loudness directive and return warning (U-1, DC-AM-003).
+- Mirrors _same_path / _add_full_clip / _load_and_validate_timeline
+  structure from noise.py.
 """
 
 from __future__ import annotations
@@ -55,16 +59,16 @@ def detect_loudness(
     options: DetectLoudnessOptions,
     timeline: str | None,
 ) -> dict[str, Any]:
-    """ラウドネス検出のパブリック API。ClipwrightError を ok=False に変換して返す。
+    """Public API for loudness detection. Converts ClipwrightError to ok=False envelope.
 
     Args:
-        media: 入力メディアファイルパス（映像＋音声必須）。
-        output: 出力 OTIO タイムラインファイルパス（.otio・media と同一dir）。
-        options: DetectLoudnessOptions。
-        timeline: 既存タイムラインパス（None=新規生成）。
+        media: Input media file path (video + audio required).
+        output: Output OTIO timeline file path (.otio, same directory as media).
+        options: DetectLoudnessOptions.
+        timeline: Existing timeline path (None = create new).
 
     Returns:
-        ok_result または error_result のエンベロープ dict。
+        ok_result or error_result envelope dict.
     """
     try:
         return _detect_loudness_inner(media, output, options, timeline)
@@ -78,43 +82,43 @@ def _detect_loudness_inner(
     options: DetectLoudnessOptions,
     timeline: str | None,
 ) -> dict[str, Any]:
-    """detect_loudness の内部実装。ClipwrightError をそのまま送出する。"""
+    """Internal implementation of detect_loudness. Raises ClipwrightError directly."""
     media_path = Path(media)
     output_path = Path(output)
 
-    # --- 1. 出力検証 ---
+    # --- 1. Output validation ---
 
     if output_path.suffix.lower() != ".otio":
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message=f"未対応の出力拡張子です: {output_path.suffix!r}",
-            hint="出力ファイルの拡張子を .otio にしてください。",
+            message=f"Unsupported output extension: {output_path.suffix!r}",
+            hint="Set the output file extension to .otio.",
         )
 
     if not output_path.parent.exists():
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message="出力先ディレクトリが存在しません。",
-            hint="出力先ディレクトリを先に作成してから再実行してください。",
+            message="output directory does not exist.",
+            hint="Create the output directory first, then re-run.",
         )
 
-    # output == media 禁止（非破壊・M5）
+    # Prohibit output == media (non-destructive, M5)
     if _same_path(output_path, media_path):
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message="出力パスと入力メディアパスが同一です。",
-            hint="出力ファイルパスを入力メディアとは別のパスに変更してください。",
+            message="Output path and input media path are the same.",
+            hint="Change the output file path to differ from the input media.",
         )
 
-    # output == timeline 禁止（非破壊）
+    # Prohibit output == timeline (non-destructive)
     if timeline is not None and _same_path(output_path, Path(timeline)):
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message="出力パスと入力タイムラインパスが同一です。",
-            hint="出力ファイルパスを入力タイムラインとは別のパスに変更してください。",
+            message="Output path and input timeline path are the same.",
+            hint="Change the output file path to differ from the input timeline.",
         )
 
-    # output は media と同一ディレクトリ（MUST・DC-AS-002）
+    # output must be in the same directory as media (MUST, DC-AS-002)
     try:
         media_resolved_dir = media_path.resolve().parent
         output_resolved_dir = output_path.resolve().parent
@@ -125,17 +129,19 @@ def _detect_loudness_inner(
     if media_resolved_dir != output_resolved_dir:
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message="出力ファイルはメディアファイルと同一ディレクトリに配置する必要があります。",
-            hint="output パスをメディアファイルと同じディレクトリに変更してください。",
+            message=(
+                "Output file must be placed in the same directory as the media file."
+            ),
+            hint="Change the output path to the same directory as the media file.",
         )
 
-    # --- 2. inspect_media: 映像＋音声必須 ---
+    # --- 2. inspect_media: require both video and audio ---
 
     if not media_path.exists():
         raise ClipwrightError(
             code=ErrorCode.FILE_NOT_FOUND,
-            message=f"ファイルが見つかりません: {media_path.name}",
-            hint="入力メディアファイルのパスが正しいか確認してください。",
+            message=f"File not found: {media_path.name}",
+            hint="Check that the input media file path is correct.",
         )
 
     media_info = inspect_media(media)
@@ -146,26 +152,26 @@ def _detect_loudness_inner(
     if not has_video:
         raise ClipwrightError(
             code=ErrorCode.UNSUPPORTED_OPERATION,
-            message=f"映像ストリームが見つかりません: {media_path.name}",
-            hint="映像と音声の両方を含むメディアファイルを入力してください。",
+            message=f"No video stream found: {media_path.name}",
+            hint="Provide a media file that contains both video and audio.",
         )
 
     if not has_audio:
         raise ClipwrightError(
             code=ErrorCode.UNSUPPORTED_OPERATION,
-            message=f"音声ストリームが見つかりません: {media_path.name}",
-            hint="映像と音声の両方を含むメディアファイルを入力してください。",
+            message=f"No audio stream found: {media_path.name}",
+            hint="Provide a media file that contains both video and audio.",
         )
 
-    # duration の取得（_add_full_clip に渡す全長 clip の総尺（秒））
+    # Retrieve duration (total seconds for the full-length clip in _add_full_clip)
     duration_sec: float = 0.0
     if media_info.duration is not None:
         duration_sec = media_info.duration.value / media_info.duration.rate
 
-    # --- 3. timeline 解決 ---
+    # --- 3. Timeline resolution ---
 
     if timeline is None:
-        # 新規生成: V1 に全長 keep clip を1本追加
+        # Create new: add one full-length keep clip to V1
         tl = new_timeline(media_path.name)
         _add_full_clip(tl, media_path, duration_sec, media_info.duration)
     else:
@@ -173,7 +179,7 @@ def _detect_loudness_inner(
             timeline, media_path, duration_sec, media_info.duration
         )
 
-    # --- 4. ラウドネス測定 ---
+    # --- 4. Loudness measurement ---
 
     kwargs: dict[str, Any] = {}
     if options.mode == "loudnorm":
@@ -190,17 +196,18 @@ def _detect_loudness_inner(
     measured_raw: dict[str, Any] | None = analysis["measured"]
     warnings: list[str] = list(analysis["warnings"])
 
-    # --- 5. loudness 注記を timeline-level metadata に部分更新（U-1 考慮）---
+    # --- 5. Partial-update timeline-level metadata with loudness directive ---
+    # (U-1: skip when measured is None)
 
     if measured_raw is None:
-        # U-1: 測定不能なら loudness 指示を書かず warning（DC-AM-003）
-        # warning は analyze 側で既に追加済みだが、loudness 側でも追記する
+        # U-1: measurement not possible — skip directive and emit warning (DC-AM-003)
+        # analyze already added a warning, but loudness adds one as well
         warnings.append(
-            "ラウドネス測定値を取得できませんでした。"
-            " loudness 指示は書き込みません（U-1）。"
+            "Could not retrieve loudness measured values."
+            " loudness directive will not be written (U-1)."
         )
     else:
-        # measured ありなら loudness 注記を書く
+        # measured present — write loudness directive
         if options.mode == "loudnorm":
             target: LoudnormTarget | PeakTarget = LoudnormTarget(
                 i=options.target_i,
@@ -212,28 +219,27 @@ def _detect_loudness_inner(
                     **measured_raw
                 )
             except ValidationError:
-                # CWE-209: ValidationError 詳細を外部に露出しない
+                # CWE-209: do not expose ValidationError details externally
                 raise ClipwrightError(
                     code=ErrorCode.INVALID_INPUT,
                     message=(
-                        "loudnorm 測定値の検証に失敗しました。"
-                        "フィールド型を確認してください。"
+                        "Validation of loudnorm measured values failed."
+                        " Check field types."
                     ),
-                    hint="measure_loudness の戻り値を確認してください。",
+                    hint="Check the return value of measure_loudness.",
                 ) from None
         else:
             target = PeakTarget(peak_db=options.target_peak_db)
             try:
                 measured_obj = PeakMeasured(**measured_raw)
             except ValidationError:
-                # CWE-209: ValidationError 詳細を外部に露出しない
+                # CWE-209: do not expose ValidationError details externally
                 raise ClipwrightError(
                     code=ErrorCode.INVALID_INPUT,
                     message=(
-                        "peak 測定値の検証に失敗しました。"
-                        "フィールド型を確認してください。"
+                        "Validation of peak measured values failed. Check field types."
                     ),
-                    hint="measure_loudness の戻り値を確認してください。",
+                    hint="Check the return value of measure_loudness.",
                 ) from None
 
         directive = LoudnessDirective(
@@ -250,22 +256,22 @@ def _detect_loudness_inner(
         existing_meta["loudness"] = directive.model_dump()
         set_clipwright_metadata(tl, existing_meta)
 
-    # --- 6. save_timeline → ok_result ---
+    # --- 6. save_timeline -> ok_result ---
 
     save_timeline(tl, str(output_path))
 
     if measured_raw is not None:
         summary = (
-            f"{media_path.name} のラウドネス解析が完了しました。"
-            f" mode={options.mode}, scope={options.scope}。"
-            f" loudness 指示を {output_path.name} に書き込みました。"
+            f"Loudness analysis of {media_path.name} complete."
+            f" mode={options.mode}, scope={options.scope}."
+            f" loudness directive written to {output_path.name}."
         )
     else:
         summary = (
-            f"{media_path.name} のラウドネス解析を試みましたが"
-            "測定値を取得できませんでした。"
-            f" mode={options.mode}, scope={options.scope}。"
-            f" loudness 指示は書き込まれていません（U-1）。"
+            f"Loudness analysis of {media_path.name} attempted"
+            " but measured values could not be retrieved."
+            f" mode={options.mode}, scope={options.scope}."
+            f" loudness directive was not written (U-1)."
         )
 
     return ok_result(
@@ -288,24 +294,24 @@ def _add_full_clip(
     duration_sec: float,
     duration_rt: RationalTimeModel | None,
 ) -> None:
-    """timeline の V1/A1 トラックに全長 keep clip を1本追加する（新規生成時）。
+    """Add one full-length keep clip to V1/A1 tracks of the timeline (new creation).
 
-    target_url には media_path.resolve() の絶対パスを書く（DC-AS-002）。
+    target_url is set to the absolute path of media_path.resolve() (DC-AS-002).
 
     Args:
-        duration_rt: Pydantic モデルの RationalTimeModel（OTIO RationalTime ではない）。
-            rate 取得用。None の場合は rate=1000.0 にフォールバック。
+        duration_rt: Pydantic model RationalTimeModel (not OTIO RationalTime).
+            Used to obtain the rate. Falls back to rate=1000.0 when None.
     """
     try:
         target_url = str(media_path.resolve())
     except OSError:
         target_url = str(media_path.absolute())
 
-    # rate の決定: duration が取れていれば使う、なければ 1000.0
-    # RationalTimeModel.rate は Pydantic スキーマで float 型のみ保証されており、
-    # gt=0 制約はないため、ゼロ除算は発生しないが保証されていない点に注意。
-    # ただし OTIO の RationalTime(duration_sec * rate, rate) 初期化ではゼロ rate でも
-    # クラッシュしないため、実害は起きない（OTIO 内部での除算は発生しない）。
+    # Determine rate: use duration if available, otherwise 1000.0.
+    # RationalTimeModel.rate is guaranteed to be float by the Pydantic schema,
+    # but gt=0 is not constrained, so zero-division is theoretically possible.
+    # However, OTIO RationalTime(duration_sec * rate, rate) initialization does
+    # not divide internally, so no crash occurs in practice.
     rate = duration_rt.rate if duration_rt is not None else 1000.0
 
     source_range = otio.opentime.TimeRange(
@@ -314,7 +320,7 @@ def _add_full_clip(
     )
     ref = otio.schema.ExternalReference(target_url=target_url)
 
-    # V1（index 0）と A1（index 1）に同じ clip を追加
+    # Add the same clip to V1 (index 0) and A1 (index 1)
     for track in tl.tracks:
         clip = otio.schema.Clip(
             name=media_path.name,
@@ -330,39 +336,41 @@ def _load_and_validate_timeline(
     duration_sec: float,
     duration_rt: RationalTimeModel | None,
 ) -> otio.schema.Timeline:
-    """既存 timeline をロードして整合性を検証する（B-4 / B-5）。
+    """Load an existing timeline and validate its consistency (B-4 / B-5).
 
-    検証内容:
-    - V1 clip の target_url が media_path と同一（B-4: パス正規化比較）
-    - 単一 source（全 clip が同一 target_url）
-    - Video kind トラックがちょうど1本（B-5）
+    Validates:
+    - The target_url of V1 clips matches media_path
+      (B-4: path normalization comparison)
+    - Single source (all clips share the same target_url)
+    - Exactly one Video-kind track (B-5)
 
-    V1 が空の場合は全長 keep clip を追加して続行する（新規生成相当）。
+    If V1 is empty, adds a full-length keep clip and continues
+    (equivalent to new creation).
 
     Raises:
-        ClipwrightError: INVALID_INPUT / OTIO_ERROR。
+        ClipwrightError: INVALID_INPUT / OTIO_ERROR.
     """
     tl = load_timeline(timeline_path)
 
-    # --- Video kind トラックがちょうど1本（B-5）---
+    # --- Exactly one Video-kind track (B-5) ---
     video_tracks = [t for t in tl.tracks if t.kind == otio.schema.TrackKind.Video]
     if len(video_tracks) != 1:
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
             message=(
-                f"タイムラインの Video トラック数が不正です: {len(video_tracks)} 本"
-                "（1本のみ対応）"
+                f"Invalid number of Video tracks in timeline: {len(video_tracks)}"
+                " (only 1 is supported)"
             ),
-            hint="Video トラックが1本の timeline を指定してください。",
+            hint="Specify a timeline with exactly one Video track.",
         )
 
     v1 = video_tracks[0]
 
-    # --- 全 clip の target_url を収集して単一 source 検証 ---
+    # --- Collect all clip target_urls and validate single source ---
     clips = [item for item in v1 if isinstance(item, otio.schema.Clip)]
 
     if not clips:
-        # V1 が空の場合は全長 keep clip を追加して続行する（新規生成相当）
+        # V1 is empty — add full-length keep clip and continue
         _add_full_clip(tl, media_path, duration_sec, duration_rt)
         return tl
 
@@ -372,8 +380,8 @@ def _load_and_validate_timeline(
         if isinstance(ref, otio.schema.ExternalReference):
             urls.add(ref.target_url)
 
-    # --- 境界検証: target_url が timeline 親ディレクトリ配下にあること（SR L-2）---
-    # 悪意ある OTIO が任意パスを target_url に埋め込む攻撃への将来保険。
+    # --- Boundary check: target_url must be within timeline parent dir (SR L-2) ---
+    # Guard against malicious OTIO embedding arbitrary paths in target_url.
     tl_path = Path(timeline_path)
     for url in urls:
         _check_source_within_timeline_dir(tl_path, url)
@@ -381,11 +389,11 @@ def _load_and_validate_timeline(
     if len(urls) > 1:
         raise ClipwrightError(
             code=ErrorCode.UNSUPPORTED_OPERATION,
-            message="タイムラインに複数ソースの clip が含まれています。",
-            hint="単一ソース（同一メディアファイル）の timeline を指定してください。",
+            message="Timeline contains clips from multiple sources.",
+            hint="Specify a timeline with a single source (same media file).",
         )
 
-    # --- target_url == media_path 検証（B-4: resolve() 正規化比較）---
+    # --- Validate target_url == media_path (B-4: resolve() normalization) ---
     if urls:
         target_url = next(iter(urls))
         try:
@@ -399,12 +407,12 @@ def _load_and_validate_timeline(
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
                 message=(
-                    f"タイムラインのソースファイルと入力メディアが一致しません。"
+                    f"Timeline source file does not match input media."
                     f" timeline source: {Path(target_url).name}"
                     f" / media: {media_path.name}"
                 ),
                 hint=(
-                    "timeline を生成したときと同じメディアファイルを指定してください。"
+                    "Specify the same media file used when the timeline was created."
                 ),
             )
 
@@ -412,17 +420,17 @@ def _load_and_validate_timeline(
 
 
 def _check_source_within_timeline_dir(timeline_path: Path, source: str) -> None:
-    """source パスが timeline 親ディレクトリ配下にあることを検証する（SR L-2）。
+    """Validate that the source path is within the timeline parent directory (SR L-2).
 
-    OTIO target_url に任意パスが埋め込まれた悪意ある OTIO への対策。
-    render.py の _check_source_within_timeline_dir と同等の境界検証を行う。
+    Guards against malicious OTIO embedding arbitrary paths in target_url.
+    Equivalent boundary check to _check_source_within_timeline_dir in render.py.
 
     Args:
-        timeline_path: OTIO タイムラインファイルのパス。
-        source: OTIO target_url から取得したメディアソースパス。
+        timeline_path: Path to the OTIO timeline file.
+        source: Media source path obtained from OTIO target_url.
 
     Raises:
-        ClipwrightError: INVALID_INPUT（source がタイムライン親 dir 境界外の場合）。
+        ClipwrightError: INVALID_INPUT (source outside timeline parent dir).
     """
     try:
         allowed_base = timeline_path.parent.resolve()
@@ -435,26 +443,28 @@ def _check_source_within_timeline_dir(timeline_path: Path, source: str) -> None:
             or source_str.startswith(base_str + "\\")
         ):
             raise ClipwrightError(
-                # render.py と同じ PATH_NOT_ALLOWED を使う（SR-r2 L-1）
+                # Use the same PATH_NOT_ALLOWED as render.py (SR-r2 L-1)
                 code=ErrorCode.PATH_NOT_ALLOWED,
-                message=(
-                    "source ファイルがタイムラインのディレクトリ境界外を指しています。"
-                ),
+                message=("Source file points outside the timeline directory boundary."),
                 hint=(
-                    "OTIO タイムラインと同じディレクトリ配下の"
-                    "ソースファイルを使用してください。"
+                    "Use a source file located within the same directory"
+                    " as the OTIO timeline."
                 ),
             )
     except ClipwrightError:
         raise
     except OSError:
-        # resolve() 失敗時は best-effort としてスキップする。
-        # 後続の source==media 比較で不正なパスは INVALID_INPUT として顕在化する。
+        # Skip on resolve() failure as a best-effort fallback.
+        # An invalid path will surface as INVALID_INPUT in the subsequent
+        # source==media comparison.
         pass
 
 
 def _same_path(a: Path, b: Path) -> bool:
-    """2 パスが同一実体を指すかを判定する（resolve 失敗時は文字列比較に退避）。"""
+    """Return True if both paths refer to the same entity.
+
+    Falls back to string comparison on OSError.
+    """
     try:
         return a.resolve() == b.resolve()
     except OSError:

@@ -1,12 +1,12 @@
-"""test_schemas.py — DetectNoiseOptions / DenoiseDirective / AfftdnParams の完全版テスト。
+"""test_schemas.py — Full tests for DetectNoiseOptions / DenoiseDirective / AfftdnParams.
 
-契約面（schemas）は実質 100% を目標にカバーする（CONVENTIONS §テストカバレッジ）。
+Target coverage for contract surface (schemas) is effectively 100% (CONVENTIONS §TestCoverage).
 
-検証観点:
-  - DetectNoiseOptions: backend/strength の有効値・既定値・不正値 ValidationError
-  - AfftdnParams: nr/nf/nt 範囲制約・既定値・不正値 ValidationError
-  - DenoiseDirective: 厳格検証・model_dump 往復・不正 kind/backend
-  - track フィールドが存在しないこと（ADR-N7 廃止確認）
+Verification points:
+  - DetectNoiseOptions: valid values / defaults / invalid ValidationError for backend/strength
+  - AfftdnParams: range constraints / defaults / invalid ValidationError for nr/nf/nt
+  - DenoiseDirective: strict validation / model_dump roundtrip / invalid kind/backend
+  - Confirm that the track field does not exist (ADR-N7 deprecation check)
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from clipwright_noise.schemas import AfftdnParams, DenoiseDirective, DetectNoise
 
 
 class TestDetectNoiseOptionsDefaults:
-    """デフォルト構築と既定値の確認。"""
+    """Verify default construction and default values."""
 
     def test_defaults_backend_is_afftdn(self) -> None:
         opts = DetectNoiseOptions()
@@ -39,7 +39,7 @@ class TestDetectNoiseOptionsDefaults:
 
 
 class TestDetectNoiseOptionsBackend:
-    """backend フィールドの有効値・不正値テスト。"""
+    """Valid and invalid value tests for the backend field."""
 
     def test_backend_afftdn_accepted(self) -> None:
         opts = DetectNoiseOptions(backend="afftdn")
@@ -59,7 +59,7 @@ class TestDetectNoiseOptionsBackend:
 
 
 class TestDetectNoiseOptionsStrength:
-    """strength フィールドの有効値・不正値テスト。"""
+    """Valid and invalid value tests for the strength field."""
 
     @pytest.mark.parametrize("s", ["light", "medium", "strong"])
     def test_valid_strength_accepted(self, s: str) -> None:
@@ -76,28 +76,28 @@ class TestDetectNoiseOptionsStrength:
 
 
 class TestDetectNoiseOptionsNoTrackField:
-    """track フィールドが存在しないこと（ADR-N7: 廃止）。"""
+    """Confirm that the track field does not exist (ADR-N7: deprecated)."""
 
     def test_track_field_does_not_exist(self) -> None:
-        """track フィールドが schemas に存在しないこと。"""
+        """The track field must not exist in schemas."""
         assert "track" not in DetectNoiseOptions.model_fields, (
-            "ADR-N7: track フィールドは廃止済み。DetectNoiseOptions に含まれてはならない。"
+            "ADR-N7: track field is deprecated. It must not be present in DetectNoiseOptions."
         )
 
     def test_extra_track_kwarg_does_not_create_field(self) -> None:
-        """track=0 を渡しても DetectNoiseOptions インスタンスに track 属性が生えないこと。
+        """Passing track=0 must not create a track attribute on the DetectNoiseOptions instance.
 
-        Pydantic v2 はデフォルトで extra フィールドを無視する。
-        したがって例外は出さないが track フィールドを持たないことを確認する。
+        Pydantic v2 ignores extra fields by default.
+        No exception is raised, but confirm that the instance has no track field.
         """
         opts = DetectNoiseOptions(track=0)  # type: ignore[call-arg]
         assert not hasattr(opts, "track"), (
-            "ADR-N7: track は廃止済み。インスタンスに track 属性が生えてはならない。"
+            "ADR-N7: track is deprecated. A track attribute must not appear on the instance."
         )
 
 
 class TestDetectNoiseOptionsCombinations:
-    """有効な組み合わせを全網羅する。"""
+    """Exhaustive test of all valid combinations."""
 
     @pytest.mark.parametrize("backend", ["afftdn", "deepfilternet"])
     @pytest.mark.parametrize("strength", ["light", "medium", "strong"])
@@ -113,7 +113,7 @@ class TestDetectNoiseOptionsCombinations:
 
 
 class TestAfftdnParamsDefaults:
-    """nt の既定値確認。"""
+    """Verify the default value of nt."""
 
     def test_nt_default_is_w(self) -> None:
         p = AfftdnParams(nr=12.0, nf=-50.0)
@@ -121,7 +121,7 @@ class TestAfftdnParamsDefaults:
 
 
 class TestAfftdnParamsNr:
-    """nr フィールドの範囲制約 [0.01, 97]。"""
+    """Range constraint [0.01, 97] for the nr field."""
 
     @pytest.mark.parametrize("nr", [0.01, 6.0, 12.0, 24.0, 50.0, 97.0])
     def test_valid_nr_accepted(self, nr: float) -> None:
@@ -137,7 +137,7 @@ class TestAfftdnParamsNr:
         assert p.nr == pytest.approx(97.0)
 
     def test_nr_zero_rejected(self) -> None:
-        """nr=0.0 は ge=0.01 に違反する。"""
+        """nr=0.0 violates ge=0.01."""
         with pytest.raises(ValidationError):
             AfftdnParams(nr=0.0, nf=-50.0)
 
@@ -146,7 +146,7 @@ class TestAfftdnParamsNr:
             AfftdnParams(nr=-1.0, nf=-50.0)
 
     def test_nr_above_upper_boundary_rejected(self) -> None:
-        """nr=98.0 は le=97 に違反する。"""
+        """nr=98.0 violates le=97."""
         with pytest.raises(ValidationError):
             AfftdnParams(nr=98.0, nf=-50.0)
 
@@ -156,7 +156,7 @@ class TestAfftdnParamsNr:
 
 
 class TestAfftdnParamsNf:
-    """nf フィールドの範囲制約 [-80, -20]。"""
+    """Range constraint [-80, -20] for the nf field."""
 
     @pytest.mark.parametrize("nf", [-80.0, -70.0, -50.0, -30.0, -20.0])
     def test_valid_nf_accepted(self, nf: float) -> None:
@@ -172,12 +172,12 @@ class TestAfftdnParamsNf:
         assert p.nf == pytest.approx(-20.0)
 
     def test_nf_below_neg80_rejected(self) -> None:
-        """nf=-81.0 は ge=-80 に違反する。"""
+        """nf=-81.0 violates ge=-80."""
         with pytest.raises(ValidationError):
             AfftdnParams(nr=12.0, nf=-81.0)
 
     def test_nf_above_neg20_rejected(self) -> None:
-        """nf=-10.0 は le=-20 に違反する。"""
+        """nf=-10.0 violates le=-20."""
         with pytest.raises(ValidationError):
             AfftdnParams(nr=12.0, nf=-10.0)
 
@@ -191,7 +191,7 @@ class TestAfftdnParamsNf:
 
 
 class TestAfftdnParamsNt:
-    """nt フィールドの Literal["w", "v"] 制約。"""
+    """Literal["w", "v"] constraint for the nt field."""
 
     def test_nt_w_accepted(self) -> None:
         p = AfftdnParams(nr=12.0, nf=-50.0, nt="w")
@@ -208,7 +208,7 @@ class TestAfftdnParamsNt:
 
 
 class TestAfftdnParamsStrengthMapping:
-    """strength→nr 写像の確定値（light=6/medium=12/strong=24）をスキーマで受理できること。"""
+    """Confirm that the fixed strength→nr mapping values (light=6/medium=12/strong=24) are accepted by the schema."""
 
     def test_nr_6_accepted_for_light_strength(self) -> None:
         p = AfftdnParams(nr=6.0, nf=-50.0)
@@ -229,7 +229,7 @@ class TestAfftdnParamsStrengthMapping:
 
 
 class TestDenoiseDirectiveAfftdn:
-    """afftdn バックエンドの DenoiseDirective 構築。"""
+    """DenoiseDirective construction for the afftdn backend."""
 
     def test_construct_afftdn_directive(self) -> None:
         d = DenoiseDirective(
@@ -268,7 +268,7 @@ class TestDenoiseDirectiveAfftdn:
 
 
 class TestDenoiseDirectiveDeepfilternet:
-    """deepfilternet バックエンドの DenoiseDirective 構築（params={}固定）。"""
+    """DenoiseDirective construction for the deepfilternet backend (params={} fixed)."""
 
     def test_construct_deepfilternet_with_empty_params(self) -> None:
         d = DenoiseDirective(
@@ -284,7 +284,7 @@ class TestDenoiseDirectiveDeepfilternet:
 
 
 class TestDenoiseDirectiveValidationErrors:
-    """不正値での ValidationError。"""
+    """ValidationError on invalid values."""
 
     def test_invalid_kind_raises_validation_error(self) -> None:
         with pytest.raises(ValidationError):
@@ -322,7 +322,7 @@ class TestDenoiseDirectiveValidationErrors:
 
 
 class TestDenoiseDirectiveModelDump:
-    """model_dump → 再構築の往復整合性。"""
+    """Roundtrip consistency of model_dump → reconstruct."""
 
     def test_model_dump_roundtrip_afftdn(self) -> None:
         d = DenoiseDirective(
@@ -373,7 +373,7 @@ class TestDenoiseDirectiveModelDump:
 
 
 class TestDenoiseDirectiveAfftdnParamsRevalidation:
-    """render が AfftdnParams(**params) で再検証するシナリオのスキーマ確認。"""
+    """Schema check for the scenario where render re-validates via AfftdnParams(**params)."""
 
     def test_afftdn_params_can_be_validated_from_directive_params(self) -> None:
         d = DenoiseDirective(
@@ -383,7 +383,7 @@ class TestDenoiseDirectiveAfftdnParamsRevalidation:
             backend="afftdn",
             params={"nr": 24.0, "nf": -40.0, "nt": "w"},
         )
-        # render は AfftdnParams(**d.params) で再検証する
+        # render re-validates with AfftdnParams(**d.params)
         afftdn = AfftdnParams(**d.params)
         assert afftdn.nr == pytest.approx(24.0)
         assert afftdn.nf == pytest.approx(-40.0)
@@ -391,7 +391,7 @@ class TestDenoiseDirectiveAfftdnParamsRevalidation:
 
 
 class TestDenoiseDirectiveMaxLength:
-    """tool / version フィールドに max_length=64 制約があること（SR-L-1）。"""
+    """Confirm that tool / version fields have a max_length=64 constraint (SR-L-1)."""
 
     def test_tool_at_max_length_64_accepted(self) -> None:
         long_tool = "t" * 64
@@ -405,7 +405,7 @@ class TestDenoiseDirectiveMaxLength:
         assert len(d.tool) == 64
 
     def test_tool_over_max_length_rejected(self) -> None:
-        """tool が65文字以上なら ValidationError（SR-L-1）。"""
+        """tool with 65+ characters raises ValidationError (SR-L-1)."""
         with pytest.raises(ValidationError):
             DenoiseDirective(
                 tool="t" * 65,
@@ -427,7 +427,7 @@ class TestDenoiseDirectiveMaxLength:
         assert len(d.version) == 64
 
     def test_version_over_max_length_rejected(self) -> None:
-        """version が65文字以上なら ValidationError（SR-L-1）。"""
+        """version with 65+ characters raises ValidationError (SR-L-1)."""
         with pytest.raises(ValidationError):
             DenoiseDirective(
                 tool="clipwright-noise",
@@ -439,7 +439,7 @@ class TestDenoiseDirectiveMaxLength:
 
 
 class TestDenoiseDirectiveMeasuredNoiseFloor:
-    """measured_noise_floor_db の範囲制約・inf/nan 拒否（SR-L-3）。"""
+    """Range constraints and inf/nan rejection for measured_noise_floor_db (SR-L-3)."""
 
     def test_measured_valid_minus_100_accepted(self) -> None:
         d = DenoiseDirective(
@@ -464,7 +464,7 @@ class TestDenoiseDirectiveMeasuredNoiseFloor:
         assert d.measured_noise_floor_db == pytest.approx(0.0)
 
     def test_measured_positive_rejected(self) -> None:
-        """測定値がプラスになることはない（ノイズフロアは 0dB 以下）。"""
+        """Noise floor cannot be positive (noise floor is 0 dB or below)."""
         with pytest.raises(ValidationError):
             DenoiseDirective(
                 tool="t",
@@ -476,7 +476,7 @@ class TestDenoiseDirectiveMeasuredNoiseFloor:
             )
 
     def test_measured_below_minus_200_rejected(self) -> None:
-        """-200 dB 未満は物理的に無意味な値として拒否する。"""
+        """Values below -200 dB are physically meaningless and are rejected."""
         with pytest.raises(ValidationError):
             DenoiseDirective(
                 tool="t",
@@ -488,7 +488,7 @@ class TestDenoiseDirectiveMeasuredNoiseFloor:
             )
 
     def test_measured_inf_rejected(self) -> None:
-        """inf は拒否される（SR-L-3）。"""
+        """inf is rejected (SR-L-3)."""
         import math
 
         with pytest.raises(ValidationError):
@@ -502,7 +502,7 @@ class TestDenoiseDirectiveMeasuredNoiseFloor:
             )
 
     def test_measured_neg_inf_rejected(self) -> None:
-        """-inf は拒否される（SR-L-3）。"""
+        """-inf is rejected (SR-L-3)."""
         import math
 
         with pytest.raises(ValidationError):
@@ -516,7 +516,7 @@ class TestDenoiseDirectiveMeasuredNoiseFloor:
             )
 
     def test_measured_nan_rejected(self) -> None:
-        """nan は拒否される（SR-L-3）。"""
+        """nan is rejected (SR-L-3)."""
         import math
 
         with pytest.raises(ValidationError):
@@ -530,7 +530,7 @@ class TestDenoiseDirectiveMeasuredNoiseFloor:
             )
 
     def test_measured_none_accepted(self) -> None:
-        """None は有効（測定不能時のフォールバック）。"""
+        """None is valid (fallback when measurement is unavailable)."""
         d = DenoiseDirective(
             tool="t",
             version="0.1.0",

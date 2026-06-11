@@ -1,13 +1,13 @@
-"""test_analyze.py — analyze.py（loudnorm/volumedetect 実行・ラウドネス測定）のテスト。
+"""test_analyze.py — Tests for analyze.py (loudnorm/volumedetect execution, loudness measurement).
 
-モック方針:
-  - clipwright_loudness.analyze.resolve_tool を patch して ffmpeg バイナリパスを制御。
-  - clipwright_loudness.analyze.run を patch して ffmpeg stderr を制御。
-  - 実 ffmpeg バイナリは一切呼ばない。
+Mock policy:
+  - Patch clipwright_loudness.analyze.resolve_tool to control the ffmpeg binary path.
+  - Patch clipwright_loudness.analyze.run to control ffmpeg stderr.
+  - No real ffmpeg binary is invoked.
 
-重要（DC-AS-004 教訓: noise での正規表現フィールド名不一致バグを繰り返さない）:
-  実 ffmpeg 8.1.1 の loudnorm print_format=json 出力形式（環境確認済み）:
-    [Parsed_loudnorm_0 @ 0x...] ← 空行
+Important (DC-AS-004 lesson: avoid repeating the regex field-name mismatch bug from noise):
+  Actual ffmpeg 8.1.1 loudnorm print_format=json output format (verified on real hardware):
+    [Parsed_loudnorm_0 @ 0x...] <- empty line
     {
     \t"input_i" : "-21.75",
     \t"input_tp" : "-18.06",
@@ -20,24 +20,24 @@
     \t"normalization_type" : "dynamic",
     \t"target_offset" : "0.03"
     }
-  ※ 値は文字列として引用符付きで出力される。"-inf" になる場合もある（無音素材）。
+    Note: values are output as quoted strings. "-inf" may appear (silent input).
 
-  実 ffmpeg 8.1.1 の volumedetect 出力形式（環境確認済み）:
+  Actual ffmpeg 8.1.1 volumedetect output format (verified on real hardware):
     [Parsed_volumedetect_0 @ 0x...] n_samples: 132300
     [Parsed_volumedetect_0 @ 0x...] mean_volume: -21.1 dB
     [Parsed_volumedetect_0 @ 0x...] max_volume: -18.1 dB
     [Parsed_volumedetect_0 @ 0x...] histogram_18db: 38400
-  ※ "max_volume: <VALUE> dB" 形式。VALUE は負の浮動小数点数。
+    Note: "max_volume: <VALUE> dB" format. VALUE is a negative float.
 
-検証観点:
-  (a) loudnorm 正常: stderr 末尾 JSON から input_i/input_tp/input_lra/input_thresh/target_offset 抽出
-  (b) peak 正常: volumedetect から max_volume 抽出
-  (c) 測定不能（JSON/フィールド欠落）→ measured=None + warning（U-1 確定方針）
-  (d) ffmpeg 不在 → DEPENDENCY_MISSING
-  (e) 実行失敗 → SUBPROCESS_FAILED（message に stderr 生文字列・絶対パス非混入）
-  (f) timeout → SUBPROCESS_TIMEOUT
-  (g) subprocess 引数配列・shell=False・timeout・終了コード検査の assert
-  (h) track 全体測定コマンド組み立て検証
+Verification points:
+  (a) loudnorm success: extract input_i/input_tp/input_lra/input_thresh/target_offset from stderr JSON
+  (b) peak success: extract max_volume from volumedetect
+  (c) measurement failure (missing JSON/fields) -> measured=None + warning (U-1 confirmed)
+  (d) ffmpeg missing -> DEPENDENCY_MISSING
+  (e) execution failure -> SUBPROCESS_FAILED (no raw stderr or absolute path in message)
+  (f) timeout -> SUBPROCESS_TIMEOUT
+  (g) assert subprocess argument list, shell=False, timeout, exit-code check
+  (h) verify track-wide measurement command construction
 """
 
 from __future__ import annotations
@@ -51,10 +51,10 @@ import pytest
 from clipwright.errors import ClipwrightError, ErrorCode
 
 # ===========================================================================
-# 実 ffmpeg 出力形式（環境確認済み: ffmpeg 8.1.1 Windows）
+# Actual ffmpeg output formats (verified: ffmpeg 8.1.1 Windows)
 # ===========================================================================
 
-# loudnorm print_format=json の正常出力（実機で確認した形式）
+# Normal loudnorm print_format=json output (format verified on real hardware)
 _LOUDNORM_STDERR_NORMAL = """\
 ffmpeg version 8.1.1 ...
 Input #0, ...
@@ -74,7 +74,7 @@ Input #0, ...
 size=N/A time=00:00:05.00 ...
 """
 
-# loudnorm: -inf が入るケース（無音素材などで測定不能）
+# loudnorm: case where -inf appears (e.g. silent input — measurement not possible)
 _LOUDNORM_STDERR_INF_VALUES = """\
 [Parsed_loudnorm_0 @ 0000019762f437c0]
 {
@@ -91,7 +91,7 @@ _LOUDNORM_STDERR_INF_VALUES = """\
 }
 """
 
-# loudnorm: JSON ブロックが全くない stderr（測定不能）
+# loudnorm: stderr with no JSON block at all (measurement not possible)
 _LOUDNORM_STDERR_NO_JSON = """\
 ffmpeg version 8.1.1 ...
 Input #0, ...
@@ -99,7 +99,7 @@ Stream #0:0: Audio: aac, 44100 Hz, stereo, fltp, 192 kb/s
 size=N/A time=00:00:05.00 ...
 """
 
-# volumedetect の正常出力（実機で確認した形式）
+# Normal volumedetect output (format verified on real hardware)
 _VOLUMEDETECT_STDERR_NORMAL = """\
 ffmpeg version 8.1.1 ...
 [Parsed_volumedetect_0 @ 000001fbb2026580] n_samples: 0
@@ -110,7 +110,7 @@ ffmpeg version 8.1.1 ...
 size=N/A time=00:00:03.00 ...
 """
 
-# volumedetect: max_volume フィールドがない stderr（測定不能）
+# volumedetect: stderr without a max_volume field (measurement not possible)
 _VOLUMEDETECT_STDERR_NO_MAX_VOLUME = """\
 ffmpeg version 8.1.1 ...
 [Parsed_volumedetect_0 @ 000001fbb2024c00] n_samples: 0
@@ -121,12 +121,12 @@ _FAKE_FFMPEG = "/usr/local/bin/ffmpeg"
 
 
 def _fake_resolve(name: str, env_var: str | None = None) -> str:
-    """resolve_tool の成功モック: ffmpeg パスを返す。"""
+    """Success mock for resolve_tool: returns ffmpeg path."""
     return _FAKE_FFMPEG
 
 
 def _make_run_ok(stderr: str) -> Any:
-    """run の成功モック（returncode=0, 指定 stderr）を返すクロージャ。"""
+    """Return a closure that mocks a successful run call (returncode=0, given stderr)."""
 
     def _impl(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
         return CompletedProcess(args=cmd, returncode=0, stdout="", stderr=stderr)
@@ -135,19 +135,19 @@ def _make_run_ok(stderr: str) -> Any:
 
 
 # ===========================================================================
-# (a) loudnorm 正常: stderr 末尾 JSON から測定値を抽出（DC-AS-004 教訓）
+# (a) loudnorm success: extract measured values from stderr JSON (DC-AS-004 lesson)
 # ===========================================================================
 
 
 class TestLoudnormNormal:
-    """実 ffmpeg 形式の loudnorm JSON から測定値を正しく抽出できること。
+    """Verify that measured values are correctly extracted from real ffmpeg loudnorm JSON.
 
-    impl の JSON パース/フィールド名が実形式と一致しなければ失敗し、
-    DC-AS-004 相当のバグを Red で捕捉する。
+    If the impl's JSON parsing or field names do not match the real format, this fails
+    and catches a DC-AS-004 equivalent bug in Red.
     """
 
     def test_loudnorm_measured_not_none(self, tmp_path: Path) -> None:
-        """正常 loudnorm stderr から measured が None でないこと（DC-AS-004 教訓）。"""
+        """measured must not be None when extracted from a normal loudnorm stderr (DC-AS-004 lesson)."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -167,12 +167,12 @@ class TestLoudnormNormal:
             )
 
         assert result["measured"] is not None, (
-            "DC-AS-004 教訓: 実 ffmpeg 形式 loudnorm JSON から measured を抽出できていない。"
-            " impl の JSON パース/フィールド名を確認すること。"
+            "DC-AS-004 lesson: failed to extract measured from real ffmpeg loudnorm JSON."
+            " Check impl JSON parsing / field names."
         )
 
     def test_loudnorm_input_i_extracted(self, tmp_path: Path) -> None:
-        """input_i が -21.75 として抽出されること。"""
+        """input_i must be extracted as -21.75."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -196,7 +196,7 @@ class TestLoudnormNormal:
         assert measured["input_i"] == pytest.approx(-21.75, abs=0.01)
 
     def test_loudnorm_input_tp_extracted(self, tmp_path: Path) -> None:
-        """input_tp が -18.06 として抽出されること。"""
+        """input_tp must be extracted as -18.06."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -220,7 +220,7 @@ class TestLoudnormNormal:
         assert measured["input_tp"] == pytest.approx(-18.06, abs=0.01)
 
     def test_loudnorm_input_lra_extracted(self, tmp_path: Path) -> None:
-        """input_lra が 0.0 として抽出されること。"""
+        """input_lra must be extracted as 0.0."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -244,7 +244,7 @@ class TestLoudnormNormal:
         assert measured["input_lra"] == pytest.approx(0.0, abs=0.01)
 
     def test_loudnorm_input_thresh_extracted(self, tmp_path: Path) -> None:
-        """input_thresh が -31.75 として抽出されること。"""
+        """input_thresh must be extracted as -31.75."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -268,7 +268,7 @@ class TestLoudnormNormal:
         assert measured["input_thresh"] == pytest.approx(-31.75, abs=0.01)
 
     def test_loudnorm_target_offset_extracted(self, tmp_path: Path) -> None:
-        """target_offset が 0.03 として抽出されること。"""
+        """target_offset must be extracted as 0.03."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -292,7 +292,7 @@ class TestLoudnormNormal:
         assert measured["target_offset"] == pytest.approx(0.03, abs=0.01)
 
     def test_loudnorm_no_warning_on_success(self, tmp_path: Path) -> None:
-        """正常測定時は warnings が空であること。"""
+        """warnings must be empty on successful measurement."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -315,15 +315,15 @@ class TestLoudnormNormal:
 
 
 # ===========================================================================
-# (b) peak 正常: volumedetect から max_volume 抽出
+# (b) peak success: extract max_volume from volumedetect
 # ===========================================================================
 
 
 class TestPeakNormal:
-    """実 ffmpeg 形式の volumedetect stderr から max_volume を正しく抽出できること。"""
+    """Verify that max_volume is correctly extracted from real ffmpeg volumedetect stderr."""
 
     def test_peak_measured_not_none(self, tmp_path: Path) -> None:
-        """正常 volumedetect stderr から measured が None でないこと。"""
+        """measured must not be None when extracted from a normal volumedetect stderr."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -341,12 +341,12 @@ class TestPeakNormal:
             result = measure_loudness(media, mode="peak", target_peak_db=-1.0)
 
         assert result["measured"] is not None, (
-            "volumedetect 正常 stderr から measured を抽出できていない。"
-            " 'max_volume: <VALUE> dB' 形式の正規表現を確認すること。"
+            "Failed to extract measured from normal volumedetect stderr."
+            " Check the regex for 'max_volume: <VALUE> dB' format."
         )
 
     def test_peak_max_volume_db_extracted(self, tmp_path: Path) -> None:
-        """max_volume_db が -18.1 として抽出されること。"""
+        """max_volume_db must be extracted as -18.1."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -368,7 +368,7 @@ class TestPeakNormal:
         assert measured["max_volume_db"] == pytest.approx(-18.1, abs=0.1)
 
     def test_peak_no_warning_on_success(self, tmp_path: Path) -> None:
-        """正常測定時は warnings が空であること。"""
+        """warnings must be empty on successful measurement."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -389,15 +389,15 @@ class TestPeakNormal:
 
 
 # ===========================================================================
-# (c) 測定不能（JSON欠落/-inf値）→ measured=None + warning（U-1 確定）
+# (c) measurement failure (missing JSON / -inf values) -> measured=None + warning (U-1 confirmed)
 # ===========================================================================
 
 
 class TestLoudnormMeasurementFailure:
-    """loudnorm で測定不能な場合 measured=None + warning が返ること（U-1）。"""
+    """When loudnorm measurement is not possible, measured=None + warning must be returned (U-1)."""
 
     def test_loudnorm_no_json_gives_measured_none(self, tmp_path: Path) -> None:
-        """JSON ブロックがない stderr → measured=None（U-1）。"""
+        """No JSON block in stderr -> measured=None (U-1)."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -417,11 +417,11 @@ class TestLoudnormMeasurementFailure:
             )
 
         assert result["measured"] is None, (
-            "U-1: loudnorm JSON なし時は measured=None でなければならない。"
+            "U-1: measured must be None when loudnorm JSON is absent."
         )
 
     def test_loudnorm_no_json_gives_warning(self, tmp_path: Path) -> None:
-        """JSON ブロックがない stderr → warnings に警告が含まれること（U-1）。"""
+        """No JSON block in stderr -> warnings must contain a warning (U-1)."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -440,13 +440,15 @@ class TestLoudnormMeasurementFailure:
                 media, mode="loudnorm", target_i=-14.0, target_tp=-1.0, target_lra=11.0
             )
 
-        assert len(result["warnings"]) > 0, "U-1: 測定不能時は warnings に警告が必要。"
+        assert len(result["warnings"]) > 0, (
+            "U-1: a warning is required when measurement is not possible."
+        )
 
     def test_loudnorm_inf_values_gives_measured_none(self, tmp_path: Path) -> None:
-        """-inf 値が含まれる JSON → measured=None（無音素材などで測定不能・U-1）。
+        """JSON with -inf values -> measured=None (silent input — not measurable, U-1).
 
-        loudnorm が "-inf" を返した場合（無音素材）は LoudnormMeasured で
-        allow_inf_nan=False により検証エラーになるため measured=None にすること。
+        When loudnorm returns "-inf" (silent input), LoudnormMeasured raises
+        ValidationError due to allow_inf_nan=False, so measured must be None.
         """
         from clipwright_loudness.analyze import measure_loudness
 
@@ -467,15 +469,15 @@ class TestLoudnormMeasurementFailure:
             )
 
         assert result["measured"] is None, (
-            "U-1: loudnorm で -inf 値が含まれる場合は measured=None でなければならない。"
+            "U-1: measured must be None when loudnorm returns -inf values."
         )
 
 
 class TestPeakMeasurementFailure:
-    """volumedetect で測定不能な場合 measured=None + warning が返ること（U-1）。"""
+    """When volumedetect measurement is not possible, measured=None + warning must be returned (U-1)."""
 
     def test_peak_no_max_volume_gives_measured_none(self, tmp_path: Path) -> None:
-        """max_volume フィールドがない stderr → measured=None。"""
+        """No max_volume field in stderr -> measured=None."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -495,7 +497,7 @@ class TestPeakMeasurementFailure:
         assert result["measured"] is None
 
     def test_peak_no_max_volume_gives_warning(self, tmp_path: Path) -> None:
-        """max_volume フィールドがない stderr → warnings に警告が含まれること。"""
+        """No max_volume field in stderr -> warnings must contain a warning."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -516,17 +518,17 @@ class TestPeakMeasurementFailure:
 
 
 # ===========================================================================
-# (d) ffmpeg 不在 → DEPENDENCY_MISSING
+# (d) ffmpeg missing -> DEPENDENCY_MISSING
 # ===========================================================================
 
 
 class TestFfmpegNotFound:
-    """ffmpeg が resolve できない場合に DEPENDENCY_MISSING が発生する。"""
+    """DEPENDENCY_MISSING is raised when ffmpeg cannot be resolved."""
 
     def test_dependency_missing_when_ffmpeg_not_found_loudnorm(
         self, tmp_path: Path
     ) -> None:
-        """loudnorm モードで resolve_tool が DEPENDENCY_MISSING を送出すると伝播すること。"""
+        """DEPENDENCY_MISSING must propagate when resolve_tool raises it in loudnorm mode."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -535,8 +537,8 @@ class TestFfmpegNotFound:
         def _fail_resolve(name: str, env_var: str | None = None) -> str:
             raise ClipwrightError(
                 code=ErrorCode.DEPENDENCY_MISSING,
-                message=f"{name} が PATH 上に見つかりません。",
-                hint=f"{name} をインストールして PATH に追加してください。",
+                message=f"{name} not found on PATH.",
+                hint=f"Install {name} and add it to PATH.",
             )
 
         with (
@@ -554,7 +556,7 @@ class TestFfmpegNotFound:
     def test_dependency_missing_when_ffmpeg_not_found_peak(
         self, tmp_path: Path
     ) -> None:
-        """peak モードでも同様に DEPENDENCY_MISSING が伝播すること。"""
+        """DEPENDENCY_MISSING must also propagate in peak mode."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -563,8 +565,8 @@ class TestFfmpegNotFound:
         def _fail_resolve(name: str, env_var: str | None = None) -> str:
             raise ClipwrightError(
                 code=ErrorCode.DEPENDENCY_MISSING,
-                message=f"{name} が見つかりません。",
-                hint="インストールしてください。",
+                message=f"{name} not found.",
+                hint="Install it.",
             )
 
         with (
@@ -579,15 +581,15 @@ class TestFfmpegNotFound:
 
 
 # ===========================================================================
-# (e) 実行失敗 → SUBPROCESS_FAILED（message に stderr 生文字列・絶対パス非混入）
+# (e) execution failure -> SUBPROCESS_FAILED (no raw stderr or absolute path in message)
 # ===========================================================================
 
 
 class TestSubprocessFailed:
-    """ffmpeg 実行失敗時に SUBPROCESS_FAILED が発生し、message に秘密を含まないこと。"""
+    """SUBPROCESS_FAILED is raised on ffmpeg failure, with no secrets in the message."""
 
     def test_subprocess_failed_loudnorm(self, tmp_path: Path) -> None:
-        """loudnorm で run が SUBPROCESS_FAILED を送出すると伝播すること。"""
+        """SUBPROCESS_FAILED must propagate when run raises it in loudnorm mode."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -596,8 +598,8 @@ class TestSubprocessFailed:
         def _fail_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             raise ClipwrightError(
                 code=ErrorCode.SUBPROCESS_FAILED,
-                message="ffmpeg コマンドが終了コード 1 で失敗しました。",
-                hint="ffmpeg のバージョンや引数を確認してください。",
+                message="ffmpeg command exited with code 1.",
+                hint="Check the ffmpeg version and arguments.",
             )
 
         with (
@@ -614,19 +616,19 @@ class TestSubprocessFailed:
         assert exc_info.value.code == ErrorCode.SUBPROCESS_FAILED
 
     def test_subprocess_failed_message_no_absolute_path(self, tmp_path: Path) -> None:
-        """SUBPROCESS_FAILED の message に絶対ディレクトリパスが含まれないこと。"""
+        """SUBPROCESS_FAILED message must not contain an absolute directory path."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
         media.write_bytes(b"dummy")
 
         def _fail_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
-            # media の絶対パスを含む message を送出 — impl がそのまま再送出すると
-            # 絶対パスが外部に漏れる。measure_loudness はパスを公開してはならない。
+            # Raise with the absolute media path in the message — if impl re-raises
+            # as-is, the absolute path leaks. measure_loudness must not expose it.
             raise ClipwrightError(
                 code=ErrorCode.SUBPROCESS_FAILED,
                 message=f"ffmpeg failed for {media}",
-                hint="確認してください。",
+                hint="Check.",
             )
 
         with (
@@ -643,7 +645,7 @@ class TestSubprocessFailed:
         assert str(tmp_path) not in exc_info.value.message
 
     def test_subprocess_failed_peak(self, tmp_path: Path) -> None:
-        """peak モードでも SUBPROCESS_FAILED が伝播すること。"""
+        """SUBPROCESS_FAILED must also propagate in peak mode."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -652,8 +654,8 @@ class TestSubprocessFailed:
         def _fail_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             raise ClipwrightError(
                 code=ErrorCode.SUBPROCESS_FAILED,
-                message="ffmpeg コマンドが失敗しました。",
-                hint="確認してください。",
+                message="ffmpeg command failed.",
+                hint="Check.",
             )
 
         with (
@@ -669,15 +671,15 @@ class TestSubprocessFailed:
 
 
 # ===========================================================================
-# (f) timeout → SUBPROCESS_TIMEOUT
+# (f) timeout -> SUBPROCESS_TIMEOUT
 # ===========================================================================
 
 
 class TestSubprocessTimeout:
-    """ffmpeg 実行が timeout した場合 SUBPROCESS_TIMEOUT が発生すること。"""
+    """SUBPROCESS_TIMEOUT is raised when the ffmpeg execution times out."""
 
     def test_subprocess_timeout_loudnorm(self, tmp_path: Path) -> None:
-        """loudnorm で run が SUBPROCESS_TIMEOUT を送出すると伝播すること。"""
+        """SUBPROCESS_TIMEOUT must propagate when run raises it in loudnorm mode."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -686,8 +688,8 @@ class TestSubprocessTimeout:
         def _timeout_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             raise ClipwrightError(
                 code=ErrorCode.SUBPROCESS_TIMEOUT,
-                message="ffmpeg コマンドがタイムアウトしました。",
-                hint="タイムアウト値を増やすか、短いメディアで試してください。",
+                message="ffmpeg command timed out.",
+                hint="Increase the timeout or try with shorter media.",
             )
 
         with (
@@ -704,7 +706,7 @@ class TestSubprocessTimeout:
         assert exc_info.value.code == ErrorCode.SUBPROCESS_TIMEOUT
 
     def test_subprocess_timeout_peak(self, tmp_path: Path) -> None:
-        """peak モードでも SUBPROCESS_TIMEOUT が伝播すること。"""
+        """SUBPROCESS_TIMEOUT must also propagate in peak mode."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -713,7 +715,7 @@ class TestSubprocessTimeout:
         def _timeout_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             raise ClipwrightError(
                 code=ErrorCode.SUBPROCESS_TIMEOUT,
-                message="タイムアウト。",
+                message="Timeout.",
                 hint="hint",
             )
 
@@ -730,15 +732,15 @@ class TestSubprocessTimeout:
 
 
 # ===========================================================================
-# (g) subprocess 引数配列・shell=False・timeout・終了コード検査の assert
+# (g) assert subprocess argument list, shell=False, timeout, exit-code check
 # ===========================================================================
 
 
 class TestSubprocessContract:
-    """run に渡す引数の形式・timeout・呼び出し検証（コーディング規約 §6.5）。"""
+    """Verify argument format, timeout, and call details of run (coding conventions §6.5)."""
 
     def test_run_called_with_list_not_string_loudnorm(self, tmp_path: Path) -> None:
-        """loudnorm: run に渡すコマンドが list[str] であること（shell=False 相当）。"""
+        """loudnorm: command passed to run must be list[str] (shell=False equivalent)."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -761,12 +763,12 @@ class TestSubprocessContract:
 
         assert len(captured_cmds) >= 1
         cmd = captured_cmds[0]
-        assert isinstance(cmd, list), f"cmd が list でない: {type(cmd)}"
+        assert isinstance(cmd, list), f"cmd is not a list: {type(cmd)}"
         for arg in cmd:
-            assert isinstance(arg, str), f"コマンド引数が str でない: {arg!r}"
+            assert isinstance(arg, str), f"command argument is not str: {arg!r}"
 
     def test_run_called_with_list_not_string_peak(self, tmp_path: Path) -> None:
-        """peak: run に渡すコマンドが list[str] であること（shell=False 相当）。"""
+        """peak: command passed to run must be list[str] (shell=False equivalent)."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -789,7 +791,7 @@ class TestSubprocessContract:
         assert isinstance(cmd, list)
 
     def test_run_cmd_starts_with_ffmpeg_binary_loudnorm(self, tmp_path: Path) -> None:
-        """loudnorm: run の第1引数が resolve_tool で得た ffmpeg バイナリパスであること。"""
+        """loudnorm: first argument to run must be the ffmpeg binary path from resolve_tool."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -814,7 +816,7 @@ class TestSubprocessContract:
         assert cmd[0] == _FAKE_FFMPEG
 
     def test_run_called_with_timeout_loudnorm(self, tmp_path: Path) -> None:
-        """loudnorm: run に timeout キーワード引数が渡されること。"""
+        """loudnorm: run must receive the timeout keyword argument."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -837,12 +839,12 @@ class TestSubprocessContract:
 
         assert len(captured_kwargs) >= 1
         kwargs = captured_kwargs[0]
-        assert "timeout" in kwargs, "run に timeout 引数が渡されていない。"
+        assert "timeout" in kwargs, "timeout argument was not passed to run."
         assert isinstance(kwargs["timeout"], (int, float))
         assert kwargs["timeout"] > 0
 
     def test_run_called_with_timeout_peak(self, tmp_path: Path) -> None:
-        """peak: run に timeout キーワード引数が渡されること。"""
+        """peak: run must receive the timeout keyword argument."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -866,7 +868,7 @@ class TestSubprocessContract:
         assert kwargs["timeout"] > 0
 
     def test_run_cmd_includes_null_output_loudnorm(self, tmp_path: Path) -> None:
-        """loudnorm: run のコマンドに -f null - が含まれること（出力不要）。"""
+        """loudnorm: run command must include -f null - (no output needed)."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -888,10 +890,10 @@ class TestSubprocessContract:
             )
 
         cmd = captured_cmds[0]
-        assert "null" in cmd, f"コマンドに 'null' が含まれない: {cmd}"
+        assert "null" in cmd, f"'null' not found in command: {cmd}"
 
     def test_run_cmd_includes_null_output_peak(self, tmp_path: Path) -> None:
-        """peak: run のコマンドに -f null - が含まれること（出力不要）。"""
+        """peak: run command must include -f null - (no output needed)."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -915,15 +917,15 @@ class TestSubprocessContract:
 
 
 # ===========================================================================
-# (h) track 全体測定コマンド組み立て検証
+# (h) track-wide measurement command construction
 # ===========================================================================
 
 
 class TestTrackMeasurementCommand:
-    """track 全体測定（メディア第1音声全体）のコマンド組み立て検証（ADR-L7）。"""
+    """Verify command construction for track-wide measurement (entire first audio stream) (ADR-L7)."""
 
     def test_loudnorm_command_contains_loudnorm_filter(self, tmp_path: Path) -> None:
-        """loudnorm コマンドに 'loudnorm' フィルタが含まれること（ADR-L1）。"""
+        """loudnorm command must contain the 'loudnorm' filter (ADR-L1)."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -947,11 +949,11 @@ class TestTrackMeasurementCommand:
         cmd = captured_cmds[0]
         cmd_str = " ".join(cmd)
         assert "loudnorm" in cmd_str, (
-            f"コマンドに 'loudnorm' フィルタが含まれない: {cmd_str}"
+            f"'loudnorm' filter not found in command: {cmd_str}"
         )
 
     def test_loudnorm_command_contains_print_format_json(self, tmp_path: Path) -> None:
-        """loudnorm コマンドに 'print_format=json' が含まれること（ADR-L1）。"""
+        """loudnorm command must contain 'print_format=json' (ADR-L1)."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -975,11 +977,11 @@ class TestTrackMeasurementCommand:
         cmd = captured_cmds[0]
         cmd_str = " ".join(cmd)
         assert "print_format=json" in cmd_str, (
-            f"コマンドに 'print_format=json' が含まれない: {cmd_str}"
+            f"'print_format=json' not found in command: {cmd_str}"
         )
 
     def test_loudnorm_command_contains_target_i(self, tmp_path: Path) -> None:
-        """loudnorm コマンドに target I 値が含まれること（I=-14）。"""
+        """loudnorm command must contain the target I value (I=-14)."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -1003,11 +1005,11 @@ class TestTrackMeasurementCommand:
         cmd = captured_cmds[0]
         cmd_str = " ".join(cmd)
         assert "I=-14" in cmd_str, (
-            f"コマンドに I=-14 (target LUFS) が含まれない: {cmd_str}"
+            f"I=-14 (target LUFS) not found in command: {cmd_str}"
         )
 
     def test_loudnorm_command_contains_media_path(self, tmp_path: Path) -> None:
-        """loudnorm コマンドにメディアパスが含まれること。"""
+        """loudnorm command must contain the media path."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -1029,10 +1031,10 @@ class TestTrackMeasurementCommand:
             )
 
         cmd = captured_cmds[0]
-        assert str(media) in cmd, f"コマンドにメディアパスが含まれない: {cmd}"
+        assert str(media) in cmd, f"media path not found in command: {cmd}"
 
     def test_peak_command_contains_volumedetect_filter(self, tmp_path: Path) -> None:
-        """peak コマンドに 'volumedetect' フィルタが含まれること（ADR-L2）。"""
+        """peak command must contain the 'volumedetect' filter (ADR-L2)."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -1054,16 +1056,16 @@ class TestTrackMeasurementCommand:
         cmd = captured_cmds[0]
         cmd_str = " ".join(cmd)
         assert "volumedetect" in cmd_str, (
-            f"コマンドに 'volumedetect' フィルタが含まれない: {cmd_str}"
+            f"'volumedetect' filter not found in command: {cmd_str}"
         )
 
 
 # ===========================================================================
-# H-1 回帰: 先頭に余計な {} ブロックがある場合も末尾 loudnorm JSON を取得できること
+# H-1 regression: must find the loudnorm JSON even when leading {} blocks are present
 # ===========================================================================
 
 
-# 先頭に余計な {} ブロックが含まれる stderr（H-1 で問題となったケース）
+# stderr with a leading {} block before the loudnorm JSON (the case that caused H-1)
 _LOUDNORM_STDERR_WITH_LEADING_BRACE = """\
 ffmpeg version 8.1.1 ...
 Input #0, {} format ...
@@ -1086,15 +1088,16 @@ size=N/A time=00:00:05.00 ...
 
 
 class TestLoudnormLeadingBraceRegression:
-    """H-1 回帰: stderr 先頭に {} ブロックがあっても末尾 loudnorm JSON を取得できること。
+    """H-1 regression: trailing loudnorm JSON must be found even when leading {} blocks exist.
 
-    re.search（先頭一致）から re.findall（全候補から末尾探索）への変更の回帰テスト。
+    Regression test for the change from re.search (first match) to
+    re.findall (all candidates, search in reverse).
     """
 
     def test_loudnorm_with_leading_brace_measured_not_none(
         self, tmp_path: Path
     ) -> None:
-        """先頭に余計な {} ブロックがある stderr から measured が None でないこと（H-1）。"""
+        """measured must not be None when leading {} blocks are present in stderr (H-1)."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"
@@ -1114,14 +1117,14 @@ class TestLoudnormLeadingBraceRegression:
             )
 
         assert result["measured"] is not None, (
-            "H-1 回帰: 先頭の {} ブロックにより末尾 loudnorm JSON が取りこぼされた。"
-            " re.findall + reversed による末尾探索を確認すること。"
+            "H-1 regression: leading {} block caused trailing loudnorm JSON to be missed."
+            " Check re.findall + reversed tail search."
         )
 
     def test_loudnorm_with_leading_brace_input_i_extracted(
         self, tmp_path: Path
     ) -> None:
-        """先頭 {} ブロックがあっても input_i が -21.75 として抽出されること（H-1）。"""
+        """input_i must be extracted as -21.75 even with leading {} blocks (H-1)."""
         from clipwright_loudness.analyze import measure_loudness
 
         media = tmp_path / "video.mp4"

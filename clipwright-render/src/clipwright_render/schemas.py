@@ -1,8 +1,8 @@
-"""schemas.py — clipwright-render 固有の Pydantic スキーマ。
+"""schemas.py — clipwright-render specific Pydantic schemas.
 
-共通型（MediaRef / TimeRange / Artifact / ToolResult 等）は clipwright.schemas で
-一元定義されているため、このモジュールでは再定義しない。
-必要な場合は `from clipwright.schemas import ...` で参照すること。
+Common types (MediaRef / TimeRange / Artifact / ToolResult, etc.) are centrally
+defined in clipwright.schemas; do not redefine them here.
+Use `from clipwright.schemas import ...` when needed.
 """
 
 from __future__ import annotations
@@ -12,30 +12,35 @@ from typing import Annotated, Self
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-# filtergraph/force_style の区切り文字および libass FontName の解釈リスク文字:
-# , : ' [ ] ; \ = # （ADR-S2-r2/DC-AM-004）
-# # を追加: libass 一部バージョンで FontName 値の # が誤解釈されるリスク（SR-NEW）。
+# Characters forbidden in filtergraph/force_style separators and libass
+# FontName interpretation risks: , : ' [ ] ; \ = # (ADR-S2-r2/DC-AM-004)
+# # added: some libass versions misinterpret # in FontName as a colour code
+# (SR-NEW).
 _FONT_NAME_FORBIDDEN_CHARS_RE = re.compile(r"[,:'\\[\];=#]")
 
-# font_size の実用上限（libass が拒否しない上限値として設定・実質無制限の意図）
+# Practical upper limit for font_size (set to a value libass does not reject;
+# effectively unlimited)
 _FONT_SIZE_MAX: int = 1_000_000_000
 
-# margin_v の実用上限（8K 解像度の最大縦幅を超える値を拒否するための基準）
+# Practical upper limit for margin_v (rejects values exceeding the maximum
+# vertical resolution of 8K)
 _MARGIN_V_MAX: int = 10_000
 
 
 class SubtitleOptions(BaseModel):
-    """字幕焼き込みオプション（ADR-S2-r2 / ADR-S6-r2 / ADR-S6-r3）。
+    """Subtitle burn-in options (ADR-S2-r2 / ADR-S6-r2 / ADR-S6-r3).
 
-    RenderOptions.subtitle に渡すことで clipwright-render が字幕を映像に焼き込む。
-    subtitle=None（省略）のとき字幕処理は行わない（後方互換・ADR-S8）。
+    Pass to RenderOptions.subtitle so clipwright-render burns subtitles into the
+    video. When subtitle=None (omitted), subtitle processing is skipped (backward
+    compatible; ADR-S8).
 
-    全スタイル系フィールドは Optional。未指定時は libass の既定値を使う。
+    All style fields are Optional; when unspecified, libass defaults are used.
     """
 
-    # allow_inf_nan=False を model_config に追加（BGM/Denoise モデルと整合・SR-V-001）。
-    # フィールドレベルの allow_inf_nan=False は model_config 設定で冗長になるが、
-    # outline フィールドは明示的にフィールドレベルでも保持する（多重防御・ADR-S2-r2）。
+    # allow_inf_nan=False added to model_config (consistent with BGM/Denoise
+    # models; SR-V-001). Field-level allow_inf_nan=False is redundant once
+    # model_config is set, but retained explicitly on the outline field for
+    # defence-in-depth (ADR-S2-r2).
     model_config = {
         "extra": "forbid",
         "arbitrary_types_allowed": False,
@@ -47,10 +52,11 @@ class SubtitleOptions(BaseModel):
         Field(
             min_length=1,
             description=(
-                "字幕ファイルのパス（必須）。空文字は不可（DC-AM-005）。"
-                " シングルクォート（'）は不可（ffmpeg filtergraph クォート構文破綻防止・CR-E-001）。"  # noqa: E501
-                " 拡張子は .srt / .vtt / .ass のみ受理（render.py で検証）。"
-                " render.py が絶対パスに解決してから plan.py に渡す（ADR-S5-r2）。"
+                "Path to subtitle file (required). Empty string not allowed"
+                " (DC-AM-005). Single quote (') not allowed (prevents ffmpeg"
+                " filtergraph quote syntax breakage; CR-E-001). Only .srt / .vtt"
+                " / .ass extensions are accepted (validated in render.py). render.py"
+                " resolves to an absolute path before passing to plan.py (ADR-S5-r2)."
             ),
         ),
     ]
@@ -60,9 +66,11 @@ class SubtitleOptions(BaseModel):
         Field(
             default=None,
             description=(
-                "フォントファミリー名。日本語フォント名（CJK 文字列）も許可する（ADR-S2-r2）。"  # noqa: E501
-                " ただし filtergraph/force_style の区切り文字 `, : ' [ ] ; \\ = #` は禁止（DC-AM-004/SR-NEW）。"  # noqa: E501
-                " 前後の空白は libass の FontName 認識に影響するため、意図した通りに指定すること（S-L-5）。"  # noqa: E501
+                "Font family name. CJK (Japanese) font names are allowed"
+                " (ADR-S2-r2). Filtergraph/force_style separator characters"
+                " `, : ' [ ] ; \\ = #` are forbidden (DC-AM-004/SR-NEW). Leading/"
+                "trailing whitespace affects libass FontName recognition; specify"
+                " exactly as intended (S-L-5)."
             ),
         ),
     ] = None
@@ -72,9 +80,10 @@ class SubtitleOptions(BaseModel):
         Field(
             default=None,
             description=(
-                "フォント探索ディレクトリのパス。ffmpeg subtitles フィルタの fontsdir= に渡す。"  # noqa: E501
-                " シングルクォート（'）は不可（ffmpeg filtergraph クォート構文破綻防止・CR-E-001）。"  # noqa: E501
-                " 未指定のとき fontsdir オプションは省略する。"
+                "Path to font search directory. Passed to the fontsdir= option"
+                " of the ffmpeg subtitles filter. Single quote (') not allowed"
+                " (prevents ffmpeg filtergraph quote syntax breakage; CR-E-001)."
+                " When unspecified, the fontsdir option is omitted."
             ),
         ),
     ] = None
@@ -86,8 +95,10 @@ class SubtitleOptions(BaseModel):
             gt=0,
             le=_FONT_SIZE_MAX,
             description=(
-                "フォントサイズ（ポイント）。1 以上の整数。未指定は libass 既定値。"
-                f" 上限は {_FONT_SIZE_MAX}（libass が拒否しない実用上限・実質無制限の意図）。"  # noqa: E501
+                "Font size in points. Must be a positive integer. When"
+                " unspecified, libass default is used. Upper limit is"
+                f" {_FONT_SIZE_MAX} (practical ceiling that libass does not"
+                " reject; effectively unlimited)."
             ),
         ),
     ] = None
@@ -98,9 +109,9 @@ class SubtitleOptions(BaseModel):
             default=None,
             pattern=r"^#[0-9a-fA-F]{6}$",
             description=(
-                "文字色を #RRGGBB 形式で指定する。"
-                " 内部で ASS の PrimaryColour（&H00BBGGRR）に変換する（DC-AM-002）。"
-                " 未指定は libass 既定値。"
+                "Text colour in #RRGGBB format."
+                " Internally converted to ASS PrimaryColour (&H00BBGGRR; DC-AM-002)."
+                " When unspecified, libass default is used."
             ),
         ),
     ] = None
@@ -113,9 +124,9 @@ class SubtitleOptions(BaseModel):
             le=100.0,
             allow_inf_nan=False,
             description=(
-                "アウトライン幅。0.0 以上の実数。"
-                " `0.0` を指定すると force_style に `Outline=0`（縁取りなし）を付与する。"  # noqa: E501
-                " `None` のとき libass 既定値（縁取りあり）を使用する（省略 = libass 任せ）。"  # noqa: E501
+                "Outline width. Non-negative float. Setting `0.0` adds"
+                " `Outline=0` to force_style (no outline). `None` uses the libass"
+                " default (outline enabled; omit = leave to libass)."
             ),
         ),
     ] = None
@@ -127,10 +138,10 @@ class SubtitleOptions(BaseModel):
             ge=1,
             le=9,
             description=(
-                "字幕の表示位置（ASS v4+ numpad 配置）。"
-                " 1=左下, 2=中下, 3=右下, 4=左中, 5=中央,"
-                " 6=右中, 7=左上, 8=中上, 9=右上。"  # noqa: E501
-                " 1〜9 の整数のみ有効（DC-AM-001）。"
+                "Subtitle display position (ASS v4+ numpad layout). 1=bottom-left,"
+                " 2=bottom-center, 3=bottom-right, 4=middle-left, 5=center,"
+                " 6=middle-right, 7=top-left, 8=top-center, 9=top-right. Only"
+                " integers 1–9 are valid (DC-AM-001)."
             ),
         ),
     ] = None
@@ -142,8 +153,10 @@ class SubtitleOptions(BaseModel):
             ge=0,
             le=_MARGIN_V_MAX,
             description=(
-                "垂直方向のマージン（ピクセル）。0 以上の整数。未指定は libass 既定値。"
-                f" 上限は {_MARGIN_V_MAX}（8K 解像度の最大縦幅を超える値を拒否するための基準）。"  # noqa: E501
+                "Vertical margin in pixels. Non-negative integer. When"
+                " unspecified, libass default is used. Upper limit is"
+                f" {_MARGIN_V_MAX} (rejects values exceeding the maximum"
+                " vertical resolution of 8K)."
             ),
         ),
     ] = None
@@ -151,66 +164,68 @@ class SubtitleOptions(BaseModel):
     @field_validator("font_name")
     @classmethod
     def _validate_font_name_no_forbidden_chars(cls, v: str | None) -> str | None:
-        """font_name に filtergraph/force_style の区切り文字が含まれないことを検証する。
+        """Validate that font_name contains no filtergraph/force_style separator
+        characters.
 
-        禁止文字: , : ' [ ] ; \\ = #（ADR-S2-r2/DC-AM-004/SR-NEW）。
-        日本語フォント名（CJK 等 Unicode）は許可する。
-        # を禁止する理由: libass の一部バージョンで FontName 値の # が
-        # 色表記と誤解釈されるリスクがあるため防御的に禁止する（SR-NEW）。
+        Forbidden characters: , : ' [ ] ; \\ = # (ADR-S2-r2/DC-AM-004/SR-NEW).
+        Japanese font names (CJK and other Unicode) are allowed. # is forbidden
+        because some libass versions misinterpret # in FontName as a colour code,
+        so it is blocked defensively (SR-NEW).
         """
         if v is None:
             return v
         if _FONT_NAME_FORBIDDEN_CHARS_RE.search(v):
             raise ValueError(
-                "font_name に filtergraph/force_style の区切り文字"
-                " (, : ' [ ] ; \\ = #) を含めることはできません（DC-AM-004/SR-NEW）。"
+                "font_name must not contain filtergraph/force_style separator"
+                " characters (, : ' [ ] ; \\ = #) (DC-AM-004/SR-NEW)."
             )
         return v
 
     @field_validator("path")
     @classmethod
     def _validate_path_no_single_quote(cls, v: str) -> str:
-        """path にシングルクォートが含まれないことを検証する。
+        """Validate that path contains no single quote.
 
-        ffmpeg の filtergraph 構文では filename='{path}' の形式でパスを囲む。
-        パスにシングルクォートが含まれると ffmpeg パーサーが構文エラーを起こすため、
-        allow-list 方式でシングルクォートを禁止する（CR-E-001）。
-        `'` のエスケープは ffmpeg filtergraph の仕様上壊れやすいため遮断を選択する。
+        ffmpeg filtergraph syntax wraps paths as filename='{path}'. If the path
+        contains a single quote, the ffmpeg parser raises a syntax error, so
+        single quotes are blocked via allow-list (CR-E-001). Escaping `'` is
+        fragile in ffmpeg filtergraph syntax, so blocking is preferred.
         """
         if "'" in v:
             raise ValueError(
-                "path にシングルクォート（'）を含めることはできません"
-                "（ffmpeg filtergraph クォート構文破綻防止・CR-E-001）。"
+                "path must not contain a single quote (')"
+                " (prevents ffmpeg filtergraph quote syntax breakage; CR-E-001)."
             )
         return v
 
     @field_validator("fonts_dir")
     @classmethod
     def _validate_fonts_dir_no_single_quote(cls, v: str | None) -> str | None:
-        """fonts_dir にシングルクォートが含まれないことを検証する。
+        """Validate that fonts_dir contains no single quote.
 
-        path と同様の理由（fontsdir='{dir}' 構文破綻防止・CR-E-001）。
+        Same reason as path (prevents fontsdir='{dir}' syntax breakage;
+        CR-E-001).
         """
         if v is None:
             return v
         if "'" in v:
             raise ValueError(
-                "fonts_dir にシングルクォート（'）を含めることはできません"
-                "（ffmpeg filtergraph クォート構文破綻防止・CR-E-001）。"
+                "fonts_dir must not contain a single quote (')"
+                " (prevents ffmpeg filtergraph quote syntax breakage; CR-E-001)."
             )
         return v
 
 
 class RenderOptions(BaseModel):
-    """clipwright_render の変換オプション（DC-AM-004）。
+    """Conversion options for clipwright_render (DC-AM-004).
 
-    各フィールドは Optional（未指定時はソースのコーデック/解像度/fps
-    等をそのまま踏襲し、ffmpeg の既定動作に委ねる）。
+    All fields are Optional; when unspecified, the source codec/resolution/fps
+    etc. are inherited and ffmpeg defaults are used.
 
-    解像度（width/height）はペア制約あり: 両方指定するか両方 None で
-    なければならない。片方のみ指定すると scale フィルタが不完全になる
-    ため ValidationError を送出する。
-    """
+    Resolution pair constraint: width and height must both be specified or both
+    be None. Specifying only one makes the scale filter incomplete and raises
+    ValidationError.
+    """  # noqa: E501
 
     video_codec: Annotated[
         str | None,
@@ -219,8 +234,9 @@ class RenderOptions(BaseModel):
             max_length=64,
             pattern=r"^[a-zA-Z0-9_\-]+$",
             description=(
-                "出力映像コーデック。例: libx264 / libx265 / copy。未指定はソース踏襲。"
-                " 英数字・アンダースコア・ハイフンのみ使用可（最大64文字）。"
+                "Output video codec. Examples: libx264 / libx265 / copy. Inherits"
+                " source when unspecified. Only alphanumerics, underscores, and"
+                " hyphens are allowed (max 64 chars)."
             ),
         ),
     ] = None
@@ -232,8 +248,9 @@ class RenderOptions(BaseModel):
             max_length=64,
             pattern=r"^[a-zA-Z0-9_\-]+$",
             description=(
-                "出力音声コーデック。例: aac / opus / mp3。未指定はソース踏襲。"
-                " 英数字・アンダースコア・ハイフンのみ使用可（最大64文字）。"
+                "Output audio codec. Examples: aac / opus / mp3. Inherits source"
+                " when unspecified. Only alphanumerics, underscores, and hyphens"
+                " are allowed (max 64 chars)."
             ),
         ),
     ] = None
@@ -244,7 +261,8 @@ class RenderOptions(BaseModel):
             default=None,
             gt=0,
             description=(
-                "出力映像幅（ピクセル）。height とペアで指定する。未指定はソース踏襲。"
+                "Output video width in pixels. Must be specified together with"
+                " height. Inherits source when unspecified."
             ),
         ),
     ] = None
@@ -255,7 +273,8 @@ class RenderOptions(BaseModel):
             default=None,
             gt=0,
             description=(
-                "出力映像高さ（ピクセル）。width とペアで指定する。未指定はソース踏襲。"
+                "Output video height in pixels. Must be specified together with"
+                " width. Inherits source when unspecified."
             ),
         ),
     ] = None
@@ -266,7 +285,8 @@ class RenderOptions(BaseModel):
             default=None,
             gt=0.0,
             description=(
-                "出力フレームレート。未指定はソース踏襲（CFR 単一ソース前提）。"
+                "Output frame rate. Inherits source when unspecified (assumes"
+                " single-source CFR)."
             ),
         ),
     ] = None
@@ -278,7 +298,8 @@ class RenderOptions(BaseModel):
             ge=0,
             le=51,
             description=(
-                "映像品質（CRF 値）。0〜51 の範囲。0 が最高品質。未指定は ffmpeg 既定。"
+                "Video quality (CRF value). Range: 0–51. 0 is highest quality."
+                " Uses ffmpeg default when unspecified."
             ),
         ),
     ] = None
@@ -288,7 +309,8 @@ class RenderOptions(BaseModel):
         Field(
             default=False,
             description=(
-                "True のとき既存出力ファイルを上書きする。既定は False（上書き拒否）。"
+                "When True, overwrites an existing output file. Default is False"
+                " (reject overwrite)."
             ),
         ),
     ] = False
@@ -298,24 +320,25 @@ class RenderOptions(BaseModel):
         Field(
             default=None,
             description=(
-                "字幕焼き込みオプション。指定時は映像に字幕を hardsub で焼き込む（ADR-S1）。"  # noqa: E501
-                " None（省略）のとき字幕処理は行わない（後方互換・ADR-S8）。"
+                "Subtitle burn-in options. When specified, subtitles are"
+                " hard-burned into the video (ADR-S1). None (omitted) skips"
+                " subtitle processing (backward compatible; ADR-S8)."
             ),
         ),
     ] = None
 
     @model_validator(mode="after")
     def _validate_resolution_pair(self) -> Self:
-        """width と height は「両方指定」または「両方 None」でなければならない。
+        """width and height must both be specified or both be None.
 
-        片方のみ指定すると ffmpeg の scale フィルタが不完全になるため
-        禁止する（DC-AM-004）。
+        Specifying only one makes the ffmpeg scale filter incomplete, so it is
+        forbidden (DC-AM-004).
         """
         width_set = self.width is not None
         height_set = self.height is not None
         if width_set != height_set:
             raise ValueError(
-                "width と height はペアで指定するか、両方省略してください"
-                "（片方のみの指定は不正です）"
+                "width and height must be specified together or both omitted"
+                " (specifying only one is invalid)"
             )
         return self

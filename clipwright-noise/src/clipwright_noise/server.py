@@ -1,9 +1,9 @@
-"""server.py — clipwright-noise MCP サーバー + CLI エントリポイント。
+"""server.py — clipwright-noise MCP server + CLI entry point.
 
-ビジネスロジックは noise.py に委譲する薄いラッパー。
-ClipwrightError の変換は noise.py 側で行うため、ここでは二重変換しない。
+A thin wrapper that delegates business logic to noise.py.
+ClipwrightError conversion is handled in noise.py; no double conversion here.
 
-トランスポートは stdio 既定（mcp.run(transport="stdio")）。
+Transport defaults to stdio (mcp.run(transport="stdio")).
 """
 
 from __future__ import annotations
@@ -17,12 +17,12 @@ from pydantic import Field
 from clipwright_noise.noise import detect_noise
 from clipwright_noise.schemas import DetectNoiseOptions
 
-# FastMCP インスタンス（サーバー名）
+# FastMCP instance (server name)
 mcp = FastMCP("clipwright-noise")
 
 
 # ===========================================================================
-# clipwright_detect_noise MCP ツール
+# clipwright_detect_noise MCP tool
 # ===========================================================================
 
 
@@ -37,14 +37,14 @@ mcp = FastMCP("clipwright-noise")
 def clipwright_detect_noise(
     media: Annotated[
         str,
-        Field(description="入力メディアファイルパス（映像＋音声を含む素材）。"),
+        Field(description="Input media file path (must contain video and audio)."),
     ],
     output: Annotated[
         str,
         Field(
             description=(
-                "出力 OTIO タイムラインファイルパス（.otio 拡張子）。"
-                "メディアファイルと同一ディレクトリに配置する必要がある。"
+                "Output OTIO timeline file path (.otio extension). "
+                "Must be placed in the same directory as the media file."
             )
         ),
     ],
@@ -52,8 +52,8 @@ def clipwright_detect_noise(
         DetectNoiseOptions | None,
         Field(
             description=(
-                "ノイズ検出オプション（backend / strength）。"
-                "省略時は backend=afftdn / strength=medium を使用する。"
+                "Noise detection options (backend / strength). "
+                "Defaults to backend=afftdn / strength=medium when omitted."
             )
         ),
     ] = None,
@@ -61,22 +61,22 @@ def clipwright_detect_noise(
         str | None,
         Field(
             description=(
-                "既存 OTIO タイムラインファイルパス。"
-                "指定した場合はそのタイムラインに denoise 指示を追記する。"
-                "省略時は新規タイムラインを生成する。"
+                "Existing OTIO timeline file path. "
+                "When specified, the denoise directive is appended to that timeline. "
+                "A new timeline is generated when omitted."
             )
         ),
     ] = None,
 ) -> dict[str, Any]:
-    """音声ノイズを解析して denoise 指示付き OTIO タイムラインを生成する MCP ツール。
+    """MCP tool: analyzes audio noise and generates a denoise-annotated OTIO timeline.
 
-    入力メディアファイルは一切書き換えない（非破壊・readOnly）。
-    ffmpeg astats でノイズフロアを測定し、backend 別のパラメータを算出して
-    timeline-level metadata["clipwright"]["denoise"] に書き込む。
-    出力は denoise 指示を持つ timeline.otio のパスを artifacts に返す。
+    The input media file is never modified (non-destructive / readOnly).
+    Measures the noise floor via ffmpeg astats, calculates backend-specific parameters,
+    and writes them to timeline-level metadata["clipwright"]["denoise"].
+    Returns the path to the annotated timeline.otio in artifacts.
 
-    ビジネスロジックは noise.detect_noise へ委譲する。
-    options が None の場合はデフォルト DetectNoiseOptions() を使用する。
+    Business logic is delegated to noise.detect_noise.
+    When options is None, the default DetectNoiseOptions() is used.
     """
     resolved_options = options if options is not None else DetectNoiseOptions()
     return detect_noise(
@@ -88,15 +88,15 @@ def clipwright_detect_noise(
 
 
 # ===========================================================================
-# エントリポイント（MCP stdio 起動）
+# Entry point (MCP stdio launch)
 # ===========================================================================
 
 
 def main() -> None:
-    """CLI エントリポイント。MCP サーバーを stdio で起動する。
+    """CLI entry point. Starts the MCP server over stdio.
 
-    pyproject.toml の [project.scripts] で
-    clipwright-noise = "clipwright_noise.server:main" として登録する。
+    Registered in pyproject.toml [project.scripts] as:
+    clipwright-noise = "clipwright_noise.server:main"
     """
     mcp.run(transport="stdio")
 

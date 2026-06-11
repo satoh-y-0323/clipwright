@@ -1,18 +1,18 @@
-"""test_e2e.py — clipwright-noise afftdn 実 e2e テスト（設計 §6.1 / v3 B-3）。
+"""test_e2e.py — clipwright-noise afftdn real e2e tests (design §6.1 / v3 B-3).
 
-フィクスチャ生成 → detect_noise → render_timeline のフルパイプラインを
-実 ffmpeg で通し、afftdn によるノイズ低減効果を volumedetect で計測する。
+Runs the full pipeline of fixture generation → detect_noise → render_timeline
+with actual ffmpeg, and measures the noise reduction effect of afftdn via volumedetect.
 
-合格基準（§6.1）:
+Pass criteria (§6.1):
   out.mean_volume <= in.mean_volume - 3.0 dB
 
-ネガティブ対照（B-3）:
-  denoise なし render の mean_volume が入力比 -3.0dB を下回らない
-  → -3.0dB 以上の低下が afftdn 起因であることを担保する。
+Negative control (B-3):
+  mean_volume of denoise-free render does not drop more than -3.0 dB below input
+  → ensures that a drop of -3.0 dB or more is caused by afftdn.
 
-前提:
-  - ffmpeg は CLIPWRIGHT_FFMPEG 環境変数または PATH で解決できること。
-  - ffmpeg 不在環境は @pytest.mark.e2e でスキップ。
+Prerequisites:
+  - ffmpeg must be resolvable via CLIPWRIGHT_FFMPEG env var or PATH.
+  - Environments without ffmpeg are skipped via @pytest.mark.e2e.
 """
 
 from __future__ import annotations
@@ -25,12 +25,12 @@ from typing import Any
 import pytest
 
 # -------------------------------------------------------------------
-# ffmpeg 存在チェック（e2e skip 判定）
+# ffmpeg presence check (e2e skip guard)
 # -------------------------------------------------------------------
 
 
 def _find_ffmpeg() -> str | None:
-    """CLIPWRIGHT_FFMPEG または PATH で ffmpeg を解決して返す。見つからない場合は None。"""
+    """Resolve ffmpeg via CLIPWRIGHT_FFMPEG or PATH and return the path. Returns None if not found."""
     try:
         from clipwright.process import resolve_tool
 
@@ -45,22 +45,23 @@ _FFMPEG_MISSING = _FFMPEG is None
 pytestmark = pytest.mark.e2e
 
 # -------------------------------------------------------------------
-# ヘルパー関数
+# Helper functions
 # -------------------------------------------------------------------
 
 
 def _make_fixture(tmp_path: Path) -> Path:
-    """ffmpeg で映像+純ホワイトノイズ音声 2s フィクスチャを生成して返す（v3 B-3）。
+    """Generate and return a 2-second video+pure-white-noise fixture using ffmpeg (v3 B-3).
 
-    testsrc(320x240,15fps) ＋ anoisesrc(white,amplitude=0.3) を mux し
-    -t 2 / -shortest で同尺2sに尺切りする。
+    Muxes testsrc(320x240,15fps) + anoisesrc(white,amplitude=0.3) and trims to 2s
+    with -t 2 / -shortest.
 
     Note:
-        e2e テストのヘルパーは「テスト用フィクスチャ生成」と「音量測定」専用であり
-        プロダクションコードではない。clipwright.process.run は MCP ツール内部の
-        サブプロセス規律を適用するためのラッパーであり、テストツールとして使うと
-        popen 引数が合わず煩雑になる。ここでは subprocess を直接使う許容例外とする。
-        timeout / capture_output / returncode 検査はすべて実施済み。  # noqa: subprocess-in-test
+        This helper is exclusively for generating test fixtures and measuring audio level
+        in e2e tests; it is not production code. clipwright.process.run is a wrapper for
+        applying subprocess discipline inside MCP tools, and using it as a test tool would
+        require awkward popen argument handling. Direct subprocess calls are an accepted
+        exception here. timeout / capture_output / returncode checks are all performed.
+        # noqa: subprocess-in-test
     """
     assert _FFMPEG is not None
     fixture = tmp_path / "fixture.mp4"
@@ -81,17 +82,19 @@ def _make_fixture(tmp_path: Path) -> Path:
         str(fixture),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    assert result.returncode == 0, f"フィクスチャ生成失敗: {result.stderr[-400:]}"
-    assert fixture.exists(), "fixture.mp4 が生成されませんでした"
+    assert result.returncode == 0, f"Fixture generation failed: {result.stderr[-400:]}"
+    assert fixture.exists(), "fixture.mp4 was not generated"
     return fixture
 
 
 def _get_mean_volume(path: Path) -> float:
-    """ffmpeg volumedetect で音声の mean_volume (dB) を返す。
+    """Return the audio mean_volume (dB) via ffmpeg volumedetect.
 
     Note:
-        e2e テストの音量測定専用ヘルパー。subprocess 直呼びの許容例外
-        （timeout / capture_output / returncode 検査を実施済み）。  # noqa: subprocess-in-test
+        Dedicated audio level measurement helper for e2e tests.
+        Direct subprocess call is an accepted exception
+        (timeout / capture_output / returncode checks are performed).
+        # noqa: subprocess-in-test
     """
     assert _FFMPEG is not None
     result = subprocess.run(
@@ -102,29 +105,29 @@ def _get_mean_volume(path: Path) -> float:
     )
     m = re.search(r"mean_volume:\s*(-?\d+\.?\d*)\s*dB", result.stderr)
     assert m is not None, (
-        f"volumedetect で mean_volume が取得できませんでした。\nstderr: {result.stderr[-400:]}"
+        f"Could not obtain mean_volume via volumedetect.\nstderr: {result.stderr[-400:]}"
     )
     return float(m.group(1))
 
 
 def _assert_ok(result: dict[str, Any], label: str) -> None:
-    """ok=True でなければ pytest.fail する。"""
+    """Call pytest.fail if ok is not True."""
     if not result.get("ok"):
-        pytest.fail(f"{label} が失敗しました: {result}")
+        pytest.fail(f"{label} failed: {result}")
 
 
 # -------------------------------------------------------------------
-# テスト: DC-GP-002 render 拡張反映事前確認
+# Test: DC-GP-002 pre-confirmation that render extension is applied
 # -------------------------------------------------------------------
 
 
 @pytest.mark.skipif(
     _FFMPEG_MISSING,
-    reason="ffmpeg が見つかりません（CLIPWRIGHT_FFMPEG または PATH が必要）",
+    reason="ffmpeg not found (CLIPWRIGHT_FFMPEG or PATH required)",
 )
 def test_render_processes_afftdn_directive(tmp_path: Path) -> None:
-    """render が afftdn 指示入り timeline を UNSUPPORTED にならず処理し
-    filter_complex に afftdn が含まれることを確認する（DC-GP-002）。"""
+    """Confirm that render processes an afftdn-annotated timeline without UNSUPPORTED
+    and that afftdn is present in filter_complex (DC-GP-002)."""
     from clipwright_render.render import render_timeline
     from clipwright_render.schemas import RenderOptions
 
@@ -134,12 +137,12 @@ def test_render_processes_afftdn_directive(tmp_path: Path) -> None:
     fixture = _make_fixture(tmp_path)
     timeline_path = tmp_path / "timeline.otio"
 
-    # detect_noise で afftdn 指示を timeline に書き込む
+    # Write afftdn directive to timeline via detect_noise
     opts = DetectNoiseOptions(backend="afftdn", strength="medium")
     result = detect_noise(str(fixture), str(timeline_path), opts, None)
     _assert_ok(result, "detect_noise")
 
-    # dry_run=True で render 計画を取得し filter_complex に afftdn が入ることを確認
+    # Obtain render plan with dry_run=True and confirm afftdn is in filter_complex
     out_mp4 = tmp_path / "out_dryrun.mp4"
     render_opts = RenderOptions(
         video_codec="libx264", audio_codec="aac", overwrite=True
@@ -149,24 +152,24 @@ def test_render_processes_afftdn_directive(tmp_path: Path) -> None:
 
     filter_complex: str = rr.get("data", {}).get("filter_complex", "")
     assert "afftdn" in filter_complex, (
-        f"filter_complex に afftdn が含まれていません。filter_complex: {filter_complex!r}"
+        f"filter_complex does not contain afftdn. filter_complex: {filter_complex!r}"
     )
 
 
 # -------------------------------------------------------------------
-# テスト: B-3 ネガティブ対照（denoise なし render は -3.0dB 以上低下しない）
+# Test: B-3 Negative control (denoise-free render does not drop more than -3.0 dB)
 # -------------------------------------------------------------------
 
 
 @pytest.mark.skipif(
     _FFMPEG_MISSING,
-    reason="ffmpeg が見つかりません（CLIPWRIGHT_FFMPEG または PATH が必要）",
+    reason="ffmpeg not found (CLIPWRIGHT_FFMPEG or PATH required)",
 )
 def test_negative_control_no_denoise_within_threshold(tmp_path: Path) -> None:
-    """denoise なし render の出力 mean_volume が入力比 -3.0dB を下回らないことを確認する（v3 B-3）。
+    """Confirm that denoise-free render mean_volume does not drop more than -3.0 dB below input (v3 B-3).
 
-    これにより「-3.0dB 以上の低下は afftdn 起因であり、
-    コーデック再エンコード単独では生じない」ことを担保する。
+    This ensures that a drop of -3.0 dB or more cannot be caused by codec re-encoding alone,
+    i.e., it must be attributable to afftdn.
     """
     from clipwright.media import inspect_media
     from clipwright.otio_utils import new_timeline, save_timeline
@@ -177,7 +180,7 @@ def test_negative_control_no_denoise_within_threshold(tmp_path: Path) -> None:
 
     fixture = _make_fixture(tmp_path)
 
-    # denoise 指示なし timeline を生成（media と同一 tmp_path 直下）
+    # Generate a timeline without a denoise directive (in same tmp_path directory)
     neg_timeline_path = tmp_path / "neg_timeline.otio"
     media_info = inspect_media(str(fixture))
     dur_sec = (
@@ -191,7 +194,7 @@ def test_negative_control_no_denoise_within_threshold(tmp_path: Path) -> None:
 
     in_vol = _get_mean_volume(fixture)
 
-    # denoise なしで render
+    # Render without denoise
     neg_out = tmp_path / "neg_out.mp4"
     rr = render_timeline(
         str(neg_timeline_path),
@@ -199,31 +202,31 @@ def test_negative_control_no_denoise_within_threshold(tmp_path: Path) -> None:
         RenderOptions(video_codec="libx264", audio_codec="aac", overwrite=True),
     )
     _assert_ok(rr, "render_timeline (negative control)")
-    assert neg_out.exists(), "ネガティブ対照の出力 mp4 が生成されませんでした"
+    assert neg_out.exists(), "Negative control output mp4 was not generated"
 
     neg_vol = _get_mean_volume(neg_out)
 
-    # ネガティブ対照: denoise なし再エンコードだけでは -3.0dB 以上は低下しない
+    # Negative control: denoise-free re-encoding alone must not cause more than -3.0 dB drop
     assert neg_vol >= in_vol - 3.0, (
-        f"ネガティブ対照失敗: denoise なし再エンコードで予期外の大幅音量低下。"
+        f"Negative control failed: unexpected large volume drop in denoise-free re-encoding."
         f" in={in_vol:.1f} dB, neg_out={neg_vol:.1f} dB, diff={neg_vol - in_vol:.2f} dB"
     )
 
 
 # -------------------------------------------------------------------
-# テスト: §6.1 本検証（afftdn による -3.0dB 以上の音量低下）
+# Test: §6.1 Main verification (afftdn causes -3.0 dB or more volume drop)
 # -------------------------------------------------------------------
 
 
 @pytest.mark.skipif(
     _FFMPEG_MISSING,
-    reason="ffmpeg が見つかりません（CLIPWRIGHT_FFMPEG または PATH が必要）",
+    reason="ffmpeg not found (CLIPWRIGHT_FFMPEG or PATH required)",
 )
 def test_afftdn_reduces_noise_by_3db(tmp_path: Path) -> None:
-    """detect_noise(afftdn) → render_timeline のフルパイプラインで
-    出力 mean_volume が入力比 -3.0dB 以上低下することを確認する（§6.1）。
+    """Confirm that the full pipeline detect_noise(afftdn) → render_timeline
+    reduces output mean_volume by -3.0 dB or more compared to input (§6.1).
 
-    media / timeline.otio / out.mp4 は同一 tmp_path 直下に配置する（DC-AS-002）。
+    media / timeline.otio / out.mp4 are all placed in the same tmp_path directory (DC-AS-002).
     """
     from clipwright_render.render import render_timeline
     from clipwright_render.schemas import RenderOptions
@@ -233,31 +236,31 @@ def test_afftdn_reduces_noise_by_3db(tmp_path: Path) -> None:
 
     fixture = _make_fixture(tmp_path)
 
-    # --- 入力音量の計測 ---
+    # --- Measure input volume ---
     in_vol = _get_mean_volume(fixture)
 
-    # --- detect_noise で afftdn 指示を timeline に書き込む ---
+    # --- Write afftdn directive to timeline via detect_noise ---
     timeline_path = tmp_path / "timeline.otio"
     opts = DetectNoiseOptions(backend="afftdn", strength="medium")
     result = detect_noise(str(fixture), str(timeline_path), opts, None)
     _assert_ok(result, "detect_noise")
-    assert timeline_path.exists(), "timeline.otio が生成されませんでした"
+    assert timeline_path.exists(), "timeline.otio was not generated"
 
-    # --- render_timeline で afftdn を適用して出力 mp4 を生成 ---
+    # --- Apply afftdn via render_timeline and generate output mp4 ---
     out_mp4 = tmp_path / "out.mp4"
     render_opts = RenderOptions(
         video_codec="libx264", audio_codec="aac", overwrite=True
     )
     rr = render_timeline(str(timeline_path), str(out_mp4), render_opts)
     _assert_ok(rr, "render_timeline")
-    assert out_mp4.exists(), "out.mp4 が生成されませんでした"
+    assert out_mp4.exists(), "out.mp4 was not generated"
 
-    # --- 出力音量の計測 ---
+    # --- Measure output volume ---
     out_vol = _get_mean_volume(out_mp4)
 
-    # --- 合格条件: out_vol <= in_vol - 3.0 ---
+    # --- Pass condition: out_vol <= in_vol - 3.0 ---
     assert out_vol <= in_vol - 3.0, (
-        f"afftdn によるノイズ低減が不十分です。"
+        f"afftdn noise reduction is insufficient."
         f" in={in_vol:.1f} dB, out={out_vol:.1f} dB, diff={out_vol - in_vol:.2f} dB"
-        f" (期待: diff <= -3.0 dB)"
+        f" (expected: diff <= -3.0 dB)"
     )

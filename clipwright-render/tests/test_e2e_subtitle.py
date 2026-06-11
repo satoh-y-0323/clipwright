@@ -1,40 +1,40 @@
-"""test_e2e_subtitle.py — clipwright-render 字幕焼き込みの実機 e2e テスト（task_id: e2e-subtitle）。
+"""test_e2e_subtitle.py — Real e2e tests for subtitle burn-in in clipwright-render (task_id: e2e-subtitle).
 
-設計根拠:
-  - architecture-report-20260611-210021 §7 v2（ADR-S4-r2/S5-r2/S6-r2/S6-r3）
-  - requirements-report-20260611-205356（字幕の時間基準=連結後出力先頭0秒起点・DC-AM-003）
-  - ADR-S1: render 拡張（RenderOptions.subtitle 経由・MCP 経路のみ・CLI なし）
+Design rationale:
+  - architecture-report-20260611-210021 §7 v2 (ADR-S4-r2/S5-r2/S6-r2/S6-r3)
+  - requirements-report-20260611-205356 (subtitle timestamp base = output timeline head 0 s, DC-AM-003)
+  - ADR-S1: render extension (via RenderOptions.subtitle, MCP path only, no CLI)
   - ADR-S3: _ALLOWED_SUBTITLE_EXTENSIONS = {.srt, .vtt, .ass}
-  - ADR-S4-r2: _append_subtitle_filter signature（timeline_dir 引数なし・境界検証は render 一本化）
-  - ADR-S5-r2: 字幕パスは render が絶対パス化・cwd 非依存
-  - ADR-S6-r2: ASS 時 force_style 不適用・SRT/VTT は charenc=UTF-8 付与
-  - ADR-S6-r3: alignment は ASS v4+ numpad
-  - ADR-S8: subtitle=None で後方互換厳守
-  - ADR-S10: 字幕は -i 不要（filter_complex の subtitles=filename= で直接読む）
-  - DC-AM-003: 字幕タイムスタンプ基準 = 出力タイムライン先頭0秒起点
-  - DC-GP-003: 全フィクスチャ・出力を tmp_path 配下に閉じ自動 teardown
+  - ADR-S4-r2: _append_subtitle_filter signature (no timeline_dir arg; boundary check unified in render)
+  - ADR-S5-r2: subtitle path is made absolute by render; cwd-independent
+  - ADR-S6-r2: force_style not applied for ASS; charenc=UTF-8 added for SRT/VTT
+  - ADR-S6-r3: alignment uses ASS v4+ numpad
+  - ADR-S8: subtitle=None preserves backward compatibility
+  - ADR-S10: subtitle does not need -i (read directly via subtitles=filename= in filter_complex)
+  - DC-AM-003: subtitle timestamp base = output timeline head (0 s)
+  - DC-GP-003: all fixtures and outputs are confined to tmp_path for automatic teardown
 
-テスト構成:
-  1. フィクスチャ生成
-     - 本編: testsrc 映像 3 秒・320x240・25fps（既知解像度）
-     - SRT/VTT/ASS 字幕: 出力タイムライン 0.5〜2.5 秒に日本語 1 行
-     - 日本語フォント: C:\\Windows\\Fonts 配下の Meiryo を使用
-       （フォント不在時は関連テストを skip）
+Test layout:
+  1. Fixture generation
+     - Main clip: testsrc video 3 s, 320x240, 25 fps (known resolution)
+     - SRT/VTT/ASS subtitles: one line from 0.5 s to 2.5 s on the output timeline
+     - Japanese font: Meiryo from C:\\Windows\\Fonts
+       (tests that require this font are skipped when the font is absent)
 
-  assert 一覧（必須）:
-    assert-1: render_timeline(dry_run=False) で字幕 1 本が outputs に生成
-    assert-2: 字幕領域のピクセルが字幕なし出力と有意に異なる（SSIM < 0.999 / PSNR < 50 dB）
-    assert-3: ネガティブ対照 — subtitle=None は字幕なし出力（差分が字幕起因と切り分け・B-3 教訓）
-    assert-4: 日本語が豆腐化せず表示（fonts_dir 指定時・字幕 SSIM < 0.999）
-    assert-5: 基本スタイル（font_size）反映 — サイズ指定有無で字幕領域 SSIM が異なる
-    assert-6: SRT / VTT / ASS の 3 形式で焼ける（M2 で VTT 直読可確認済み）
-    assert-7: 後方互換 — subtitle=None は映像不変（字幕あり出力と SSIM が 1.0 未満であることで
-              差異を確認し、字幕なし同士は SSIM=1.0 を期待）
+  Required asserts:
+    assert-1: render_timeline(dry_run=False) produces one subtitle-burned output file
+    assert-2: subtitle-region pixels differ significantly from the no-subtitle output (SSIM < 0.999 / PSNR < 50 dB)
+    assert-3: Negative control — subtitle=None outputs no subtitle (isolates diff as subtitle-caused, lesson B-3)
+    assert-4: Japanese characters render without tofu (with fonts_dir, subtitle SSIM < 0.999)
+    assert-5: Basic style (font_size) is applied — SSIM differs between different size settings
+    assert-6: All three formats — SRT / VTT / ASS — can be burned in (VTT direct-read confirmed in M2)
+    assert-7: Backward compat — subtitle=None leaves video unchanged (SSIM < 1.0 vs subtitle output;
+              no-subtitle pairs expect SSIM = 1.0)
 
-実行方法（ffmpeg 不在時は skip）:
+How to run (skipped when ffmpeg is absent):
   uv run --package clipwright-render pytest -k e2e_subtitle
 
-ffmpeg を PATH に通すか CLIPWRIGHT_FFMPEG / CLIPWRIGHT_FFPROBE 環境変数で指定すること。
+Add ffmpeg to PATH or set CLIPWRIGHT_FFMPEG / CLIPWRIGHT_FFPROBE environment variables.
 """
 
 from __future__ import annotations
@@ -52,16 +52,16 @@ from clipwright_render.render import render_timeline
 from clipwright_render.schemas import RenderOptions, SubtitleOptions
 
 # ===========================================================================
-# ffmpeg / ffprobe パス解決（conftest.py の require_ffmpeg と同パターン）
+# ffmpeg / ffprobe binary resolution (same pattern as conftest.py require_ffmpeg)
 # ===========================================================================
 
-# 他の e2e テストファイル（test_e2e_merge.py 等）と同一のスタンドアロン実装パターン。
-# conftest.py と同一ロジックで重複実装になるが、e2e ファイルはスタンドアロンとする
-# 本プロジェクトのコンベンションに従う（S-L-6 参照）。
+# Same standalone implementation pattern as other e2e files (test_e2e_merge.py, etc.).
+# Duplicates conftest.py logic, but e2e files are intentionally self-contained per
+# project convention (see S-L-6).
 
 
 def _find_binary(name: str, env_var: str) -> str | None:
-    """バイナリを PATH → env_var の順で探す。"""
+    """Search for a binary in PATH first, then fall back to env_var."""
     found = shutil.which(name)
     if found:
         return found
@@ -79,46 +79,46 @@ pytestmark = pytest.mark.e2e
 requires_ffmpeg = pytest.mark.skipif(
     _FFMPEG is None,
     reason=(
-        "ffmpeg が見つかりません。"
-        "PATH に ffmpeg を追加するか "
-        "CLIPWRIGHT_FFMPEG 環境変数にフルパスを設定してください。"
+        "ffmpeg not found. "
+        "Add ffmpeg to PATH or "
+        "set the CLIPWRIGHT_FFMPEG environment variable to its full path."
     ),
 )
 
 requires_ffprobe = pytest.mark.skipif(
     _FFPROBE is None,
     reason=(
-        "ffprobe が見つかりません。"
-        "PATH に ffprobe を追加するか "
-        "CLIPWRIGHT_FFPROBE 環境変数にフルパスを設定してください。"
+        "ffprobe not found. "
+        "Add ffprobe to PATH or "
+        "set the CLIPWRIGHT_FFPROBE environment variable to its full path."
     ),
 )
 
 # ===========================================================================
-# 定数
+# Constants
 # ===========================================================================
 
 _E2E_TIMEOUT: int = int(os.environ.get("E2E_TIMEOUT_SEC", "120"))
 
-_MAIN_DUR = 3.0  # 本編: 3 秒
-_RATE = 25.0  # 映像 fps
-_WIDTH = 320  # 映像幅（ピクセル）
-_HEIGHT = 240  # 映像高さ（ピクセル）
+_MAIN_DUR = 3.0  # Main clip duration: 3 s
+_RATE = 25.0  # Video fps
+_WIDTH = 320  # Video width (pixels)
+_HEIGHT = 240  # Video height (pixels)
 
-# 字幕表示区間（出力タイムライン先頭0秒起点・DC-AM-003）
-_SUB_START_S = 0.5  # 字幕表示開始: 0.5 秒
-_SUB_END_S = 2.5  # 字幕表示終了: 2.5 秒
-_FRAME_SAMPLE_S = 1.0  # ピクセル比較に使うフレーム（字幕表示中）
+# Subtitle display interval (output timeline base = 0 s, DC-AM-003)
+_SUB_START_S = 0.5  # Subtitle display start: 0.5 s
+_SUB_END_S = 2.5  # Subtitle display end: 2.5 s
+_FRAME_SAMPLE_S = 1.0  # Frame timestamp used for pixel comparison (subtitle visible)
 
-# 日本語字幕テキスト
+# Japanese subtitle text (test input data — intentionally kept in Japanese)
 _JP_TEXT = "こんにちは世界"
 _EN_TEXT = "Hello World Subtitle"
 
-# Windows フォントディレクトリ（CJK フォント確認）
+# Windows font directory (for CJK font check)
 _WINDOWS_FONTS_DIR = r"C:\Windows\Fonts"
 _JP_FONT_NAME = "Meiryo"
 
-# 日本語フォント (Meiryo .ttc) の存在確認
+# Check that the Japanese font (Meiryo .ttc) exists
 _JP_FONTS_DIR_EXISTS = (
     Path(_WINDOWS_FONTS_DIR).is_dir()
     and Path(_WINDOWS_FONTS_DIR).joinpath("meiryo.ttc").exists()
@@ -127,24 +127,25 @@ _JP_FONTS_DIR_EXISTS = (
 requires_cjk_font = pytest.mark.skipif(
     not _JP_FONTS_DIR_EXISTS,
     reason=(
-        f"CJK フォントが見つかりません: {_WINDOWS_FONTS_DIR}\\meiryo.ttc。"
-        "日本語フォントをインストールするか、fonts_dir を設定してください。"
+        f"CJK font not found: {_WINDOWS_FONTS_DIR}\\meiryo.ttc. "
+        "Install a Japanese font or configure fonts_dir."
     ),
 )
 
-# SSIM しきい値: 字幕あり/なしの有意差（字幕が焼かれていれば SSIM < 0.999）
+# SSIM threshold: significant pixel difference between subtitle and no-subtitle outputs
+# (if a subtitle is burned in, SSIM < 0.999)
 _SSIM_PIXEL_DIFF_THRESHOLD = 0.999
 
 # ===========================================================================
-# ヘルパー: フィクスチャ生成
+# Helpers: fixture generation
 # ===========================================================================
 
 
 def _make_main_video(ffmpeg: str, output: Path) -> None:
-    """本編フィクスチャ: testsrc 映像（3 秒・320x240・25fps）を生成する。
+    """Generate the main-clip fixture: testsrc video (3 s, 320x240, 25 fps).
 
-    音声なし（字幕テストは映像のみで十分。音声パイプは bgm/loudness テストで別途確認済み）。
-    DC-GP-003: tmp_path 配下に生成し自動 teardown。
+    No audio (audio pipeline is already verified in bgm/loudness tests).
+    DC-GP-003: generate under tmp_path for automatic teardown.
     """
     cmd = [
         ffmpeg,
@@ -170,14 +171,14 @@ def _make_main_video(ffmpeg: str, output: Path) -> None:
         timeout=_E2E_TIMEOUT,
     )
     assert result.returncode == 0, (
-        f"本編フィクスチャ生成に失敗しました: {result.stderr[:400]}"
+        f"Main-clip fixture generation failed: {result.stderr[:400]}"
     )
 
 
 def _make_srt(output: Path, text: str = _EN_TEXT) -> None:
-    """SRT 字幕ファイルを生成する（UTF-8）。
+    """Generate an SRT subtitle file (UTF-8).
 
-    タイムスタンプは出力タイムライン先頭0秒起点（DC-AM-003）。
+    Timestamps are based on the output timeline head at 0 s (DC-AM-003).
     """
     start_ms = int(_SUB_START_S * 1000)
     end_ms = int(_SUB_END_S * 1000)
@@ -188,10 +189,10 @@ def _make_srt(output: Path, text: str = _EN_TEXT) -> None:
 
 
 def _make_vtt(output: Path, text: str = _EN_TEXT) -> None:
-    """VTT 字幕ファイルを生成する（UTF-8）。
+    """Generate a VTT subtitle file (UTF-8).
 
-    タイムスタンプは出力タイムライン先頭0秒起点（DC-AM-003）。
-    M2 実機確認済み: VTT は subtitles フィルタで直読可（ADR-S3/ADR-S9）。
+    Timestamps are based on the output timeline head at 0 s (DC-AM-003).
+    M2 confirmed: VTT can be read directly by the subtitles filter (ADR-S3/ADR-S9).
     """
     start_str = f"00:00:0{int(_SUB_START_S)}.{int((_SUB_START_S % 1) * 1000):03d}"
     end_str = f"00:00:0{int(_SUB_END_S)}.{int((_SUB_END_S % 1) * 1000):03d}"
@@ -200,11 +201,11 @@ def _make_vtt(output: Path, text: str = _EN_TEXT) -> None:
 
 
 def _make_ass(output: Path, text: str = _EN_TEXT, font_name: str = "Arial") -> None:
-    """ASS 字幕ファイルを生成する（UTF-8）。
+    """Generate an ASS subtitle file (UTF-8).
 
-    内蔵スタイル（FontSize=20・白字・Alignment=2=中下）を持つ。
-    ADR-S6-r2: ASS は内蔵スタイル優先のため force_style は付与されない。
-    タイムスタンプは出力タイムライン先頭0秒起点（DC-AM-003）。
+    Includes an embedded style (FontSize=20, white, Alignment=2 = bottom centre).
+    ADR-S6-r2: ASS uses its embedded style, so force_style is not added.
+    Timestamps are based on the output timeline head at 0 s (DC-AM-003).
     """
     start_s = _SUB_START_S
     end_s = _SUB_END_S
@@ -235,7 +236,7 @@ def _make_ass(output: Path, text: str = _EN_TEXT, font_name: str = "Arial") -> N
 
 
 # ===========================================================================
-# ヘルパー: OTIO タイムライン構築
+# Helpers: OTIO timeline construction
 # ===========================================================================
 
 
@@ -244,7 +245,7 @@ def _make_timeline(
     duration_sec: float = _MAIN_DUR,
     rate: float = _RATE,
 ) -> otio.schema.Timeline:
-    """単一クリップの OTIO タイムラインを生成する。"""
+    """Build an OTIO timeline from a single clip."""
     ref = otio.schema.ExternalReference(target_url=str(source_path))
     clip = otio.schema.Clip(
         name=source_path.name,
@@ -262,17 +263,17 @@ def _make_timeline(
 
 
 def _save_timeline(timeline: otio.schema.Timeline, path: Path) -> None:
-    """OTIO タイムラインをファイルに保存する。"""
+    """Save an OTIO timeline to a file."""
     otio.adapters.write_to_file(timeline, str(path))
 
 
 # ===========================================================================
-# ヘルパー: ピクセル差分計測
+# Helpers: pixel difference measurement
 # ===========================================================================
 
 
 def _extract_frame(ffmpeg: str, video: Path, time_s: float, output_png: Path) -> None:
-    """動画から指定時刻のフレームを PNG で抽出する。"""
+    """Extract a frame at the given timestamp from a video and save it as PNG."""
     cmd = [
         ffmpeg,
         "-y",
@@ -294,16 +295,16 @@ def _extract_frame(ffmpeg: str, video: Path, time_s: float, output_png: Path) ->
         timeout=_E2E_TIMEOUT,
     )
     assert result.returncode == 0, (
-        f"フレーム抽出に失敗しました（{video.name} @ {time_s}s）: {result.stderr[:200]}"
+        f"Frame extraction failed ({video.name} @ {time_s}s): {result.stderr[:200]}"
     )
-    assert output_png.exists(), f"フレーム PNG が生成されませんでした: {output_png}"
+    assert output_png.exists(), f"Frame PNG was not created: {output_png}"
 
 
 def _measure_ssim(ffmpeg: str, frame_a: Path, frame_b: Path) -> float:
-    """2フレームの SSIM All 値を計測して返す（1.0 = 完全一致、< 1.0 = ピクセル差あり）。
+    """Return the SSIM All value for two frames (1.0 = identical; < 1.0 = pixel difference).
 
-    SSIM（構造的類似度）は字幕焼き込みの有無を判定する指標として使用する。
-    字幕が焼き込まれていれば字幕領域のピクセルが変化し SSIM < 1.0 になる。
+    SSIM (structural similarity) is used to detect whether a subtitle was burned in.
+    If a subtitle is present, pixels in the subtitle region change and SSIM drops below 1.0.
     """
     cmd = [
         ffmpeg,
@@ -324,16 +325,16 @@ def _measure_ssim(ffmpeg: str, frame_a: Path, frame_b: Path) -> float:
         errors="replace",
         timeout=_E2E_TIMEOUT,
     )
-    assert result.returncode == 0, f"SSIM 計測に失敗しました: {result.stderr[:200]}"
+    assert result.returncode == 0, f"SSIM measurement failed: {result.stderr[:200]}"
     m = re.search(r"All:([\d.]+)", result.stderr)
-    assert m is not None, f"SSIM All 値が見つかりません:\n{result.stderr[-200:]}"
+    assert m is not None, f"SSIM All value not found:\n{result.stderr[-200:]}"
     return float(m.group(1))
 
 
 def _measure_psnr(ffmpeg: str, frame_a: Path, frame_b: Path) -> float:
-    """2フレームの PSNR average 値を計測して返す（dB）。
+    """Return the PSNR average value for two frames (dB).
 
-    PSNR < 50 dB なら有意なピクセル差あり（字幕焼き込みの補助確認）。
+    PSNR < 50 dB indicates a significant pixel difference (supplementary check for subtitle burn-in).
     """
     cmd = [
         ffmpeg,
@@ -354,29 +355,29 @@ def _measure_psnr(ffmpeg: str, frame_a: Path, frame_b: Path) -> float:
         errors="replace",
         timeout=_E2E_TIMEOUT,
     )
-    assert result.returncode == 0, f"PSNR 計測に失敗しました: {result.stderr[:200]}"
+    assert result.returncode == 0, f"PSNR measurement failed: {result.stderr[:200]}"
     m = re.search(r"average:([\d.]+)", result.stderr)
-    assert m is not None, f"PSNR average 値が見つかりません:\n{result.stderr[-200:]}"
+    assert m is not None, f"PSNR average value not found:\n{result.stderr[-200:]}"
     return float(m.group(1))
 
 
 # ===========================================================================
-# テスト: assert-1 + assert-3（基本生成・ネガティブ対照）
+# Tests: assert-1 + assert-3 (basic generation, negative control)
 # ===========================================================================
 
 
 @requires_ffmpeg
 class TestSubtitleBasicRender:
-    """字幕焼き込みの基本生成実証（assert-1・assert-3）。
+    """Basic subtitle burn-in: output generation and negative control (assert-1, assert-3).
 
-    assert-1: render_timeline(dry_run=False) で字幕付き 1 本が outputs に生成される。
-    assert-3: subtitle=None は字幕なしで出力（ネガティブ対照・B-3 教訓）。
+    assert-1: render_timeline(dry_run=False) produces one subtitle-burned output file.
+    assert-3: subtitle=None outputs no subtitle (negative control, lesson B-3).
     """
 
     def test_render_with_subtitle_returns_ok(self, tmp_path: Path) -> None:
-        """字幕付き timeline で render が ok=True を返し出力ファイルが生成される（assert-1）。
+        """render returns ok=True and the output file is created for a subtitle timeline (assert-1).
 
-        MCP/render_timeline 直叩き経路で確認（CLI は通さない・DC-AS-003）。
+        Verified via the MCP/render_timeline path (no CLI, DC-AS-003).
         """
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
@@ -396,15 +397,15 @@ class TestSubtitleBasicRender:
             RenderOptions(subtitle=SubtitleOptions(path=str(srt))),
             dry_run=False,
         )
-        assert result["ok"] is True, f"render が失敗しました: {result}"
-        assert out_path.exists(), "出力ファイルが生成されていません"
-        assert out_path.stat().st_size > 0, "出力ファイルのサイズが 0 です"
+        assert result["ok"] is True, f"render failed: {result}"
+        assert out_path.exists(), "output file was not created"
+        assert out_path.stat().st_size > 0, "output file size is 0"
 
     def test_render_dry_run_filter_has_subtitles(self, tmp_path: Path) -> None:
-        """dry_run で filter_complex に subtitles が含まれる（ADR-S10・内部確認）。
+        """dry_run filter_complex contains subtitles (ADR-S10 internal check).
 
-        字幕は -i を追加せず filter_complex の subtitles=filename= で直接読む。
-        ADR-S10: dry_run で filter_complex を確認し subtitles が挿入されていることを assert する。
+        Subtitles are read directly via subtitles=filename= in filter_complex without adding -i.
+        ADR-S10: retrieve filter_complex via dry_run and assert that subtitles is present.
         """
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
@@ -424,29 +425,28 @@ class TestSubtitleBasicRender:
             RenderOptions(subtitle=SubtitleOptions(path=str(srt), font_size=24)),
             dry_run=True,
         )
-        assert result["ok"] is True, f"dry_run が失敗しました: {result}"
+        assert result["ok"] is True, f"dry_run failed: {result}"
 
         fc = result["data"]["filter_complex"]
         assert "subtitles=filename=" in fc, (
-            f"filter_complex に subtitles が含まれていません（ADR-S10 違反）:\n"
+            f"filter_complex does not contain subtitles (ADR-S10 violation):\n"
             f"  filter_complex: {fc}"
         )
         assert "[outvsub]" in fc, (
-            f"filter_complex に [outvsub] ラベルが含まれていません:\n"
-            f"  filter_complex: {fc}"
+            f"filter_complex does not contain [outvsub] label:\n  filter_complex: {fc}"
         )
-        # ADR-S10: 字幕は -i 不要のため input_sources は元の本数のまま
-        # SRT/VTT 時は charenc=UTF-8 が付与される（ADR-S6-r2）
+        # ADR-S10: subtitle does not add -i, so input_sources count is unchanged.
+        # charenc=UTF-8 is added for SRT/VTT (ADR-S6-r2).
         assert "charenc=UTF-8" in fc, (
-            f"SRT 時に charenc=UTF-8 が filter_complex に含まれていません（ADR-S6-r2 違反）:\n"
+            f"charenc=UTF-8 missing from filter_complex for SRT (ADR-S6-r2 violation):\n"
             f"  filter_complex: {fc}"
         )
 
     def test_subtitle_none_dry_run_no_subtitles_filter(self, tmp_path: Path) -> None:
-        """subtitle=None のとき dry_run filter_complex に subtitles が含まれない（assert-3・ADR-S8）。
+        """dry_run filter_complex does not contain subtitles when subtitle=None (assert-3, ADR-S8).
 
-        後方互換確認: subtitle=None で _append_subtitle_filter が呼ばれず
-        filter_complex に subtitles が挿入されないことを確認する。
+        Backward-compatibility check: with subtitle=None, _append_subtitle_filter is not called
+        and no subtitles entry is inserted into filter_complex.
         """
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
@@ -464,38 +464,38 @@ class TestSubtitleBasicRender:
             RenderOptions(),  # subtitle=None
             dry_run=True,
         )
-        assert result["ok"] is True, f"dry_run が失敗しました: {result}"
+        assert result["ok"] is True, f"dry_run failed: {result}"
 
         fc = result["data"]["filter_complex"]
         assert "subtitles" not in fc, (
-            f"subtitle=None なのに filter_complex に subtitles が含まれています（ADR-S8 違反）:\n"
+            f"filter_complex contains subtitles even though subtitle=None (ADR-S8 violation):\n"
             f"  filter_complex: {fc}"
         )
         assert "[outvsub]" not in fc, (
-            f"subtitle=None なのに filter_complex に [outvsub] が含まれています（ADR-S8 違反）:\n"
+            f"filter_complex contains [outvsub] even though subtitle=None (ADR-S8 violation):\n"
             f"  filter_complex: {fc}"
         )
 
 
 # ===========================================================================
-# テスト: assert-2（字幕焼き込みピクセル実証）
+# Tests: assert-2 (subtitle burn-in pixel evidence)
 # ===========================================================================
 
 
 @requires_ffmpeg
 class TestSubtitlePixelDiff:
-    """字幕焼き込みのピクセル有意差実証（assert-2・SSIM/PSNR）。
+    """Demonstrate significant pixel difference due to subtitle burn-in (assert-2, SSIM/PSNR).
 
-    字幕あり/なしの出力フレームを SSIM・PSNR で比較し、
-    字幕が実際に映像に焼き込まれていることを実証する。
-    SSIM All < 0.999 かつ PSNR < 50 dB で有意差とする。
+    Compare output frames with and without subtitle using SSIM and PSNR to prove
+    that the subtitle is actually burned into the video.
+    SSIM All < 0.999 and PSNR < 50 dB are considered significant differences.
     """
 
     def test_subtitle_pixels_differ_from_no_subtitle(self, tmp_path: Path) -> None:
-        """字幕あり出力フレームが字幕なし出力フレームとピクセルが有意に異なる（assert-2）。
+        """Subtitle-burned frame differs significantly from the no-subtitle frame (assert-2).
 
-        字幕表示中（1.0 秒のフレーム）を比較する。
-        SSIM < 0.999 で字幕焼き込みが実証される（B-3 教訓: ネガティブ対照で切り分け）。
+        Compare the frame at 1.0 s (during subtitle display).
+        SSIM < 0.999 proves the subtitle was burned in (lesson B-3: isolated by negative control).
         """
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
@@ -504,7 +504,7 @@ class TestSubtitlePixelDiff:
         _make_main_video(_FFMPEG, main_src)
         _make_srt(srt)
 
-        # 字幕あり出力
+        # Subtitle output
         tl_sub = _make_timeline(main_src)
         tl_sub_path = tmp_path / "tl_sub.otio"
         _save_timeline(tl_sub, tl_sub_path)
@@ -515,9 +515,9 @@ class TestSubtitlePixelDiff:
             RenderOptions(subtitle=SubtitleOptions(path=str(srt), font_size=28)),
             dry_run=False,
         )
-        assert result_sub["ok"] is True, f"字幕あり render が失敗しました: {result_sub}"
+        assert result_sub["ok"] is True, f"Subtitle render failed: {result_sub}"
 
-        # 字幕なし出力（ネガティブ対照）
+        # No-subtitle output (negative control)
         tl_nosub = _make_timeline(main_src)
         tl_nosub_path = tmp_path / "tl_nosub.otio"
         _save_timeline(tl_nosub, tl_nosub_path)
@@ -528,11 +528,9 @@ class TestSubtitlePixelDiff:
             RenderOptions(),  # subtitle=None
             dry_run=False,
         )
-        assert result_nosub["ok"] is True, (
-            f"字幕なし render が失敗しました: {result_nosub}"
-        )
+        assert result_nosub["ok"] is True, f"No-subtitle render failed: {result_nosub}"
 
-        # フレーム抽出（字幕表示中）
+        # Frame extraction (during subtitle display)
         frame_sub = tmp_path / "frame_sub.png"
         frame_nosub = tmp_path / "frame_nosub.png"
         _extract_frame(_FFMPEG, out_sub, _FRAME_SAMPLE_S, frame_sub)
@@ -542,23 +540,23 @@ class TestSubtitlePixelDiff:
         psnr = _measure_psnr(_FFMPEG, frame_sub, frame_nosub)
 
         assert ssim < _SSIM_PIXEL_DIFF_THRESHOLD, (
-            f"字幕あり/なしのピクセル差が不十分です（assert-2・焼き込み未実証）:\n"
-            f"  SSIM All: {ssim:.6f}（期待: < {_SSIM_PIXEL_DIFF_THRESHOLD}）\n"
+            f"Pixel difference between subtitle and no-subtitle is insufficient (assert-2, burn-in unproven):\n"
+            f"  SSIM All: {ssim:.6f} (expected: < {_SSIM_PIXEL_DIFF_THRESHOLD})\n"
             f"  PSNR: {psnr:.2f} dB\n"
-            f"  字幕が実際に映像に焼き込まれていれば字幕領域のピクセルが変化するはず"
+            f"  If the subtitle was burned in, subtitle-region pixels should have changed"
         )
         assert psnr < 50.0, (
-            f"字幕あり/なしの PSNR が有意差基準を超えています（assert-2・補助確認）:\n"
-            f"  PSNR: {psnr:.2f} dB（期待: < 50.0 dB）\n"
+            f"PSNR between subtitle and no-subtitle does not meet significance threshold (assert-2, supplementary):\n"
+            f"  PSNR: {psnr:.2f} dB (expected: < 50.0 dB)\n"
             f"  SSIM: {ssim:.6f}"
         )
 
     def test_no_subtitle_frames_identical_to_baseline(self, tmp_path: Path) -> None:
-        """字幕なし出力を2回生成すると同じフレームになる（ネガティブ対照・切り分け）。
+        """Two no-subtitle renders produce identical frames (negative control, isolation check).
 
-        subtitle=None で2回 render して同じフレームが得られることを確認する。
-        これにより「SSIM 差が字幕起因」であることを切り分ける。
-        同一入力の2出力は SSIM ≒ 1.0 であるはず（エンコーダーの非決定性を考慮 >= 0.98）。
+        Render twice with subtitle=None and confirm the same frame is produced each time.
+        This isolates that any SSIM difference is caused by the subtitle, not render variance.
+        Two renders of the same input should yield SSIM ≈ 1.0 (>= 0.98 to allow encoder non-determinism).
         """
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
@@ -588,32 +586,33 @@ class TestSubtitlePixelDiff:
 
         ssim = _measure_ssim(_FFMPEG, frame_a, frame_b)
         assert ssim >= 0.98, (
-            f"字幕なし同士の SSIM が期待値を下回っています（ネガティブ対照）:\n"
-            f"  SSIM: {ssim:.6f}（期待: >= 0.98）\n"
-            f"  同一入力を 2 回 render しても SSIM はほぼ 1.0 になるはず"
+            f"SSIM between two no-subtitle renders is below expected (negative control):\n"
+            f"  SSIM: {ssim:.6f} (expected: >= 0.98)\n"
+            f"  Two renders of the same input should yield SSIM ≈ 1.0"
         )
 
 
 # ===========================================================================
-# テスト: assert-4（日本語・豆腐化なし実証）
+# Tests: assert-4 (Japanese subtitles, no tofu)
 # ===========================================================================
 
 
 @requires_ffmpeg
 @requires_cjk_font
 class TestSubtitleJapanese:
-    """日本語字幕が豆腐化せず表示されることを実証するテスト（assert-4）。
+    """Prove that Japanese subtitles render without tofu (assert-4).
 
-    fonts_dir=C:\\Windows\\Fonts・font_name=Meiryo を指定して日本語 SRT を焼き込み、
-    字幕なし出力との SSIM 差が有意であることを確認する（グリフが描画されていれば差が出る）。
-    フォント不在環境では skip する（requires_cjk_font マーカー）。
+    Burn a Japanese SRT with fonts_dir=C:\\Windows\\Fonts and font_name=Meiryo,
+    then confirm the SSIM difference vs the no-subtitle output is significant
+    (if CJK glyphs are drawn, pixels change).
+    Skipped in environments without the required font (requires_cjk_font marker).
     """
 
     def test_japanese_subtitle_renders_with_cjk_font(self, tmp_path: Path) -> None:
-        """日本語字幕が Meiryo フォントで豆腐化せず表示される（assert-4）。
+        """Japanese subtitle renders without tofu using the Meiryo font (assert-4).
 
-        SSIM < 0.999 で CJK グリフが描画されていることを確認する。
-        フォントが正しく指定されていれば ASCII 字幕と同様のピクセル変化が生じる。
+        SSIM < 0.999 confirms that CJK glyphs were drawn.
+        When the font is correctly specified, the same pixel change occurs as for ASCII subtitles.
         """
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
@@ -622,7 +621,7 @@ class TestSubtitleJapanese:
         _make_main_video(_FFMPEG, main_src)
         _make_srt(srt_jp, text=_JP_TEXT)
 
-        # 日本語字幕あり（Meiryo・Windows Fonts）
+        # Japanese subtitle (Meiryo, Windows Fonts)
         tl_jp = _make_timeline(main_src)
         tl_jp_path = tmp_path / "tl_jp.otio"
         _save_timeline(tl_jp, tl_jp_path)
@@ -640,9 +639,9 @@ class TestSubtitleJapanese:
             ),
             dry_run=False,
         )
-        assert result_jp["ok"] is True, f"日本語字幕 render が失敗しました: {result_jp}"
+        assert result_jp["ok"] is True, f"Japanese subtitle render failed: {result_jp}"
 
-        # ネガティブ対照（字幕なし）
+        # Negative control (no subtitle)
         tl_nosub = _make_timeline(main_src)
         tl_nosub_path = tmp_path / "tl_nosub.otio"
         _save_timeline(tl_nosub, tl_nosub_path)
@@ -652,7 +651,7 @@ class TestSubtitleJapanese:
         )
         assert result_nosub["ok"] is True
 
-        # フレーム抽出
+        # Frame extraction
         frame_jp = tmp_path / "frame_jp.png"
         frame_nosub = tmp_path / "frame_nosub.png"
         _extract_frame(_FFMPEG, out_jp, _FRAME_SAMPLE_S, frame_jp)
@@ -660,33 +659,33 @@ class TestSubtitleJapanese:
 
         ssim = _measure_ssim(_FFMPEG, frame_jp, frame_nosub)
         assert ssim < _SSIM_PIXEL_DIFF_THRESHOLD, (
-            f"日本語字幕のピクセル差が不十分です（assert-4・日本語豆腐化疑い）:\n"
-            f"  SSIM All: {ssim:.6f}（期待: < {_SSIM_PIXEL_DIFF_THRESHOLD}）\n"
-            f"  font_name={_JP_FONT_NAME}・fonts_dir={_WINDOWS_FONTS_DIR}\n"
-            f"  フォントが正しく読み込まれ CJK グリフが描画されていれば差が出るはず"
+            f"Japanese subtitle pixel difference is insufficient (assert-4, possible tofu rendering):\n"
+            f"  SSIM All: {ssim:.6f} (expected: < {_SSIM_PIXEL_DIFF_THRESHOLD})\n"
+            f"  font_name={_JP_FONT_NAME}, fonts_dir={_WINDOWS_FONTS_DIR}\n"
+            f"  If the font is loaded correctly and CJK glyphs are drawn, a pixel difference should appear"
         )
 
 
 # ===========================================================================
-# テスト: assert-5（スタイル反映・font_size 差異）
+# Tests: assert-5 (style application, font_size difference)
 # ===========================================================================
 
 
 @requires_ffmpeg
 class TestSubtitleStyle:
-    """基本スタイル（font_size）反映を実証するテスト（assert-5）。
+    """Prove that basic style (font_size) is applied (assert-5).
 
-    font_size=48 と font_size=12 では字幕領域のピクセル変化量が異なることを確認する。
-    大きいフォントは多くのピクセルを変化させるため SSIM がより低くなる。
+    font_size=48 and font_size=12 produce different amounts of pixel change.
+    A larger font changes more pixels, so SSIM vs the no-subtitle output is lower.
     """
 
     def test_large_font_size_has_more_pixel_diff_than_small(
         self, tmp_path: Path
     ) -> None:
-        """font_size=48 の SSIM 差は font_size=12 より大きい（assert-5・スタイル反映）。
+        """SSIM difference with font_size=48 is larger than with font_size=12 (assert-5, style applied).
 
-        大きい字幕は字幕領域で多くのピクセルを変化させるため、
-        字幕なし出力との SSIM 差が小さい字幕より大きくなることを確認する。
+        A larger subtitle changes more pixels in the subtitle region, so SSIM vs the no-subtitle
+        output is lower than for a smaller subtitle.
         """
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
@@ -695,7 +694,7 @@ class TestSubtitleStyle:
         _make_main_video(_FFMPEG, main_src)
         _make_srt(srt)
 
-        # 字幕なし出力（共通ベースライン）
+        # No-subtitle output (shared baseline)
         tl_nosub = _make_timeline(main_src)
         tl_nosub_path = tmp_path / "tl_nosub.otio"
         _save_timeline(tl_nosub, tl_nosub_path)
@@ -705,7 +704,7 @@ class TestSubtitleStyle:
         )
         assert r_nosub["ok"] is True
 
-        # font_size=48（大）
+        # font_size=48 (large)
         tl_big = _make_timeline(main_src)
         tl_big_path = tmp_path / "tl_big.otio"
         _save_timeline(tl_big, tl_big_path)
@@ -718,7 +717,7 @@ class TestSubtitleStyle:
         )
         assert r_big["ok"] is True
 
-        # font_size=12（小）
+        # font_size=12 (small)
         tl_small = _make_timeline(main_src)
         tl_small_path = tmp_path / "tl_small.otio"
         _save_timeline(tl_small, tl_small_path)
@@ -731,7 +730,7 @@ class TestSubtitleStyle:
         )
         assert r_small["ok"] is True
 
-        # フレーム抽出
+        # Frame extraction
         frame_nosub = tmp_path / "frame_nosub.png"
         frame_big = tmp_path / "frame_big.png"
         frame_small = tmp_path / "frame_small.png"
@@ -742,19 +741,19 @@ class TestSubtitleStyle:
         ssim_big = _measure_ssim(_FFMPEG, frame_big, frame_nosub)
         ssim_small = _measure_ssim(_FFMPEG, frame_small, frame_nosub)
 
-        # 大フォントは多くのピクセルを変化させる → SSIM が小フォントより低い
+        # Large font changes more pixels -> lower SSIM than small font
         assert ssim_big < ssim_small, (
-            f"font_size=48 の SSIM 差が font_size=12 より大きくなっていません（assert-5）:\n"
+            f"SSIM difference for font_size=48 is not larger than for font_size=12 (assert-5):\n"
             f"  SSIM (size=48 vs nosub): {ssim_big:.6f}\n"
             f"  SSIM (size=12 vs nosub): {ssim_small:.6f}\n"
-            f"  大きいフォントは多くのピクセルを変化させるため SSIM が低くなるはず"
+            f"  A larger font changes more pixels, so SSIM should be lower"
         )
 
     def test_force_style_in_filter_complex_for_srt(self, tmp_path: Path) -> None:
-        """SRT 時に force_style が filter_complex に含まれる（ADR-S6-r2 内部確認）。
+        """force_style is present in filter_complex for SRT (ADR-S6-r2 internal check).
 
-        SubtitleOptions にスタイル指定がある場合、SRT/VTT は force_style= が
-        filter_complex に付与されることを dry_run で確認する。
+        When SubtitleOptions includes style settings, force_style= is added to
+        filter_complex for SRT/VTT input; verified via dry_run.
         """
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
@@ -785,25 +784,25 @@ class TestSubtitleStyle:
 
         fc = result["data"]["filter_complex"]
         assert "force_style=" in fc, (
-            f"SRT 時に force_style が filter_complex に含まれていません（ADR-S6-r2 違反）:\n"
+            f"force_style missing from filter_complex for SRT (ADR-S6-r2 violation):\n"
             f"  filter_complex: {fc}"
         )
         assert "FontSize=24" in fc, (
-            f"font_size=24 が force_style に反映されていません:\n  filter_complex: {fc}"
+            f"font_size=24 not reflected in force_style:\n  filter_complex: {fc}"
         )
         assert "Alignment=2" in fc, (
-            f"alignment=2 が force_style に反映されていません（ADR-S6-r3）:\n"
+            f"alignment=2 not reflected in force_style (ADR-S6-r3):\n"
             f"  filter_complex: {fc}"
         )
         assert "MarginV=20" in fc, (
-            f"margin_v=20 が force_style に反映されていません:\n  filter_complex: {fc}"
+            f"margin_v=20 not reflected in force_style:\n  filter_complex: {fc}"
         )
 
     def test_ass_no_force_style_in_filter_complex(self, tmp_path: Path) -> None:
-        """ASS 時に force_style が filter_complex に含まれない（ADR-S6-r2 内部確認）。
+        """force_style is absent from filter_complex for ASS (ADR-S6-r2 internal check).
 
-        ASS は内蔵スタイルを持つため force_style を適用しない（DC-AS-002）。
-        SubtitleOptions にスタイル指定があっても ASS 入力時は force_style= を付与しない。
+        ASS has embedded styles, so force_style is not applied (DC-AS-002).
+        Even when SubtitleOptions includes style settings, force_style= must not be added for ASS.
         """
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
@@ -823,7 +822,7 @@ class TestSubtitleStyle:
             RenderOptions(
                 subtitle=SubtitleOptions(
                     path=str(ass),
-                    font_size=24,  # 指定があっても ASS では force_style に入らない
+                    font_size=24,  # style settings are ignored for ASS (not passed to force_style)
                 )
             ),
             dry_run=True,
@@ -832,28 +831,28 @@ class TestSubtitleStyle:
 
         fc = result["data"]["filter_complex"]
         assert "force_style=" not in fc, (
-            f"ASS 時に force_style が filter_complex に含まれています（ADR-S6-r2/DC-AS-002 違反）:\n"
+            f"filter_complex contains force_style for ASS (ADR-S6-r2/DC-AS-002 violation):\n"
             f"  filter_complex: {fc}"
         )
-        # ASS 時は charenc=UTF-8 も付与しない（実機確認済み・ADR-S6-r2）
+        # charenc=UTF-8 is also not added for ASS (confirmed in M2, ADR-S6-r2)
         assert "charenc=UTF-8" not in fc, (
-            f"ASS 時に charenc=UTF-8 が filter_complex に含まれています（ADR-S6-r2 違反）:\n"
+            f"filter_complex contains charenc=UTF-8 for ASS (ADR-S6-r2 violation):\n"
             f"  filter_complex: {fc}"
         )
 
 
 # ===========================================================================
-# テスト: assert-6（SRT/VTT/ASS の 3 形式）
+# Tests: assert-6 (all three formats: SRT / VTT / ASS)
 # ===========================================================================
 
 
 @requires_ffmpeg
 class TestSubtitleFormats:
-    """SRT / VTT / ASS の 3 形式で字幕が焼ける実証（assert-6）。
+    """Prove that subtitles can be burned in all three formats: SRT / VTT / ASS (assert-6).
 
-    M2 実機確認済み: VTT は subtitles フィルタで直読可（ADR-S3/ADR-S9）。
-    3 形式とも render_timeline が ok=True を返し出力ファイルが生成されることを確認する。
-    各形式で字幕表示中フレームのピクセルが字幕なし出力と有意に異なることも確認する。
+    M2 confirmed: VTT can be read directly by the subtitles filter (ADR-S3/ADR-S9).
+    Confirm that render_timeline returns ok=True and the output file is created for all three formats.
+    Also confirm that subtitle-region pixels differ significantly from the no-subtitle output.
     """
 
     def _render_with_subtitle(
@@ -863,7 +862,7 @@ class TestSubtitleFormats:
         suffix: str,
         subtitle_path: Path,
     ) -> tuple[bool, Path]:
-        """字幕付き render を実行し (ok, out_path) を返す。"""
+        """Run a subtitle-burned render and return (ok, out_path)."""
         main_src = tmp_path / "main.mp4"
         tl = _make_timeline(main_src)
         tl_path = tmp_path / f"tl_{suffix}.otio"
@@ -877,7 +876,7 @@ class TestSubtitleFormats:
         return result["ok"], out_path
 
     def test_srt_format_renders_ok(self, tmp_path: Path) -> None:
-        """SRT 形式で字幕が焼ける（assert-6）。"""
+        """SRT format subtitle renders successfully (assert-6)."""
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
         srt = tmp_path / "test.srt"
@@ -885,16 +884,16 @@ class TestSubtitleFormats:
         _make_srt(srt)
 
         ok, out = self._render_with_subtitle(_FFMPEG, tmp_path, "srt", srt)
-        assert ok is True, "SRT 字幕 render が失敗しました"
+        assert ok is True, "SRT subtitle render failed"
         assert out.exists() and out.stat().st_size > 0, (
-            "SRT 出力ファイルが生成されていません"
+            "SRT output file was not created"
         )
 
     def test_vtt_format_renders_ok(self, tmp_path: Path) -> None:
-        """VTT 形式で字幕が焼ける（assert-6・M2 VTT 直読可確認済み）。
+        """VTT format subtitle renders successfully (assert-6, VTT direct-read confirmed in M2).
 
-        VTT は libavformat が直接 WebVTT として読む。
-        ADR-S9: VTT 直読可なので SRT 変換は不要。
+        libavformat reads VTT directly as WebVTT.
+        ADR-S9: VTT direct-read is supported, so no SRT conversion is needed.
         """
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
@@ -904,16 +903,16 @@ class TestSubtitleFormats:
 
         ok, out = self._render_with_subtitle(_FFMPEG, tmp_path, "vtt", vtt)
         assert ok is True, (
-            "VTT 字幕 render が失敗しました（VTT が直読できていない可能性: ADR-S9）"
+            "VTT subtitle render failed (possible VTT direct-read issue: ADR-S9)"
         )
         assert out.exists() and out.stat().st_size > 0, (
-            "VTT 出力ファイルが生成されていません"
+            "VTT output file was not created"
         )
 
     def test_ass_format_renders_ok(self, tmp_path: Path) -> None:
-        """ASS 形式で字幕が焼ける（assert-6）。
+        """ASS format subtitle renders successfully (assert-6).
 
-        ASS は内蔵スタイルを持つため force_style は不適用（ADR-S6-r2）。
+        ASS has embedded styles, so force_style is not applied (ADR-S6-r2).
         """
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
@@ -922,16 +921,16 @@ class TestSubtitleFormats:
         _make_ass(ass)
 
         ok, out = self._render_with_subtitle(_FFMPEG, tmp_path, "ass", ass)
-        assert ok is True, "ASS 字幕 render が失敗しました"
+        assert ok is True, "ASS subtitle render failed"
         assert out.exists() and out.stat().st_size > 0, (
-            "ASS 出力ファイルが生成されていません"
+            "ASS output file was not created"
         )
 
     def test_three_formats_pixel_diff_vs_no_subtitle(self, tmp_path: Path) -> None:
-        """SRT/VTT/ASS の 3 形式とも字幕なし出力とピクセル差が有意（assert-6・実証）。
+        """All three formats (SRT/VTT/ASS) produce significant pixel difference vs no-subtitle (assert-6).
 
-        各形式の出力フレームと字幕なし出力フレームの SSIM を比較する。
-        SSIM < 0.999 で字幕が焼き込まれていることを確認する。
+        Compare the output frame of each format against the no-subtitle output frame using SSIM.
+        SSIM < 0.999 confirms the subtitle was burned in.
         """
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
@@ -944,7 +943,7 @@ class TestSubtitleFormats:
         _make_vtt(vtt)
         _make_ass(ass)
 
-        # 字幕なし出力（共通ベースライン）
+        # No-subtitle output (shared baseline)
         tl_nosub = _make_timeline(main_src)
         tl_nosub_path = tmp_path / "tl_nosub.otio"
         _save_timeline(tl_nosub, tl_nosub_path)
@@ -960,7 +959,7 @@ class TestSubtitleFormats:
         for fmt, sub_path in [("srt", srt), ("vtt", vtt), ("ass", ass)]:
             ok, out = self._render_with_subtitle(_FFMPEG, tmp_path, fmt, sub_path)
             if not ok:
-                failures.append(f"{fmt.upper()}: render が失敗")
+                failures.append(f"{fmt.upper()}: render failed")
                 continue
 
             frame = tmp_path / f"frame_{fmt}.png"
@@ -970,34 +969,35 @@ class TestSubtitleFormats:
             if ssim >= _SSIM_PIXEL_DIFF_THRESHOLD:
                 failures.append(
                     f"{fmt.upper()}: SSIM={ssim:.6f} >= {_SSIM_PIXEL_DIFF_THRESHOLD}"
-                    "（字幕焼き込み未実証）"
+                    " (subtitle burn-in unproven)"
                 )
 
         assert not failures, (
-            "以下の形式で字幕焼き込みのピクセル差が不十分です（assert-6）:\n"
+            "Pixel difference is insufficient for the following formats (assert-6):\n"
             + "\n".join(f"  {f}" for f in failures)
         )
 
 
 # ===========================================================================
-# テスト: assert-7（後方互換・subtitle=None で映像不変）
+# Tests: assert-7 (backward compat, subtitle=None leaves video unchanged)
 # ===========================================================================
 
 
 @requires_ffmpeg
 class TestSubtitleBackwardCompat:
-    """後方互換実証: subtitle=None は従来出力と等価（assert-7・ADR-S8）。
+    """Backward-compatibility proof: subtitle=None produces equivalent output (assert-7, ADR-S8).
 
-    subtitle=None で render した2出力が SSIM ≒ 1.0 になることを確認し、
-    「字幕なし出力」が安定していることを保証する（B-3 教訓の補足）。
-    また字幕あり/なしの SSIM 差が確実に字幕起因であることを切り分ける。
+    Confirm that two renders with subtitle=None yield SSIM ≈ 1.0, proving the
+    no-subtitle output is stable (supplementary to lesson B-3).
+    Also isolates that SSIM differences between subtitle and no-subtitle renders
+    are caused exclusively by the subtitle.
     """
 
     def test_no_subtitle_outputs_are_equivalent(self, tmp_path: Path) -> None:
-        """subtitle=None で 2 回 render した出力フレームが SSIM >= 0.98 で同一（assert-7）。
+        """Two renders with subtitle=None produce frames with SSIM >= 0.98 (assert-7).
 
-        同一入力のレンダリングは決定論的なので SSIM がほぼ 1.0 になる。
-        エンコーダーの非決定性を考慮して 0.98 を下限とする。
+        Rendering the same input is deterministic, so SSIM should be ≈ 1.0.
+        0.98 is the lower bound to accommodate encoder non-determinism.
         """
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
@@ -1009,7 +1009,7 @@ class TestSubtitleBackwardCompat:
             _save_timeline(tl, tl_path)
             out = tmp_path / f"out_{i}.mp4"
             r = render_timeline(str(tl_path), str(out), RenderOptions(), dry_run=False)
-            assert r["ok"] is True, f"subtitle=None render {i} が失敗しました"
+            assert r["ok"] is True, f"subtitle=None render {i} failed"
 
         frame_1 = tmp_path / "frame_1.png"
         frame_2 = tmp_path / "frame_2.png"
@@ -1018,17 +1018,17 @@ class TestSubtitleBackwardCompat:
 
         ssim = _measure_ssim(_FFMPEG, frame_1, frame_2)
         assert ssim >= 0.98, (
-            f"subtitle=None の 2 出力フレームの SSIM が期待値を下回っています（assert-7）:\n"
-            f"  SSIM: {ssim:.6f}（期待: >= 0.98）\n"
-            f"  subtitle=None は決定論的な出力を返すはず（ADR-S8）"
+            f"SSIM of two subtitle=None output frames is below expected (assert-7):\n"
+            f"  SSIM: {ssim:.6f} (expected: >= 0.98)\n"
+            f"  subtitle=None should produce deterministic output (ADR-S8)"
         )
 
     def test_subtitle_presence_causes_pixel_diff(self, tmp_path: Path) -> None:
-        """字幕あり出力と字幕なし出力のピクセル差が字幕起因と切り分けられる（assert-7）。
+        """Pixel difference between subtitle and no-subtitle is isolated as subtitle-caused (assert-7).
 
-        subtitle=None の出力を2本（同一）と字幕あり出力を比較し、
-        字幕なし同士は SSIM >= 0.98・字幕あり/なし差は < 0.999 であることを確認する。
-        差分が字幕のみに起因することを定量的に示す（B-3 教訓）。
+        Compare two no-subtitle renders (identical) with one subtitle render.
+        Confirm no-subtitle pairs have SSIM >= 0.98 and subtitle vs no-subtitle has SSIM < 0.999.
+        Quantitatively demonstrates that the diff originates solely from the subtitle (lesson B-3).
         """
         assert _FFMPEG is not None
         main_src = tmp_path / "main.mp4"
@@ -1036,7 +1036,7 @@ class TestSubtitleBackwardCompat:
         _make_main_video(_FFMPEG, main_src)
         _make_srt(srt)
 
-        # 字幕なし x2
+        # No-subtitle x2
         tl_no1 = _make_timeline(main_src)
         tl_no1_path = tmp_path / "tl_no1.otio"
         _save_timeline(tl_no1, tl_no1_path)
@@ -1055,7 +1055,7 @@ class TestSubtitleBackwardCompat:
         )
         assert r_no2["ok"] is True
 
-        # 字幕あり x1
+        # Subtitle x1
         tl_sub = _make_timeline(main_src)
         tl_sub_path = tmp_path / "tl_sub.otio"
         _save_timeline(tl_sub, tl_sub_path)
@@ -1075,18 +1075,18 @@ class TestSubtitleBackwardCompat:
         _extract_frame(_FFMPEG, out_no2, _FRAME_SAMPLE_S, frame_no2)
         _extract_frame(_FFMPEG, out_sub, _FRAME_SAMPLE_S, frame_sub)
 
-        # 字幕なし同士: SSIM >= 0.98
+        # No-subtitle pair: SSIM >= 0.98
         ssim_no_vs_no = _measure_ssim(_FFMPEG, frame_no1, frame_no2)
         assert ssim_no_vs_no >= 0.98, (
-            f"字幕なし同士の SSIM が低すぎます（ネガティブ対照の信頼性不足）:\n"
-            f"  SSIM: {ssim_no_vs_no:.6f}（期待: >= 0.98）"
+            f"SSIM between two no-subtitle renders is too low (negative control reliability issue):\n"
+            f"  SSIM: {ssim_no_vs_no:.6f} (expected: >= 0.98)"
         )
 
-        # 字幕あり vs 字幕なし: SSIM < 0.999（字幕起因の差）
+        # Subtitle vs no-subtitle: SSIM < 0.999 (difference caused by subtitle)
         ssim_sub_vs_no = _measure_ssim(_FFMPEG, frame_sub, frame_no1)
         assert ssim_sub_vs_no < _SSIM_PIXEL_DIFF_THRESHOLD, (
-            f"字幕あり/なしの SSIM 差が不十分です（assert-7・切り分け失敗）:\n"
-            f"  字幕あり vs なし SSIM: {ssim_sub_vs_no:.6f}（期待: < {_SSIM_PIXEL_DIFF_THRESHOLD}）\n"
-            f"  字幕なし同士 SSIM: {ssim_no_vs_no:.6f}（参考）\n"
-            f"  字幕あり/なしの差が字幕起因であることを確認するための対照実験"
+            f"SSIM difference between subtitle and no-subtitle is insufficient (assert-7, isolation failure):\n"
+            f"  subtitle vs no-subtitle SSIM: {ssim_sub_vs_no:.6f} (expected: < {_SSIM_PIXEL_DIFF_THRESHOLD})\n"
+            f"  no-subtitle pair SSIM: {ssim_no_vs_no:.6f} (reference)\n"
+            f"  Control experiment to confirm the diff is caused solely by the subtitle"
         )

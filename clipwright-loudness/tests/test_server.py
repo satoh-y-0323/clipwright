@@ -1,12 +1,12 @@
-"""test_server.py — server.py（MCP + CLI）の完全版テスト。
+"""test_server.py — Full test suite for server.py (MCP + CLI).
 
-対象:
-  - clipwright_detect_loudness が MCP に登録されていること
+Targets:
+  - clipwright_detect_loudness is registered in MCP
   - annotations: readOnlyHint=True / destructiveHint=False / idempotentHint=True / openWorldHint=False
-  - options=None 時に既定 DetectLoudnessOptions() が委譲先へ渡ること
-  - timeline=None が既定であること
-  - loudness.detect_loudness へ委譲すること
-  - main() が mcp.run(transport="stdio") を呼ぶこと
+  - When options=None, default DetectLoudnessOptions() is passed to the delegate
+  - timeline=None is the default
+  - Delegates to loudness.detect_loudness
+  - main() calls mcp.run(transport="stdio")
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from clipwright_loudness.server import clipwright_detect_loudness as server_acti
 from clipwright_loudness.server import main, mcp
 
 # ===========================================================================
-# ヘルパー
+# Helpers
 # ===========================================================================
 
 
@@ -36,63 +36,61 @@ def _ok_envelope(**kwargs: Any) -> dict[str, Any]:
 
 
 def _get_tool_annotations() -> Any:
-    # FastMCP は登録済みツールを取得する公開 API を持たないため、
-    # テスト目的でプライベート属性 _tool_manager を参照する。
+    # FastMCP does not expose a public API to retrieve registered tools,
+    # so we access the private _tool_manager attribute for test purposes.
     tool = mcp._tool_manager.get_tool("clipwright_detect_loudness")  # noqa: SLF001
-    assert tool is not None, "clipwright_detect_loudness が mcp に登録されていること"
+    assert tool is not None, "clipwright_detect_loudness must be registered in mcp"
     return tool.annotations
 
 
 # ===========================================================================
-# MCP 登録・annotations 検証
+# MCP registration and annotations
 # ===========================================================================
 
 
 class TestMcpRegistration:
-    """clipwright_detect_loudness が MCP に正しく登録されていること。"""
+    """clipwright_detect_loudness must be correctly registered in MCP."""
 
     def test_tool_is_registered(self) -> None:
-        """clipwright_detect_loudness が MCP ツールリストに存在すること。"""
+        """clipwright_detect_loudness must exist in the MCP tool list."""
         tool = mcp._tool_manager.get_tool("clipwright_detect_loudness")  # noqa: SLF001
-        assert tool is not None, (
-            "clipwright_detect_loudness が MCP に登録されていない。"
-        )
+        assert tool is not None, "clipwright_detect_loudness is not registered in MCP."
 
 
 class TestMcpAnnotations:
-    """detect 系ツールの MCP annotations 確認（設計 §2.4・project-conventions.md）。"""
+    """Verify MCP annotations for the detect tool (design §2.4, project-conventions.md)."""
 
     def test_read_only_hint_is_true(self) -> None:
-        """readOnlyHint=True: 入力メディアを書き換えない。"""
+        """readOnlyHint=True: input media is not modified."""
         annotations = _get_tool_annotations()
         assert annotations.readOnlyHint is True
 
     def test_destructive_hint_is_false(self) -> None:
-        """destructiveHint=False: 破壊的操作でない。"""
+        """destructiveHint=False: not a destructive operation."""
         annotations = _get_tool_annotations()
         assert annotations.destructiveHint is False
 
     def test_idempotent_hint_is_true(self) -> None:
-        """idempotentHint=True: 同じ入力で同じ出力。"""
+        """idempotentHint=True: same input produces same output."""
         annotations = _get_tool_annotations()
         assert annotations.idempotentHint is True
 
     def test_open_world_hint_is_false(self) -> None:
-        """openWorldHint=False: ネットワークアクセスなし。"""
+        """openWorldHint=False: no network access."""
         annotations = _get_tool_annotations()
         assert annotations.openWorldHint is False
 
 
 # ===========================================================================
-# 委譲（detect_loudness への委譲）
+# Delegation (to detect_loudness)
 # ===========================================================================
 
 
 class TestDelegation:
-    """clipwright_detect_loudness が loudness.detect_loudness へ正しく委譲すること。"""
+    """clipwright_detect_loudness must correctly delegate to loudness.detect_loudness."""
 
     def test_success_delegates_to_detect_loudness(self) -> None:
-        """成功時に detect_loudness が呼ばれ結果が返ること。"""
+        """detect_loudness must be called on success and its result returned."""
         with patch(
             "clipwright_loudness.server.detect_loudness",
             return_value=_ok_envelope(summary="done"),
@@ -106,7 +104,7 @@ class TestDelegation:
         assert result["summary"] == "done"
 
     def test_error_result_propagates(self) -> None:
-        """detect_loudness がエラーエンベロープを返した場合にそのまま伝播すること。"""
+        """An error envelope returned by detect_loudness must propagate as-is."""
         error_envelope: dict[str, Any] = {
             "ok": False,
             "error": {
@@ -127,7 +125,7 @@ class TestDelegation:
         assert result["error"]["code"] == "INVALID_INPUT"
 
     def test_media_and_output_forwarded(self) -> None:
-        """media / output が detect_loudness に正しく渡ること。"""
+        """media / output must be correctly forwarded to detect_loudness."""
         with patch(
             "clipwright_loudness.server.detect_loudness",
             return_value=_ok_envelope(),
@@ -144,7 +142,7 @@ class TestDelegation:
         assert kwargs.get("output") == "/path/to/out.otio"
 
     def test_timeline_forwarded_when_specified(self) -> None:
-        """timeline 引数が detect_loudness に正しく渡ること。"""
+        """The timeline argument must be correctly forwarded to detect_loudness."""
         with patch(
             "clipwright_loudness.server.detect_loudness",
             return_value=_ok_envelope(),
@@ -160,7 +158,7 @@ class TestDelegation:
         assert kwargs.get("timeline") == "existing.otio"
 
     def test_timeline_none_is_forwarded(self) -> None:
-        """timeline=None が detect_loudness に渡ること（省略時の既定）。"""
+        """timeline=None must be forwarded to detect_loudness (default when omitted)."""
         with patch(
             "clipwright_loudness.server.detect_loudness",
             return_value=_ok_envelope(),
@@ -174,15 +172,15 @@ class TestDelegation:
 
 
 # ===========================================================================
-# options=None 時の既定値
+# Default value when options=None
 # ===========================================================================
 
 
 class TestOptionsDefault:
-    """options=None の場合に DetectLoudnessOptions() が使われること。"""
+    """When options=None, DetectLoudnessOptions() defaults must be used."""
 
     def test_options_none_uses_default_detect_loudness_options(self) -> None:
-        """options=None → mode=loudnorm / scope=track の既定が渡ること。"""
+        """options=None -> mode=loudnorm / scope=track defaults must be passed."""
         with patch(
             "clipwright_loudness.server.detect_loudness",
             return_value=_ok_envelope(),
@@ -194,13 +192,13 @@ class TestOptionsDefault:
         _args, kwargs = mock_fn.call_args
         passed = kwargs.get("options")
         assert isinstance(passed, DetectLoudnessOptions), (
-            f"options が DetectLoudnessOptions でない: {type(passed)}"
+            f"options is not DetectLoudnessOptions: {type(passed)}"
         )
         assert passed.mode == "loudnorm"
         assert passed.scope == "track"
 
     def test_options_explicit_is_forwarded(self) -> None:
-        """options を明示指定した場合はそのまま渡ること。"""
+        """An explicitly specified options value must be forwarded as-is."""
         custom_opts = DetectLoudnessOptions(mode="peak", scope="track")
         with patch(
             "clipwright_loudness.server.detect_loudness",
@@ -218,15 +216,15 @@ class TestOptionsDefault:
 
 
 # ===========================================================================
-# main() — stdio 起動
+# main() — stdio launch
 # ===========================================================================
 
 
 class TestCliMain:
-    """main() が MCP サーバーを stdio で起動すること。"""
+    """main() must launch the MCP server over stdio."""
 
     def test_main_runs_mcp_with_stdio_transport(self) -> None:
-        """main() が mcp.run(transport="stdio") を呼ぶこと。"""
+        """main() must call mcp.run(transport="stdio")."""
         with patch.object(mcp, "run") as mock_run:
             main()
 
@@ -234,4 +232,4 @@ class TestCliMain:
         _args, kwargs = mock_run.call_args
         assert kwargs.get("transport") == "stdio" or (
             len(_args) >= 1 and _args[0] == "stdio"
-        ), f"transport='stdio' が渡されていない。args={_args}, kwargs={kwargs}"
+        ), f"transport='stdio' was not passed. args={_args}, kwargs={kwargs}"

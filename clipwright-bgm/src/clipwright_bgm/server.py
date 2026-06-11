@@ -1,9 +1,9 @@
-"""server.py — clipwright-bgm MCP サーバー + CLI エントリポイント。
+"""server.py — clipwright-bgm MCP server + CLI entry point.
 
-ビジネスロジックは bgm.py に委譲する薄いラッパー。
-ClipwrightError の変換は bgm.py 側で行うため、ここでは二重変換しない。
+Thin wrapper that delegates business logic to bgm.py.
+ClipwrightError conversion is handled in bgm.py, so no double-conversion is done here.
 
-トランスポートは stdio 既定（mcp.run(transport="stdio")）。
+Transport defaults to stdio (mcp.run(transport="stdio")).
 """
 
 from __future__ import annotations
@@ -17,12 +17,12 @@ from pydantic import Field
 from clipwright_bgm.bgm import add_bgm
 from clipwright_bgm.schemas import BgmOptions
 
-# FastMCP インスタンス（サーバー名）
+# FastMCP instance (server name)
 mcp = FastMCP("clipwright-bgm")
 
 
 # ===========================================================================
-# clipwright_add_bgm MCP ツール
+# clipwright_add_bgm MCP tool
 # ===========================================================================
 
 
@@ -37,15 +37,16 @@ mcp = FastMCP("clipwright-bgm")
 def clipwright_add_bgm(
     timeline: Annotated[
         str,
-        Field(description="入力 OTIO タイムラインファイルパス（.otio）。"),
+        Field(description="Input OTIO timeline file path (.otio)."),
     ],
     bgm: Annotated[
         str,
         Field(
             description=(
-                "BGM ファイルパス（音声または動画）。"
-                "許可拡張子: mp3, wav, m4a, aac, flac, ogg, opus, mp4, mkv, mov, webm。"
-                "タイムラインファイルと同一ディレクトリに配置する必要がある。"
+                "BGM file path (audio or video). "
+                "Allowed extensions: mp3, wav, m4a, aac, flac, ogg, opus,"
+                " mp4, mkv, mov, webm. "
+                "Must be placed in the same directory as the timeline file."
             )
         ),
     ],
@@ -53,8 +54,8 @@ def clipwright_add_bgm(
         str,
         Field(
             description=(
-                "出力 OTIO タイムラインファイルパス（.otio 拡張子）。"
-                "入力タイムラインとは別のパスを指定すること（非破壊・M5）。"
+                "Output OTIO timeline file path (.otio extension). "
+                "Must differ from the input timeline path (non-destructive, M5)."
             )
         ),
     ],
@@ -62,22 +63,24 @@ def clipwright_add_bgm(
         BgmOptions | None,
         Field(
             description=(
-                "BGM オプション（volume_db / fade_in_sec / fade_out_sec / ducking）。"
-                "省略時は add_bgm 内部のデフォルト値を使用する。"
+                "BGM options (volume_db / fade_in_sec / fade_out_sec / ducking). "
+                "When omitted, the default values inside add_bgm are used."
             )
         ),
     ] = None,
 ) -> dict[str, Any]:
-    """BGM クリップを OTIO タイムラインに追加する MCP ツール。
+    """MCP tool to add a BGM clip to an OTIO timeline.
 
-    出力 OTIO ファイルを新規生成するため readOnly ではないが、
-    入力 OTIO・メディアは不変（非破壊）。
-    clipwright-render の readOnlyHint=False（新ファイル生成）と対称の設計（CR M-4）。
-    BGM 尺を core inspect_media で取得し、A2 Audio トラックに BGM クリップを追加する。
-    BGM クリップには BgmDirective（volume_db/fade/ducking）を metadata に書く。
-    実体化（ミックス）は clipwright-render が行う。
+    Not read-only because a new output OTIO file is created, but the input OTIO
+    and media files are unchanged (non-destructive).
+    Symmetric design with clipwright-render's readOnlyHint=False
+    (new file generation, CR M-4).
+    Fetches BGM duration via core inspect_media and adds a BGM clip
+    to the A2 Audio track.
+    Writes BgmDirective (volume_db/fade/ducking) into the BGM clip metadata.
+    The actual mix is performed by clipwright-render.
 
-    ビジネスロジックは bgm.add_bgm へ委譲する。
+    Delegates business logic to bgm.add_bgm.
     """
     return add_bgm(
         timeline=timeline,
@@ -88,15 +91,15 @@ def clipwright_add_bgm(
 
 
 # ===========================================================================
-# エントリポイント（MCP stdio 起動）
+# Entry point (MCP stdio)
 # ===========================================================================
 
 
 def main() -> None:
-    """CLI エントリポイント。MCP サーバーを stdio で起動する。
+    """CLI entry point. Starts the MCP server over stdio.
 
-    pyproject.toml の [project.scripts] で
-    clipwright-bgm = "clipwright_bgm.server:main" として登録する。
+    Registered in pyproject.toml [project.scripts] as:
+    clipwright-bgm = "clipwright_bgm.server:main"
     """
     mcp.run(transport="stdio")
 

@@ -1,9 +1,9 @@
-"""server.py — clipwright-loudness MCP サーバー + CLI エントリポイント。
+"""server.py — clipwright-loudness MCP server + CLI entry point.
 
-ビジネスロジックは loudness.py に委譲する薄いラッパー。
-ClipwrightError の変換は loudness.py 側で行うため、ここでは二重変換しない。
+Thin wrapper that delegates business logic to loudness.py.
+ClipwrightError conversion is handled in loudness.py; no double conversion here.
 
-トランスポートは stdio 既定（mcp.run(transport="stdio")）。
+Transport defaults to stdio (mcp.run(transport="stdio")).
 """
 
 from __future__ import annotations
@@ -17,12 +17,12 @@ from pydantic import Field
 from clipwright_loudness.loudness import detect_loudness
 from clipwright_loudness.schemas import DetectLoudnessOptions
 
-# FastMCP インスタンス（サーバー名）
+# FastMCP instance (server name)
 mcp = FastMCP("clipwright-loudness")
 
 
 # ===========================================================================
-# clipwright_detect_loudness MCP ツール
+# clipwright_detect_loudness MCP tool
 # ===========================================================================
 
 
@@ -37,14 +37,14 @@ mcp = FastMCP("clipwright-loudness")
 def clipwright_detect_loudness(
     media: Annotated[
         str,
-        Field(description="入力メディアファイルパス（映像＋音声を含む素材）。"),
+        Field(description="Input media file path (must contain both video and audio)."),
     ],
     output: Annotated[
         str,
         Field(
             description=(
-                "出力 OTIO タイムラインファイルパス（.otio 拡張子）。"
-                "メディアファイルと同一ディレクトリに配置する必要がある。"
+                "Output OTIO timeline file path (.otio extension). "
+                "Must be placed in the same directory as the media file."
             )
         ),
     ],
@@ -52,9 +52,9 @@ def clipwright_detect_loudness(
         DetectLoudnessOptions | None,
         Field(
             description=(
-                "ラウドネス検出オプション（mode / scope / target 等）。"
-                "省略時は mode=loudnorm / scope=track /"
-                " I=-14 / TP=-1 / LRA=11 を使用する。"
+                "Loudness detection options (mode / scope / target, etc.). "
+                "Defaults to mode=loudnorm / scope=track /"
+                " I=-14 / TP=-1 / LRA=11 when omitted."
             )
         ),
     ] = None,
@@ -62,24 +62,24 @@ def clipwright_detect_loudness(
         str | None,
         Field(
             description=(
-                "既存 OTIO タイムラインファイルパス。"
-                "指定した場合はそのタイムラインに loudness 指示を追記する。"
-                "省略時は新規タイムラインを生成する。"
+                "Existing OTIO timeline file path. "
+                "When specified, the loudness directive is appended to that timeline. "
+                "A new timeline is created when omitted."
             )
         ),
     ] = None,
 ) -> dict[str, Any]:
-    """音声ラウドネスを解析して loudness 指示付き OTIO タイムラインを生成するツール。
+    """Analyze audio loudness and generate an OTIO timeline with a loudness directive.
 
-    入力メディアファイルは一切書き換えない（非破壊・readOnly）。
-    readOnlyHint=True は「入力メディアを変更しない」意味であり、
-    output に指定した .otio ファイルは新規生成する（readOnly の範囲外）。
-    ffmpeg loudnorm/volumedetect でラウドネスを測定し、loudness 指示を
-    timeline-level metadata["clipwright"]["loudness"] に書き込む。
-    出力は loudness 指示を持つ timeline.otio のパスを artifacts に返す。
+    The input media file is never modified (non-destructive, readOnly).
+    readOnlyHint=True means "the input media is not changed"; the .otio file
+    specified in output is newly created (outside the readOnly scope).
+    Measures loudness with ffmpeg loudnorm/volumedetect and writes the loudness
+    directive to timeline-level metadata["clipwright"]["loudness"].
+    Returns the path of the resulting timeline.otio in artifacts.
 
-    ビジネスロジックは loudness.detect_loudness へ委譲する。
-    options が None の場合はデフォルト DetectLoudnessOptions() を使用する。
+    Delegates business logic to loudness.detect_loudness.
+    Uses default DetectLoudnessOptions() when options is None.
     """
     resolved_options = options if options is not None else DetectLoudnessOptions()
     return detect_loudness(
@@ -91,15 +91,15 @@ def clipwright_detect_loudness(
 
 
 # ===========================================================================
-# エントリポイント（MCP stdio 起動）
+# Entry point (MCP stdio launch)
 # ===========================================================================
 
 
 def main() -> None:
-    """CLI エントリポイント。MCP サーバーを stdio で起動する。
+    """CLI entry point. Launches the MCP server over stdio.
 
-    pyproject.toml の [project.scripts] で
-    clipwright-loudness = "clipwright_loudness.server:main" として登録する。
+    Registered in pyproject.toml [project.scripts] as:
+    clipwright-loudness = "clipwright_loudness.server:main"
     """
     mcp.run(transport="stdio")
 

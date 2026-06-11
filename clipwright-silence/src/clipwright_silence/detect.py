@@ -1,17 +1,18 @@
-"""detect.py — clipwright-silence オーケストレーション層。
+"""detect.py — clipwright-silence orchestration layer.
 
-入力検証 → inspect_media → silencedetect 実行・パース → KEEP 導出 →
-OTIO 構築・保存 → エンベロープ返却 の一連フローを担う。
+Handles the full flow: input validation -> inspect_media -> silencedetect
+execution/parsing -> KEEP derivation -> OTIO construction/save -> envelope return.
 
-設計判断:
-- _detect_silence_intervals() が ffmpeg 実行とステドエラーパースをカプセル化し、
-  将来バックエンドを差し替えられる（アダプタ抽象・AD-1）。
-- _detect_vad_silence_intervals() が VAD CLI の別プロセス起動と発話→無音反転を担う。
-  両者とも (無音区間リスト) を返す共通契約にし、derive_keep_ranges 以降は共通フロー。
-- source_range の rate は inspect_media の MediaInfo.duration.rate を用い、
-  value = 秒 × rate で構築する（DC-AS-003）。
-- output は media と同一ディレクトリ配下のパスのみ許可する（DC-AS-001）。
-- エラーメッセージにフルパス・ffmpeg 生 stderr を露出しない（basename のみ・M-1）。
+Design decisions:
+- _detect_silence_intervals() encapsulates ffmpeg execution and stderr parsing,
+  allowing future backend replacement (adapter abstraction, AD-1).
+- _detect_vad_silence_intervals() handles spawning the VAD CLI as a separate
+  process and inverting speech -> silence. Both return (silence interval list)
+  with a common contract so derive_keep_ranges onward uses a shared flow.
+- source_range rate is taken from inspect_media MediaInfo.duration.rate,
+  and value = seconds * rate (DC-AS-003).
+- output is only permitted in the same directory as media (DC-AS-001).
+- Error messages do not expose full paths or raw ffmpeg stderr (basename only, M-1).
 """
 
 from __future__ import annotations
@@ -34,36 +35,39 @@ import clipwright_silence
 from clipwright_silence.plan import derive_keep_ranges
 from clipwright_silence.schemas import DetectSilenceOptions
 
-# silence_start / silence_end 行を抽出する正規表現（DC-AM-003 行頭一致・`.` 小数点固定）
+# Regex to extract silence_start / silence_end lines
+# (DC-AM-003: line-start match, '.' fixed decimal)
 _RE_SILENCE_START = re.compile(r"silence_start:\s*([0-9]+(?:\.[0-9]+)?)")
 _RE_SILENCE_END = re.compile(r"silence_end:\s*([0-9]+(?:\.[0-9]+)?)")
 
 
 def _fmt_sec(sec: float) -> str:
-    """秒を「分秒」の人間可読表現に変換する（summary 生成用）。
+    """Convert seconds to a human-readable minutes/seconds string (for summary).
 
-    フォーマット例: 90.0 → "1分30.0秒"、45.5 → "45.5秒"
+    Format examples: 90.0 -> "1m30.0s", 45.5 -> "45.5s"
     """
     m = int(sec) // 60
     s = sec - m * 60
-    return f"{m}分{s:.1f}秒" if m > 0 else f"{s:.1f}秒"
+    return f"{m}m{s:.1f}s" if m > 0 else f"{s:.1f}s"
 
 
 def _parse_silence_intervals(
     stderr: str,
     total_duration_sec: float,
 ) -> list[tuple[float, float]]:
-    """silencedetect の stderr から無音区間リストを抽出する。
+    """Extract silence interval list from silencedetect stderr.
 
-    行単位でパースし、行頭一致・`.` 小数点固定の正規表現で抽出する（DC-AM-003）。
-    対になっていない末尾の silence_start は total_duration_sec で補完する（DC-AM-002）。
+    Parses line by line using a line-start match regex with fixed '.'
+    decimal (DC-AM-003). A trailing silence_start with no matching
+    silence_end is completed using
+    total_duration_sec (DC-AM-002).
 
     Args:
-        stderr: ffmpeg の標準エラー出力文字列。
-        total_duration_sec: 素材の総尺（秒）。補完に使用する。
+        stderr: ffmpeg standard error output string.
+        total_duration_sec: Total duration of the source (seconds). Used for completion.
 
     Returns:
-        無音区間のリスト。各要素は (start_sec, end_sec) の tuple。
+        List of silence intervals. Each element is a (start_sec, end_sec) tuple.
     """
     intervals: list[tuple[float, float]] = []
     pending_start: float | None = None
@@ -75,20 +79,20 @@ def _parse_silence_intervals(
             continue
 
         m_end = _RE_SILENCE_END.search(line)
-        # 孤立 silence_end は silencedetect の正常出力では発生しない（start→end が対で
-        # 出力されるため）。発生した場合は異常出力としてスキップする。
-        # これは握りつぶしではなく、設計意図のある無視（silencedetect 仕様への準拠）。
+        # An isolated silence_end does not occur in normal silencedetect output
+        # (start->end are always paired). If encountered, skip as abnormal output.
+        # This is an intentional ignore per silencedetect spec, not suppression.
         if m_end and pending_start is not None:
             end = float(m_end.group(1))
-            # SR L-3: end < start の異常区間はスキップする
-            # （将来バックエンド差替え時の防御）
+            # SR L-3: skip abnormal intervals where end < start
+            # (defensive check for future backend replacement)
             if end < pending_start:
                 pending_start = None
                 continue
             intervals.append((pending_start, end))
             pending_start = None
 
-    # 末尾 silence_end 欠落 → total_duration で補完（DC-AM-002）
+    # Trailing silence_end missing -> complete with total_duration (DC-AM-002)
     if pending_start is not None:
         intervals.append((pending_start, total_duration_sec))
 
@@ -101,23 +105,26 @@ def _detect_silence_intervals(
     options: DetectSilenceOptions,
     total_duration_sec: float,
 ) -> list[tuple[float, float]]:
-    """ffmpeg silencedetect を実行して無音区間リストを返す（アダプタ抽象・AD-1）。
+    """Run ffmpeg silencedetect and return a list of silence intervals.
 
-    将来バックエンドを差し替える際はこの関数のみ置き換えればよい。
+    Adapter abstraction (AD-1).
+
+    When replacing the backend in the future, only this function needs to be swapped.
 
     Args:
-        ffmpeg: ffmpeg 実行ファイルパス。
-        source: 入力メディアファイルパス。
-        options: DetectSilenceOptions。
-        total_duration_sec: 素材の総尺（秒）。末尾補完に使用する。
+        ffmpeg: Path to ffmpeg executable.
+        source: Input media file path.
+        options: DetectSilenceOptions.
+        total_duration_sec: Total duration of source (seconds).
+            Used for trailing completion.
 
     Returns:
-        無音区間のリスト。各要素は (start_sec, end_sec)。
+        List of silence intervals. Each element is (start_sec, end_sec).
 
     Raises:
-        ClipwrightError: SUBPROCESS_FAILED / SUBPROCESS_TIMEOUT（run が送出）。
+        ClipwrightError: SUBPROCESS_FAILED / SUBPROCESS_TIMEOUT (raised by run).
     """
-    # フィルタ文字列は明示フォーマットでロケール非依存（DC-AM-003）
+    # Filter string uses explicit format to be locale-independent (DC-AM-003)
     filter_str = (
         f"silencedetect=noise={options.silence_threshold_db:.3f}dB"
         f":d={options.min_silence_duration:.6f}"
@@ -145,23 +152,23 @@ def _detect_vad_silence_intervals(
     options: DetectSilenceOptions,
     total_duration_sec: float,
 ) -> tuple[list[tuple[float, float]], int]:
-    """VAD CLI を別プロセス起動して無音区間リストと speech_count を返す。
+    """Spawn VAD CLI as a separate process; return silence intervals and speech_count.
 
-    VAD-AD-02/04: VAD CLI が返す発話区間を total_duration_sec に対して反転し
-    無音区間にする。speech_count は VAD summary 生成のみに使用し、
-    共通フローには渡さない（§7.5）。
+    VAD-AD-02/04: Inverts the speech intervals returned by the VAD CLI against
+    total_duration_sec to produce silence intervals. speech_count is used only
+    for VAD summary generation and is not passed to the common flow (§7.5).
 
     Args:
-        source: 入力メディアファイルの絶対パス。
-        options: DetectSilenceOptions（vad_* フィールドを参照）。
-        total_duration_sec: 素材の総尺（秒）。反転に使用。
+        source: Absolute path to the input media file.
+        options: DetectSilenceOptions (references vad_* fields).
+        total_duration_sec: Total duration of source (seconds). Used for inversion.
 
     Returns:
-        (無音区間リスト, speech_count) のタプル。
+        Tuple of (silence interval list, speech_count).
 
     Raises:
-        ClipwrightError: VAD CLI の error JSON を対応 ErrorCode にマップして送出。
-                         run() が非ゼロ終了した場合は SUBPROCESS_FAILED。
+        ClipwrightError: Maps VAD CLI error JSON to corresponding ErrorCode.
+                         SUBPROCESS_FAILED if run() exits non-zero.
     """
     timeout = float(max(60, math.ceil(total_duration_sec * 4)))
     cmd = [
@@ -177,7 +184,7 @@ def _detect_vad_silence_intervals(
         "--min-silence",
         f"{options.vad_min_silence_duration}",
         "--media-duration",
-        # vad_cli 側で ceil(total * 2) するため float 精度不定でも実害なし（NF-L-1）
+        # vad_cli uses ceil(total*2); float precision has no practical impact (NF-L-1)
         f"{total_duration_sec}",
     ]
     result = run(cmd, timeout=timeout)
@@ -187,21 +194,21 @@ def _detect_vad_silence_intervals(
     except json.JSONDecodeError as exc:
         raise ClipwrightError(
             code=ErrorCode.SUBPROCESS_FAILED,
-            message="VAD CLI の出力が不正な JSON です",
+            message="VAD CLI returned invalid JSON output",
             hint=(
-                "VAD CLI が期待する JSON を返しませんでした。"
-                "再実行してもエラーが続く場合は再現条件を添えて報告してください。"
+                "VAD CLI did not return the expected JSON. "
+                "If the error persists, please report with reproduction steps."
             ),
         ) from exc
 
-    # エラー JSON の場合は ErrorCode にマップして ClipwrightError を送出（§7.1）
+    # If error JSON, map to ErrorCode and raise ClipwrightError (§7.1)
     if "error" in payload:
         err = payload["error"]
         raw_code: str = err.get("code", "INTERNAL")
-        message: str = err.get("message", "VAD CLI でエラーが発生しました")
-        hint: str = err.get("hint", "再現条件を添えて報告してください。")
+        message: str = err.get("message", "An error occurred in VAD CLI")
+        hint: str = err.get("hint", "Please report with reproduction steps.")
 
-        # 既知の ErrorCode にマップ。不明なコードは SUBPROCESS_FAILED にフォールバック
+        # Map to known ErrorCode; fall back to SUBPROCESS_FAILED for unknown codes
         try:
             error_code = ErrorCode(raw_code)
         except ValueError:
@@ -209,32 +216,32 @@ def _detect_vad_silence_intervals(
 
         raise ClipwrightError(code=error_code, message=message, hint=hint)
 
-    # 発話区間の前処理（§7.4）: クリップ・退化除去
+    # Pre-process speech intervals (§7.4): clip and remove degenerate intervals
     raw_segments: list[dict[str, Any]] = payload.get("speech_segments", [])
     total = total_duration_sec
     speech_segments: list[tuple[float, float]] = []
     for seg in raw_segments:
         try:
-            # dict 形式 {"start": ..., "end": ...} または list 形式 [start, end] を許容
+            # Accept both dict {"start": ..., "end": ...} and list [start, end] formats
             if isinstance(seg, (list, tuple)):
                 start, end = float(seg[0]), float(seg[1])
             else:
                 start, end = float(seg["start"]), float(seg["end"])
         except (TypeError, KeyError, ValueError, IndexError):
-            # 不正要素（null/string/空 dict 等）はスキップして処理継続（SR L-3）
+            # Skip malformed elements (null/string/empty dict, etc.) — SR L-3
             continue
-        # start < 0 → 0 でクリップ、end > total → total でクリップ
+        # Clip start < 0 to 0, clip end > total to total
         start = max(0.0, start)
         end = min(total, end)
-        # 退化区間（start >= end）を除去
+        # Remove degenerate intervals (start >= end)
         if start >= end:
             continue
         speech_segments.append((start, end))
 
     speech_count = len(speech_segments)
 
-    # 発話区間 → 無音区間へ反転（VAD-AD-04）
-    # 発話区間を昇順でソートしてから [0, total] の補集合を取る
+    # Invert speech intervals -> silence intervals (VAD-AD-04)
+    # Sort speech intervals ascending and take the complement of [0, total]
     sorted_speech = sorted(speech_segments, key=lambda iv: iv[0])
     silence_intervals: list[tuple[float, float]] = []
     cursor = 0.0
@@ -253,26 +260,26 @@ def detect_silence(
     output: str,
     options: DetectSilenceOptions,
 ) -> dict[str, Any]:
-    """無音区間を検出して KEEP 区間の OTIO タイムラインを生成する（AD-2/AD-5）。
+    """Detect silence intervals and generate a KEEP interval OTIO timeline (AD-2/AD-5).
 
-    非破壊: 入力メディアファイルは一切書き換えない。
-    出力は新規生成した timeline.otio のパスを artifacts に返す。
+    Non-destructive: does not modify the input media file in any way.
+    Output returns the path of the newly created timeline.otio in artifacts.
 
-    フロー:
-      1. 出力検証（拡張子・親ディレクトリ・output==media・出力同一ディレクトリ）
-      2. inspect_media → 音声/映像ストリーム確認・duration 確認
-      3. ffmpeg silencedetect 実行・stderr パース
-      4. derive_keep_ranges で KEEP 導出
-      5. OTIO タイムライン構築・保存
-      6. エンベロープ返却
+    Flow:
+      1. Output validation (extension, parent directory, output==media, same directory)
+      2. inspect_media -> verify audio/video streams and duration
+      3. Run ffmpeg silencedetect and parse stderr
+      4. Derive KEEP intervals with derive_keep_ranges
+      5. Build and save OTIO timeline
+      6. Return envelope
 
     Args:
-        media: 入力メディアファイルパス。
-        output: 出力 timeline.otio ファイルパス（media と同一ディレクトリ）。
-        options: DetectSilenceOptions。
+        media: Input media file path.
+        output: Output timeline.otio file path (must be in the same directory as media).
+        options: DetectSilenceOptions.
 
     Returns:
-        ok_result または error_result のエンベロープ dict。
+        Envelope dict from ok_result or error_result.
     """
     try:
         return _detect_inner(media, output, options)
@@ -285,68 +292,74 @@ def _detect_inner(
     output: str,
     options: DetectSilenceOptions,
 ) -> dict[str, Any]:
-    """detect_silence の内部実装。ClipwrightError をそのまま送出する。"""
+    """Internal implementation of detect_silence. Raises ClipwrightError directly."""
     output_path = Path(output)
     media_path = Path(media)
 
-    # --- 1. 出力検証 ---
+    # --- 1. Output validation ---
 
-    # 拡張子は .otio のみ（AD-5）
+    # Extension must be .otio (AD-5)
     if output_path.suffix.lower() != ".otio":
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
             message=(
-                f"出力ファイルの拡張子が不正です: {output_path.suffix!r}。"
-                ".otio のみ許可されています。"
+                f"Invalid output file extension: {output_path.suffix!r}. "
+                "Only .otio is allowed."
             ),
-            hint="出力ファイルパスの拡張子を .otio にしてください。",
+            hint="Change the output file path extension to .otio.",
         )
 
-    # 親ディレクトリ存在確認（自動作成しない・AD-5）
+    # Verify parent directory exists (no auto-creation, AD-5)
     if not output_path.parent.exists():
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
             message=(
-                "出力先ディレクトリが存在しません。"
-                "指定 output の親ディレクトリを確認してください。"
+                "The output directory does not exist. "
+                "Check the parent directory of the specified output path."
             ),
-            hint="出力先ディレクトリを先に作成してから再実行してください。",
+            hint="Create the output directory first, then re-run.",
         )
 
-    # output == media 防止（同一パス上書きを防ぐ）
+    # Prevent output == media (avoid overwriting the same path)
     try:
         if output_path.resolve() == media_path.resolve():
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
-                message="出力パスと入力メディアパスが同一です。",
-                hint="出力ファイルパスを入力メディアとは別のパスに変更してください。",
+                message="The output path and input media path are identical.",
+                hint=(
+                    "Change the output file path to a path"
+                    " different from the input media."
+                ),
             )
     except OSError as exc:
         if str(output_path) == str(media_path):
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
-                message="出力パスと入力メディアパスが同一です。",
-                hint="出力ファイルパスを入力メディアとは別のパスに変更してください。",
+                message="The output path and input media path are identical.",
+                hint=(
+                    "Change the output file path to a path"
+                    " different from the input media."
+                ),
             ) from exc
 
-    # --- 2. inspect_media → ストリーム・duration 確認 ---
+    # --- 2. inspect_media -> verify streams and duration ---
 
-    # inspect_media は FILE_NOT_FOUND（symlink 拒否含む）/ PROBE_FAILED 等を送出する。
-    # SR L-2: FILE_NOT_FOUND の message は basename のみに差し替える
-    # （フルパス露出を防ぐ・render._probe の M-1 対応と同方針）。
+    # inspect_media raises FILE_NOT_FOUND (incl. symlink rejection) / PROBE_FAILED, etc.
+    # SR L-2: Replace FILE_NOT_FOUND message with basename only
+    # (prevents full path exposure; same policy as render._probe M-1).
     try:
         media_info = inspect_media(media)
     except ClipwrightError as exc:
         if exc.code == ErrorCode.FILE_NOT_FOUND:
             raise ClipwrightError(
                 code=ErrorCode.FILE_NOT_FOUND,
-                message=f"ファイルが見つかりません: {media_path.name}",
+                message=f"File not found: {media_path.name}",
                 hint=exc.hint,
             ) from exc
         raise
 
-    # output が media と同一ディレクトリ配下にあることを検証（DC-AS-001）
-    # inspect_media 後に行う（存在確認済みの状態で resolve する）
+    # Verify output is in the same directory as media (DC-AS-001)
+    # Done after inspect_media so the path has been confirmed to exist before resolve()
     try:
         media_dir = media_path.resolve().parent
         output_dir = output_path.parent.resolve()
@@ -354,87 +367,87 @@ def _detect_inner(
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
                 message=(
-                    f"出力 timeline は入力メディアと同じディレクトリに配置してください"
-                    f"（入力: {media_path.name}）。"
+                    "The output timeline must be placed in the same"
+                    f" directory as the input media (input: {media_path.name})."
                 ),
                 hint=(
-                    "output のパスを media ファイルと同じディレクトリ内に"
-                    "変更してください。"
-                    "（例: output = media と同じディレクトリ / timeline.otio）"
+                    "Change the output path to be in the same directory"
+                    " as the media file."
+                    " (e.g., output = same directory as media / timeline.otio)"
                 ),
             )
     except ClipwrightError:
         raise
     except OSError:
-        # resolve 失敗（ネットワークパス等）は best-effort でスキップ
+        # resolve failure (network paths, etc.) is skipped on best-effort basis
         pass
 
-    # 映像ストリーム確認（DC-AS-002）
+    # Verify video stream (DC-AS-002)
     has_video = any(s.codec_type == "video" for s in media_info.streams)
     has_audio = any(s.codec_type == "audio" for s in media_info.streams)
 
     if not has_video:
         raise ClipwrightError(
             code=ErrorCode.UNSUPPORTED_OPERATION,
-            message=f"映像ストリームが見つかりません: {media_path.name}",
+            message=f"No video stream found: {media_path.name}",
             hint=(
-                "本ツールは映像＋音声素材を対象とします。"
-                "映像を含むメディアファイルを指定してください。"
+                "This tool targets media with both video and audio streams. "
+                "Specify a media file that contains video."
             ),
         )
 
     if not has_audio:
         raise ClipwrightError(
             code=ErrorCode.UNSUPPORTED_OPERATION,
-            message=f"音声ストリームが見つかりません: {media_path.name}",
+            message=f"No audio stream found: {media_path.name}",
             hint=(
-                "無音検出には音声ストリームが必要です。"
-                "音声を含むメディアファイルを指定してください。"
+                "Silence detection requires an audio stream. "
+                "Specify a media file that contains audio."
             ),
         )
 
-    # duration 確認（DC-AS-004）
+    # Verify duration (DC-AS-004)
     if media_info.duration is None:
         raise ClipwrightError(
             code=ErrorCode.PROBE_FAILED,
-            message=f"素材の尺を取得できませんでした: {media_path.name}",
+            message=f"Could not retrieve media duration: {media_path.name}",
             hint=(
-                "メディアファイルが破損していないか確認してください。"
-                "ffprobe で手動確認することもできます。"
+                "Check that the media file is not corrupted. "
+                "You can also verify manually with ffprobe."
             ),
         )
 
     total_duration_sec = media_info.duration.value / media_info.duration.rate
     rate = media_info.duration.rate
 
-    # --- 3. 検出実行（backend で分岐）---
+    # --- 3. Run detection (branch by backend) ---
 
     abs_media = str(media_path.resolve())
 
-    # speech_count は VAD summary 用途のみ。共通フロー（無音区間リスト）は両経路共通
+    # speech_count is for VAD summary only; silence interval list is shared
     speech_count: int | None = None
 
     if options.backend == "vad":
-        # VAD 経路: sys.executable -m clipwright_silence.vad_cli で別プロセス起動
-        # resolve_tool は使わない（sys.executable -m で同 venv を保証・VAD-AD-02）
+        # VAD path: spawn as separate process via sys.executable -m
+        # resolve_tool is not used (sys.executable -m ensures same venv, VAD-AD-02)
         silence_intervals, speech_count = _detect_vad_silence_intervals(
             abs_media, options, total_duration_sec
         )
     else:
-        # silencedetect 経路（既存・backend="silencedetect"）
+        # silencedetect path (existing; backend="silencedetect")
         ffmpeg = resolve_tool("ffmpeg", "CLIPWRIGHT_FFMPEG")
         silence_intervals = _detect_silence_intervals(
             ffmpeg, abs_media, options, total_duration_sec
         )
 
-    # --- 4. KEEP 導出 ---
+    # --- 4. Derive KEEP intervals ---
 
     keep_ranges = derive_keep_ranges(total_duration_sec, silence_intervals, options)
 
-    # --- 5. OTIO タイムライン構築・保存 ---
+    # --- 5. Build and save OTIO timeline ---
 
     timeline = new_timeline(media_path.name)
-    v1 = timeline.tracks[0]  # V1（Video）トラック
+    v1 = timeline.tracks[0]  # V1 (Video) track
 
     for start_sec, end_sec in keep_ranges:
         start_value = start_sec * rate
@@ -459,42 +472,42 @@ def _detect_inner(
 
     save_timeline(timeline, output)
 
-    # --- 6. エンベロープ返却 ---
+    # --- 6. Return envelope ---
 
     silence_count = len(silence_intervals)
     keep_count = len(keep_ranges)
     total_silence_seconds = sum(e - s for s, e in silence_intervals)
     total_keep_seconds = sum(e - s for s, e in keep_ranges)
 
-    # summary を backend で出し分け（VAD-AD-08・§7.5）
-    # VAD 経路では _detect_vad_silence_intervals が常に int を返すため
-    # speech_count は必ず int（assert で型確定し mypy を満足させる）
+    # Differentiate summary by backend (VAD-AD-08, §7.5)
+    # In the VAD path, _detect_vad_silence_intervals always returns an int,
+    # so speech_count is guaranteed to be int (assert to satisfy mypy)
     if options.backend == "vad":
-        assert speech_count is not None  # VAD 経路で必ず設定される
+        assert speech_count is not None  # Always set on the VAD path
         _silence_fmt = _fmt_sec(total_silence_seconds)
         _keep_fmt = _fmt_sec(total_keep_seconds)
         summary = (
-            f"発話 {speech_count} 区間を検出。"
-            f"非発話 {silence_count} 区間（合計 {_silence_fmt}）を除去。"
-            f"残す {keep_count} 区間（合計 {_keep_fmt}）の"
-            f"{output_path.name} を生成しました。"
+            f"Detected {speech_count} speech interval(s). "
+            f"Removed {silence_count} non-speech interval(s) (total {_silence_fmt}). "
+            f"Generated {output_path.name} with {keep_count} interval(s) to keep"
+            f" (total {_keep_fmt})."
         )
     else:
         _silence_fmt = _fmt_sec(total_silence_seconds)
         _keep_fmt = _fmt_sec(total_keep_seconds)
         summary = (
-            f"総尺 {_fmt_sec(total_duration_sec)} の素材から"
-            f"無音 {silence_count} 区間（合計 {_silence_fmt}）を検出。"
-            f"残す {keep_count} 区間（合計 {_keep_fmt}）の"
-            f"{output_path.name} を生成しました。"
+            f"Detected {silence_count} silence interval(s) (total {_silence_fmt})"
+            f" from source with duration {_fmt_sec(total_duration_sec)}. "
+            f"Generated {output_path.name} with {keep_count} interval(s) to keep"
+            f" (total {_keep_fmt})."
         )
 
     warnings: list[str] = []
     if keep_count == 0:
         warnings.append(
-            "残す区間がありません（全区間が無音判定）。"
-            "生成された timeline.otio の V1 トラックは空です。"
-            "render に渡すと INVALID_INPUT になります。"
+            "No intervals to keep (all intervals classified as silence). "
+            "The V1 track of the generated timeline.otio is empty. "
+            "Passing it to render will result in INVALID_INPUT."
         )
 
     return ok_result(

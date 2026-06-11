@@ -1,23 +1,23 @@
-"""test_noise.py — noise.py オーケストレーション層のテスト。
+"""test_noise.py — Tests for the noise.py orchestration layer.
 
-モック方針:
-  - clipwright_noise.noise.inspect_media を patch して MediaInfo を供給。
-  - clipwright_noise.noise.measure_noise を patch して astats を呼ばない。
-  - 実 ffmpeg/ffprobe バイナリは一切呼ばない。
+Mock strategy:
+  - Patch clipwright_noise.noise.inspect_media to supply MediaInfo.
+  - Patch clipwright_noise.noise.measure_noise to avoid calling astats.
+  - No actual ffmpeg/ffprobe binaries are called.
 
-検証観点（v3 設計 §1.1 / DC-AS-002 / B-4 / B-5 / DC-GP-003 / DC-GP-005）:
-  (a) timeline=None: 新規 timeline・V1 全長 keep clip（target_url=絶対パス）・denoise 注記・save
-  (b) timeline 指定: 既存ロード + 部分更新で既存注記保持
-  (c) .otio 以外の拡張子 → INVALID_INPUT
-  (d) media 不在 → FILE_NOT_FOUND（basename のみ・DC-GP-005）
+Verification points (v3 design §1.1 / DC-AS-002 / B-4 / B-5 / DC-GP-003 / DC-GP-005):
+  (a) timeline=None: new timeline, V1 full-length keep clip (target_url=absolute path), denoise annotation, save
+  (b) timeline specified: load existing + partial update preserving existing annotations
+  (c) Extension other than .otio → INVALID_INPUT
+  (d) media not found → FILE_NOT_FOUND (basename only; DC-GP-005)
   (e) output==media → INVALID_INPUT / output==timeline → INVALID_INPUT
-  (f) output が media と別 dir → INVALID_INPUT（DC-AS-002）
-  (g) 映像なし → UNSUPPORTED / 音声なし → UNSUPPORTED
-  (h) timeline 指定で media ≠ timeline source → INVALID_INPUT
-  (h2) silence 由来相当の実 timeline をロードして同一 media を渡すと通る正常系（B-4）
-  (i) timeline が複数 source → UNSUPPORTED / Video2 本 → INVALID_INPUT
-  (i2) V1+A1 の正常 timeline は通る正常系（B-5）
-  (j) backend=deepfilternet → params={} 注記 + warning に「render 適用は未対応」
+  (f) output in different dir from media → INVALID_INPUT (DC-AS-002)
+  (g) no video → UNSUPPORTED / no audio → UNSUPPORTED
+  (h) timeline specified with media ≠ timeline source → INVALID_INPUT
+  (h2) Positive path: loading a silence-origin real timeline with the same media passes (B-4)
+  (i) Multiple sources in timeline → UNSUPPORTED / Two Video tracks → INVALID_INPUT
+  (i2) V1+A1 normal timeline passes (B-5)
+  (j) backend=deepfilternet → params={} annotation + warning containing "render not supported"
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo
 from clipwright_noise.schemas import DetectNoiseOptions
 
 # ===========================================================================
-# ヘルパー
+# Helpers
 # ===========================================================================
 
 FPS = 30.0
@@ -57,7 +57,7 @@ def _make_media_info(
     has_video: bool = True,
     has_audio: bool = True,
 ) -> MediaInfo:
-    """テスト用 MediaInfo を構築するヘルパー。"""
+    """Helper to build a MediaInfo for testing."""
     streams: list[StreamInfo] = []
     if has_video:
         streams.append(StreamInfo(index=0, codec_type="video", codec_name="h264"))
@@ -83,24 +83,24 @@ def _make_otio_timeline(
     num_audio_tracks: int = 1,
     sources: list[str] | None = None,
 ) -> otio.schema.Timeline:
-    """テスト用 OTIO Timeline を構築するヘルパー。
+    """Helper to build a test OTIO Timeline.
 
-    sources が指定された場合は複数ソースの clip を V1 に追加する。
-    sources=None の場合は media_path.resolve() 1件の clip を追加する。
+    When sources is specified, clips with multiple sources are added to V1.
+    When sources=None, a single clip with media_path.resolve() is added.
     """
     tl = otio.schema.Timeline(name="test")
 
-    # Video トラックを num_video_tracks 本追加
+    # Add num_video_tracks Video tracks
     for i in range(num_video_tracks):
         track = otio.schema.Track(name=f"V{i + 1}", kind=otio.schema.TrackKind.Video)
         tl.tracks.append(track)
 
-    # Audio トラックを num_audio_tracks 本追加
+    # Add num_audio_tracks Audio tracks
     for i in range(num_audio_tracks):
         track = otio.schema.Track(name=f"A{i + 1}", kind=otio.schema.TrackKind.Audio)
         tl.tracks.append(track)
 
-    # V1 に clip を追加
+    # Add clips to V1
     v1 = next(t for t in tl.tracks if t.kind == otio.schema.TrackKind.Video)
 
     if sources is None:
@@ -124,20 +124,20 @@ def _make_otio_timeline(
 
 
 def _save_timeline_to_file(tl: otio.schema.Timeline, path: Path) -> None:
-    """Timeline を実ファイルに保存する。"""
+    """Save a Timeline to an actual file."""
     otio.adapters.write_to_file(tl, str(path))
 
 
 # ===========================================================================
-# (a) timeline=None: 新規 timeline 生成
+# (a) timeline=None: new timeline generation
 # ===========================================================================
 
 
 class TestNewTimeline:
-    """timeline=None 時に新規 timeline が生成されること。"""
+    """Verify that a new timeline is generated when timeline=None."""
 
     def test_new_timeline_ok_result(self, tmp_path: Path) -> None:
-        """成功エンベロープが返ること。"""
+        """A success envelope must be returned."""
         from clipwright_noise.noise import detect_noise
 
         media = tmp_path / "video.mp4"
@@ -165,7 +165,7 @@ class TestNewTimeline:
         assert result["ok"] is True
 
     def test_new_timeline_otio_file_created(self, tmp_path: Path) -> None:
-        """output に .otio ファイルが生成されること。"""
+        """An .otio file must be created at the output path."""
         from clipwright_noise.noise import detect_noise
         from clipwright_noise.schemas import DetectNoiseOptions
 
@@ -183,10 +183,10 @@ class TestNewTimeline:
         ):
             detect_noise(str(media), str(output), DetectNoiseOptions(), timeline=None)
 
-        assert output.exists(), "output .otio が生成されていない。"
+        assert output.exists(), "Output .otio was not created."
 
     def test_new_timeline_v1_has_clip(self, tmp_path: Path) -> None:
-        """生成 timeline の V1 に clip が1件以上あること。"""
+        """The generated timeline's V1 must contain at least one clip."""
         from clipwright.otio_utils import load_timeline
 
         from clipwright_noise.noise import detect_noise
@@ -212,7 +212,7 @@ class TestNewTimeline:
         assert len(clips) >= 1
 
     def test_new_timeline_clip_target_url_is_absolute(self, tmp_path: Path) -> None:
-        """V1 の clip target_url が媒体ファイルの絶対パスであること（DC-AS-002）。"""
+        """The V1 clip target_url must be the absolute path of the media file (DC-AS-002)."""
         from clipwright.otio_utils import load_timeline
 
         from clipwright_noise.noise import detect_noise
@@ -238,7 +238,7 @@ class TestNewTimeline:
         abs_media = str(media.resolve())
         for clip in clips:
             assert isinstance(clip.media_reference, otio.schema.ExternalReference)
-            # target_url が絶対パスを含むこと（resolve()比較）
+            # target_url must contain the absolute path (compare via resolve())
             ref_path = Path(clip.media_reference.target_url)
             try:
                 resolved = str(ref_path.resolve())
@@ -247,7 +247,7 @@ class TestNewTimeline:
             assert resolved == abs_media
 
     def test_new_timeline_has_denoise_metadata(self, tmp_path: Path) -> None:
-        """生成 timeline の metadata["clipwright"]["denoise"] が設定されること。"""
+        """The generated timeline's metadata["clipwright"]["denoise"] must be set."""
         from clipwright.otio_utils import get_clipwright_metadata, load_timeline
 
         from clipwright_noise.noise import detect_noise
@@ -269,13 +269,15 @@ class TestNewTimeline:
 
         tl = load_timeline(str(output))
         meta = get_clipwright_metadata(tl)
-        assert "denoise" in meta, "timeline.metadata['clipwright']['denoise'] がない。"
+        assert "denoise" in meta, (
+            "timeline.metadata['clipwright']['denoise'] is missing."
+        )
         denoise = meta["denoise"]
         assert denoise["kind"] == "denoise"
         assert denoise["backend"] == "afftdn"
 
     def test_new_timeline_artifacts_contains_otio(self, tmp_path: Path) -> None:
-        """result の artifacts に role=timeline / format=otio が含まれること。"""
+        """result artifacts must include role=timeline / format=otio."""
         from clipwright_noise.noise import detect_noise
         from clipwright_noise.schemas import DetectNoiseOptions
 
@@ -308,15 +310,15 @@ class TestNewTimeline:
 
 
 # ===========================================================================
-# (b) timeline 指定: 既存 timeline ロード + 部分更新
+# (b) timeline specified: load existing timeline + partial update
 # ===========================================================================
 
 
 class TestExistingTimeline:
-    """timeline=path 時に既存タイムラインをロードして更新すること。"""
+    """Verify that an existing timeline is loaded and updated when timeline=path."""
 
     def test_existing_timeline_denoise_metadata_updated(self, tmp_path: Path) -> None:
-        """既存 timeline に denoise 注記が追記されること。"""
+        """The denoise annotation must be appended to an existing timeline."""
         from clipwright.otio_utils import get_clipwright_metadata, load_timeline
 
         from clipwright_noise.noise import detect_noise
@@ -325,7 +327,7 @@ class TestExistingTimeline:
         media = tmp_path / "video.mp4"
         media.write_bytes(b"dummy")
 
-        # silence が生成したような timeline を作成
+        # Create a timeline similar to one generated by silence
         tl = _make_otio_timeline(media)
         timeline_path = tmp_path / "existing.otio"
         _save_timeline_to_file(tl, timeline_path)
@@ -353,7 +355,7 @@ class TestExistingTimeline:
         assert "denoise" in meta
 
     def test_existing_timeline_other_metadata_preserved(self, tmp_path: Path) -> None:
-        """既存 timeline の denoise 以外の注記が保持されること。"""
+        """Non-denoise annotations on the existing timeline must be preserved."""
         from clipwright.otio_utils import (
             get_clipwright_metadata,
             load_timeline,
@@ -367,7 +369,7 @@ class TestExistingTimeline:
         media.write_bytes(b"dummy")
 
         tl = _make_otio_timeline(media)
-        # 既存注記を書き込む（silence が生成した silence_intervals など）
+        # Write existing annotations (e.g., silence_intervals generated by silence)
         set_clipwright_metadata(tl, {"silence_intervals": [{"start": 2.0, "end": 4.0}]})
         timeline_path = tmp_path / "existing.otio"
         _save_timeline_to_file(tl, timeline_path)
@@ -391,19 +393,19 @@ class TestExistingTimeline:
 
         out_tl = load_timeline(str(output))
         meta = get_clipwright_metadata(out_tl)
-        # silence_intervals が保持されること
+        # silence_intervals must be preserved
         assert "silence_intervals" in meta, (
-            "既存の silence_intervals が denoise 更新で消えてしまった。"
+            "Existing silence_intervals was lost after the denoise update."
         )
 
 
 # ===========================================================================
-# (c) .otio 以外の拡張子 → INVALID_INPUT
+# (c) Extension other than .otio → INVALID_INPUT
 # ===========================================================================
 
 
 class TestInvalidExtension:
-    """output に .otio 以外を指定した場合 INVALID_INPUT が返ること。"""
+    """INVALID_INPUT must be returned when output has an extension other than .otio."""
 
     @pytest.mark.parametrize("ext", [".mp4", ".json", ".txt", ".otioz", ""])
     def test_non_otio_extension_returns_invalid_input(
@@ -425,12 +427,12 @@ class TestInvalidExtension:
 
 
 # ===========================================================================
-# (d) media 不在 → FILE_NOT_FOUND（basename のみ・DC-GP-005）
+# (d) media not found → FILE_NOT_FOUND (basename only; DC-GP-005)
 # ===========================================================================
 
 
 class TestMediaNotFound:
-    """media ファイルが存在しない場合 FILE_NOT_FOUND が返ること。"""
+    """FILE_NOT_FOUND must be returned when the media file does not exist."""
 
     def test_missing_media_returns_file_not_found(self, tmp_path: Path) -> None:
         from clipwright_noise.noise import detect_noise
@@ -447,7 +449,7 @@ class TestMediaNotFound:
         assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
 
     def test_missing_media_message_contains_only_basename(self, tmp_path: Path) -> None:
-        """FILE_NOT_FOUND の message にディレクトリパスが含まれないこと（DC-GP-005）。"""
+        """FILE_NOT_FOUND message must not contain a directory path (DC-GP-005)."""
         from clipwright_noise.noise import detect_noise
         from clipwright_noise.schemas import DetectNoiseOptions
 
@@ -463,7 +465,7 @@ class TestMediaNotFound:
         assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
         error_msg = result["error"]["message"]
         assert full_dir not in error_msg, (
-            f"DC-GP-005: message に絶対ディレクトリパス '{full_dir}' が含まれている。"
+            f"DC-GP-005: Absolute directory path '{full_dir}' is present in the message."
         )
         assert "missing_video.mp4" in error_msg
 
@@ -474,14 +476,13 @@ class TestMediaNotFound:
 
 
 class TestOutputConflict:
-    """output が media または timeline と同一パスの場合 INVALID_INPUT が返ること。"""
+    """INVALID_INPUT must be returned when output is the same path as media or timeline."""
 
     def test_output_equals_media_returns_invalid_input(self, tmp_path: Path) -> None:
         from clipwright_noise.noise import detect_noise
         from clipwright_noise.schemas import DetectNoiseOptions
 
-        # output と media が同じパス（ただし拡張子を .otio にするとメディアと別）
-        # 別名で同じパスにリダイレクトするシナリオ
+        # output and media have the same path
         media = tmp_path / "video.otio"
         media.write_bytes(b"dummy")
 
@@ -514,12 +515,12 @@ class TestOutputConflict:
 
 
 # ===========================================================================
-# (f) output が media と別 dir → INVALID_INPUT（DC-AS-002）
+# (f) output in different dir from media → INVALID_INPUT (DC-AS-002)
 # ===========================================================================
 
 
 class TestOutputDifferentDir:
-    """output が media と異なるディレクトリの場合 INVALID_INPUT が返ること（DC-AS-002）。"""
+    """INVALID_INPUT must be returned when output is in a different directory from media (DC-AS-002)."""
 
     def test_output_in_different_dir_returns_invalid_input(
         self, tmp_path: Path
@@ -545,7 +546,7 @@ class TestOutputDifferentDir:
     def test_output_different_dir_hint_does_not_contain_absolute_path(
         self, tmp_path: Path
     ) -> None:
-        """同一dir エラーの hint に絶対パスが含まれないこと（SR-M-2・CWE-209）。"""
+        """The same-dir error hint must not contain an absolute path (SR-M-2 / CWE-209)."""
         from clipwright_noise.noise import detect_noise
 
         media_dir = tmp_path / "media_src_dir"
@@ -563,22 +564,22 @@ class TestOutputDifferentDir:
 
         assert result["ok"] is False
         hint = result["error"].get("hint", "")
-        # hint に絶対ディレクトリパスが含まれないこと（CWE-209）
+        # hint must not contain an absolute directory path (CWE-209)
         assert str(media_dir) not in hint, (
-            f"SR-M-2: hint にメディアディレクトリの絶対パス '{media_dir}' が含まれている。"
+            f"SR-M-2: Absolute media directory path '{media_dir}' is present in the hint."
         )
         assert str(tmp_path) not in hint, (
-            f"SR-M-2: hint に tmp_path '{tmp_path}' が含まれている。"
+            f"SR-M-2: tmp_path '{tmp_path}' is present in the hint."
         )
 
 
 # ===========================================================================
-# (g) 映像なし → UNSUPPORTED / 音声なし → UNSUPPORTED
+# (g) no video → UNSUPPORTED / no audio → UNSUPPORTED
 # ===========================================================================
 
 
 class TestStreamRequirements:
-    """映像・音声の両方が必要（ADR-N8 / DC-AS-003）。"""
+    """Both video and audio are required (ADR-N8 / DC-AS-003)."""
 
     def test_no_video_stream_returns_unsupported(self, tmp_path: Path) -> None:
         from clipwright_noise.noise import detect_noise
@@ -616,12 +617,12 @@ class TestStreamRequirements:
 
 
 # ===========================================================================
-# (h) timeline 指定で media ≠ timeline source → INVALID_INPUT
+# (h) timeline specified with media ≠ timeline source → INVALID_INPUT
 # ===========================================================================
 
 
 class TestTimelineSourceMismatch:
-    """timeline の source が media と異なる場合 INVALID_INPUT が返ること（DC-AM-003）。"""
+    """INVALID_INPUT must be returned when the timeline source differs from media (DC-AM-003)."""
 
     def test_different_source_returns_invalid_input(self, tmp_path: Path) -> None:
         from clipwright_noise.noise import detect_noise
@@ -630,7 +631,7 @@ class TestTimelineSourceMismatch:
         media = tmp_path / "video.mp4"
         media.write_bytes(b"dummy")
 
-        # 別ファイルを source にした timeline を作成
+        # Create a timeline with a different file as its source
         other_media = tmp_path / "other_video.mp4"
         other_media.write_bytes(b"other")
         tl = _make_otio_timeline(other_media)
@@ -652,7 +653,7 @@ class TestTimelineSourceMismatch:
         assert result["error"]["code"] == ErrorCode.INVALID_INPUT
 
     def test_mismatch_message_contains_basename_only(self, tmp_path: Path) -> None:
-        """不一致エラーの message に絶対パスが混入しないこと（DC-GP-005）。"""
+        """The mismatch error message must not contain absolute paths (DC-GP-005)."""
         from clipwright_noise.noise import detect_noise
         from clipwright_noise.schemas import DetectNoiseOptions
 
@@ -683,17 +684,17 @@ class TestTimelineSourceMismatch:
 
 
 # ===========================================================================
-# (h2) silence 由来の実 timeline + 同一 media → 正常系（B-4）
+# (h2) Positive path: silence-origin real timeline + same media passes (B-4)
 # ===========================================================================
 
 
 class TestTimelineSourceMatchPositive:
-    """同一 media の timeline ロードで誤 INVALID_INPUT を出さないこと（B-4）。"""
+    """Verify that loading a same-media timeline does not produce a spurious INVALID_INPUT (B-4)."""
 
     def test_same_source_timeline_passes_validation(self, tmp_path: Path) -> None:
-        """silence 由来相当の実 OTIO timeline に同一 media を渡すと通ること（B-4）。
+        """Loading a silence-origin OTIO timeline with the same media must pass (B-4).
 
-        パス正規化比較（Path.resolve()）で誤判定しないことを検証する。
+        Verifies that Path.resolve() normalized comparison does not produce false positives.
         """
         from clipwright_noise.noise import detect_noise
         from clipwright_noise.schemas import DetectNoiseOptions
@@ -701,7 +702,7 @@ class TestTimelineSourceMatchPositive:
         media = tmp_path / "video.mp4"
         media.write_bytes(b"dummy")
 
-        # media.resolve() の絶対パスを source にした timeline を作成
+        # Create a timeline with media.resolve() absolute path as its source
         tl = _make_otio_timeline(media)
         timeline_path = tmp_path / "silence.otio"
         _save_timeline_to_file(tl, timeline_path)
@@ -724,28 +725,28 @@ class TestTimelineSourceMatchPositive:
             )
 
         assert result["ok"] is True, (
-            f"B-4: 同一 media の timeline が誤 INVALID_INPUT になった。"
+            f"B-4: Same-media timeline produced a spurious INVALID_INPUT."
             f" error={result.get('error')}"
         )
 
 
 # ===========================================================================
-# (i) 複数 source → UNSUPPORTED / Video2 本 → INVALID_INPUT
+# (i) Multiple sources → UNSUPPORTED / Two Video tracks → INVALID_INPUT
 # ===========================================================================
 
 
 class TestTimelineValidation:
-    """timeline の構造検証（DC-AM-004 / B-5）。"""
+    """Timeline structure validation (DC-AM-004 / B-5)."""
 
     def test_multiple_sources_returns_unsupported(self, tmp_path: Path) -> None:
-        """V1 に複数 source の clip が含まれる場合 UNSUPPORTED_OPERATION が返ること。"""
+        """UNSUPPORTED_OPERATION must be returned when V1 contains clips from multiple sources."""
         from clipwright_noise.noise import detect_noise
         from clipwright_noise.schemas import DetectNoiseOptions
 
         media = tmp_path / "video.mp4"
         media.write_bytes(b"dummy")
 
-        # 複数 source（2 つの異なる target_url）
+        # Multiple sources (two different target_urls)
         other = tmp_path / "other.mp4"
         tl = _make_otio_timeline(
             media,
@@ -766,14 +767,14 @@ class TestTimelineValidation:
             )
 
         assert result["ok"] is False
-        # 複数 source は UNSUPPORTED_OPERATION か INVALID_INPUT
+        # Multiple sources → UNSUPPORTED_OPERATION or INVALID_INPUT
         assert result["error"]["code"] in (
             ErrorCode.UNSUPPORTED_OPERATION,
             ErrorCode.INVALID_INPUT,
         )
 
     def test_two_video_tracks_returns_invalid_input(self, tmp_path: Path) -> None:
-        """Video トラックが2本の timeline は INVALID_INPUT が返ること（B-5）。"""
+        """INVALID_INPUT must be returned when the timeline has two Video tracks (B-5)."""
         from clipwright_noise.noise import detect_noise
         from clipwright_noise.schemas import DetectNoiseOptions
 
@@ -800,22 +801,22 @@ class TestTimelineValidation:
 
 
 # ===========================================================================
-# (i2) V1+A1 の正常 timeline → 通る正常系（B-5）
+# (i2) V1+A1 normal timeline passes (B-5)
 # ===========================================================================
 
 
 class TestV1A1TimelinePositive:
-    """V1+A1（Video1本 + Audio1本）の timeline は検証を通ること（B-5）。"""
+    """A V1+A1 (one Video + one Audio) timeline must pass validation (B-5)."""
 
     def test_v1_a1_timeline_passes_validation(self, tmp_path: Path) -> None:
-        """silence 由来の V1+A1 timeline が通ること（Audio トラックは許容）。"""
+        """A silence-origin V1+A1 timeline must pass (Audio track is allowed)."""
         from clipwright_noise.noise import detect_noise
         from clipwright_noise.schemas import DetectNoiseOptions
 
         media = tmp_path / "video.mp4"
         media.write_bytes(b"dummy")
 
-        # V1+A1（Video1本 + Audio1本）
+        # V1+A1 (one Video + one Audio)
         tl = _make_otio_timeline(media, num_video_tracks=1, num_audio_tracks=1)
         timeline_path = tmp_path / "v1a1.otio"
         _save_timeline_to_file(tl, timeline_path)
@@ -838,25 +839,25 @@ class TestV1A1TimelinePositive:
             )
 
         assert result["ok"] is True, (
-            f"B-5: V1+A1 の正常 timeline が INVALID_INPUT になった。"
+            f"B-5: V1+A1 normal timeline produced INVALID_INPUT."
             f" error={result.get('error')}"
         )
 
 
 # ===========================================================================
-# (i3) V1 空 timeline → 全長 clip が追加されて renderable になること（CR-M-1）
+# (i3) Empty V1 timeline → full-length clip appended, becomes renderable (CR-M-1)
 # ===========================================================================
 
 
 class TestEmptyV1Timeline:
-    """既存 timeline の V1 が空の場合、全長 keep clip を追加して ok=True になること（CR-M-1）。
+    """When V1 of an existing timeline is empty, a full-length keep clip must be appended so ok=True (CR-M-1).
 
-    render が resolve_kept_ranges で「Clip が0件」を INVALID_INPUT で弾かないよう、
-    _load_and_validate_timeline が _add_full_clip 相当で全長 clip を補完する。
+    Prevents render's resolve_kept_ranges from rejecting with INVALID_INPUT (zero clips).
+    _load_and_validate_timeline appends a full-length clip equivalent to creating a new timeline.
     """
 
     def test_empty_v1_timeline_adds_clip_and_succeeds(self, tmp_path: Path) -> None:
-        """V1 が空の既存 timeline を渡すと全長 clip が追加されて ok=True になること。"""
+        """Passing an existing timeline with an empty V1 must append a full-length clip and return ok=True."""
         from clipwright.otio_utils import load_timeline
 
         from clipwright_noise.noise import detect_noise
@@ -864,7 +865,7 @@ class TestEmptyV1Timeline:
         media = tmp_path / "video.mp4"
         media.write_bytes(b"dummy")
 
-        # V1 が空の timeline を手動生成（clip なし）
+        # Manually create a timeline with an empty V1 (no clips)
         empty_tl = otio.schema.Timeline(name="empty")
         v1 = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
         empty_tl.tracks.append(v1)
@@ -889,29 +890,29 @@ class TestEmptyV1Timeline:
             )
 
         assert result["ok"] is True, (
-            f"CR-M-1: V1 空の timeline が INVALID_INPUT になった。"
+            f"CR-M-1: Empty V1 timeline produced INVALID_INPUT."
             f" error={result.get('error')}"
         )
 
-        # 出力 timeline の V1 に clip が追加されていること
+        # V1 in the output timeline must have a clip appended
         out_tl = load_timeline(str(output))
         out_v1 = next(t for t in out_tl.tracks if t.kind == otio.schema.TrackKind.Video)
         out_clips = [it for it in out_v1 if isinstance(it, otio.schema.Clip)]
         assert len(out_clips) >= 1, (
-            "CR-M-1: V1 空の timeline に全長 clip が追加されていない。"
+            "CR-M-1: No full-length clip was appended to the empty V1 timeline."
         )
 
 
 # ===========================================================================
-# (j) backend=deepfilternet → params={} 注記 + warning（DC-GP-003）
+# (j) backend=deepfilternet → params={} annotation + warning (DC-GP-003)
 # ===========================================================================
 
 
 class TestDeepfilternetBackend:
-    """backend=deepfilternet 選択時に params={} 注記と warning が出ること（DC-GP-003）。"""
+    """When backend=deepfilternet, params={} annotation and a warning must be emitted (DC-GP-003)."""
 
     def test_deepfilternet_sets_empty_params_in_metadata(self, tmp_path: Path) -> None:
-        """denoise 注記の params が {} であること（DC-AM-002）。"""
+        """The denoise annotation params must be {} (DC-AM-002)."""
         from clipwright.otio_utils import get_clipwright_metadata, load_timeline
 
         from clipwright_noise.noise import detect_noise
@@ -941,13 +942,13 @@ class TestDeepfilternetBackend:
         meta = get_clipwright_metadata(tl)
         assert "denoise" in meta
         assert meta["denoise"]["params"] == {}, (
-            "DC-AM-002: deepfilternet の params は {} でなければならない。"
+            "DC-AM-002: deepfilternet params must be {}."
         )
 
     def test_deepfilternet_warning_mentions_render_unsupported(
         self, tmp_path: Path
     ) -> None:
-        """warnings に「render 適用は未対応」旨が含まれること（DC-GP-003）。"""
+        """warnings must contain a message indicating that render application is not supported (DC-GP-003)."""
         from clipwright_noise.noise import detect_noise
         from clipwright_noise.schemas import DetectNoiseOptions
 
@@ -972,16 +973,16 @@ class TestDeepfilternetBackend:
 
         warnings = result.get("warnings", [])
         assert len(warnings) > 0, (
-            "DC-GP-003: deepfilternet 選択時は warnings が空であってはならない。"
+            "DC-GP-003: warnings must not be empty when deepfilternet is selected."
         )
         warning_text = " ".join(warnings)
-        # 「render 適用は未対応」または類似の文言が含まれること
+        # Must contain keywords indicating render is not supported
         assert any(
-            kw in warning_text for kw in ["render", "未対応", "afftdn", "将来"]
-        ), f"DC-GP-003: warnings に render 未対応の旨が含まれない: {warnings}"
+            kw in warning_text for kw in ["render", "not supported", "afftdn", "future"]
+        ), f"DC-GP-003: warnings do not mention render not supported: {warnings}"
 
     def test_deepfilternet_backend_stored_in_metadata(self, tmp_path: Path) -> None:
-        """denoise 注記の backend が "deepfilternet" であること。"""
+        """The denoise annotation backend must be "deepfilternet"."""
         from clipwright.otio_utils import get_clipwright_metadata, load_timeline
 
         from clipwright_noise.noise import detect_noise

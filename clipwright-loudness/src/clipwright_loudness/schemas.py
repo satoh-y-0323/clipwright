@@ -1,13 +1,13 @@
-"""schemas.py — clipwright-loudness 固有の Pydantic スキーマ。
+"""schemas.py — clipwright-loudness Pydantic schemas.
 
-共通型（MediaRef / Artifact / ToolResult 等）は clipwright.schemas で
-一元定義されているため、このモジュールでは再定義しない。
+Common types (MediaRef / Artifact / ToolResult, etc.) are defined centrally
+in clipwright.schemas and are not redefined here.
 
-DetectLoudnessOptions: clipwright_detect_loudness の入力オプション。
-LoudnessDirective: timeline-level metadata["clipwright"]["loudness"]
-    に書く指示スキーマ。
-LoudnormTarget / PeakTarget: mode 別の正規化目標値。
-LoudnormMeasured / PeakMeasured: mode 別の測定値。
+DetectLoudnessOptions: Input options for clipwright_detect_loudness.
+LoudnessDirective: Directive schema written to
+    timeline-level metadata["clipwright"]["loudness"].
+LoudnormTarget / PeakTarget: Normalization target values per mode.
+LoudnormMeasured / PeakMeasured: Measured values per mode.
 """
 
 from __future__ import annotations
@@ -18,12 +18,12 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class DetectLoudnessOptions(BaseModel):
-    """clipwright_detect_loudness のオプション（設計 §3・ADR-L1/L2）。
+    """Options for clipwright_detect_loudness (design §3, ADR-L1/L2).
 
-    mode: loudnorm（EBU R128 LUFS 正規化）または peak（ピーク dB 正規化）。
-    scope: track のみ（per_clip は DC-AS-003 で延期）。
-    target_i/target_tp/target_lra: loudnorm target 値（上書き可能）。
-    target_peak_db: peak target 値（上書き可能）。
+    mode: loudnorm (EBU R128 LUFS normalization) or peak (peak dB normalization).
+    scope: track only (per_clip deferred per DC-AS-003).
+    target_i/target_tp/target_lra: loudnorm target values (overridable).
+    target_peak_db: peak target value (overridable).
     """
 
     mode: Annotated[
@@ -31,9 +31,10 @@ class DetectLoudnessOptions(BaseModel):
         Field(
             default="loudnorm",
             description=(
-                "ラウドネス正規化モード。"
-                '"loudnorm"（既定）は EBU R128 LUFS 正規化（ffmpeg loudnorm）。'
-                '"peak" はピーク dB 正規化（ffmpeg volumedetect）。'
+                "Loudness normalization mode. "
+                '"loudnorm" (default) applies EBU R128 LUFS normalization'
+                " (ffmpeg loudnorm). "
+                '"peak" applies peak dB normalization (ffmpeg volumedetect).'
             ),
         ),
     ] = "loudnorm"
@@ -43,14 +44,14 @@ class DetectLoudnessOptions(BaseModel):
         Field(
             default="track",
             description=(
-                "処理スコープ。"
-                '"track"（既定）はタイムライン全体を1回測定する。'
-                "per_clip は DC-AS-003 で延期。"
+                "Processing scope. "
+                '"track" (default) measures the entire timeline in a single pass. '
+                "per_clip is deferred per DC-AS-003."
             ),
         ),
     ] = "track"
 
-    # loudnorm target パラメータ（設計: I=-14/TP=-1/LRA=11）
+    # loudnorm target parameters (design: I=-14/TP=-1/LRA=11)
     target_i: Annotated[
         float,
         Field(
@@ -58,7 +59,8 @@ class DetectLoudnessOptions(BaseModel):
             ge=-70.0,
             le=-5.0,
             description=(
-                "loudnorm 統合ラウドネス目標値（LUFS）。範囲 [-70, -5]。既定 -14。"
+                "loudnorm integrated loudness target (LUFS)."
+                " Range [-70, -5]. Default -14."
             ),
         ),
     ] = -14.0
@@ -70,7 +72,7 @@ class DetectLoudnessOptions(BaseModel):
             ge=-9.0,
             le=0.0,
             description=(
-                "loudnorm トゥルーピーク目標値（dBTP）。範囲 [-9, 0]。既定 -1。"
+                "loudnorm true peak target (dBTP). Range [-9, 0]. Default -1."
             ),
         ),
     ] = -1.0
@@ -81,27 +83,27 @@ class DetectLoudnessOptions(BaseModel):
             default=11.0,
             ge=1.0,
             le=50.0,
-            description="loudnorm LRA 目標値（LU）。範囲 [1, 50]。既定 11。",
+            description="loudnorm LRA target (LU). Range [1, 50]. Default 11.",
         ),
     ] = 11.0
 
-    # peak target パラメータ
+    # peak target parameters
     target_peak_db: Annotated[
         float,
         Field(
             default=-1.0,
             ge=-60.0,
             le=0.0,
-            description="peak モードのピーク目標値（dB）。範囲 [-60, 0]。既定 -1。",
+            description="Peak mode peak target (dB). Range [-60, 0]. Default -1.",
         ),
     ] = -1.0
 
 
 class LoudnormTarget(BaseModel):
-    """loudnorm モードの正規化目標値（ADR-L4）。
+    """Normalization target values for loudnorm mode (ADR-L4).
 
-    render 側 plan.py でも独立して再定義する
-    （NR-M-1 教訓: clipwright_loudness 非依存）。
+    Also independently redefined on the render side in plan.py
+    (NR-M-1 lesson: no dependency on clipwright_loudness).
     """
 
     i: Annotated[
@@ -110,7 +112,7 @@ class LoudnormTarget(BaseModel):
             default=-14.0,
             ge=-70.0,
             le=-5.0,
-            description="統合ラウドネス目標値（LUFS）。範囲 [-70, -5]。",
+            description="Integrated loudness target (LUFS). Range [-70, -5].",
         ),
     ] = -14.0
 
@@ -120,7 +122,7 @@ class LoudnormTarget(BaseModel):
             default=-1.0,
             ge=-9.0,
             le=0.0,
-            description="トゥルーピーク目標値（dBTP）。範囲 [-9, 0]。",
+            description="True peak target (dBTP). Range [-9, 0].",
         ),
     ] = -1.0
 
@@ -130,13 +132,13 @@ class LoudnormTarget(BaseModel):
             default=11.0,
             ge=1.0,
             le=50.0,
-            description="LRA 目標値（LU）。範囲 [1, 50]。",
+            description="LRA target (LU). Range [1, 50].",
         ),
     ] = 11.0
 
 
 class PeakTarget(BaseModel):
-    """peak モードの正規化目標値（ADR-L4）。"""
+    """Normalization target values for peak mode (ADR-L4)."""
 
     peak_db: Annotated[
         float,
@@ -145,24 +147,26 @@ class PeakTarget(BaseModel):
             ge=-60.0,
             le=0.0,
             allow_inf_nan=False,
-            description="ピーク目標値（dB）。範囲 [-60, 0]。inf/nan 不可。",
+            description="Peak target (dB). Range [-60, 0]. inf/nan not allowed.",
         ),
     ] = -1.0
 
 
 class LoudnormMeasured(BaseModel):
-    """loudnorm フィルタが出力する測定値（ADR-L1）。
+    """Measured values output by the loudnorm filter (ADR-L1).
 
-    ffmpeg loudnorm=print_format=json の stderr 末尾 JSON から取得する 5 値。
-    無音素材で "-inf" が返る場合があり、そのときは allow_inf_nan=False により
-    ValidationError になるため呼び出し側は measured=None として扱う（U-1）。
+    Five values extracted from the JSON block at the end of ffmpeg
+    loudnorm=print_format=json stderr.
+    When the input is silent, "-inf" may be returned; in that case
+    allow_inf_nan=False causes a ValidationError and the caller treats
+    measured=None (U-1).
     """
 
     input_i: Annotated[
         float,
         Field(
             allow_inf_nan=False,
-            description="入力統合ラウドネス（LUFS）。inf/nan 不可。",
+            description="Input integrated loudness (LUFS). inf/nan not allowed.",
         ),
     ]
 
@@ -170,7 +174,7 @@ class LoudnormMeasured(BaseModel):
         float,
         Field(
             allow_inf_nan=False,
-            description="入力トゥルーピーク（dBTP）。inf/nan 不可。",
+            description="Input true peak (dBTP). inf/nan not allowed.",
         ),
     ]
 
@@ -178,7 +182,7 @@ class LoudnormMeasured(BaseModel):
         float,
         Field(
             allow_inf_nan=False,
-            description="入力 LRA（LU）。inf/nan 不可。",
+            description="Input LRA (LU). inf/nan not allowed.",
         ),
     ]
 
@@ -186,7 +190,7 @@ class LoudnormMeasured(BaseModel):
         float,
         Field(
             allow_inf_nan=False,
-            description="入力閾値（LUFS）。inf/nan 不可。",
+            description="Input threshold (LUFS). inf/nan not allowed.",
         ),
     ]
 
@@ -194,15 +198,15 @@ class LoudnormMeasured(BaseModel):
         float,
         Field(
             allow_inf_nan=False,
-            description="目標オフセット（LU）。inf/nan 不可。",
+            description="Target offset (LU). inf/nan not allowed.",
         ),
     ]
 
 
 class PeakMeasured(BaseModel):
-    """volumedetect フィルタが出力する測定値（ADR-L2）。
+    """Measured values output by the volumedetect filter (ADR-L2).
 
-    ffmpeg volumedetect の stderr から "max_volume: -X.X dB" を抽出した値。
+    Value extracted from "max_volume: -X.X dB" in ffmpeg volumedetect stderr.
     """
 
     max_volume_db: Annotated[
@@ -211,18 +215,19 @@ class PeakMeasured(BaseModel):
             ge=-200.0,
             le=0.0,
             allow_inf_nan=False,
-            description="最大音量（dB）。範囲 [-200, 0]。inf/nan 不可。",
+            description="Maximum volume (dB). Range [-200, 0]. inf/nan not allowed.",
         ),
     ]
 
 
 class LoudnessDirective(BaseModel):
-    """timeline-level metadata に書く loudness 指示スキーマ（設計 §3.2・ADR-L4）。
+    """Loudness directive schema written to timeline-level metadata
+    (design §3.2, ADR-L4).
 
-    loudness が生成し render が検証読込する。
-    scope は track のみ（per_clip は DC-AS-003 で延期）。
-    target は mode で discriminate（LoudnormTarget または PeakTarget）。
-    measured は mode 別の測定値または None（U-1: 測定不能時）。
+    Generated by loudness and read/validated by render.
+    scope is track only (per_clip deferred per DC-AS-003).
+    target is discriminated by mode (LoudnormTarget or PeakTarget).
+    measured holds mode-specific measured values or None (U-1: when measurement fails).
     """
 
     tool: Annotated[str, Field(max_length=64)]
@@ -235,16 +240,12 @@ class LoudnessDirective(BaseModel):
 
     @model_validator(mode="after")
     def _validate_target_mode_consistency(self) -> LoudnessDirective:
-        """target の型が mode に対応していることを検証する。
+        """Validate that the target type is consistent with mode.
 
-        mode=loudnorm → LoudnormTarget、mode=peak → PeakTarget でなければならない。
+        mode=loudnorm requires LoudnormTarget; mode=peak requires PeakTarget.
         """
         if self.mode == "loudnorm" and not isinstance(self.target, LoudnormTarget):
-            raise ValueError(
-                "mode=loudnorm の場合 target は LoudnormTarget でなければなりません。"
-            )
+            raise ValueError("When mode=loudnorm, target must be LoudnormTarget.")
         if self.mode == "peak" and not isinstance(self.target, PeakTarget):
-            raise ValueError(
-                "mode=peak の場合 target は PeakTarget でなければなりません。"
-            )
+            raise ValueError("When mode=peak, target must be PeakTarget.")
         return self

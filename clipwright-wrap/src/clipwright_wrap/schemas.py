@@ -1,7 +1,7 @@
-"""schemas.py — clipwright-wrap 固有の Pydantic スキーマ。
+"""schemas.py — clipwright-wrap-specific Pydantic schemas.
 
-共通型（MediaRef / Artifact / ToolResult 等）は clipwright.schemas で
-一元定義されているため、このモジュールでは再定義しない。
+Common types (MediaRef / Artifact / ToolResult, etc.) are defined
+centrally in clipwright.schemas; this module does not redefine them.
 """
 
 from __future__ import annotations
@@ -12,12 +12,14 @@ from pydantic import BaseModel, Field
 
 
 class WrapCaptionsOptions(BaseModel):
-    """clipwright_wrap_captions のオプション（WR-AD-05）。
+    """Options for clipwright_wrap_captions (WR-AD-05).
 
-    language は budoux parser 選択。
-    spike-budoux で全4言語ロード可確認済み（DC-AM-005）。
-    max_chars は 1 行最大文字数（一律 1 文字カウント・len() 判定）。
-    max_lines は 1 cue 最大行数（超過は warnings 対象・WR-AD-15(1)）。
+    language selects the budoux parser.
+    All 4 languages confirmed loadable in spike-budoux (DC-AM-005).
+    max_chars is the maximum number of characters per line
+    (each character counts as 1; len() check).
+    max_lines is the maximum number of lines per cue
+    (excess is subject to warnings; WR-AD-15(1)).
     """
 
     language: Annotated[
@@ -27,10 +29,10 @@ class WrapCaptionsOptions(BaseModel):
             max_length=7,
             pattern=r"^(ja|zh-hans|zh-hant|th)$",
             description=(
-                "budoux の文節分割器を選択する言語コード。"
-                "対応言語: ja / zh-hans / zh-hant / th。"
-                "spike-budoux で全4言語確認済み（DC-AM-005）。"
-                "対応外は INVALID_INPUT で拒否。"
+                "Language code to select the budoux phrase-boundary parser. "
+                "Supported languages: ja / zh-hans / zh-hant / th. "
+                "All 4 languages confirmed in spike-budoux (DC-AM-005). "
+                "Unsupported values are rejected with INVALID_INPUT."
             ),
         ),
     ] = "ja"
@@ -41,11 +43,15 @@ class WrapCaptionsOptions(BaseModel):
             default=16,
             gt=0,
             description=(
-                "1 行の最大文字数（一律 1 文字カウント・len() 判定）。"
-                "日本語字幕慣習の全角 ~16 文字を既定値とする（WR-AD-05）。"
-                "超過直前で改行を挿入する（貪欲行詰め・WR-AD-04）。"
-                "1 文節が単独で超過する場合は途中で割らず 1 行に置く。"
-                "gt=0 制約: 0 以下は INVALID_INPUT。"
+                "Maximum number of characters per line"
+                " (each character counts as 1; len() check). "
+                "Default is ~16 full-width characters, following"
+                " Japanese subtitle conventions (WR-AD-05). "
+                "A line break is inserted just before the limit is exceeded"
+                " (greedy fill; WR-AD-04). "
+                "If a single phrase segment exceeds the limit on its own,"
+                " it is placed on one line without splitting. "
+                "gt=0 constraint: 0 or below is rejected with INVALID_INPUT."
             ),
         ),
     ] = 16
@@ -56,9 +62,10 @@ class WrapCaptionsOptions(BaseModel):
             default=2,
             gt=0,
             description=(
-                "1 cue あたりの最大行数。超過時は warnings に記録する。"
-                "切り捨ては行わず原文を保持する（WR-AD-15(1)・要件 §2）。"
-                "gt=0 制約: 0 以下は INVALID_INPUT。"
+                "Maximum number of lines per cue. Excess is recorded in warnings. "
+                "The original text is preserved without truncation"
+                " (WR-AD-15(1); requirement §2). "
+                "gt=0 constraint: 0 or below is rejected with INVALID_INPUT."
             ),
         ),
     ] = 2

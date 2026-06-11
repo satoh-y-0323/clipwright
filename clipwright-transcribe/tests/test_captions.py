@@ -1,12 +1,14 @@
-"""test_captions.py — captions.py 純ロジックの Red テスト（契約面 100% 目標）。
+"""test_captions.py — Red tests for the captions.py pure logic layer
+(target: 100% contract coverage).
 
-architecture TR-AD-02/06/07 と DC-GP-002/DC-AS-005 の仕様を観点に固定する。
-このファイルは captions.py が存在しない段階で import 失敗により
-機能未実装として失敗することを意図した Red テスト群。
+Fixes the specification from architecture TR-AD-02/06/07 and DC-GP-002/DC-AS-005.
+This file is intended to fail at import when captions.py does not exist, thereby
+signalling that the feature is not yet implemented (Red test suite).
 
-注意（DC-GP-001-R）:
-  契約面100%は spike 仮説 fixture（whisper_sample.json）に対する被覆であり、
-  env 未設定で spike が仮説の場合は実スキーマ未検証・e2e 照合まで確定しない。
+Note (DC-GP-001-R):
+  100% contract coverage is measured against the hypothetical spike fixture
+  (whisper_sample.json). Until the real binary is confirmed via e2e, schema
+  correctness against actual whisper output is unverified.
 """
 
 from __future__ import annotations
@@ -23,67 +25,68 @@ from clipwright_transcribe.captions import (
 )
 
 # ===========================================================================
-# normalize_segments — 基本動作
+# normalize_segments — basic behaviour
 # ===========================================================================
 
 
 class TestNormalizeSegmentsBasic:
-    """normalize_segments の基本動作（fixture ベース）を検証する。"""
+    """Verify basic behaviour of normalize_segments (fixture-based)."""
 
     def test_normalize_returns_list(self, whisper_sample_json: dict[str, Any]) -> None:
-        """normalize_segments が list を返すこと。"""
+        """normalize_segments returns a list."""
         result = normalize_segments(whisper_sample_json)
         assert isinstance(result, list)
 
     def test_normalize_returns_correct_count(
         self, whisper_sample_json: dict[str, Any]
     ) -> None:
-        """fixture の 3 セグメントが正しく正規化されること。"""
+        """The fixture's 3 segments are correctly normalised."""
         result = normalize_segments(whisper_sample_json)
         assert len(result) == 3
 
     def test_first_segment_start_sec(self, whisper_sample_json: dict[str, Any]) -> None:
-        """offsets.from=0ms → start_sec=0.0 秒になること（TR-AD-07）。"""
+        """offsets.from=0ms -> start_sec=0.0 s (TR-AD-07)."""
         result = normalize_segments(whisper_sample_json)
         assert result[0]["start_sec"] == pytest.approx(0.0)
 
     def test_first_segment_end_sec(self, whisper_sample_json: dict[str, Any]) -> None:
-        """offsets.to=1200ms → end_sec=1.2 秒になること（TR-AD-07）。"""
+        """offsets.to=1200ms -> end_sec=1.2 s (TR-AD-07)."""
         result = normalize_segments(whisper_sample_json)
         assert result[0]["end_sec"] == pytest.approx(1.2)
 
     def test_second_segment_start_sec(
         self, whisper_sample_json: dict[str, Any]
     ) -> None:
-        """offsets.from=1500ms → start_sec=1.5 秒になること。"""
+        """offsets.from=1500ms -> start_sec=1.5 s."""
         result = normalize_segments(whisper_sample_json)
         assert result[1]["start_sec"] == pytest.approx(1.5)
 
     def test_second_segment_end_sec(self, whisper_sample_json: dict[str, Any]) -> None:
-        """offsets.to=2800ms → end_sec=2.8 秒になること。"""
+        """offsets.to=2800ms -> end_sec=2.8 s."""
         result = normalize_segments(whisper_sample_json)
         assert result[1]["end_sec"] == pytest.approx(2.8)
 
     def test_third_segment_start_sec(self, whisper_sample_json: dict[str, Any]) -> None:
-        """offsets.from=3000ms → start_sec=3.0 秒になること。"""
+        """offsets.from=3000ms -> start_sec=3.0 s."""
         result = normalize_segments(whisper_sample_json)
         assert result[2]["start_sec"] == pytest.approx(3.0)
 
     def test_third_segment_end_sec(self, whisper_sample_json: dict[str, Any]) -> None:
-        """offsets.to=4500ms → end_sec=4.5 秒になること。"""
+        """offsets.to=4500ms -> end_sec=4.5 s."""
         result = normalize_segments(whisper_sample_json)
         assert result[2]["end_sec"] == pytest.approx(4.5)
 
     def test_segment_text_stripped(self, whisper_sample_json: dict[str, Any]) -> None:
-        """text は前後の空白を strip されること（whisper 出力は先頭に空白が入ることがある）。"""
+        """text has leading/trailing whitespace stripped (whisper output often has a
+        leading space)."""
         result = normalize_segments(whisper_sample_json)
-        # fixture の text は " Hello world." → "Hello world."
+        # fixture text is " Hello world." -> "Hello world."
         assert result[0]["text"] == "Hello world."
 
     def test_all_segments_have_required_keys(
         self, whisper_sample_json: dict[str, Any]
     ) -> None:
-        """全セグメントに start_sec / end_sec / text キーが存在すること。"""
+        """All segments contain the start_sec / end_sec / text keys."""
         result = normalize_segments(whisper_sample_json)
         for seg in result:
             assert "start_sec" in seg
@@ -92,15 +95,15 @@ class TestNormalizeSegmentsBasic:
 
 
 # ===========================================================================
-# normalize_segments — 防御・除去ロジック
+# normalize_segments — defensive filtering
 # ===========================================================================
 
 
 class TestNormalizeSegmentsFiltering:
-    """不正・退化セグメントの除去を検証する。"""
+    """Verify that invalid and degenerate segments are removed."""
 
     def test_empty_text_segment_removed(self) -> None:
-        """text が空文字のセグメントは除去されること（DC-GP-002 補完）。"""
+        """Segments with empty text are removed (DC-GP-002 supplement)."""
         data = {
             "transcription": [
                 {"offsets": {"from": 0, "to": 1000}, "text": ""},
@@ -112,7 +115,7 @@ class TestNormalizeSegmentsFiltering:
         assert result[0]["text"] == "Hello"
 
     def test_whitespace_only_text_segment_removed(self) -> None:
-        """text が空白のみのセグメントは除去されること。"""
+        """Segments with whitespace-only text are removed."""
         data = {
             "transcription": [
                 {"offsets": {"from": 0, "to": 1000}, "text": "   "},
@@ -124,7 +127,7 @@ class TestNormalizeSegmentsFiltering:
         assert result[0]["text"] == "Hello"
 
     def test_degenerate_segment_start_equals_end_removed(self) -> None:
-        """start_sec == end_sec の退化区間は除去されること。"""
+        """Degenerate intervals where start_sec == end_sec are removed."""
         data = {
             "transcription": [
                 {"offsets": {"from": 1000, "to": 1000}, "text": "degenerate"},
@@ -136,7 +139,7 @@ class TestNormalizeSegmentsFiltering:
         assert result[0]["text"] == "valid"
 
     def test_degenerate_segment_start_greater_than_end_removed(self) -> None:
-        """start_sec > end_sec の退化区間は除去されること。"""
+        """Degenerate intervals where start_sec > end_sec are removed."""
         data = {
             "transcription": [
                 {"offsets": {"from": 2000, "to": 1000}, "text": "reversed"},
@@ -148,7 +151,7 @@ class TestNormalizeSegmentsFiltering:
         assert result[0]["text"] == "valid"
 
     def test_missing_offsets_key_segment_removed(self) -> None:
-        """offsets キーが欠落したセグメントは除去されること（防御）。"""
+        """Segments missing the offsets key are removed (defensive)."""
         data = {
             "transcription": [
                 {"text": "no offsets"},
@@ -160,7 +163,7 @@ class TestNormalizeSegmentsFiltering:
         assert result[0]["text"] == "valid"
 
     def test_missing_from_key_segment_removed(self) -> None:
-        """offsets.from キーが欠落したセグメントは除去されること（防御）。"""
+        """Segments missing offsets.from are removed (defensive)."""
         data = {
             "transcription": [
                 {"offsets": {"to": 1000}, "text": "no from"},
@@ -172,7 +175,7 @@ class TestNormalizeSegmentsFiltering:
         assert result[0]["text"] == "valid"
 
     def test_missing_to_key_segment_removed(self) -> None:
-        """offsets.to キーが欠落したセグメントは除去されること（防御）。"""
+        """Segments missing offsets.to are removed (defensive)."""
         data = {
             "transcription": [
                 {"offsets": {"from": 0}, "text": "no to"},
@@ -184,7 +187,7 @@ class TestNormalizeSegmentsFiltering:
         assert result[0]["text"] == "valid"
 
     def test_missing_text_key_segment_removed(self) -> None:
-        """text キーが欠落したセグメントは除去されること（防御）。"""
+        """Segments missing the text key are removed (defensive)."""
         data = {
             "transcription": [
                 {"offsets": {"from": 0, "to": 1000}},
@@ -196,7 +199,7 @@ class TestNormalizeSegmentsFiltering:
         assert result[0]["text"] == "valid"
 
     def test_non_dict_entry_segment_removed(self) -> None:
-        """transcription 要素が dict でない場合は除去されること（防御）。"""
+        """Non-dict transcription entries are removed (defensive)."""
         data = {
             "transcription": [
                 "not a dict",
@@ -208,7 +211,8 @@ class TestNormalizeSegmentsFiltering:
         assert result[0]["text"] == "valid"
 
     def test_non_numeric_offsets_segment_removed(self) -> None:
-        """offsets.from/to が数値変換できない場合は除去されること（防御）。"""
+        """Segments where offsets.from/to cannot be converted to float are removed
+        (defensive)."""
         data = {
             "transcription": [
                 {"offsets": {"from": "abc", "to": 1000}, "text": "bad offset"},
@@ -220,73 +224,73 @@ class TestNormalizeSegmentsFiltering:
         assert result[0]["text"] == "valid"
 
     def test_non_list_transcription_returns_empty(self) -> None:
-        """transcription が list でない場合は空リストを返すこと（防御）。"""
+        """When transcription is not a list, an empty list is returned (defensive)."""
         result = normalize_segments({"transcription": "not a list"})
         assert result == []
 
     def test_empty_transcription_list_returns_empty(self) -> None:
-        """transcription が空リストの場合、空リストを返すこと（DC-GP-002）。"""
+        """An empty transcription list returns an empty list (DC-GP-002)."""
         data: dict[str, Any] = {"transcription": []}
         result = normalize_segments(data)
         assert result == []
 
     def test_missing_transcription_key_returns_empty(self) -> None:
-        """transcription キーが欠落している場合、空リストを返すこと（防御）。"""
+        """A missing transcription key returns an empty list (defensive)."""
         result = normalize_segments({})
         assert result == []
 
 
 # ===========================================================================
-# DC-GP-002 — セグメント 0 件
+# DC-GP-002 — Zero segments
 # ===========================================================================
 
 
 class TestDCGP002ZeroSegments:
-    """セグメント 0 件時の各関数の振る舞いを検証する（DC-GP-002）。"""
+    """Verify behaviour of each function when segments is empty (DC-GP-002)."""
 
     def test_normalize_segments_empty_returns_empty_list(self) -> None:
-        """normalize_segments の 0 件入力 → 空リストを返すこと。"""
+        """normalize_segments with zero-entry input returns an empty list."""
         result = normalize_segments({"transcription": []})
         assert result == []
 
     def test_to_srt_empty_segments_returns_empty_string(self) -> None:
-        """to_srt の 0 件入力 → 空文字列を返すこと。"""
+        """to_srt with zero-entry input returns an empty string."""
         result = to_srt([])
         assert result == ""
 
     def test_to_vtt_empty_segments_returns_header_only(self) -> None:
-        """to_vtt の 0 件入力 → "WEBVTT" ヘッダのみを返すこと。"""
+        """to_vtt with zero-entry input returns only the "WEBVTT" header."""
         result = to_vtt([])
         assert result.strip() == "WEBVTT"
 
 
 # ===========================================================================
-# to_srt — タイムコードと出力フォーマット
+# to_srt — timecodes and output format
 # ===========================================================================
 
 
 class TestToSrt:
-    """to_srt のフォーマット・インデックス・タイムコードを検証する。"""
+    """Verify to_srt format, index, and timecodes."""
 
     def _make_segment(self, start_sec: float, end_sec: float, text: str) -> Segment:
         return {"start_sec": start_sec, "end_sec": end_sec, "text": text}
 
     def test_single_segment_index_starts_at_1(self) -> None:
-        """SRT のインデックスが 1 始まりであること。"""
+        """SRT index starts at 1."""
         segments = [self._make_segment(0.0, 1.0, "Hello")]
         srt = to_srt(segments)
         lines = srt.strip().splitlines()
         assert lines[0] == "1"
 
     def test_single_segment_timecode_format(self) -> None:
-        """SRT タイムコードが HH:MM:SS,mmm 形式であること（TR-AD-07）。"""
+        """SRT timecode is in HH:MM:SS,mmm format (TR-AD-07)."""
         segments = [self._make_segment(0.0, 1.5, "Hello")]
         srt = to_srt(segments)
         lines = srt.strip().splitlines()
-        # 2行目がタイムコード行: 00:00:00,000 --> 00:00:01,500
+        # Line 2 is the timecode line: 00:00:00,000 --> 00:00:01,500
         assert "-->" in lines[1]
         start, end = lines[1].split(" --> ")
-        # HH:MM:SS,mmm パターン検証
+        # Verify HH:MM:SS,mmm pattern
         import re
 
         pattern = r"^\d{2}:\d{2}:\d{2},\d{3}$"
@@ -294,27 +298,28 @@ class TestToSrt:
         assert re.match(pattern, end), f"SRT end timecode format error: {end}"
 
     def test_timecode_zero_second(self) -> None:
-        """start_sec=0.0 → '00:00:00,000' であること（境界値）。"""
+        """start_sec=0.0 -> '00:00:00,000' (boundary value)."""
         segments = [self._make_segment(0.0, 0.5, "Zero")]
         srt = to_srt(segments)
         assert "00:00:00,000" in srt
 
     def test_timecode_hour_rollover(self) -> None:
-        """60分以上の秒値で時間が繰り上がること（境界値）。"""
+        """Second values over 60 minutes roll over to the hours field (boundary
+        value)."""
         segments = [self._make_segment(3661.0, 3662.5, "Rollover")]
         srt = to_srt(segments)
-        # 3661秒 = 1時間1分1秒
+        # 3661 s = 1 h 1 m 1 s
         assert "01:01:01,000" in srt
 
     def test_timecode_milliseconds_precision(self) -> None:
-        """ミリ秒部分が正しく整形されること。"""
+        """Millisecond part is formatted correctly."""
         segments = [self._make_segment(1.234, 2.567, "Millis")]
         srt = to_srt(segments)
         assert "00:00:01,234" in srt
         assert "00:00:02,567" in srt
 
     def test_multiple_segments_sequential_index(self) -> None:
-        """複数セグメントで連番インデックスが付くこと。"""
+        """Multiple segments receive sequential indices."""
         segments = [
             self._make_segment(0.0, 1.0, "First"),
             self._make_segment(1.5, 2.5, "Second"),
@@ -325,17 +330,17 @@ class TestToSrt:
         assert lines == ["1", "2", "3"]
 
     def test_multiple_segments_blank_line_separator(self) -> None:
-        """複数セグメント間に空行区切りがあること。"""
+        """Multiple segments are separated by blank lines."""
         segments = [
             self._make_segment(0.0, 1.0, "First"),
             self._make_segment(1.5, 2.5, "Second"),
         ]
         srt = to_srt(segments)
-        # 空行が存在すること
+        # Blank line must exist
         assert "\n\n" in srt
 
     def test_segment_text_in_output(self) -> None:
-        """セグメントの text が SRT 出力に含まれること。"""
+        """Segment text appears in the SRT output."""
         segments = [self._make_segment(0.0, 1.0, "Hello world")]
         srt = to_srt(segments)
         assert "Hello world" in srt
@@ -343,7 +348,7 @@ class TestToSrt:
     def test_fixture_based_srt_output(
         self, whisper_sample_json: dict[str, Any]
     ) -> None:
-        """fixture JSON から normalize_segments → to_srt の一連フローが機能すること。"""
+        """normalize_segments -> to_srt pipeline works end-to-end with the fixture."""
         segments = normalize_segments(whisper_sample_json)
         srt = to_srt(segments)
         assert len(srt) > 0
@@ -352,24 +357,24 @@ class TestToSrt:
 
 
 # ===========================================================================
-# to_vtt — タイムコードと出力フォーマット
+# to_vtt — timecodes and output format
 # ===========================================================================
 
 
 class TestToVtt:
-    """to_vtt のフォーマット・ヘッダ・タイムコードを検証する。"""
+    """Verify to_vtt format, header, and timecodes."""
 
     def _make_segment(self, start_sec: float, end_sec: float, text: str) -> Segment:
         return {"start_sec": start_sec, "end_sec": end_sec, "text": text}
 
     def test_output_starts_with_webvtt_header(self) -> None:
-        """VTT 出力が 'WEBVTT' ヘッダで始まること。"""
+        """VTT output starts with the 'WEBVTT' header."""
         segments = [self._make_segment(0.0, 1.0, "Hello")]
         vtt = to_vtt(segments)
         assert vtt.startswith("WEBVTT")
 
     def test_timecode_format_uses_dot_separator(self) -> None:
-        """VTT タイムコードが HH:MM:SS.mmm 形式（ドット区切り）であること（TR-AD-07）。"""
+        """VTT timecode uses HH:MM:SS.mmm format (dot separator; TR-AD-07)."""
         segments = [self._make_segment(0.0, 1.5, "Hello")]
         vtt = to_vtt(segments)
         import re
@@ -378,32 +383,33 @@ class TestToVtt:
         assert re.search(pattern, vtt), f"VTT timecode format error: {vtt}"
 
     def test_timecode_zero_second(self) -> None:
-        """start_sec=0.0 → '00:00:00.000' であること（境界値）。"""
+        """start_sec=0.0 -> '00:00:00.000' (boundary value)."""
         segments = [self._make_segment(0.0, 0.5, "Zero")]
         vtt = to_vtt(segments)
         assert "00:00:00.000" in vtt
 
     def test_timecode_hour_rollover(self) -> None:
-        """60分以上の秒値で時間が繰り上がること（境界値）。"""
+        """Second values over 60 minutes roll over to the hours field (boundary
+        value)."""
         segments = [self._make_segment(3661.0, 3662.5, "Rollover")]
         vtt = to_vtt(segments)
         assert "01:01:01.000" in vtt
 
     def test_timecode_milliseconds_precision(self) -> None:
-        """ミリ秒部分が正しく整形されること。"""
+        """Millisecond part is formatted correctly."""
         segments = [self._make_segment(1.234, 2.567, "Millis")]
         vtt = to_vtt(segments)
         assert "00:00:01.234" in vtt
         assert "00:00:02.567" in vtt
 
     def test_segment_text_in_output(self) -> None:
-        """セグメントの text が VTT 出力に含まれること。"""
+        """Segment text appears in the VTT output."""
         segments = [self._make_segment(0.0, 1.0, "Hello world")]
         vtt = to_vtt(segments)
         assert "Hello world" in vtt
 
     def test_arrow_separator_present(self) -> None:
-        """タイムコード間の --> 区切りが含まれること。"""
+        """The --> separator appears between timecodes."""
         segments = [self._make_segment(0.0, 1.0, "Hello")]
         vtt = to_vtt(segments)
         assert "-->" in vtt
@@ -411,7 +417,7 @@ class TestToVtt:
     def test_fixture_based_vtt_output(
         self, whisper_sample_json: dict[str, Any]
     ) -> None:
-        """fixture JSON から normalize_segments → to_vtt の一連フローが機能すること。"""
+        """normalize_segments -> to_vtt pipeline works end-to-end with the fixture."""
         segments = normalize_segments(whisper_sample_json)
         vtt = to_vtt(segments)
         assert vtt.startswith("WEBVTT")
@@ -419,34 +425,36 @@ class TestToVtt:
 
 
 # ===========================================================================
-# DC-AS-005 — SRT と VTT のタイムコード一貫性
+# DC-AS-005 — SRT and VTT timecode consistency
 # ===========================================================================
 
 
 class TestTimecodeConsistency:
-    """SRT と VTT が同一秒値から導出され一貫することを検証する（DC-AS-005 純ロジック側）。"""
+    """Verify that SRT and VTT derive from the same second value (DC-AS-005, pure
+    logic side)."""
 
     def _make_segment(self, start_sec: float, end_sec: float, text: str) -> Segment:
         return {"start_sec": start_sec, "end_sec": end_sec, "text": text}
 
     def test_srt_and_vtt_share_same_second_values(self) -> None:
-        """SRT と VTT で秒整数部分（HH:MM:SS）が一致すること。"""
+        """SRT and VTT share the same HH:MM:SS integer part."""
         segments = [self._make_segment(1.234, 2.567, "Consistent")]
         srt = to_srt(segments)
         vtt = to_vtt(segments)
-        # SRT: 00:00:01,234 → ミリ秒前半 "00:00:01"
-        # VTT: 00:00:01.234 → ミリ秒前半 "00:00:01"
+        # SRT: 00:00:01,234 -> HH:MM:SS part "00:00:01"
+        # VTT: 00:00:01.234 -> HH:MM:SS part "00:00:01"
         srt_hms_start = "00:00:01"
         vtt_hms_start = "00:00:01"
         assert srt_hms_start in srt
         assert vtt_hms_start in vtt
 
     def test_srt_comma_and_vtt_dot_differ_only_in_separator(self) -> None:
-        """SRT のコンマ区切りと VTT のドット区切りのみが異なり、値は同一であること。"""
+        """Only the millisecond separator differs between SRT (comma) and VTT (dot);
+        the values are identical."""
         segments = [self._make_segment(0.0, 1.5, "Test")]
         srt = to_srt(segments)
         vtt = to_vtt(segments)
-        # SRT: 00:00:00,000 → 00:00:01,500
+        # SRT: 00:00:00,000 --> 00:00:01,500
         # VTT: 00:00:00.000 --> 00:00:01.500
         assert "00:00:00,000" in srt
         assert "00:00:01,500" in srt
@@ -456,26 +464,26 @@ class TestTimecodeConsistency:
     def test_fixture_srt_and_vtt_timecodes_consistent(
         self, whisper_sample_json: dict[str, Any]
     ) -> None:
-        """fixture 由来のセグメントで SRT/VTT タイムコードが一貫すること。"""
+        """SRT/VTT timecodes are consistent for fixture-derived segments."""
         segments = normalize_segments(whisper_sample_json)
         srt = to_srt(segments)
         vtt = to_vtt(segments)
 
-        # 1セグメント目: start=0.0s → "00:00:00"
+        # First segment: start=0.0s -> "00:00:00"
         assert "00:00:00,000" in srt
         assert "00:00:00.000" in vtt
 
-        # 1セグメント目: end=1.2s → "00:00:01,200" / "00:00:01.200"
+        # First segment: end=1.2s -> "00:00:01,200" / "00:00:01.200"
         assert "00:00:01,200" in srt
         assert "00:00:01.200" in vtt
 
     def test_millisecond_rounding_consistent_between_srt_and_vtt(self) -> None:
-        """SRT と VTT でミリ秒の値が一致すること（丸め処理の一貫性）。"""
-        # ミリ秒に切り捨てて一致することを確認
+        """Millisecond values are identical between SRT and VTT (rounding
+        consistency)."""
         segments = [self._make_segment(1.001, 2.999, "Rounding")]
         srt = to_srt(segments)
         vtt = to_vtt(segments)
-        # ミリ秒部分: SRT "001" / VTT "001" が一致すること
+        # ms part: SRT "001" / VTT "001" must match
         assert "00:00:01,001" in srt
         assert "00:00:01.001" in vtt
         assert "00:00:02,999" in srt
@@ -483,80 +491,86 @@ class TestTimecodeConsistency:
 
 
 # ===========================================================================
-# CR L-8 — _format_timecode 丸め挙動の明文化（四捨五入仕様の固定）
+# CR L-8 — Documenting _format_timecode rounding behaviour (locking round-half-up
+# spec)
 # ===========================================================================
 
 
 class TestFormatTimecodeRounding:
-    """_format_timecode の四捨五入挙動を境界値で固定する（CR L-8 対応）。
+    """Lock the round-half-up behaviour of _format_timecode with boundary values
+    (CR L-8).
 
-    実装は int(round(total_seconds * 1000)) であり「四捨五入」が正仕様。
-    docstring が「切り捨て」と誤記していたため（CR L-8）、
-    impl-captions-fix で docstring を修正する前に仕様を境界値テストで固定する。
+    The implementation uses int(round(total_seconds * 1000)), making round-half-up
+    the correct specification. The docstring had an incorrect "truncation" note (CR
+    L-8); this test class pins the spec via boundary values before that docstring fix
+    (impl-captions-fix).
 
-    以下のテストはすべて「四捨五入なら pass・切り捨てなら fail」となる境界値を選んでいる。
-    実装が既に round 済みのため現時点で Green になる。
-    docstring 修正後（impl-captions-fix）も引き続き Green であることで仕様整合を保証する。
+    All tests below are boundary values where round-half-up passes and truncation
+    fails. Since the implementation already uses round(), they are currently Green.
+    They remain Green after the docstring fix (impl-captions-fix) to guarantee spec
+    alignment.
     """
 
     def _make_segment(self, start_sec: float, end_sec: float, text: str) -> Segment:
         return {"start_sec": start_sec, "end_sec": end_sec, "text": text}
 
     def test_round_up_at_0_5ms_boundary(self) -> None:
-        """1.9999 秒（小数部分が 0.9ms 超）が四捨五入で 2000ms になること。
+        """1.9999 s (fractional part > 0.9 ms) rounds up to 2000 ms.
 
-        1.9999 * 1000 = 1999.9 → round(1999.9) = 2000 → "00:00:02,000"
-        切り捨て（int(1999.9) = 1999）なら "00:00:01,999" になるため、
-        四捨五入仕様を一意に識別できる境界値。
+        1.9999 * 1000 = 1999.9 -> round(1999.9) = 2000 -> "00:00:02,000"
+        Truncation (int(1999.9) = 1999) would give "00:00:01,999", uniquely
+        distinguishing the two behaviours.
         """
         segments = [self._make_segment(0.0, 1.9999, "RoundUp")]
         srt = to_srt(segments)
         assert "00:00:02,000" in srt, (
-            f"四捨五入で 2000ms になるはず（切り捨てなら 1999ms）: {srt}"
+            f"Expected round-half-up to 2000 ms (truncation gives 1999 ms): {srt}"
         )
 
     def test_round_up_at_0_5ms_boundary_vtt(self) -> None:
-        """1.9999 秒（小数部分が 0.9ms 超）が VTT でも四捨五入で 2000ms になること。
+        """1.9999 s also rounds up to 2000 ms in VTT output.
 
-        SRT/VTT で同一 ms 値が導出されることを確認する（DC-AS-005 非回帰）。
+        Confirms that SRT and VTT derive the same ms value (DC-AS-005 non-regression).
         """
         segments = [self._make_segment(0.0, 1.9999, "RoundUpVtt")]
         vtt = to_vtt(segments)
         assert "00:00:02.000" in vtt, (
-            f"四捨五入で 2000ms になるはず（切り捨てなら 1999ms）: {vtt}"
+            f"Expected round-half-up to 2000 ms (truncation gives 1999 ms): {vtt}"
         )
 
     def test_srt_and_vtt_same_ms_at_rounding_boundary(self) -> None:
-        """1.9999 秒の SRT と VTT で同一 ms 値が導出されること（DC-AS-005 非回帰）。
+        """SRT and VTT produce the same ms value for 1.9999 s (DC-AS-005
+        non-regression).
 
-        セパレータのみ異なり（SRT=","・VTT="."）、ms 値は一致しなければならない。
+        Only the separator differs (SRT=","  VTT="."); ms values must match.
         """
         segments = [self._make_segment(0.0, 1.9999, "Consistency")]
         srt = to_srt(segments)
         vtt = to_vtt(segments)
-        assert "00:00:02,000" in srt, f"SRT 四捨五入 2000ms: {srt}"
-        assert "00:00:02.000" in vtt, f"VTT 四捨五入 2000ms: {vtt}"
+        assert "00:00:02,000" in srt, f"SRT round-half-up 2000 ms: {srt}"
+        assert "00:00:02.000" in vtt, f"VTT round-half-up 2000 ms: {vtt}"
 
     def test_minute_rollover_at_rounding_boundary(self) -> None:
-        """59.9996 秒（小数部分が 0.6ms 超）が四捨五入で 60000ms → 分繰り上がりになること。
+        """59.9996 s (fractional part > 0.6 ms) rounds up to 60000 ms -> minute
+        rollover.
 
-        59.9996 * 1000 = 59999.6 → round(59999.6) = 60000ms = 1分0秒0ms
-        切り捨て（int(59999.6) = 59999ms = 59秒999ms）なら "00:00:59,999" のまま。
+        59.9996 * 1000 = 59999.6 -> round(59999.6) = 60000 ms = 1 min 0 s 0 ms
+        Truncation (int(59999.6) = 59999 ms = 59 s 999 ms) gives "00:00:59,999".
         """
         segments = [self._make_segment(0.0, 59.9996, "MinuteRollover")]
         srt = to_srt(segments)
         assert "00:01:00,000" in srt, (
-            f"四捨五入で分繰り上がり（00:01:00,000）になるはず: {srt}"
+            f"Expected minute rollover (00:01:00,000) from round-half-up: {srt}"
         )
 
     def test_hour_rollover_at_rounding_boundary(self) -> None:
-        """3599.9996 秒（小数部分が 0.6ms 超）が四捨五入で時間繰り上がりになること。
+        """3599.9996 s (fractional part > 0.6 ms) rounds up to hour rollover.
 
-        3599.9996 * 1000 = 3599999.6 → round(3599999.6) = 3600000ms = 1時間0分0秒0ms
-        切り捨てなら "00:59:59,999" のまま。
+        3599.9996 * 1000 = 3599999.6 -> round(3599999.6) = 3600000 ms = 1 h 0 m 0 s
+        Truncation gives "00:59:59,999".
         """
         segments = [self._make_segment(0.0, 3599.9996, "HourRollover")]
         srt = to_srt(segments)
         assert "01:00:00,000" in srt, (
-            f"四捨五入で時間繰り上がり（01:00:00,000）になるはず: {srt}"
+            f"Expected hour rollover (01:00:00,000) from round-half-up: {srt}"
         )

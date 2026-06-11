@@ -1,25 +1,25 @@
-"""test_loudness.py — loudness.py オーケストレーション層のテスト。
+"""test_loudness.py — Tests for the loudness.py orchestration layer.
 
-モック方針:
-  - clipwright_loudness.loudness.inspect_media を patch して MediaInfo を供給。
-  - clipwright_loudness.loudness.measure_loudness を patch して ffmpeg を呼ばない。
-  - 実 ffmpeg/ffprobe バイナリは一切呼ばない。
+Mock policy:
+  - Patch clipwright_loudness.loudness.inspect_media to supply MediaInfo.
+  - Patch clipwright_loudness.loudness.measure_loudness to avoid calling ffmpeg.
+  - No real ffmpeg/ffprobe binary is invoked.
 
-検証観点:
-  (a) timeline=None: 新規 timeline・V1/A1 全長 keep clip・loudness 注記を
-      timeline-level metadata に格納・save
-  (b) timeline 指定: 既存ロード+部分更新で既存注記（denoise 等）保持
-  (c) .otio 以外→INVALID_INPUT
-  (d) media 不在→FILE_NOT_FOUND（basename）
-  (e) output==media/timeline→INVALID_INPUT
-  (f) output が media と別dir→INVALID_INPUT
-  (g) 映像なし→UNSUPPORTED・音声なし→UNSUPPORTED
-  (h) timeline 指定で media≠timeline source→INVALID_INPUT
-  (h2) 既存 timeline（V1+A1 正常系）は検証を通る
-  (i) 複数source/Video2本→不正
-  (j) mode=loudnorm/peak それぞれで target・measured が timeline-level 注記に入る
-  (k) U-1: loudnorm で measured 取得不能なら loudness 指示を書かず（既存 metadata に
-      loudness を追加しない）warning を返す
+Verification points:
+  (a) timeline=None: new timeline, V1/A1 full-length keep clip, loudness directive in
+      timeline-level metadata, save
+  (b) timeline specified: load existing + partial update preserving other directives (e.g. denoise)
+  (c) non-.otio extension -> INVALID_INPUT
+  (d) media not found -> FILE_NOT_FOUND (basename)
+  (e) output==media/timeline -> INVALID_INPUT
+  (f) output in different dir from media -> INVALID_INPUT
+  (g) no video -> UNSUPPORTED, no audio -> UNSUPPORTED
+  (h) timeline specified with media != timeline source -> INVALID_INPUT
+  (h2) valid timeline (V1+A1 normal case) passes validation
+  (i) multiple sources / 2 Video tracks -> error
+  (j) mode=loudnorm/peak: target and measured are stored in timeline-level directive
+  (k) U-1: when loudnorm measured is not available, skip loudness directive
+      (no loudness key added to existing metadata) and return warning
 """
 
 from __future__ import annotations
@@ -35,13 +35,13 @@ from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo
 from clipwright_loudness.schemas import DetectLoudnessOptions
 
 # ===========================================================================
-# ヘルパー
+# Helpers
 # ===========================================================================
 
 FPS = 30.0
-_TEST_BIT_RATE = 8_000_000  # テスト用ビットレート定数（アサーション対象外）
+_TEST_BIT_RATE = 8_000_000  # test bit rate constant (not asserted)
 
-# loudnorm mode での正常測定結果モック
+# Normal measured result mock for loudnorm mode
 _FAKE_LOUDNORM_MEASURED = {
     "measured": {
         "input_i": -21.75,
@@ -53,7 +53,7 @@ _FAKE_LOUDNORM_MEASURED = {
     "warnings": [],
 }
 
-# peak mode での正常測定結果モック
+# Normal measured result mock for peak mode
 _FAKE_PEAK_MEASURED = {
     "measured": {
         "max_volume_db": -18.1,
@@ -61,11 +61,11 @@ _FAKE_PEAK_MEASURED = {
     "warnings": [],
 }
 
-# measured=None（測定不能・U-1）のモック
+# measured=None (not measurable, U-1) mock
 _FAKE_MEASURED_NONE = {
     "measured": None,
     "warnings": [
-        "ラウドネス測定値を取得できませんでした。loudness 指示は書き込みません。"
+        "Could not retrieve loudness measured values. loudness directive will not be written."
     ],
 }
 
@@ -78,7 +78,7 @@ def _make_media_info(
     has_video: bool = True,
     has_audio: bool = True,
 ) -> MediaInfo:
-    """テスト用 MediaInfo を構築するヘルパー。"""
+    """Helper to construct a MediaInfo for testing."""
     streams: list[StreamInfo] = []
     if has_video:
         streams.append(StreamInfo(index=0, codec_type="video", codec_name="h264"))
@@ -104,7 +104,7 @@ def _make_otio_timeline(
     num_audio_tracks: int = 1,
     sources: list[str] | None = None,
 ) -> otio.schema.Timeline:
-    """テスト用 OTIO Timeline を構築するヘルパー。"""
+    """Helper to construct a test OTIO Timeline."""
     tl = otio.schema.Timeline(name="test")
 
     for i in range(num_video_tracks):
@@ -139,20 +139,20 @@ def _make_otio_timeline(
 
 
 def _save_timeline_to_file(tl: otio.schema.Timeline, path: Path) -> None:
-    """Timeline を実ファイルに保存する。"""
+    """Save a Timeline to a real file."""
     otio.adapters.write_to_file(tl, str(path))
 
 
 # ===========================================================================
-# (a) timeline=None: 新規 timeline 生成
+# (a) timeline=None: new timeline creation
 # ===========================================================================
 
 
 class TestNewTimeline:
-    """timeline=None 時に新規 timeline が生成されること。"""
+    """A new timeline must be created when timeline=None."""
 
     def test_new_timeline_ok_result(self, tmp_path: Path) -> None:
-        """成功エンベロープが返ること。"""
+        """Must return a success envelope."""
         from clipwright_loudness.loudness import detect_loudness
 
         media = tmp_path / "video.mp4"
@@ -179,7 +179,7 @@ class TestNewTimeline:
         assert result["ok"] is True
 
     def test_new_timeline_otio_file_created(self, tmp_path: Path) -> None:
-        """output に .otio ファイルが生成されること。"""
+        """An .otio file must be created at the output path."""
         from clipwright_loudness.loudness import detect_loudness
 
         media = tmp_path / "video.mp4"
@@ -200,10 +200,10 @@ class TestNewTimeline:
                 str(media), str(output), DetectLoudnessOptions(), timeline=None
             )
 
-        assert output.exists(), "output .otio が生成されていない。"
+        assert output.exists(), "output .otio was not created."
 
     def test_new_timeline_v1_has_clip(self, tmp_path: Path) -> None:
-        """生成 timeline の V1 に clip が1件以上あること。"""
+        """V1 of the created timeline must contain at least one clip."""
         from clipwright.otio_utils import load_timeline
 
         from clipwright_loudness.loudness import detect_loudness
@@ -234,7 +234,7 @@ class TestNewTimeline:
     def test_new_timeline_has_loudness_metadata_at_timeline_level(
         self, tmp_path: Path
     ) -> None:
-        """生成 timeline の timeline-level metadata に loudness 注記があること（ADR-L4）。"""
+        """The created timeline must have a loudness directive in timeline-level metadata (ADR-L4)."""
         from clipwright.otio_utils import get_clipwright_metadata, load_timeline
 
         from clipwright_loudness.loudness import detect_loudness
@@ -260,14 +260,14 @@ class TestNewTimeline:
         tl = load_timeline(str(output))
         meta = get_clipwright_metadata(tl)
         assert "loudness" in meta, (
-            "timeline.metadata['clipwright']['loudness'] がない（ADR-L4）。"
+            "timeline.metadata['clipwright']['loudness'] is missing (ADR-L4)."
         )
         loudness = meta["loudness"]
         assert loudness["kind"] == "loudness"
         assert loudness["scope"] == "track"
 
     def test_new_timeline_artifacts_contains_otio(self, tmp_path: Path) -> None:
-        """result の artifacts に role=timeline / format=otio が含まれること。"""
+        """result artifacts must contain role=timeline / format=otio."""
         from clipwright_loudness.loudness import detect_loudness
 
         media = tmp_path / "video.mp4"
@@ -301,15 +301,15 @@ class TestNewTimeline:
 
 
 # ===========================================================================
-# (b) timeline 指定: 既存 timeline ロード + 部分更新
+# (b) timeline specified: load existing + partial update
 # ===========================================================================
 
 
 class TestExistingTimeline:
-    """timeline=path 時に既存タイムラインをロードして更新すること。"""
+    """When timeline=path, the existing timeline must be loaded and updated."""
 
     def test_existing_timeline_loudness_metadata_updated(self, tmp_path: Path) -> None:
-        """既存 timeline に loudness 注記が追記されること。"""
+        """loudness directive must be appended to an existing timeline."""
         from clipwright.otio_utils import get_clipwright_metadata, load_timeline
 
         from clipwright_loudness.loudness import detect_loudness
@@ -346,7 +346,7 @@ class TestExistingTimeline:
         assert "loudness" in meta
 
     def test_existing_timeline_other_metadata_preserved(self, tmp_path: Path) -> None:
-        """既存 timeline の loudness 以外の注記（denoise など）が保持されること。"""
+        """Other directives in the existing timeline (e.g. denoise) must be preserved."""
         from clipwright.otio_utils import (
             get_clipwright_metadata,
             load_timeline,
@@ -359,7 +359,7 @@ class TestExistingTimeline:
         media.write_bytes(b"dummy")
 
         tl = _make_otio_timeline(media)
-        # 既存 denoise 注記を書き込む
+        # Write an existing denoise directive
         set_clipwright_metadata(
             tl,
             {
@@ -396,19 +396,19 @@ class TestExistingTimeline:
 
         out_tl = load_timeline(str(output))
         meta = get_clipwright_metadata(out_tl)
-        # denoise が保持されること
+        # denoise must still be present
         assert "denoise" in meta, (
-            "既存の denoise 注記が loudness 更新で消えてしまった。"
+            "Existing denoise directive was lost during loudness update."
         )
 
 
 # ===========================================================================
-# (c) .otio 以外の拡張子 → INVALID_INPUT
+# (c) non-.otio extension -> INVALID_INPUT
 # ===========================================================================
 
 
 class TestInvalidExtension:
-    """output に .otio 以外を指定した場合 INVALID_INPUT が返ること。"""
+    """INVALID_INPUT must be returned when output has a non-.otio extension."""
 
     @pytest.mark.parametrize("ext", [".mp4", ".json", ".txt", ".otioz", ""])
     def test_non_otio_extension_returns_invalid_input(
@@ -429,12 +429,12 @@ class TestInvalidExtension:
 
 
 # ===========================================================================
-# (c2) output の親ディレクトリが存在しない → INVALID_INPUT
+# (c2) output parent directory does not exist -> INVALID_INPUT
 # ===========================================================================
 
 
 class TestOutputParentDirNotFound:
-    """output の親ディレクトリが存在しない場合 INVALID_INPUT が返ること。"""
+    """INVALID_INPUT must be returned when the output parent directory does not exist."""
 
     def test_output_parent_dir_not_exist_returns_invalid_input(
         self, tmp_path: Path
@@ -451,16 +451,16 @@ class TestOutputParentDirNotFound:
 
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.INVALID_INPUT
-        assert "出力先ディレクトリ" in result["error"]["message"]
+        assert "output directory" in result["error"]["message"]
 
 
 # ===========================================================================
-# (d) media 不在 → FILE_NOT_FOUND（basename）
+# (d) media not found -> FILE_NOT_FOUND (basename)
 # ===========================================================================
 
 
 class TestMediaNotFound:
-    """media ファイルが存在しない場合 FILE_NOT_FOUND が返ること。"""
+    """FILE_NOT_FOUND must be returned when the media file does not exist."""
 
     def test_missing_media_returns_file_not_found(self, tmp_path: Path) -> None:
         from clipwright_loudness.loudness import detect_loudness
@@ -476,7 +476,7 @@ class TestMediaNotFound:
         assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
 
     def test_missing_media_message_contains_only_basename(self, tmp_path: Path) -> None:
-        """FILE_NOT_FOUND の message にディレクトリパスが含まれないこと（DC-GP-005）。"""
+        """FILE_NOT_FOUND message must not contain a directory path (DC-GP-005)."""
         from clipwright_loudness.loudness import detect_loudness
 
         media = tmp_path / "missing_video.mp4"
@@ -491,18 +491,18 @@ class TestMediaNotFound:
         assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
         error_msg = result["error"]["message"]
         assert full_dir not in error_msg, (
-            f"DC-GP-005: message に絶対ディレクトリパス '{full_dir}' が含まれている。"
+            f"DC-GP-005: absolute directory path '{full_dir}' found in message."
         )
         assert "missing_video.mp4" in error_msg
 
 
 # ===========================================================================
-# (e) output == media / output == timeline → INVALID_INPUT
+# (e) output == media / output == timeline -> INVALID_INPUT
 # ===========================================================================
 
 
 class TestOutputConflict:
-    """output が media または timeline と同一パスの場合 INVALID_INPUT が返ること。"""
+    """INVALID_INPUT must be returned when output is the same path as media or timeline."""
 
     def test_output_equals_media_returns_invalid_input(self, tmp_path: Path) -> None:
         from clipwright_loudness.loudness import detect_loudness
@@ -537,12 +537,12 @@ class TestOutputConflict:
 
 
 # ===========================================================================
-# (f) output が media と別 dir → INVALID_INPUT
+# (f) output in different dir from media -> INVALID_INPUT
 # ===========================================================================
 
 
 class TestOutputDifferentDir:
-    """output が media と異なるディレクトリの場合 INVALID_INPUT が返ること。"""
+    """INVALID_INPUT must be returned when output is in a different directory from media."""
 
     def test_output_in_different_dir_returns_invalid_input(
         self, tmp_path: Path
@@ -566,7 +566,7 @@ class TestOutputDifferentDir:
         assert result["error"]["code"] == ErrorCode.INVALID_INPUT
 
     def test_output_different_dir_hint_no_absolute_path(self, tmp_path: Path) -> None:
-        """同一dir エラーの hint に絶対パスが含まれないこと（CWE-209）。"""
+        """The same-dir error hint must not contain an absolute path (CWE-209)."""
         from clipwright_loudness.loudness import detect_loudness
 
         media_dir = tmp_path / "media_src_dir"
@@ -589,12 +589,12 @@ class TestOutputDifferentDir:
 
 
 # ===========================================================================
-# (g) 映像なし → UNSUPPORTED / 音声なし → UNSUPPORTED
+# (g) no video -> UNSUPPORTED / no audio -> UNSUPPORTED
 # ===========================================================================
 
 
 class TestStreamRequirements:
-    """映像・音声の両方が必要。"""
+    """Both video and audio streams are required."""
 
     def test_no_video_stream_returns_unsupported(self, tmp_path: Path) -> None:
         from clipwright_loudness.loudness import detect_loudness
@@ -634,12 +634,12 @@ class TestStreamRequirements:
 
 
 # ===========================================================================
-# (h) timeline 指定で media ≠ timeline source → INVALID_INPUT
+# (h) timeline specified with media != timeline source -> INVALID_INPUT
 # ===========================================================================
 
 
 class TestTimelineSourceMismatch:
-    """timeline の source が media と異なる場合 INVALID_INPUT が返ること。"""
+    """INVALID_INPUT must be returned when the timeline source differs from media."""
 
     def test_different_source_returns_invalid_input(self, tmp_path: Path) -> None:
         from clipwright_loudness.loudness import detect_loudness
@@ -670,7 +670,7 @@ class TestTimelineSourceMismatch:
         assert result["error"]["code"] == ErrorCode.INVALID_INPUT
 
     def test_mismatch_message_contains_basename_only(self, tmp_path: Path) -> None:
-        """不一致エラーの message に絶対パスが混入しないこと（DC-GP-005）。"""
+        """Mismatch error message must not contain an absolute path (DC-GP-005)."""
         from clipwright_loudness.loudness import detect_loudness
 
         media = tmp_path / "video.mp4"
@@ -702,15 +702,15 @@ class TestTimelineSourceMismatch:
 
 
 # ===========================================================================
-# (h2) 既存 timeline（V1+A1 正常系）は検証を通る
+# (h2) valid timeline (V1+A1 normal case) passes validation
 # ===========================================================================
 
 
 class TestTimelineSourceMatchPositive:
-    """同一 media の timeline ロードで誤 INVALID_INPUT を出さないこと。"""
+    """Must not incorrectly raise INVALID_INPUT when loading a timeline with the same media."""
 
     def test_same_source_timeline_passes_validation(self, tmp_path: Path) -> None:
-        """同一 media の timeline を渡すと通ること（パス正規化比較）。"""
+        """A timeline created from the same media must pass validation (path normalization comparison)."""
         from clipwright_loudness.loudness import detect_loudness
 
         media = tmp_path / "video.mp4"
@@ -740,12 +740,12 @@ class TestTimelineSourceMatchPositive:
             )
 
         assert result["ok"] is True, (
-            f"同一 media の timeline が誤 INVALID_INPUT になった。"
+            f"Same-media timeline incorrectly returned INVALID_INPUT."
             f" error={result.get('error')}"
         )
 
     def test_v1_a1_timeline_passes_validation(self, tmp_path: Path) -> None:
-        """V1+A1（Video1本 + Audio1本）の timeline は検証を通ること。"""
+        """A V1+A1 (1 Video + 1 Audio) timeline must pass validation."""
         from clipwright_loudness.loudness import detect_loudness
 
         media = tmp_path / "video.mp4"
@@ -775,21 +775,20 @@ class TestTimelineSourceMatchPositive:
             )
 
         assert result["ok"] is True, (
-            f"V1+A1 の正常 timeline が INVALID_INPUT になった。"
-            f" error={result.get('error')}"
+            f"V1+A1 normal timeline returned INVALID_INPUT. error={result.get('error')}"
         )
 
 
 # ===========================================================================
-# (i) 複数 source / Video2本 → 不正
+# (i) multiple sources / 2 Video tracks -> error
 # ===========================================================================
 
 
 class TestTimelineValidation:
-    """timeline の構造検証。"""
+    """Timeline structural validation."""
 
     def test_multiple_sources_returns_error(self, tmp_path: Path) -> None:
-        """V1 に複数 source の clip が含まれる場合エラーが返ること。"""
+        """An error must be returned when V1 contains clips from multiple sources."""
         from clipwright_loudness.loudness import detect_loudness
 
         media = tmp_path / "video.mp4"
@@ -823,7 +822,7 @@ class TestTimelineValidation:
         )
 
     def test_two_video_tracks_returns_invalid_input(self, tmp_path: Path) -> None:
-        """Video トラックが2本の timeline は INVALID_INPUT が返ること。"""
+        """INVALID_INPUT must be returned when the timeline has two Video tracks."""
         from clipwright_loudness.loudness import detect_loudness
 
         media = tmp_path / "video.mp4"
@@ -851,15 +850,15 @@ class TestTimelineValidation:
 
 
 # ===========================================================================
-# (j) mode=loudnorm/peak それぞれで target・measured が timeline-level 注記に入る
+# (j) mode=loudnorm/peak: target and measured are stored in timeline-level directive
 # ===========================================================================
 
 
 class TestLoudnessModeMetadata:
-    """mode ごとに target・measured が timeline-level metadata に正しく格納されること。"""
+    """Target and measured must be correctly stored in timeline-level metadata for each mode."""
 
     def test_loudnorm_mode_target_in_metadata(self, tmp_path: Path) -> None:
-        """loudnorm mode: target（I/TP/LRA）が timeline metadata に入ること。"""
+        """loudnorm mode: target (I/TP/LRA) must be present in timeline metadata."""
         from clipwright.otio_utils import get_clipwright_metadata, load_timeline
 
         from clipwright_loudness.loudness import detect_loudness
@@ -891,11 +890,11 @@ class TestLoudnessModeMetadata:
         assert loudness["mode"] == "loudnorm"
         assert "target" in loudness
         target = loudness["target"]
-        # I/TP/LRA の既定値が含まれること
+        # Default I/TP/LRA values must be present
         assert "i" in target or "I" in target
 
     def test_loudnorm_mode_measured_in_metadata(self, tmp_path: Path) -> None:
-        """loudnorm mode: measured が timeline metadata に入ること。"""
+        """loudnorm mode: measured must be present in timeline metadata."""
         from clipwright.otio_utils import get_clipwright_metadata, load_timeline
 
         from clipwright_loudness.loudness import detect_loudness
@@ -925,13 +924,13 @@ class TestLoudnessModeMetadata:
         meta = get_clipwright_metadata(tl)
         loudness = meta["loudness"]
         assert loudness.get("measured") is not None, (
-            "loudnorm 正常系: measured が timeline metadata に入っていない。"
+            "loudnorm success path: measured is not present in timeline metadata."
         )
         measured = loudness["measured"]
         assert "input_i" in measured
 
     def test_peak_mode_target_in_metadata(self, tmp_path: Path) -> None:
-        """peak mode: target（peak_db）が timeline metadata に入ること。"""
+        """peak mode: target (peak_db) must be present in timeline metadata."""
         from clipwright.otio_utils import get_clipwright_metadata, load_timeline
 
         from clipwright_loudness.loudness import detect_loudness
@@ -966,7 +965,7 @@ class TestLoudnessModeMetadata:
         assert "peak_db" in target
 
     def test_peak_mode_measured_in_metadata(self, tmp_path: Path) -> None:
-        """peak mode: measured（max_volume_db）が timeline metadata に入ること。"""
+        """peak mode: measured (max_volume_db) must be present in timeline metadata."""
         from clipwright.otio_utils import get_clipwright_metadata, load_timeline
 
         from clipwright_loudness.loudness import detect_loudness
@@ -1001,17 +1000,17 @@ class TestLoudnessModeMetadata:
 
 
 # ===========================================================================
-# (k) U-1: loudnorm で measured 取得不能なら loudness 指示を書かず warning
+# (k) U-1: when loudnorm measured is not available, skip loudness directive and return warning
 # ===========================================================================
 
 
 class TestU1MeasuredNone:
-    """U-1: measured=None の場合 loudness 指示を timeline metadata に書かず warning を返す。"""
+    """U-1: when measured=None, the loudness directive must not be written and a warning must be returned."""
 
     def test_loudnorm_measured_none_no_loudness_in_metadata(
         self, tmp_path: Path
     ) -> None:
-        """measured=None の場合 timeline metadata に loudness キーが追加されないこと（U-1）。"""
+        """When measured=None, the loudness key must not be added to timeline metadata (U-1)."""
         from clipwright.otio_utils import get_clipwright_metadata, load_timeline
 
         from clipwright_loudness.loudness import detect_loudness
@@ -1037,25 +1036,25 @@ class TestU1MeasuredNone:
                 timeline=None,
             )
 
-        # ok=True（detect 自体は成功）
+        # ok=True (detect itself succeeds)
         assert result["ok"] is True, (
-            "U-1: measured=None でも detect は成功（ok=True）でなければならない。"
+            "U-1: detect must succeed (ok=True) even when measured=None."
         )
 
-        # timeline ファイル自体は生成されること
+        # The timeline file itself must still be created
         assert output.exists(), (
-            "U-1: measured=None でも timeline ファイル自体は生成されるべき。"
+            "U-1: the timeline file must be created even when measured=None."
         )
-        # timeline に loudness キーが追加されていないこと
+        # The loudness key must not be added to the timeline
         tl = load_timeline(str(output))
         meta = get_clipwright_metadata(tl)
         assert "loudness" not in meta, (
-            "U-1: measured=None の場合 loudness 指示を timeline metadata に"
-            "書いてはならない（DC-AM-003）。"
+            "U-1: loudness directive must not be written to timeline metadata"
+            " when measured=None (DC-AM-003)."
         )
 
     def test_loudnorm_measured_none_warning_in_result(self, tmp_path: Path) -> None:
-        """measured=None の場合 result の warnings に警告が含まれること（U-1）。"""
+        """When measured=None, result warnings must contain a warning (U-1)."""
         from clipwright_loudness.loudness import detect_loudness
 
         media = tmp_path / "video.mp4"
@@ -1081,27 +1080,27 @@ class TestU1MeasuredNone:
 
         warnings = result.get("warnings", [])
         assert len(warnings) > 0, (
-            "U-1: measured=None 時は result.warnings に警告が必要（DC-AM-003）。"
+            "U-1: result.warnings must contain a warning when measured=None (DC-AM-003)."
         )
 
 
 # ===========================================================================
-# SR L-2: _load_and_validate_timeline の境界検証（timeline 親dir 外ソース）
+# SR L-2: _load_and_validate_timeline boundary check (source outside timeline parent dir)
 # ===========================================================================
 
 
 class TestTimelineSourceBoundaryCheck:
-    """SR L-2: timeline の target_url がタイムライン親ディレクトリ配下にあること。"""
+    """SR L-2: target_url in the timeline must be within the timeline parent directory."""
 
     def test_source_outside_timeline_dir_returns_invalid_input(
         self, tmp_path: Path
     ) -> None:
-        """target_url がタイムライン親ディレクトリ外を指す場合 PATH_NOT_ALLOWED が返ること（SR-r2 L-1）。"""
+        """PATH_NOT_ALLOWED must be returned when target_url points outside the timeline parent dir (SR-r2 L-1)."""
         import opentimelineio as otio
 
         from clipwright_loudness.loudness import detect_loudness
 
-        # timeline は subdir に保存、source は別ディレクトリを指す
+        # timeline is saved in a subdir; source points to a different directory
         subdir = tmp_path / "project"
         subdir.mkdir()
         outside_dir = tmp_path / "outside"
@@ -1113,7 +1112,7 @@ class TestTimelineSourceBoundaryCheck:
         outside_media = outside_dir / "other.mp4"
         outside_media.write_bytes(b"dummy")
 
-        # V1 に outside_media を指す clip を持つ timeline を subdir に保存
+        # Save a timeline in subdir with a clip pointing to outside_media
         tl = otio.schema.Timeline(name="test")
         track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
         tl.tracks.append(track)
@@ -1145,5 +1144,5 @@ class TestTimelineSourceBoundaryCheck:
             )
 
         assert result["ok"] is False
-        # 境界外パス: render.py と同じ PATH_NOT_ALLOWED を期待する（SR-r2 L-1）
+        # Out-of-boundary path: expect PATH_NOT_ALLOWED as in render.py (SR-r2 L-1)
         assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED

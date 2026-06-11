@@ -1,10 +1,11 @@
-"""server.py — clipwright-render MCP サーバー + CLI エントリポイント。
+"""server.py — MCP server and CLI entry point for clipwright-render.
 
-ビジネスロジックは render.py に委譲する薄いラッパー。
-ClipwrightError の変換は render.py 側で行うため、ここでは二重変換しない。
+Thin wrapper that delegates all business logic to render.py.
+ClipwrightError conversion is done on the render.py side; double conversion is
+not performed here.
 
-トランスポートは stdio 既定（mcp.run(transport="stdio")）。
-CLI は argparse で引数をパースし render_timeline を呼ぶ。
+Default transport is stdio (mcp.run(transport="stdio")).
+The CLI parses arguments with argparse and calls render_timeline.
 """
 
 from __future__ import annotations
@@ -20,12 +21,12 @@ from pydantic import Field, ValidationError
 from clipwright_render.render import render_timeline
 from clipwright_render.schemas import RenderOptions
 
-# FastMCP インスタンス（サーバー名）
+# FastMCP instance (server name)
 mcp = FastMCP("clipwright-render")
 
 
 # ===========================================================================
-# clipwright_render MCP ツール
+# clipwright_render MCP tool
 # ===========================================================================
 
 
@@ -40,33 +41,33 @@ mcp = FastMCP("clipwright-render")
 def clipwright_render(
     timeline: Annotated[
         str,
-        Field(description="入力 OTIO タイムラインファイルパス。"),
+        Field(description="Input OTIO timeline file path."),
     ],
     output: Annotated[
         str,
-        Field(description="出力動画ファイルパス（.mp4/.mkv/.mov/.webm）。"),
+        Field(description="Output video file path (.mp4/.mkv/.mov/.webm)."),
     ],
     options: Annotated[
         RenderOptions | None,
         Field(
             description=(
-                "レンダリングオプション（コーデック/解像度/fps/crf/overwrite）。"
-                " 省略時はすべてソース踏襲（ffmpeg 既定）。"
+                "Rendering options (codec/resolution/fps/crf/overwrite)."
+                " When omitted, all settings inherit from the source (ffmpeg defaults)."
             )
         ),
     ] = None,
     dry_run: Annotated[
         bool,
-        Field(description="True のとき ffmpeg を実行せず計画のみを返す。"),
+        Field(description="When True, returns the plan only without executing ffmpeg."),
     ] = False,
 ) -> dict[str, Any]:
-    """OTIO タイムラインを FFmpeg で実体化する MCP ツール。
+    """MCP tool that materialises an OTIO timeline with FFmpeg.
 
-    入力 timeline ファイル・元素材メディアは一切書き換えない（非破壊）。
-    出力は新規生成した動画ファイルのパスを artifacts に返す。
+    Non-destructive: the input timeline file and source media are never modified.
+    The output is a newly generated video file whose path is returned in artifacts.
 
-    ビジネスロジックは render.render_timeline へ委譲する。
-    options が None の場合はデフォルト RenderOptions() を使用する。
+    Business logic is delegated to render.render_timeline.
+    When options is None, default RenderOptions() is used.
     """
     resolved_options = options if options is not None else RenderOptions()
     return render_timeline(
@@ -78,53 +79,53 @@ def clipwright_render(
 
 
 # ===========================================================================
-# CLI エントリポイント（DC-GP-003 / §6.3）
+# CLI entry point (DC-GP-003 / §6.3)
 # ===========================================================================
 
 
 def main() -> None:
-    """CLI エントリポイント。
+    """CLI entry point.
 
     clipwright-render <timeline> <output> [--dry-run] [--video-codec C]
       [--audio-codec C] [--width W --height H] [--fps F] [--crf N] [--overwrite]
 
-    argparse で引数をパースし RenderOptions を組み立てて render_timeline を呼ぶ。
-    MCP ツールと render.py ロジックを共有する（DC-GP-003）。
+    Parses arguments with argparse, builds RenderOptions, and calls render_timeline.
+    Shares render.py logic with the MCP tool (DC-GP-003).
     """
     parser = argparse.ArgumentParser(
         prog="clipwright-render",
-        description="OTIO タイムラインを FFmpeg で実体化する",
+        description="Materialise an OTIO timeline with FFmpeg",
     )
 
-    # 位置引数
-    parser.add_argument("timeline", help="入力 OTIO タイムラインファイルパス")
-    parser.add_argument("output", help="出力動画ファイルパス")
+    # Positional arguments
+    parser.add_argument("timeline", help="Input OTIO timeline file path")
+    parser.add_argument("output", help="Output video file path")
 
-    # オプション
+    # Optional arguments
     parser.add_argument(
-        "--dry-run", action="store_true", help="計画のみ返す（ffmpeg 未実行）"
+        "--dry-run", action="store_true", help="Return plan only (ffmpeg not executed)"
     )
     parser.add_argument(
-        "--video-codec", dest="video_codec", metavar="C", help="出力映像コーデック"
+        "--video-codec", dest="video_codec", metavar="C", help="Output video codec"
     )
     parser.add_argument(
-        "--audio-codec", dest="audio_codec", metavar="C", help="出力音声コーデック"
+        "--audio-codec", dest="audio_codec", metavar="C", help="Output audio codec"
     )
     parser.add_argument(
-        "--width", type=int, metavar="W", help="出力映像幅（height とペア）"
+        "--width", type=int, metavar="W", help="Output video width (pair with height)"
     )
     parser.add_argument(
-        "--height", type=int, metavar="H", help="出力映像高さ（width とペア）"
+        "--height", type=int, metavar="H", help="Output video height (pair with width)"
     )
-    parser.add_argument("--fps", type=float, metavar="F", help="出力フレームレート")
-    parser.add_argument("--crf", type=int, metavar="N", help="映像品質（CRF 0〜51）")
+    parser.add_argument("--fps", type=float, metavar="F", help="Output frame rate")
+    parser.add_argument("--crf", type=int, metavar="N", help="Video quality (CRF 0-51)")
     parser.add_argument(
-        "--overwrite", action="store_true", help="既存出力ファイルを上書き"
+        "--overwrite", action="store_true", help="Overwrite existing output file"
     )
 
     args = parser.parse_args()
 
-    # RenderOptions を Pydantic で組み立て（バリデーション込み）
+    # Build RenderOptions with Pydantic (includes validation)
     try:
         options = RenderOptions(
             video_codec=args.video_codec,
@@ -136,13 +137,16 @@ def main() -> None:
             overwrite=args.overwrite,
         )
     except ValidationError as exc:
-        # Pydantic 内部詳細は露出させず、不正なフィールド名のみ提示する（Sec Low-2）
+        # Do not expose Pydantic internal details; show only the invalid field
+        # names (Sec Low-2)
         fields = ", ".join(str(loc[0]) for e in exc.errors() if (loc := e.get("loc")))
         detail = (
-            f"{fields} の値が制約を満たしていません" if fields else "入力が不正です"
+            f"{fields} value(s) do not satisfy constraints"
+            if fields
+            else "input is invalid"
         )
         print(
-            f"オプションのバリデーションエラー: {detail}。--help で確認してください。",
+            f"Option validation error: {detail}. Run with --help for usage.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -158,13 +162,13 @@ def main() -> None:
         print(result.get("summary", ""))
     else:
         error = result.get("error", {})
-        print(f"エラー: {error.get('message', '')}", file=sys.stderr)
-        print(f"ヒント: {error.get('hint', '')}", file=sys.stderr)
+        print(f"Error: {error.get('message', '')}", file=sys.stderr)
+        print(f"Hint: {error.get('hint', '')}", file=sys.stderr)
         sys.exit(1)
 
 
 # ===========================================================================
-# エントリポイント（MCP stdio 起動）
+# Entry point (MCP stdio)
 # ===========================================================================
 
 if __name__ == "__main__":

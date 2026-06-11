@@ -1,16 +1,18 @@
-"""test_integration.py — clipwright-render 実バイナリ end-to-end テスト（DC-GP-002）。
+"""test_integration.py — End-to-end tests for clipwright-render with real binaries (DC-GP-002).
 
-本テストはモックを一切使わず、実 ffmpeg/ffprobe バイナリを使って
-clipwright_render のオーケストレーション関数を end-to-end で検証する。
+These tests use no mocks and verify clipwright_render orchestration functions
+end-to-end with real ffmpeg/ffprobe binaries.
 
-カバレッジ上の位置づけ:
-  - モックベースの test_render.py では「ffmpeg が正しく実行されて1本の動画が
-    生成される」「元素材・OTIO ファイルが不変」という受入条件2/3を検証できない。
-  - 本テストは実バイナリを動かすことで、それらをはじめて確認する。
+Coverage position:
+  - Mock-based test_render.py cannot verify acceptance criteria 2/3:
+    "ffmpeg executes correctly and generates a single output video" or
+    "source media and OTIO files are unchanged".
+  - This file runs real binaries to confirm those criteria for the first time.
 
-実行条件:
-  - env CLIPWRIGHT_FFMPEG / CLIPWRIGHT_FFPROBE が設定済み、または PATH に
-    ffmpeg/ffprobe があること。未設定時は pytest.skip する（モックは使わない）。
+Execution requirements:
+  - CLIPWRIGHT_FFMPEG / CLIPWRIGHT_FFPROBE environment variables are set, or
+    ffmpeg/ffprobe are available on PATH.
+  - Tests are skipped when neither is available (no mocks used).
 """
 
 from __future__ import annotations
@@ -28,12 +30,12 @@ from clipwright_render.render import render_timeline
 from clipwright_render.schemas import RenderOptions
 
 # ===========================================================================
-# ヘルパー
+# Helpers
 # ===========================================================================
 
 
 def _sha256(path: Path) -> str:
-    """ファイルの SHA-256 ハッシュを返す。"""
+    """Return the SHA-256 hash of a file."""
     h = hashlib.sha256()
     with path.open("rb") as f:
         for chunk in iter(lambda: f.read(65536), b""):
@@ -42,7 +44,7 @@ def _sha256(path: Path) -> str:
 
 
 def _probe_duration(ffprobe: str, path: Path) -> float:
-    """ffprobe で動画の duration（秒）を取得する。"""
+    """Use ffprobe to get the duration (seconds) of a video file."""
     cmd = [
         ffprobe,
         "-v",
@@ -59,12 +61,12 @@ def _probe_duration(ffprobe: str, path: Path) -> float:
 
 
 def _make_test_video(ffmpeg: str, output: Path, duration: float = 5.0) -> None:
-    """lavfi testsrc + sine を使って短い映像+音声の動画を生成する（CFR・固定解像度）。
+    """Generate a short video with audio using lavfi testsrc + sine (CFR, fixed resolution).
 
     Args:
-        ffmpeg: ffmpeg 実行ファイルのパス。
-        output: 生成するファイルのパス（.mp4）。
-        duration: 動画の尺（秒）。
+        ffmpeg: Path to the ffmpeg executable.
+        output: Output file path (.mp4).
+        duration: Video duration in seconds.
     """
     cmd = [
         ffmpeg,
@@ -87,7 +89,7 @@ def _make_test_video(ffmpeg: str, output: Path, duration: float = 5.0) -> None:
         str(output),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    assert result.returncode == 0, f"素材生成に失敗しました: {result.stderr[:300]}"
+    assert result.returncode == 0, f"Source generation failed: {result.stderr[:300]}"
 
 
 def _build_two_segment_timeline(
@@ -99,19 +101,19 @@ def _build_two_segment_timeline(
     clip2_duration: float,
     rate: float = 25.0,
 ) -> otio.schema.Timeline:
-    """同一ソースを参照する 2 区間の OTIO Timeline を構築して保存し返す。
+    """Build and save a two-segment OTIO Timeline referencing the same source.
 
     Args:
-        source_path: ソースメディアファイルのパス。
-        otio_path: 保存先の .otio ファイルパス。
-        clip1_start: 第1クリップの source_range start（秒）。
-        clip1_duration: 第1クリップの duration（秒）。
-        clip2_start: 第2クリップの source_range start（秒）。
-        clip2_duration: 第2クリップの duration（秒）。
-        rate: RationalTime のレート（デフォルト 25 fps）。
+        source_path: Path to the source media file.
+        otio_path: Destination .otio file path.
+        clip1_start: source_range start for clip 1 (seconds).
+        clip1_duration: Duration for clip 1 (seconds).
+        clip2_start: source_range start for clip 2 (seconds).
+        clip2_duration: Duration for clip 2 (seconds).
+        rate: RationalTime rate (default 25 fps).
 
     Returns:
-        保存した Timeline オブジェクト。
+        The saved Timeline object.
     """
     ref = otio.schema.ExternalReference(target_url=str(source_path))
 
@@ -137,7 +139,7 @@ def _build_two_segment_timeline(
 
 
 # ===========================================================================
-# テスト
+# Tests
 # ===========================================================================
 
 
@@ -147,15 +149,15 @@ def test_render_two_segments_produces_single_output(
     require_ffmpeg: str,
     require_ffprobe: str,
 ) -> None:
-    """受入2の検証: 実 ffmpeg で 2 区間連結し出力 1 本が生成される。
+    """Acceptance criterion 2: real ffmpeg concatenates 2 segments and produces a single output.
 
-    モックのみでは未検証の受入条件2（ffmpeg が正しく起動して出力ファイルを生成する）を
-    実バイナリで確認する。
+    Verifies acceptance criterion 2 (ffmpeg executes correctly and generates the output file),
+    which cannot be verified with mocks alone.
 
-    観点:
-      - clipwright_render を dry_run=False で実行すると ok=True が返る。
-      - 出力ファイルが 1 本だけ生成される（artifacts に記録される）。
-      - ffprobe で出力ファイルを読めること（有効な動画ファイルである）。
+    Observations:
+      - clipwright_render with dry_run=False returns ok=True.
+      - Exactly one output file is generated (recorded in artifacts).
+      - ffprobe can read the output file (it is a valid video file).
     """
     source = tmp_path / "source.mp4"
     _make_test_video(require_ffmpeg, source, duration=6.0)
@@ -178,17 +180,17 @@ def test_render_two_segments_produces_single_output(
         dry_run=False,
     )
 
-    assert result["ok"] is True, f"render が失敗しました: {result}"
-    assert output.exists(), "出力ファイルが生成されていません"
-    assert output.stat().st_size > 0, "出力ファイルのサイズが 0 です"
+    assert result["ok"] is True, f"render failed: {result}"
+    assert output.exists(), "output file was not generated"
+    assert output.stat().st_size > 0, "output file size is 0"
 
-    # ffprobe で読めることを確認（有効な動画ファイル）
+    # Confirm the output can be read by ffprobe (valid video file)
     duration = _probe_duration(require_ffprobe, output)
-    assert duration > 0.0, "出力動画の尺が 0 秒です"
+    assert duration > 0.0, "output video duration is 0 seconds"
 
-    # artifacts に出力パスが記録されている
+    # Output path is recorded in artifacts
     artifacts = result.get("artifacts", [])
-    assert len(artifacts) == 1, f"artifacts の件数が不正です: {artifacts}"
+    assert len(artifacts) == 1, f"unexpected artifact count: {artifacts}"
     assert Path(artifacts[0]["path"]).resolve() == output.resolve()
 
 
@@ -198,12 +200,12 @@ def test_render_output_duration_matches_segments(
     require_ffmpeg: str,
     require_ffprobe: str,
 ) -> None:
-    """受入2の検証: 出力尺が 2 区間の Σduration に妥当（許容誤差内）。
+    """Acceptance criterion 2: output duration matches the sum of segment durations (within tolerance).
 
-    モックのみでは未検証の受入条件2（ffmpeg が実際に正しい尺の動画を生成する）を
-    実バイナリで確認する。
+    Verifies acceptance criterion 2 (ffmpeg actually generates a video of the correct duration),
+    which cannot be verified with mocks alone.
 
-    2区間合計 = 2.0 + 2.0 = 4.0 秒。ffprobe で計測した尺との誤差が 0.5 秒以内。
+    Two-segment total = 2.0 + 2.0 = 4.0 s. Measured duration by ffprobe must be within 0.5 s.
     """
     source = tmp_path / "source.mp4"
     _make_test_video(require_ffmpeg, source, duration=6.0)
@@ -230,19 +232,19 @@ def test_render_output_duration_matches_segments(
         dry_run=False,
     )
 
-    assert result["ok"] is True, f"render が失敗しました: {result}"
+    assert result["ok"] is True, f"render failed: {result}"
 
     actual_duration = _probe_duration(require_ffprobe, output)
-    tolerance = 0.5  # エンコーダーの GOP 境界による誤差を許容
+    tolerance = 0.5  # allow for encoder GOP boundary deviation
     assert abs(actual_duration - expected_total) <= tolerance, (
-        f"出力尺が期待範囲外です: actual={actual_duration:.3f}s,"
-        f" expected≈{expected_total}s, tolerance=±{tolerance}s"
+        f"output duration out of expected range: actual={actual_duration:.3f}s,"
+        f" expected~{expected_total}s, tolerance=+-{tolerance}s"
     )
 
-    # ok_result の total_duration_seconds と一致することも確認
+    # Also verify the reported total_duration_seconds matches
     reported_duration = result["data"]["total_duration_seconds"]
     assert abs(reported_duration - expected_total) <= 0.001, (
-        f"報告された尺が不正です: "
+        f"reported duration is incorrect: "
         f"reported={reported_duration}, expected={expected_total}"
     )
 
@@ -253,12 +255,12 @@ def test_render_preserves_source_and_otio(
     require_ffmpeg: str,
     require_ffprobe: str,  # noqa: ARG001
 ) -> None:
-    """受入3の検証: render 実行前後で元素材・OTIO ファイルが不変（非破壊）。
+    """Acceptance criterion 3: source media and OTIO file are unchanged after render (non-destructive).
 
-    モックのみでは未検証の受入条件3（元素材・OTIO ファイルが書き換えられない）を
-    実バイナリで確認する。
+    Verifies acceptance criterion 3 (source media and OTIO are not modified),
+    which cannot be verified with mocks alone.
 
-    render 実行前後のファイルサイズと SHA-256 ハッシュが一致することを確認する。
+    File sizes and SHA-256 hashes before and after render must match.
     """
     source = tmp_path / "source.mp4"
     _make_test_video(require_ffmpeg, source, duration=5.0)
@@ -273,7 +275,7 @@ def test_render_preserves_source_and_otio(
         clip2_duration=2.0,
     )
 
-    # render 前の状態を記録
+    # Record state before render
     source_size_before = source.stat().st_size
     source_hash_before = _sha256(source)
     otio_size_before = otio_path.stat().st_size
@@ -287,21 +289,17 @@ def test_render_preserves_source_and_otio(
         dry_run=False,
     )
 
-    assert result["ok"] is True, f"render が失敗しました: {result}"
+    assert result["ok"] is True, f"render failed: {result}"
 
-    # render 後の状態を検証
-    assert source.stat().st_size == source_size_before, "元素材のサイズが変化しました"
-    assert _sha256(source) == source_hash_before, "元素材のハッシュが変化しました"
-    assert otio_path.stat().st_size == otio_size_before, (
-        "OTIO ファイルのサイズが変化しました"
-    )
-    assert _sha256(otio_path) == otio_hash_before, (
-        "OTIO ファイルのハッシュが変化しました"
-    )
+    # Verify state after render
+    assert source.stat().st_size == source_size_before, "source media size changed"
+    assert _sha256(source) == source_hash_before, "source media hash changed"
+    assert otio_path.stat().st_size == otio_size_before, "OTIO file size changed"
+    assert _sha256(otio_path) == otio_hash_before, "OTIO file hash changed"
 
-    # 出力は新規生成で元素材と別ファイル
-    assert output.resolve() != source.resolve(), "出力と元素材が同一パスです"
-    assert output.exists(), "出力ファイルが生成されていません"
+    # Output is a newly generated file separate from the source
+    assert output.resolve() != source.resolve(), "output and source share the same path"
+    assert output.exists(), "output file was not generated"
 
 
 @pytest.mark.integration
@@ -310,10 +308,10 @@ def test_render_with_width_height_produces_output(
     require_ffmpeg: str,
     require_ffprobe: str,
 ) -> None:
-    """L-4 検証: width/height 指定時に実 ffmpeg が正常に動作すること。
+    """L-4 verification: real ffmpeg operates correctly with width/height specified.
 
-    scale を filter_complex 内に統合した実装（-vf 廃止）が
-    実バイナリで動作することを確認する。
+    Confirms that the implementation integrating scale inside filter_complex (replacing -vf)
+    works correctly with real binaries.
     """
     source = tmp_path / "source.mp4"
     _make_test_video(require_ffmpeg, source, duration=4.0)
@@ -329,7 +327,7 @@ def test_render_with_width_height_produces_output(
     )
 
     output = tmp_path / "output_scaled.mp4"
-    # width=160, height=120 にスケールする（元素材の 320x240 の半分）
+    # Scale to width=160, height=120 (half of source 320x240)
     result = render_timeline(
         timeline=str(otio_path),
         output=str(output),
@@ -337,10 +335,10 @@ def test_render_with_width_height_produces_output(
         dry_run=False,
     )
 
-    assert result["ok"] is True, f"width/height 指定の render が失敗しました: {result}"
-    assert output.exists(), "出力ファイルが生成されていません"
-    assert output.stat().st_size > 0, "出力ファイルのサイズが 0 です"
+    assert result["ok"] is True, f"render with width/height failed: {result}"
+    assert output.exists(), "output file was not generated"
+    assert output.stat().st_size > 0, "output file size is 0"
 
-    # ffprobe で出力ファイルを読めること（有効な動画ファイルである）
+    # Confirm the output can be read by ffprobe (valid video file)
     duration = _probe_duration(require_ffprobe, output)
-    assert duration > 0.0, "出力動画の尺が 0 秒です"
+    assert duration > 0.0, "output video duration is 0 seconds"

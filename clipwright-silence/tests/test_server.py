@@ -1,16 +1,13 @@
-"""test_server.py — clipwright-silence server.py（MCP + CLI）の Red テスト。
+"""test_server.py — Red tests for clipwright-silence server.py (MCP + CLI).
 
-対象:
-  - clipwright_detect_silence ツールが MCP に登録され、
-    detect.detect_silence へ委譲すること
-  - MCP annotations（§6.2・detect 系）:
+Target:
+  - clipwright_detect_silence tool must be registered in MCP and delegate to detect.detect_silence
+  - MCP annotations (§6.2, detect type):
     readOnlyHint:true / destructiveHint:false / idempotentHint:true
-  - 成功時エンベロープ（ok:true）
-  - 失敗時エンベロープ（ok:false, error:{code,message,hint}）
-  - detect_silence が error_result を返したらそのまま返ること
-  - main() 関数の存在と呼び出せること（DC-GP-002）
-
-server.py は未実装のため全テストが「機能未実装による失敗」で Red になる。
+  - Success envelope (ok:true)
+  - Error envelope (ok:false, error:{code,message,hint})
+  - When detect_silence returns error_result, it must be returned as-is
+  - Existence and callability of main() (DC-GP-002)
 """
 
 from __future__ import annotations
@@ -21,7 +18,7 @@ from unittest.mock import patch
 import pytest
 
 # ---------------------------------------------------------------------------
-# server.py の import 試行（未実装なら _SERVER_AVAILABLE = False）
+# Attempt to import server.py (_SERVER_AVAILABLE = False if not implemented)
 # ---------------------------------------------------------------------------
 
 try:
@@ -34,21 +31,21 @@ try:
 except (ImportError, ModuleNotFoundError):
     _SERVER_AVAILABLE = False
 
-# server.py が存在しない限り全テストを xfail にする
+# Mark all tests as xfail unless server.py is available
 pytestmark = pytest.mark.xfail(
     not _SERVER_AVAILABLE,
-    reason="server.py が未実装のため Red（機能未実装による失敗）",
+    reason="server.py is not implemented",
     strict=True,
 )
 
 
 # ---------------------------------------------------------------------------
-# ヘルパー
+# Helpers
 # ---------------------------------------------------------------------------
 
 
 def _ok_envelope(**kwargs: Any) -> dict[str, Any]:
-    """成功エンベロープのひな型を返す。"""
+    """Return a success envelope template."""
     base: dict[str, Any] = {
         "ok": True,
         "summary": "ok",
@@ -61,7 +58,7 @@ def _ok_envelope(**kwargs: Any) -> dict[str, Any]:
 
 
 def _error_envelope(code: str) -> dict[str, Any]:
-    """失敗エンベロープのひな型を返す。"""
+    """Return an error envelope template."""
     return {
         "ok": False,
         "error": {
@@ -73,65 +70,65 @@ def _error_envelope(code: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# MCP annotations テスト（§6.2・detect 系）
+# MCP annotations tests (§6.2, detect type)
 # ---------------------------------------------------------------------------
 
 
 class TestMcpAnnotations:
-    """clipwright_detect_silence ツールの MCP annotations を検証する。
+    """Validate MCP annotations for the clipwright_detect_silence tool.
 
-    detect 系: readOnlyHint:true / destructiveHint:false / idempotentHint:true
-    （render と異なり readOnlyHint=true である点に注意）
+    detect type: readOnlyHint:true / destructiveHint:false / idempotentHint:true
+    (note: readOnlyHint=true unlike render)
     """
 
     def _get_annotations(self) -> Any:
-        # CR L-1: FastMCP の公開 API でツール情報を取得する手段がないため、
-        # プライベート API (_tool_manager) に依存している。
-        # FastMCP のバージョンアップで _tool_manager が変更・削除された場合に
-        # このテストが壊れるリスクがある。公開 API が整備され次第移行すること。
+        # CR L-1: No public API available in FastMCP to retrieve tool info,
+        # so relying on the private API (_tool_manager).
+        # This test may break if _tool_manager is changed or removed in a FastMCP upgrade.
+        # Migrate to a public API once one is available.
         tool = mcp._tool_manager.get_tool(  # noqa: SLF001
             "clipwright_detect_silence"
         )
-        assert tool is not None, "clipwright_detect_silence が mcp に登録されていること"
+        assert tool is not None, "clipwright_detect_silence must be registered in mcp"
         return tool.annotations
 
     def test_tool_is_registered(self) -> None:
-        """clipwright_detect_silence が mcp に登録されていること。"""
-        # CR L-1: _tool_manager はプライベート API。FastMCP 更新で壊れるリスクあり
+        """clipwright_detect_silence must be registered in mcp."""
+        # CR L-1: _tool_manager is a private API. Risk of breaking on FastMCP updates.
         tool = mcp._tool_manager.get_tool(  # noqa: SLF001
             "clipwright_detect_silence"
         )
         assert tool is not None
 
     def test_read_only_hint_is_true(self) -> None:
-        """readOnlyHint=True（メディアファイルを書き換えない・detect 系規約）。"""
+        """readOnlyHint=True (does not modify the media file; detect type convention)."""
         ann = self._get_annotations()
         assert ann.readOnlyHint is True
 
     def test_destructive_hint_is_false(self) -> None:
-        """destructiveHint=False（入力メディア・OTIO は不変）。"""
+        """destructiveHint=False (input media and OTIO remain unchanged)."""
         ann = self._get_annotations()
         assert ann.destructiveHint is False
 
     def test_idempotent_hint_is_true(self) -> None:
-        """idempotentHint=True（同一入力・同一パラメータ→同一 timeline）。"""
+        """idempotentHint=True (same input + same parameters -> same timeline)."""
         ann = self._get_annotations()
         assert ann.idempotentHint is True
 
 
 # ---------------------------------------------------------------------------
-# MCP ツール呼び出し: detect.detect_silence への委譲テスト
+# MCP tool invocation: delegation to detect.detect_silence
 # ---------------------------------------------------------------------------
 
 
 class TestMcpToolDelegation:
-    """detect.detect_silence への委譲と error エンベロープのパススルーを検証する。
+    """Validate delegation to detect.detect_silence and error envelope passthrough.
 
-    detect_silence を patch して呼び出しの委譲を確認する。
+    Patches detect_silence to confirm delegation.
     """
 
     def test_success_delegates_to_detect_silence(self) -> None:
-        """成功時に detect.detect_silence を呼び委譲すること。"""
+        """On success, must call and delegate to detect.detect_silence."""
         expected = _ok_envelope(summary="detected ok")
 
         with patch(
@@ -148,7 +145,7 @@ class TestMcpToolDelegation:
         assert result["ok"] is True
 
     def test_failure_returns_error_envelope(self) -> None:
-        """detect_silence が失敗エンベロープを返すと server もそのまま返す。"""
+        """When detect_silence returns an error envelope, server must return it as-is."""
         expected = _error_envelope("FILE_NOT_FOUND")
 
         with patch(
@@ -165,7 +162,7 @@ class TestMcpToolDelegation:
         assert result["error"]["code"] == "FILE_NOT_FOUND"
 
     def test_error_result_passthrough(self) -> None:
-        """detect が error_result を返したらそのまま返ること（二重変換なし）。"""
+        """When detect returns error_result, it must be returned as-is (no double conversion)."""
         expected = _error_envelope("DEPENDENCY_MISSING")
 
         with patch(
@@ -185,13 +182,13 @@ class TestMcpToolDelegation:
         assert "hint" in error
 
     def test_error_envelope_has_code_message_hint(self) -> None:
-        """失敗エンベロープに code / message / hint が含まれること。"""
+        """Error envelope must contain code / message / hint."""
         expected: dict[str, Any] = {
             "ok": False,
             "error": {
                 "code": "UNSUPPORTED_OPERATION",
-                "message": "音声ストリームが無いため無音検出できません",
-                "hint": "音声ストリームを含む素材を指定してください",
+                "message": "Cannot detect silence: no audio stream",
+                "hint": "Specify a media source that contains an audio stream",
             },
         }
 
@@ -212,7 +209,7 @@ class TestMcpToolDelegation:
         assert "hint" in error
 
     def test_options_passed_to_detect_silence(self) -> None:
-        """options の内容が detect_silence に渡されること。"""
+        """options content must be passed to detect_silence."""
         from clipwright_silence.schemas import DetectSilenceOptions
 
         opts = DetectSilenceOptions(
@@ -234,11 +231,11 @@ class TestMcpToolDelegation:
         assert call_args is not None
 
     def test_ok_envelope_structure(self) -> None:
-        """成功エンベロープに ok/summary/data/artifacts/warnings が含まれること。"""
+        """Success envelope must contain ok/summary/data/artifacts/warnings."""
         expected = _ok_envelope(
             summary=(
-                "総尺 60 秒の素材から無音 3 区間を検出。"
-                "残す 4 区間の timeline.otio を生成しました。"
+                "Detected 3 silence interval(s) from a 60s source. "
+                "Generated timeline.otio with 4 interval(s) to keep."
             ),
             data={
                 "silence_count": 3,
@@ -267,34 +264,34 @@ class TestMcpToolDelegation:
 
 
 # ---------------------------------------------------------------------------
-# main() 存在確認テスト（DC-GP-002 / §6.3）
+# main() existence test (DC-GP-002 / §6.3)
 # ---------------------------------------------------------------------------
 
 
 class TestCliMain:
-    """main() 関数の存在と基本呼び出しを検証する（DC-GP-002: CLI = MCP stdio 起動）。"""
+    """Validate existence and basic call of main() (DC-GP-002: CLI = MCP stdio launch)."""
 
     def test_main_is_callable(self) -> None:
-        """main() 関数が存在し callable であること。"""
+        """main() function must exist and be callable."""
         assert callable(main)
 
     def test_main_exists_in_module(self) -> None:
-        """clipwright_silence.server モジュールに main が定義されていること。"""
+        """main must be defined in the clipwright_silence.server module."""
         import clipwright_silence.server as server_module
 
         assert hasattr(server_module, "main")
         assert callable(server_module.main)
 
     def test_main_runs_mcp_server(self) -> None:
-        """main() が mcp.run を呼び出すこと（stdio 起動・DC-GP-002）。
+        """main() must call mcp.run (stdio launch, DC-GP-002).
 
-        実際の stdio 起動は行わず、mcp.run のモックで確認する。
+        Does not perform actual stdio launch; confirmed via mock of mcp.run.
         """
         with patch.object(mcp, "run") as mock_run:
             main()
 
         mock_run.assert_called_once()
-        # transport="stdio" で呼ばれることを確認
+        # must be called with transport="stdio"
         _args, kwargs = mock_run.call_args
         assert kwargs.get("transport") == "stdio" or (
             len(_args) >= 1 and _args[0] == "stdio"

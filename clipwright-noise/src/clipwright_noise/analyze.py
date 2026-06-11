@@ -1,8 +1,11 @@
-"""analyze.py — ffmpeg astats によるノイズフロア測定とパラメータ算出（設計 §2.3）。
+"""analyze.py — Noise floor measurement and parameter calculation via ffmpeg astats.
 
-astats フィルタで音声の RMS/Noise_floor を測定し、
-backend 別の denoise パラメータを算出する。
-測定不能時は nf=-50.0 にフォールバックし warning を返す（設計 B-6）。
+Design reference: §2.3.
+
+Measures audio RMS/Noise_floor using the astats filter,
+then calculates denoise parameters per backend.
+Falls back to nf=-50.0 when measurement is unavailable,
+returning a warning (design B-6).
 """
 
 from __future__ import annotations
@@ -13,34 +16,34 @@ from typing import Any
 
 from clipwright.process import resolve_tool, run
 
-# strength → afftdn nr (dB) の写像（設計 §2.1 確定値）
+# strength → afftdn nr (dB) mapping (design §2.1 fixed values)
 _STRENGTH_TO_NR: dict[str, float] = {
     "light": 6.0,
     "medium": 12.0,
     "strong": 24.0,
 }
 
-# nf のフォールバック値（astats 取得不能時・設計 B-6）
+# nf fallback value (when astats measurement is unavailable; design B-6)
 _NF_FALLBACK: float = -50.0
 
-# nf の clamp 範囲（AfftdnParams の制約に合わせる）
+# nf clamp range (aligned with AfftdnParams constraints)
 _NF_MIN: float = -80.0
 _NF_MAX: float = -20.0
 
-# astats 実行 timeout（秒）
+# astats execution timeout (seconds)
 _TIMEOUT_SECONDS: float = 60.0
 
 
 def _parse_noise_floor(stderr: str) -> float | None:
-    """astats stderr からノイズフロア値（dB）を抽出する。
+    """Extract the noise floor value (dB) from astats stderr.
 
-    優先順位:
-    1. `Noise floor dB:` フィールド（実 ffmpeg astats 出力形式）
-    2. `RMS level dB:` フィールド（fallback）
+    Priority:
+    1. `Noise floor dB:` field (actual ffmpeg astats output format)
+    2. `RMS level dB:` field (fallback)
 
-    取得不能なら None を返す。
+    Returns None if extraction fails.
     """
-    # Noise floor dB を優先（実 ffmpeg astats 出力形式: "Noise floor dB: -X.X"）
+    # Prefer Noise floor dB (actual ffmpeg astats output format: "Noise floor dB: -X.X")
     m = re.search(r"Noise floor dB:\s*(-?\d+\.?\d*)", stderr)
     if m:
         try:
@@ -48,7 +51,7 @@ def _parse_noise_floor(stderr: str) -> float | None:
         except ValueError:
             pass
 
-    # RMS level dB を fallback（実 ffmpeg astats 出力形式: "RMS level dB: -X.X"）
+    # Fall back to RMS level dB (actual ffmpeg astats output: "RMS level dB: -X.X")
     m = re.search(r"RMS level dB:\s*(-?\d+\.?\d*)", stderr)
     if m:
         try:
@@ -60,7 +63,7 @@ def _parse_noise_floor(stderr: str) -> float | None:
 
 
 def _clamp(value: float, lo: float, hi: float) -> float:
-    """value を [lo, hi] に clamp する。"""
+    """Clamp value to the range [lo, hi]."""
     return max(lo, min(hi, value))
 
 
@@ -69,28 +72,29 @@ def measure_noise(
     strength: str,
     backend: str,
 ) -> dict[str, Any]:
-    """メディアの音声を astats で解析し、backend 別の denoise パラメータを返す。
+    """Analyze media audio with astats and return denoise parameters per backend.
 
     Args:
-        media_path: 入力メディアファイルのパス（映像＋音声）。
-        strength: DetectNoiseOptions.strength（"light"/"medium"/"strong"）。
-        backend: "afftdn" または "deepfilternet"。
+        media_path: Path to the input media file (video + audio).
+        strength: DetectNoiseOptions.strength ("light"/"medium"/"strong").
+        backend: "afftdn" or "deepfilternet".
 
     Returns:
         {
-            "params": dict（AfftdnParams 相当 or {}），
-            "measured_noise_floor_db": float | None，
-            "warnings": list[str]，
+            "params": dict (AfftdnParams-equivalent or {}),
+            "measured_noise_floor_db": float | None,
+            "warnings": list[str],
         }
 
     Raises:
         clipwright.errors.ClipwrightError: DEPENDENCY_MISSING / SUBPROCESS_FAILED /
-            SUBPROCESS_TIMEOUT。
+            SUBPROCESS_TIMEOUT.
     """
-    # ffmpeg 実行ファイルを解決する（B-1: resolve_tool 経由で PATH 非依存）
+    # Resolve the ffmpeg binary (B-1: PATH-independent via resolve_tool)
     ffmpeg_bin = resolve_tool("ffmpeg", "CLIPWRIGHT_FFMPEG")
 
-    # astats で全区間のノイズフロアを測定（metadata=1:reset=0 で全体統計）
+    # Measure noise floor for the entire duration with astats
+    # (metadata=1:reset=0 for global stats)
     cmd = [
         ffmpeg_bin,
         "-i",
@@ -104,14 +108,14 @@ def measure_noise(
 
     warnings: list[str] = []
 
-    # run は ClipwrightError（SUBPROCESS_FAILED / SUBPROCESS_TIMEOUT 等）を送出し、
-    # そのまま呼び出し元に伝播させる。
+    # run raises ClipwrightError (SUBPROCESS_FAILED / SUBPROCESS_TIMEOUT, etc.),
+    # which propagates directly to the caller.
     result = run(
         cmd,
         timeout=_TIMEOUT_SECONDS,
     )
 
-    # astats の統計は stderr に出力される（run は CompletedProcess を返す）
+    # astats statistics are written to stderr (run returns CompletedProcess)
     stderr_text = result.stderr
 
     measured = _parse_noise_floor(stderr_text)
@@ -124,17 +128,17 @@ def measure_noise(
         else:
             nf = _NF_FALLBACK
             warnings.append(
-                f"ノイズフロア測定不能のため既定 nf={_NF_FALLBACK} を使用します。"
-                " astats 出力に Noise floor dB / RMS level dB"
-                " フィールドが含まれませんでした。"
+                f"Noise floor measurement failed; using default nf={_NF_FALLBACK}."
+                " The astats output did not contain"
+                " Noise floor dB / RMS level dB fields."
             )
 
         params: dict[str, Any] = {"nr": nr, "nf": nf, "nt": "w"}
     else:
-        # deepfilternet: params は {} 固定（初版・設計 DC-AM-002）
+        # deepfilternet: params fixed to {} (first release; design DC-AM-002)
         if measured is None:
             warnings.append(
-                "ノイズフロア測定不能のため measured_noise_floor_db=None になります。"
+                "Noise floor measurement failed; measured_noise_floor_db will be None."
             )
         params = {}
 

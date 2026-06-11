@@ -1,15 +1,17 @@
-"""test_schemas.py — DetectLoudnessOptions / LoudnessDirective / Target / Measured の完全版テスト。
+"""test_schemas.py — Full test suite for DetectLoudnessOptions / LoudnessDirective / Target / Measured.
 
-契約面（schemas）は実質 100% を目標にカバーする（CONVENTIONS §テストカバレッジ）。
+Target coverage for schemas (contract surface) is effectively 100% (CONVENTIONS §test-coverage).
 
-検証観点:
-  - DetectLoudnessOptions: mode∈{loudnorm,peak}・scope∈{track}のみ・target 上書き・
-    既定 I=-14/TP=-1/LRA=11・不正値 ValidationError
-  - LoudnessDirective: kind="loudness"・mode・scope="track"・
-    target=LoudnormTarget|PeakTarget discriminate・
-    measured=LoudnormMeasured|PeakMeasured|None・tool/version max_length=64・数値 inf/nan 拒否
-  - LoudnormMeasured: input_i/input_tp/input_lra/input_thresh/target_offset 全 float・有限値のみ
-  - PeakMeasured: max_volume_db 範囲 [-200..0]
+Verification points:
+  - DetectLoudnessOptions: mode in {loudnorm, peak}, scope in {track} only, target override,
+    defaults I=-14/TP=-1/LRA=11, invalid values raise ValidationError
+  - LoudnessDirective: kind="loudness", mode, scope="track",
+    target=LoudnormTarget|PeakTarget discriminate,
+    measured=LoudnormMeasured|PeakMeasured|None, tool/version max_length=64,
+    numeric inf/nan rejected
+  - LoudnormMeasured: all float fields input_i/input_tp/input_lra/input_thresh/target_offset,
+    finite values only
+  - PeakMeasured: max_volume_db range [-200..0]
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ from clipwright_loudness.schemas import (
 
 
 class TestDetectLoudnessOptionsDefaults:
-    """デフォルト構築と既定値の確認。"""
+    """Verify default construction and default field values."""
 
     def test_defaults_mode_is_loudnorm(self) -> None:
         opts = DetectLoudnessOptions()
@@ -57,7 +59,7 @@ class TestDetectLoudnessOptionsDefaults:
         assert opts.target_lra == pytest.approx(11.0)
 
     def test_defaults_target_peak_db_is_minus1(self) -> None:
-        """peak モードの既定 target_peak_db は -1.0。"""
+        """Default target_peak_db for peak mode is -1.0."""
         opts = DetectLoudnessOptions(mode="peak")
         assert opts.target_peak_db == pytest.approx(-1.0)
 
@@ -68,7 +70,7 @@ class TestDetectLoudnessOptionsDefaults:
 
 
 class TestDetectLoudnessOptionsMode:
-    """mode フィールドの有効値・不正値テスト。"""
+    """Valid and invalid values for the mode field."""
 
     def test_mode_loudnorm_accepted(self) -> None:
         opts = DetectLoudnessOptions(mode="loudnorm")
@@ -88,7 +90,7 @@ class TestDetectLoudnessOptionsMode:
 
 
 class TestDetectLoudnessOptionsScope:
-    """scope フィールドは track のみ（per_clip は今回スコープ外）。"""
+    """scope field accepts track only (per_clip is out of scope for this release)."""
 
     def test_scope_track_accepted(self) -> None:
         opts = DetectLoudnessOptions(scope="track")
@@ -103,13 +105,13 @@ class TestDetectLoudnessOptionsScope:
             DetectLoudnessOptions(scope=invalid)  # type: ignore[arg-type]
 
     def test_per_clip_scope_is_rejected(self) -> None:
-        """per_clip は今回スコープ外（DC-AS-003）: ValidationError になること。"""
+        """per_clip is out of scope (DC-AS-003): must raise ValidationError."""
         with pytest.raises(ValidationError):
             DetectLoudnessOptions(scope="per_clip")  # type: ignore[arg-type]
 
 
 class TestDetectLoudnessOptionsTargetOverride:
-    """loudnorm target 上書きテスト。"""
+    """loudnorm target override tests."""
 
     def test_target_i_override(self) -> None:
         opts = DetectLoudnessOptions(mode="loudnorm", target_i=-16.0)
@@ -129,7 +131,7 @@ class TestDetectLoudnessOptionsTargetOverride:
 
 
 class TestDetectLoudnessOptionsCombinations:
-    """有効な組み合わせを網羅する。"""
+    """Cover all valid combinations."""
 
     @pytest.mark.parametrize("mode", ["loudnorm", "peak"])
     def test_all_valid_modes_with_track_scope_accepted(self, mode: str) -> None:
@@ -144,7 +146,7 @@ class TestDetectLoudnessOptionsCombinations:
 
 
 class TestLoudnormTargetDefaults:
-    """LoudnormTarget の既定値確認（I=-14/TP=-1/LRA=11）。"""
+    """Verify LoudnormTarget default values (I=-14/TP=-1/LRA=11)."""
 
     def test_default_i_is_minus14(self) -> None:
         t = LoudnormTarget()
@@ -160,7 +162,7 @@ class TestLoudnormTargetDefaults:
 
 
 class TestLoudnormTargetRanges:
-    """LoudnormTarget の範囲制約テスト。"""
+    """Range constraint tests for LoudnormTarget."""
 
     def test_i_lower_boundary_minus70_accepted(self) -> None:
         t = LoudnormTarget(i=-70.0)
@@ -217,7 +219,7 @@ class TestLoudnormTargetRanges:
 
 
 class TestPeakTargetRanges:
-    """PeakTarget の範囲制約テスト。"""
+    """Range constraint tests for PeakTarget."""
 
     def test_default_peak_db_minus1(self) -> None:
         t = PeakTarget()
@@ -254,7 +256,7 @@ class TestPeakTargetRanges:
 
 
 class TestLoudnormMeasured:
-    """LoudnormMeasured の全フィールド確認・有限値制約テスト。"""
+    """Full field verification and finite-value constraint tests for LoudnormMeasured."""
 
     def test_construct_full_measured(self) -> None:
         m = LoudnormMeasured(
@@ -271,7 +273,7 @@ class TestLoudnormMeasured:
         assert m.target_offset == pytest.approx(0.03)
 
     def test_input_i_inf_rejected(self) -> None:
-        """input_i = inf は拒否（allow_inf_nan=False）。"""
+        """input_i = inf is rejected (allow_inf_nan=False)."""
         with pytest.raises(ValidationError):
             LoudnormMeasured(
                 input_i=math.inf,
@@ -282,7 +284,7 @@ class TestLoudnormMeasured:
             )
 
     def test_input_i_neg_inf_rejected(self) -> None:
-        """-inf は拒否（無音素材など）。"""
+        """-inf is rejected (e.g. silent input)."""
         with pytest.raises(ValidationError):
             LoudnormMeasured(
                 input_i=-math.inf,
@@ -349,7 +351,7 @@ class TestLoudnormMeasured:
 
 
 class TestPeakMeasured:
-    """PeakMeasured の範囲制約・inf/nan 拒否テスト。"""
+    """Range constraint and inf/nan rejection tests for PeakMeasured."""
 
     def test_construct_valid(self) -> None:
         m = PeakMeasured(max_volume_db=-18.1)
@@ -390,7 +392,7 @@ class TestPeakMeasured:
 
 
 class TestLoudnessDirectiveKind:
-    """kind="loudness" の固定値確認。"""
+    """Verify the fixed value kind="loudness"."""
 
     def test_kind_loudness_accepted(self) -> None:
         d = LoudnessDirective(
@@ -430,7 +432,7 @@ class TestLoudnessDirectiveKind:
 
 
 class TestLoudnessDirectiveScope:
-    """scope="track" 固定の確認（per_clip は延期）。"""
+    """Verify scope="track" is fixed (per_clip is deferred)."""
 
     def test_scope_track_accepted(self) -> None:
         d = LoudnessDirective(
@@ -445,7 +447,7 @@ class TestLoudnessDirectiveScope:
         assert d.scope == "track"
 
     def test_scope_per_clip_rejected(self) -> None:
-        """per_clip は DC-AS-003 で延期: バリデーションエラーになること。"""
+        """per_clip is deferred per DC-AS-003: must raise ValidationError."""
         with pytest.raises(ValidationError):
             LoudnessDirective(
                 tool="t",
@@ -459,7 +461,7 @@ class TestLoudnessDirectiveScope:
 
 
 class TestLoudnessDirectiveTargetDiscriminate:
-    """target が mode で discriminate されること（LoudnormTarget/PeakTarget）。"""
+    """Verify target is discriminated by mode (LoudnormTarget/PeakTarget)."""
 
     def test_loudnorm_mode_with_loudnorm_target(self) -> None:
         d = LoudnessDirective(
@@ -489,7 +491,7 @@ class TestLoudnessDirectiveTargetDiscriminate:
 
 
 class TestLoudnessDirectiveMeasured:
-    """measured フィールド: LoudnormMeasured / PeakMeasured / None 全パターン。"""
+    """All patterns for the measured field: LoudnormMeasured / PeakMeasured / None."""
 
     def test_measured_none_accepted(self) -> None:
         d = LoudnessDirective(
@@ -539,7 +541,7 @@ class TestLoudnessDirectiveMeasured:
 
 
 class TestLoudnessDirectiveToolVersionMaxLength:
-    """tool / version フィールドに max_length=64 制約があること。"""
+    """Verify tool / version fields have max_length=64 constraint."""
 
     def test_tool_at_max_length_64_accepted(self) -> None:
         long_tool = "t" * 64
@@ -593,10 +595,10 @@ class TestLoudnessDirectiveToolVersionMaxLength:
 
 
 class TestLoudnessDirectiveCrossModeConsistency:
-    """_validate_target_mode_consistency: mode と target 型の整合性検証。"""
+    """_validate_target_mode_consistency: validate consistency between mode and target type."""
 
     def test_loudnorm_mode_with_peak_target_raises_validation_error(self) -> None:
-        """mode=loudnorm ＋ target=PeakTarget は ValidationError になること。"""
+        """mode=loudnorm + target=PeakTarget must raise ValidationError."""
         with pytest.raises(ValidationError):
             LoudnessDirective(
                 tool="clipwright-loudness",
@@ -609,7 +611,7 @@ class TestLoudnessDirectiveCrossModeConsistency:
             )
 
     def test_peak_mode_with_loudnorm_target_raises_validation_error(self) -> None:
-        """mode=peak ＋ target=LoudnormTarget は ValidationError になること。"""
+        """mode=peak + target=LoudnormTarget must raise ValidationError."""
         with pytest.raises(ValidationError):
             LoudnessDirective(
                 tool="clipwright-loudness",
@@ -623,7 +625,7 @@ class TestLoudnessDirectiveCrossModeConsistency:
 
 
 class TestLoudnessDirectiveModelDump:
-    """model_dump → 再構築の往復整合性。"""
+    """Round-trip consistency: model_dump -> reconstruct."""
 
     def test_roundtrip_loudnorm_with_measured(self) -> None:
         m = LoudnormMeasured(

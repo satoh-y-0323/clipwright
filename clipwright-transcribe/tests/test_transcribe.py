@@ -1,23 +1,26 @@
-"""test_transcribe.py — transcribe.py オーケストレーションのテスト。
+"""test_transcribe.py — Tests for the transcribe.py orchestration layer.
 
-対象 API:
+Target API:
   clipwright_transcribe.transcribe.transcribe_media(
       media: str, output: str, options: TranscribeOptions,
   ) -> dict
 
-モック方針:
-  - transcribe.inspect_media を patch して MediaInfo を供給。
-  - 軽量フロー検証では transcribe._run_whisper を patch して segments/language を供給。
-  - _run_whisper 単体検証では transcribe.resolve_tool / transcribe.run を patch。
-  - 実 ffmpeg/whisper バイナリは一切呼ばない。
+Mock strategy:
+  - Patch transcribe.inspect_media to supply MediaInfo.
+  - Patch transcribe._run_whisper to supply segments/language for lightweight flow tests.
+  - Patch transcribe.resolve_tool / transcribe.run for _run_whisper unit tests.
+  - No real ffmpeg/whisper binaries are invoked.
 
-検証観点（architecture TR-AD-01/03/04/05/08/09/10 / §8 C-3 対応）:
-  ① 出力検証（拡張子・親dir・output==media・同一dir）
-  ② 入力検証（音声なし=UNSUPPORTED_OPERATION・FILE_NOT_FOUND basename・DC-AS-004 依存不在）
-  ③ モデル解決（os.path.isfile・param→env・DC-AS-003）
-  ④ OTIO（全尺1clip kind=transcript-source・segment marker on V1・DC-AM-101/001）
-  ⑤ DC-GP-003 marker name 短縮・DC-GP-002 0件・DC-AS-005 秒値一貫
-  ⑥ SRT/VTT 同basename同dir・artifacts3件・サニタイズ・summary/data
+Verification points (architecture TR-AD-01/03/04/05/08/09/10 / §8 C-3):
+  ① Output validation (extension, parent dir, output==media, same-dir)
+  ② Input validation (no audio=UNSUPPORTED_OPERATION, FILE_NOT_FOUND basename,
+     DC-AS-004 missing dependency)
+  ③ Model resolution (os.path.isfile, param->env, DC-AS-003)
+  ④ OTIO (full-length 1 clip kind=transcript-source, segment marker on V1,
+     DC-AM-101/001)
+  ⑤ DC-GP-003 marker name truncation, DC-GP-002 zero segments, DC-AS-005 second
+     value consistency
+  ⑥ SRT/VTT same basename+dir, 3 artifacts, sanitisation, summary/data
 """
 
 from __future__ import annotations
@@ -48,7 +51,7 @@ FPS = 30.0
 
 
 # ===========================================================================
-# ヘルパー
+# Helpers
 # ===========================================================================
 
 
@@ -60,7 +63,7 @@ def _make_media_info(
     has_video: bool = True,
     has_audio: bool = True,
 ) -> MediaInfo:
-    """テスト用 MediaInfo を構築する。"""
+    """Build a MediaInfo for testing."""
     streams: list[StreamInfo] = []
     if has_video:
         streams.append(StreamInfo(index=0, codec_type="video", codec_name="h264"))
@@ -87,10 +90,10 @@ def _seg(start_sec: float, end_sec: float, text: str) -> Segment:
 
 
 def _make_paths(tmp_path: Path) -> tuple[str, str, str]:
-    """media / output / model のパスを同一一時ディレクトリに作る。
+    """Create media / output / model paths inside the same temporary directory.
 
-    media と model は実ファイルとして作成する（inspect_media/_run_whisper は
-    モックするが、同一dir 検証・モデル isfile 検査を通すため）。
+    media and model are written as real files (inspect_media/_run_whisper are mocked,
+    but the same-dir check and model isfile check still need them to exist).
     """
     media = tmp_path / "video.mp4"
     media.write_bytes(b"fake")
@@ -105,7 +108,7 @@ def _opts(**kwargs: Any) -> TranscribeOptions:
 
 
 # ===========================================================================
-# ① 出力検証
+# ① Output validation
 # ===========================================================================
 
 
@@ -149,7 +152,7 @@ class TestOutputValidation:
 
 
 # ===========================================================================
-# ② 入力検証
+# ② Input validation
 # ===========================================================================
 
 
@@ -165,7 +168,7 @@ class TestInputValidation:
         assert result["error"]["code"] == ErrorCode.UNSUPPORTED_OPERATION
 
     def test_audio_only_is_accepted(self, tmp_path: Path) -> None:
-        """映像なし・音声のみ素材は受理されること（TR-AD-03）。"""
+        """Video-less, audio-only sources are accepted (TR-AD-03)."""
         media, output, model = _make_paths(tmp_path)
         with (
             patch(
@@ -181,32 +184,33 @@ class TestInputValidation:
         assert result["ok"] is True
 
     def test_file_not_found_basename_only(self, tmp_path: Path) -> None:
-        """FILE_NOT_FOUND の message は basename のみ（フルパス非露出・TR-AD-09）。"""
+        """FILE_NOT_FOUND message exposes only the basename, not the full path
+        (TR-AD-09)."""
         media, output, _model = _make_paths(tmp_path)
         with patch(
             "clipwright_transcribe.transcribe.inspect_media",
             side_effect=ClipwrightError(
                 code=ErrorCode.FILE_NOT_FOUND,
-                message=f"ファイルが見つかりません: {media}",
-                hint="パスを確認してください。",
+                message=f"File not found: {media}",
+                hint="Check that the path is correct.",
             ),
         ):
             result = transcribe_media(media, output, _opts())
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
-        # フルパスを含まず basename のみ
+        # Full path must not appear; basename must appear.
         assert media not in result["error"]["message"]
         assert "video.mp4" in result["error"]["message"]
 
     def test_inspect_media_other_error_reraised(self, tmp_path: Path) -> None:
-        """FILE_NOT_FOUND 以外の inspect_media エラーはそのまま伝播すること（L321）。"""
+        """Non-FILE_NOT_FOUND errors from inspect_media propagate unchanged (L321)."""
         media, output, _model = _make_paths(tmp_path)
         with patch(
             "clipwright_transcribe.transcribe.inspect_media",
             side_effect=ClipwrightError(
                 code=ErrorCode.PROBE_FAILED,
-                message="probe 失敗",
-                hint="確認してください。",
+                message="probe failed",
+                hint="Check the input.",
             ),
         ):
             result = transcribe_media(media, output, _opts())
@@ -225,13 +229,13 @@ class TestInputValidation:
 
 
 # ===========================================================================
-# ② / ③ 依存・モデル解決（DC-AS-003/004）
+# ② / ③ Dependency and model resolution (DC-AS-003/004)
 # ===========================================================================
 
 
 class TestDependencyResolution:
     def test_model_missing_dependency_missing(self, tmp_path: Path) -> None:
-        """model_path も env も無い → DEPENDENCY_MISSING（DC-AS-003）。"""
+        """No model_path and no env -> DEPENDENCY_MISSING (DC-AS-003)."""
         media = tmp_path / "video.mp4"
         media.write_bytes(b"x")
         output = tmp_path / "out.otio"
@@ -248,7 +252,7 @@ class TestDependencyResolution:
         assert result["error"]["code"] == ErrorCode.DEPENDENCY_MISSING
 
     def test_ffmpeg_missing_dependency_missing(self, tmp_path: Path) -> None:
-        """ffmpeg 不在 → DEPENDENCY_MISSING（resolve_tool が送出・DC-AS-004）。"""
+        """ffmpeg absent -> DEPENDENCY_MISSING (raised by resolve_tool; DC-AS-004)."""
         media, output, model = _make_paths(tmp_path)
         with (
             patch(
@@ -259,8 +263,8 @@ class TestDependencyResolution:
                 "clipwright_transcribe.transcribe.resolve_tool",
                 side_effect=ClipwrightError(
                     code=ErrorCode.DEPENDENCY_MISSING,
-                    message="ffmpeg が見つかりません",
-                    hint="ffmpeg を導入してください。",
+                    message="ffmpeg not found",
+                    hint="Install ffmpeg.",
                 ),
             ),
         ):
@@ -269,14 +273,14 @@ class TestDependencyResolution:
         assert result["error"]["code"] == ErrorCode.DEPENDENCY_MISSING
 
     def test_resolve_model_path_param_priority(self, tmp_path: Path) -> None:
-        """model_path（param）が存在すればそれを返すこと。"""
+        """model_path (param) is returned when the file exists."""
         model = tmp_path / "m.bin"
         model.write_bytes(b"x")
         resolved = _resolve_model_path(_opts(model_path=str(model)))
         assert resolved == str(model)
 
     def test_resolve_model_path_env_fallback(self, tmp_path: Path) -> None:
-        """model_path 未指定時は env CLIPWRIGHT_WHISPER_MODEL を使うこと。"""
+        """Falls back to env CLIPWRIGHT_WHISPER_MODEL when model_path is not set."""
         model = tmp_path / "env.bin"
         model.write_bytes(b"x")
         with patch.dict(os.environ, {"CLIPWRIGHT_WHISPER_MODEL": str(model)}):
@@ -284,7 +288,7 @@ class TestDependencyResolution:
         assert resolved == str(model)
 
     def test_resolve_model_path_missing_raises(self, tmp_path: Path) -> None:
-        """param が存在しないファイル・env も無し → DEPENDENCY_MISSING。"""
+        """Non-existent param file and no env -> DEPENDENCY_MISSING."""
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("CLIPWRIGHT_WHISPER_MODEL", None)
             with pytest.raises(ClipwrightError) as exc_info:
@@ -293,7 +297,7 @@ class TestDependencyResolution:
 
 
 # ===========================================================================
-# ④ OTIO 構築（全尺1clip + segment marker）
+# ④ OTIO construction (full-length 1 clip + segment markers)
 # ===========================================================================
 
 
@@ -317,7 +321,8 @@ class TestOtioConstruction:
         return result, timeline
 
     def test_full_clip_present(self, tmp_path: Path) -> None:
-        """V1 に全尺1clip（kind=transcript-source・start_time=0）が載ること。"""
+        """V1 contains a full-length single clip (kind=transcript-source,
+        start_time=0)."""
         result, timeline = self._run(tmp_path, [_seg(0.0, 1.0, "hi")])
         assert result["ok"] is True
         v1 = timeline.tracks[0]
@@ -329,18 +334,18 @@ class TestOtioConstruction:
         assert cw["tool"] == "clipwright-transcribe"
         # source_range.start_time == 0
         assert clip.source_range.start_time.value == pytest.approx(0.0)
-        # 全尺（10秒 × 30fps = 300）
+        # Full duration (10s × 30fps = 300)
         assert clip.source_range.duration.value == pytest.approx(300.0)
 
     def test_markers_on_v1_track(self, tmp_path: Path) -> None:
-        """各セグメントが V1 トラックの marker として付与されること（DC-AM-101）。"""
+        """Each segment is attached as a marker on the V1 track (DC-AM-101)."""
         segs = [_seg(0.0, 1.2, "Hello"), _seg(1.5, 2.8, "World")]
         _result, timeline = self._run(tmp_path, segs)
         v1 = timeline.tracks[0]
         assert len(v1.markers) == 2
 
     def test_marker_metadata_caption(self, tmp_path: Path) -> None:
-        """marker metadata に kind=caption / text / language が入ること。"""
+        """Marker metadata contains kind=caption, text, and language."""
         _result, timeline = self._run(tmp_path, [_seg(0.0, 1.2, "Hello")], "ja")
         marker = timeline.tracks[0].markers[0]
         cw = marker.metadata["clipwright"]
@@ -349,9 +354,11 @@ class TestOtioConstruction:
         assert cw["language"] == "ja"
 
     def test_marker_marked_range_uses_whisper_seconds(self, tmp_path: Path) -> None:
-        """marker marked_range が whisper 秒値そのまま（DC-AM-001・RationalTime 比較）。
+        """marker.marked_range uses whisper second values directly (DC-AM-001,
+        RationalTime comparison).
 
-        start=1.5s・rate=30 → value=45.0。近似比較を避け RationalTime で厳密比較する。
+        start=1.5s, rate=30 -> value=45.0. Strict RationalTime comparison avoids
+        float approximation.
         """
         _result, timeline = self._run(tmp_path, [_seg(1.5, 2.8, "x")])
         marker = timeline.tracks[0].markers[0]
@@ -361,7 +368,7 @@ class TestOtioConstruction:
         assert marker.marked_range.duration == expected_dur
 
     def test_marker_time_matches_srt_seconds(self, tmp_path: Path) -> None:
-        """marker 秒値と SRT タイムコードが同一秒値由来であること（DC-AS-005）。"""
+        """Marker second values and SRT timecodes share the same origin (DC-AS-005)."""
         media, output, model = _make_paths(tmp_path)
         with (
             patch(
@@ -376,7 +383,7 @@ class TestOtioConstruction:
             transcribe_media(media, output, _opts(model_path=model))
         timeline = otio.adapters.read_from_file(output)
         marker = timeline.tracks[0].markers[0]
-        # marker start = 1.5s → SRT "00:00:01,500"
+        # marker start = 1.5s -> SRT "00:00:01,500"
         start_sec = (
             marker.marked_range.start_time.value / marker.marked_range.start_time.rate
         )
@@ -385,17 +392,20 @@ class TestOtioConstruction:
         assert "00:00:01,500" in srt
 
     def test_marker_name_truncated(self, tmp_path: Path) -> None:
-        """長文セグメントの marker name が先頭40字に短縮され本文は metadata.text（DC-GP-003）。"""
+        """Long-text segment marker name is truncated to 40 chars; full text is in
+        metadata.text (DC-GP-003)."""
+        # Japanese characters are used intentionally to verify multi-byte length
+        # counting (ii: test data — do not translate).
         long_text = "あ" * 60
         _result, timeline = self._run(tmp_path, [_seg(0.0, 1.0, long_text)])
         marker = timeline.tracks[0].markers[0]
-        assert len(marker.name) <= _MARKER_NAME_MAX + 1  # +1 は省略記号
+        assert len(marker.name) <= _MARKER_NAME_MAX + 1  # +1 for ellipsis character
         assert marker.name.startswith("あ" * 40)
         assert marker.metadata["clipwright"]["text"] == long_text
 
 
 # ===========================================================================
-# ⑤ DC-GP-002 セグメント0件
+# ⑤ DC-GP-002 Zero segments
 # ===========================================================================
 
 
@@ -414,14 +424,14 @@ class TestZeroSegments:
         ):
             result = transcribe_media(media, output, _opts(model_path=model))
         assert result["ok"] is True
-        assert result["warnings"]  # 0件警告
+        assert result["warnings"]  # zero-segment warning present
         assert result["data"]["segment_count"] == 0
         timeline = otio.adapters.read_from_file(output)
         v1 = timeline.tracks[0]
-        # marker 0・全尺1clip は存在
+        # 0 markers, but the full-length clip is present
         assert len(v1.markers) == 0
         assert len([c for c in v1 if isinstance(c, otio.schema.Clip)]) == 1
-        # SRT 空・VTT ヘッダのみ
+        # SRT empty, VTT header only
         srt = Path(output).with_suffix(".srt").read_text(encoding="utf-8")
         vtt = Path(output).with_suffix(".vtt").read_text(encoding="utf-8")
         assert srt == ""
@@ -429,7 +439,7 @@ class TestZeroSegments:
 
 
 # ===========================================================================
-# ⑥ 出力・エンベロープ
+# ⑥ Outputs and envelope
 # ===========================================================================
 
 
@@ -470,7 +480,7 @@ class TestEnvelopeAndOutputs:
         result, _output, _media = self._run(tmp_path)
         summary = result["summary"]
         assert "en" in summary
-        assert "2" in summary  # セグメント数
+        assert "2" in summary  # segment count
 
     def test_data_lightweight(self, tmp_path: Path) -> None:
         result, _output, _media = self._run(tmp_path)
@@ -478,12 +488,12 @@ class TestEnvelopeAndOutputs:
         assert data["segment_count"] == 2
         assert data["language"] == "en"
         assert "total_duration_seconds" in data
-        # 全文セグメントは data に詰めない
+        # Full segment list must not be embedded in data
         assert "segments" not in data
 
 
 # ===========================================================================
-# _run_whisper アダプタ単体（resolve_tool / run モック）
+# _run_whisper adapter unit tests (resolve_tool / run mocked)
 # ===========================================================================
 
 
@@ -495,7 +505,7 @@ class TestRunWhisperAdapter:
         return _impl
 
     def _fake_run_writes_json(self, json_text: str) -> Any:
-        """whisper 呼び出し時に <prefix>.json を書く run モックを返す。"""
+        """Return a run mock that writes <prefix>.json when called for whisper."""
 
         def _impl(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             if "-of" in cmd:
@@ -510,7 +520,8 @@ class TestRunWhisperAdapter:
         captured: dict[str, list[str]],
         json_body: str = '{"transcription": []}',
     ) -> Any:
-        """cmd をキャプチャして <prefix>.json を書く run モックを返す（CR L-4 DRY）。"""
+        """Return a run mock that captures the whisper command and writes <prefix>.json
+        (CR L-4 DRY)."""
 
         def _impl(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             if "-of" in cmd:
@@ -524,8 +535,8 @@ class TestRunWhisperAdapter:
     def test_success_returns_segments_and_language(
         self, tmp_path: Path, whisper_sample_json: dict[str, Any]
     ) -> None:
-        # 仮説 fixture（fixtures/README.md・whisper_sample.json）の result.language=='en' に
-        # 依存。e2e 後に実値へ差替（DC-GP-001-R）
+        # Depends on hypothetical fixture (fixtures/README.md, whisper_sample.json)
+        # result.language=='en'. Replace with real values after e2e (DC-GP-001-R).
         import json as _json
 
         model = tmp_path / "m.bin"
@@ -547,9 +558,9 @@ class TestRunWhisperAdapter:
         assert language == "en"
 
     def test_language_auto_flag_when_none(self, tmp_path: Path) -> None:
-        """language=None で LANG_AUTO_FLAG の各トークンが cmd に含まれること（DC-AM-002）。
+        """language=None causes each LANG_AUTO_FLAG token to appear in cmd (DC-AM-002).
 
-        LANG_AUTO_FLAG は list[str] であり、cmd に "-l", "auto" が順に含まれることを検証する。
+        LANG_AUTO_FLAG is list[str]; verifies that "-l" and "auto" appear in order.
         """
         captured: dict[str, list[str]] = {}
         with (
@@ -564,7 +575,7 @@ class TestRunWhisperAdapter:
         ):
             _run_whisper("video.mp4", _opts(language=None), 10.0, "m.bin")
         cmd = captured["whisper"]
-        # LANG_AUTO_FLAG は list[str] であること（CR M-1 / SR M-2）
+        # LANG_AUTO_FLAG must be list[str] (CR M-1 / SR M-2)
         assert LANG_AUTO_FLAG == ["-l", "auto"]
         for token in LANG_AUTO_FLAG:
             assert token in cmd
@@ -605,14 +616,14 @@ class TestRunWhisperAdapter:
         assert "clipwright" in cmd
 
     def test_subprocess_failure_sanitized(self, tmp_path: Path) -> None:
-        """ffmpeg/whisper の SUBPROCESS_FAILED stderr がサニタイズされること（TR-AD-09）。"""
+        """ffmpeg/whisper SUBPROCESS_FAILED stderr is sanitised (TR-AD-09)."""
         leak = "/secret/path/to/model stderr leak"
 
         def _raise_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             raise ClipwrightError(
                 code=ErrorCode.SUBPROCESS_FAILED,
-                message=f"コマンドが失敗しました: {leak}",
-                hint="確認してください。",
+                message=f"Command failed: {leak}",
+                hint="Check the input.",
             )
 
         with (
@@ -626,18 +637,18 @@ class TestRunWhisperAdapter:
             _run_whisper("video.mp4", _opts(), 10.0, "m.bin")
         assert exc_info.value.code == ErrorCode.SUBPROCESS_FAILED
         assert leak not in exc_info.value.message
-        assert "内部サブプロセス" in exc_info.value.message
+        assert "internal subprocess" in exc_info.value.message
 
     def test_whisper_run_failure_sanitized(self, tmp_path: Path) -> None:
-        """ffmpeg 成功・whisper run 失敗時もサニタイズされること（L215-216）。"""
+        """ffmpeg success + whisper run failure is also sanitised (L215-216)."""
         leak = "/secret/whisper stderr"
 
         def _run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
-            if "-of" in cmd:  # whisper 呼び出しで失敗させる
+            if "-of" in cmd:  # fail on the whisper invocation
                 raise ClipwrightError(
                     code=ErrorCode.SUBPROCESS_TIMEOUT,
                     message=f"timeout: {leak}",
-                    hint="確認してください。",
+                    hint="Check the input.",
                 )
             return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
@@ -654,7 +665,7 @@ class TestRunWhisperAdapter:
         assert leak not in exc_info.value.message
 
     def test_sanitize_passthrough_non_subprocess(self) -> None:
-        """非サブプロセス系の ClipwrightError はそのまま返ること（L88）。"""
+        """Non-subprocess ClipwrightError is returned unchanged (L88)."""
         from clipwright_transcribe.transcribe import _sanitize_subprocess_error
 
         original = ClipwrightError(
@@ -664,13 +675,13 @@ class TestRunWhisperAdapter:
         assert result is original
 
     def test_json_read_failure_subprocess_failed(self, tmp_path: Path) -> None:
-        """whisper が JSON を書かなかった場合 SUBPROCESS_FAILED になること（SR L-3）。
+        """When whisper produces no JSON, SUBPROCESS_FAILED is raised (SR L-3).
 
-        message はパスを含まない固定文言であること（パス非露出・from None チェーン）。
+        The message must not contain any path (no path exposure; from None chain).
         """
 
         def _run_no_json(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
-            # JSON を書かない
+            # Do not write JSON
             return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
         with (
@@ -684,12 +695,12 @@ class TestRunWhisperAdapter:
             _run_whisper("video.mp4", _opts(), 10.0, "m.bin")
         err = exc_info.value
         assert err.code == ErrorCode.SUBPROCESS_FAILED
-        # message にパス断片が含まれないこと（SR L-3 パス非露出）
+        # message must not contain path fragments (SR L-3 path non-exposure)
         assert "/" not in err.message
         assert "\\" not in err.message
 
     def test_whisper_binary_name_constant_used(self, tmp_path: Path) -> None:
-        """resolve_tool が WHISPER_BINARY_NAME 定数で呼ばれること（DC-AS-003）。"""
+        """resolve_tool is called with the WHISPER_BINARY_NAME constant (DC-AS-003)."""
         names: list[str] = []
 
         def _track_resolve(name: str, env_var: str | None = None) -> str:

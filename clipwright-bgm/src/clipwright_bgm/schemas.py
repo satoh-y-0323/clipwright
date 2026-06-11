@@ -1,12 +1,13 @@
-"""schemas.py — clipwright-bgm 固有の Pydantic スキーマ。
+"""schemas.py — Pydantic schemas specific to clipwright-bgm.
 
-共通型（MediaRef / Artifact / ToolResult 等）は clipwright.schemas で
-一元定義されているため、このモジュールでは再定義しない。
+Common types (MediaRef / Artifact / ToolResult, etc.) are defined centrally in
+clipwright.schemas and are not redefined here.
 
-DuckingOptions: ユーザー入力のダッキングオプション。
-DuckingDirective: BGM クリップ metadata に書くダッキング指示。
-BgmOptions: clipwright_add_bgm の入力オプション（ユーザー入力層）。
-BgmDirective: BGM クリップ metadata["clipwright"] の指示スキーマ（writer 層・B9-r2）。
+DuckingOptions: User-facing ducking options.
+DuckingDirective: Ducking directive written into BGM clip metadata.
+BgmOptions: Input options for clipwright_add_bgm (user input layer).
+BgmDirective: Directive schema written to BGM clip metadata["clipwright"]
+    (writer layer, B9-r2).
 """
 
 from __future__ import annotations
@@ -17,10 +18,10 @@ from pydantic import BaseModel, Field
 
 
 class DuckingOptions(BaseModel):
-    """ユーザー入力のダッキングオプション（ADR-B9）。
+    """User-facing ducking options (ADR-B9).
 
-    enabled=True のとき render 時に sidechaincompress で BGM を自動減衰させる。
-    threshold/ratio は sidechaincompress パラメータに写像する。
+    When enabled=True, sidechaincompress is applied at render time to automatically
+    attenuate the BGM. threshold and ratio map to sidechaincompress parameters.
     """
 
     model_config = {"allow_inf_nan": False}
@@ -30,25 +31,26 @@ class DuckingOptions(BaseModel):
         float,
         Field(
             default=0.05,
-            description="サイドチェーン入力のトリガー閾値（0〜1 の線形振幅）。",
+            description="Sidechain trigger threshold (linear amplitude, range 0–1).",
         ),
     ] = 0.05
     ratio: Annotated[
         float,
         Field(
             default=4.0,
-            description="圧縮比率。大きいほど強くダッキングする。",
+            description="Compression ratio. Higher values produce stronger ducking.",
         ),
     ] = 4.0
 
 
 class BgmOptions(BaseModel):
-    """clipwright_add_bgm のオプション（ユーザー入力層・ADR-B9）。
+    """Options for clipwright_add_bgm (user input layer, ADR-B9).
 
-    volume_db: BGM の音量調整（dB）。-60〜20 の範囲。
-    fade_in_sec: フェードイン秒数。0 のとき afade を注入しない（ADR-B9-r3）。
-    fade_out_sec: フェードアウト秒数。0 のとき afade を注入しない（ADR-B9-r3）。
-    ducking: ダッキングオプション（既定 OFF）。
+    volume_db: BGM volume adjustment in dB. Range: -60 to 20.
+    fade_in_sec: Fade-in duration in seconds. 0 means no afade is injected (ADR-B9-r3).
+    fade_out_sec: Fade-out duration in seconds.
+        0 means no afade is injected (ADR-B9-r3).
+    ducking: Ducking options (default OFF).
     """
 
     model_config = {"allow_inf_nan": False}
@@ -58,7 +60,7 @@ class BgmOptions(BaseModel):
         Field(
             ge=-60.0,
             le=20.0,
-            description="BGM の音量調整（dB）。範囲 [-60, 20]。",
+            description="BGM volume adjustment in dB. Range: [-60, 20].",
         ),
     ]
     fade_in_sec: Annotated[
@@ -66,7 +68,9 @@ class BgmOptions(BaseModel):
         Field(
             default=0.0,
             ge=0.0,
-            description="フェードイン秒数（ge=0）。0 のとき無フェード（ADR-B9-r3）。",
+            description=(
+                "Fade-in duration in seconds (ge=0). 0 means no fade (ADR-B9-r3)."
+            ),
         ),
     ] = 0.0
     fade_out_sec: Annotated[
@@ -74,20 +78,23 @@ class BgmOptions(BaseModel):
         Field(
             default=0.0,
             ge=0.0,
-            description="フェードアウト秒数（ge=0）。0 のとき無フェード（ADR-B9-r3）。",
+            description=(
+                "Fade-out duration in seconds (ge=0). 0 means no fade (ADR-B9-r3)."
+            ),
         ),
     ] = 0.0
     ducking: DuckingOptions = Field(default_factory=DuckingOptions)
 
 
 class DuckingDirective(BaseModel):
-    """BGM クリップ metadata に書くダッキング指示（writer 層・ADR-B9-r2）。
+    """Ducking directive written into BGM clip metadata (writer layer, ADR-B9-r2).
 
-    BgmDirective.ducking として co-locate する。
-    render の reader 側も同フィールド構成で読み込む。
-    allow_inf_nan=False は子モデルに自動伝播しないため明示（SR L-1・M-1）。
-    threshold/ratio に sidechaincompress の実許容域ベースの範囲制約を付与（CR L-6）。
-    実許容域は `ffmpeg -h filter=sidechaincompress` で確認済み。
+    Co-located as BgmDirective.ducking.
+    The render reader side reads the same field structure.
+    allow_inf_nan=False is not propagated to child models automatically, so it is set
+    explicitly here (SR L-1, M-1).
+    Range constraints on threshold/ratio are based on the actual allowed range of
+    sidechaincompress (CR L-6), confirmed via `ffmpeg -h filter=sidechaincompress`.
     """
 
     model_config = {"allow_inf_nan": False}
@@ -100,8 +107,8 @@ class DuckingDirective(BaseModel):
             gt=0.0,
             le=1.0,
             description=(
-                "サイドチェーン入力のトリガー閾値（0〜1 の線形振幅）。"
-                "ffmpeg sidechaincompress threshold 値域: (0, 1]。"
+                "Sidechain trigger threshold (linear amplitude, range 0–1). "
+                "ffmpeg sidechaincompress threshold range: (0, 1]."
             ),
         ),
     ] = 0.05
@@ -111,16 +118,20 @@ class DuckingDirective(BaseModel):
             default=4.0,
             ge=1.0,
             le=20.0,
-            description="圧縮比率（ffmpeg sidechaincompress ratio 値域: [1, 20]）。",
+            description=(
+                "Compression ratio (ffmpeg sidechaincompress ratio range: [1, 20])."
+            ),
         ),
     ] = 4.0
 
 
 class BgmDirective(BaseModel):
-    """BGM クリップ metadata["clipwright"] に書く指示スキーマ（writer 層・ADR-B9-r2）。
+    """Directive schema written to BGM clip metadata["clipwright"]
+    (writer layer, ADR-B9-r2).
 
-    add_bgm が構築し .model_dump() を OTIO metadata に書く。
-    render の reader 側も同フィールド・max_length=64 で定義する（NR-M-1 踏襲）。
+    Built by add_bgm and stored via .model_dump() into OTIO metadata.
+    The render reader side defines the same fields with max_length=64
+    (following NR-M-1).
     """
 
     model_config = {"allow_inf_nan": False}

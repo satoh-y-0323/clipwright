@@ -1,12 +1,12 @@
-"""test_plan.py — plan.py（純ロジック）の Red テスト。
+"""test_plan.py — Red tests for plan.py (pure logic).
 
-対象関数:
+Target functions:
   - resolve_kept_ranges(timeline) -> list[KeptRange]
   - build_plan(ranges, probe_info, options) -> RenderPlan
 
-plan.py は ffmpeg/ffprobe を一切実行しない純ロジック。
-probe 結果（bit_rate/has_video/audio_count）は引数として渡す（DC-AM-007）。
-OTIO Timeline はテスト内で直接構築する。
+plan.py is pure logic that never executes ffmpeg/ffprobe.
+probe results (bit_rate/has_video/audio_count) are passed as arguments (DC-AM-007).
+OTIO Timelines are constructed directly inside tests.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from clipwright_render.plan import RenderPlan
 
 # ---------------------------------------------------------------------------
-# ヘルパー: テスト内 Timeline 構築
+# Helpers: in-test Timeline construction
 # ---------------------------------------------------------------------------
 
 FPS = 30.0
@@ -33,12 +33,12 @@ _EPSILON = 1e-6
 
 
 def _rt(seconds: float, rate: float = FPS) -> otio.opentime.RationalTime:
-    """秒を RationalTime に変換するヘルパー。"""
+    """Convert seconds to RationalTime."""
     return otio.opentime.RationalTime(seconds * rate, rate)
 
 
 def _tr(start: float, duration: float, rate: float = FPS) -> otio.opentime.TimeRange:
-    """start 秒・duration 秒の TimeRange を返す。"""
+    """Return a TimeRange of start seconds and duration seconds."""
     return otio.opentime.TimeRange(
         start_time=_rt(start, rate),
         duration=_rt(duration, rate),
@@ -51,7 +51,7 @@ def _make_clip(
     duration: float,
     rate: float = FPS,
 ) -> otio.schema.Clip:
-    """source_range 付き Clip を生成する。"""
+    """Build a Clip with the given source_range."""
     clip = otio.schema.Clip()
     clip.media_reference = otio.schema.ExternalReference(target_url=source)
     clip.source_range = _tr(start, duration, rate)
@@ -62,7 +62,7 @@ def _make_timeline_with_clips(
     clips: list[otio.schema.Clip | otio.schema.Gap | otio.schema.Transition],
     track_kind: str = otio.schema.TrackKind.Video,
 ) -> otio.schema.Timeline:
-    """指定クリップを含む単一トラックの Timeline を生成する。"""
+    """Build a single-track Timeline containing the given clips."""
     track = otio.schema.Track(kind=track_kind)
     for item in clips:
         track.append(item)
@@ -72,15 +72,15 @@ def _make_timeline_with_clips(
 
 
 # ---------------------------------------------------------------------------
-# resolve_kept_ranges テスト群
+# resolve_kept_ranges tests
 # ---------------------------------------------------------------------------
 
 
 class TestResolveKeptRanges:
-    """resolve_kept_ranges(timeline) の動作検証。"""
+    """Verify resolve_kept_ranges(timeline) behaviour."""
 
     def test_single_clip_returns_one_range(self) -> None:
-        """Clip 1 件: (source, source_range) が正しく抽出される（DC-AS-005）。"""
+        """1 clip: (source, source_range) is extracted correctly (DC-AS-005)."""
         from clipwright_render.plan import resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
@@ -90,7 +90,7 @@ class TestResolveKeptRanges:
         assert ranges[0].source_range == _tr(0.0, 5.0)
 
     def test_multiple_clips_returns_multiple_ranges(self) -> None:
-        """Clip 複数件: 全 Clip の (source, source_range) が順序通りに返る。"""
+        """Multiple clips: all (source, source_range) pairs returned in order."""
         from clipwright_render.plan import resolve_kept_ranges
 
         clips = [
@@ -104,7 +104,7 @@ class TestResolveKeptRanges:
         assert ranges[1].source_range == _tr(5.0, 2.0)
 
     def test_gap_is_skipped(self) -> None:
-        """Gap はスキップされ、前後の Clip のみが返る（DC-AS-006）。"""
+        """Gap is skipped; only the surrounding Clips are returned (DC-AS-006)."""
         from clipwright_render.plan import resolve_kept_ranges
 
         gap = otio.schema.Gap(source_range=_tr(0.0, 2.0))
@@ -118,7 +118,7 @@ class TestResolveKeptRanges:
         assert len(ranges) == 2
 
     def test_transition_raises_unsupported(self) -> None:
-        """Transition 含む → UNSUPPORTED_OPERATION（DC-AS-006）。"""
+        """Contains Transition -> UNSUPPORTED_OPERATION (DC-AS-006)."""
         from clipwright_render.plan import resolve_kept_ranges
 
         transition = otio.schema.Transition()
@@ -133,14 +133,14 @@ class TestResolveKeptRanges:
         assert exc_info.value.code == ErrorCode.UNSUPPORTED_OPERATION
 
     def test_no_video_track_raises_unsupported(self) -> None:
-        """video トラック 0 本 → UNSUPPORTED_OPERATION（architecture §5・DC-AS-002）。
+        """0 video tracks -> UNSUPPORTED_OPERATION (architecture §5, DC-AS-002).
 
-        M-2: video トラックが存在しない場合は「サポートしていない構成」として
-        UNSUPPORTED_OPERATION を返す（設計書の INVALID_INPUT から変更）。
+        M-2: when no video track exists, treated as "unsupported configuration" and
+        UNSUPPORTED_OPERATION is returned (changed from INVALID_INPUT in design doc).
         """
         from clipwright_render.plan import resolve_kept_ranges
 
-        # audio トラックのみ含む Timeline（video トラックなし）
+        # Timeline with audio track only (no video track)
         audio_track = otio.schema.Track(kind=otio.schema.TrackKind.Audio)
         audio_track.append(_make_clip("/src/a.mp4", 0.0, 3.0))
         tl = otio.schema.Timeline()
@@ -150,7 +150,7 @@ class TestResolveKeptRanges:
         assert exc_info.value.code == ErrorCode.UNSUPPORTED_OPERATION
 
     def test_two_video_tracks_raises_unsupported(self) -> None:
-        """video トラック 2 本以上 → UNSUPPORTED_OPERATION（DC-AS-006）。"""
+        """2 or more video tracks -> UNSUPPORTED_OPERATION (DC-AS-006)."""
         from clipwright_render.plan import resolve_kept_ranges
 
         track1 = otio.schema.Track(kind=otio.schema.TrackKind.Video)
@@ -165,8 +165,8 @@ class TestResolveKeptRanges:
         assert exc_info.value.code == ErrorCode.UNSUPPORTED_OPERATION
 
     def test_multiple_sources_returns_ranges_with_each_source(self) -> None:
-        """target_url 不一致（複数ソース）→ 各 KeptRange が自分の source を保持する
-        （観点1: resolve_kept_ranges は複数ソースを許容・DC-AS-005 旧挙動廃止）。"""
+        """Different target_urls (multiple sources) -> each KeptRange holds its own source
+        (aspect 1: resolve_kept_ranges allows multiple sources; old DC-AS-005 behaviour removed)."""
         from clipwright_render.plan import resolve_kept_ranges
 
         clips = [
@@ -174,15 +174,15 @@ class TestResolveKeptRanges:
             _make_clip("/src/b.mp4", 1.0, 2.0),
         ]
         tl = _make_timeline_with_clips(clips)
-        # Arrange/Act: UNSUPPORTED_OPERATION を送出しないことを確認
+        # Arrange/Act: confirm UNSUPPORTED_OPERATION is not raised
         ranges = resolve_kept_ranges(tl)
-        # Assert: 各 KeptRange が自分のソースを保持している
+        # Assert: each KeptRange holds its own source
         assert len(ranges) == 2
         assert ranges[0].source == "/src/a.mp4"
         assert ranges[1].source == "/src/b.mp4"
 
     def test_multiple_sources_each_range_preserves_source_range(self) -> None:
-        """複数ソースの Clip → 各 KeptRange が自分の source_range を保持する（観点1）。"""
+        """Multiple-source clips -> each KeptRange holds its own source_range (aspect 1)."""
         from clipwright_render.plan import resolve_kept_ranges
 
         clips = [
@@ -198,10 +198,10 @@ class TestResolveKeptRanges:
         assert ranges[2].source_range == _tr(5.0, 1.5)
 
     def test_missing_reference_raises_invalid_input(self) -> None:
-        """MissingReference → INVALID_INPUT（L-3: データ不正の意味）。
+        """MissingReference -> INVALID_INPUT (L-3: data corruption meaning).
 
-        MissingReference はタイムラインのデータが不正（参照欠落）であることを示す。
-        「非対応構成」（UNSUPPORTED_OPERATION）ではなく「データ不正」（INVALID_INPUT）。
+        MissingReference indicates corrupt timeline data (missing reference).
+        Should be INVALID_INPUT ("bad data"), not UNSUPPORTED_OPERATION ("unsupported config").
         """
         from clipwright_render.plan import resolve_kept_ranges
 
@@ -214,7 +214,7 @@ class TestResolveKeptRanges:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_zero_clips_raises_invalid_input(self) -> None:
-        """Clip 0 件（Gap のみ等）→ INVALID_INPUT（DC-AS-005）。"""
+        """0 clips (Gap only etc.) -> INVALID_INPUT (DC-AS-005)."""
         from clipwright_render.plan import resolve_kept_ranges
 
         gap = otio.schema.Gap(source_range=_tr(0.0, 5.0))
@@ -224,7 +224,7 @@ class TestResolveKeptRanges:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_source_range_times_are_rational_time(self) -> None:
-        """source_range は float 秒ではなく RationalTime/TimeRange で保持する。"""
+        """source_range is stored as RationalTime/TimeRange, not float seconds."""
         from clipwright_render.plan import resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 1.5, 3.7)])
@@ -234,7 +234,7 @@ class TestResolveKeptRanges:
         assert isinstance(sr.start_time, otio.opentime.RationalTime)
 
     def test_audio_track_clips_are_ignored(self) -> None:
-        """audio トラックの Clip は対象外（先頭 video トラックのみ）。"""
+        """Audio track clips are ignored (first video track only)."""
         from clipwright_render.plan import resolve_kept_ranges
 
         video_track = otio.schema.Track(kind=otio.schema.TrackKind.Video)
@@ -245,20 +245,20 @@ class TestResolveKeptRanges:
         tl.tracks.append(video_track)
         tl.tracks.append(audio_track)
         ranges = resolve_kept_ranges(tl)
-        # 先頭 video トラックの1件のみ
+        # Only 1 item from the first video track
         assert len(ranges) == 1
 
 
 # ---------------------------------------------------------------------------
-# build_plan — trim 座標境界テスト（DC-AS-004）
+# build_plan — trim coordinate boundary tests (DC-AS-004)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanTrimCoordinates:
-    """build_plan が生成する filter_complex の trim 座標を検証する。"""
+    """Verify trim coordinates in filter_complex generated by build_plan."""
 
     def test_start_zero_duration_float(self) -> None:
-        """start=0 の境界値: trim start=0 が filter_complex に含まれる。"""
+        """Boundary value start=0: trim start=0 must be present in filter_complex."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
@@ -269,7 +269,7 @@ class TestBuildPlanTrimCoordinates:
         assert "trim=start=0" in fc or "trim=start=0." in fc
 
     def test_fractional_start_and_duration(self) -> None:
-        """小数 start/duration の座標変換が正しい（小数6桁・DC-AS-004）。"""
+        """Fractional start/duration coordinate conversion is correct (6 decimal places, DC-AS-004)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         # start=1.5s, duration=3.25s → end=4.75s
@@ -277,12 +277,12 @@ class TestBuildPlanTrimCoordinates:
         ranges = resolve_kept_ranges(tl)
         probe = ProbeInfo(has_video=True, audio_count=0, bit_rate=None)
         plan = build_plan(ranges, probe, RenderOptions())
-        # trim start は 1.5、end は 4.75 の数値が含まれる
+        # trim start is 1.5, end is 4.75
         assert "1.5" in plan.filter_complex
         assert "4.75" in plan.filter_complex
 
     def test_setpts_reset_present(self) -> None:
-        """setpts=PTS-STARTPTS が filter_complex に含まれる（DC-AS-004）。"""
+        """setpts=PTS-STARTPTS must be present in filter_complex (DC-AS-004)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
@@ -292,7 +292,7 @@ class TestBuildPlanTrimCoordinates:
         assert "setpts=PTS-STARTPTS" in plan.filter_complex
 
     def test_asetpts_reset_present_when_audio(self) -> None:
-        """音声ありの場合 asetpts=PTS-STARTPTS が filter_complex に含まれる。"""
+        """With audio, asetpts=PTS-STARTPTS must be present in filter_complex."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
@@ -303,15 +303,15 @@ class TestBuildPlanTrimCoordinates:
 
 
 # ---------------------------------------------------------------------------
-# build_plan — filter_complex 構造テスト（ADR-1）
+# build_plan — filter_complex structure tests (ADR-1)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanFilterComplex:
-    """filter_complex の構造（trim/concat/ラベル）を検証する。"""
+    """Verify filter_complex structure (trim/concat/labels)."""
 
     def test_filter_complex_is_single_string(self) -> None:
-        """filter_complex は単一文字列（コマンドインジェクション防止・ADR-1）。"""
+        """filter_complex is a single string (prevents command injection, ADR-1)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
@@ -321,7 +321,7 @@ class TestBuildPlanFilterComplex:
         assert isinstance(plan.filter_complex, str)
 
     def test_single_clip_uses_concat_n1(self) -> None:
-        """Clip 1 件でも concat=n=1 を使う（DC-AS-005）。"""
+        """Even a single clip uses concat=n=1 (DC-AS-005)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
@@ -331,7 +331,7 @@ class TestBuildPlanFilterComplex:
         assert "concat=n=1" in plan.filter_complex
 
     def test_two_clips_concat_n2(self) -> None:
-        """Clip 2 件: concat=n=2 が filter_complex に含まれる（ADR-1）。"""
+        """2 clips: concat=n=2 must be present in filter_complex (ADR-1)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         clips = [
@@ -345,7 +345,7 @@ class TestBuildPlanFilterComplex:
         assert "concat=n=2" in plan.filter_complex
 
     def test_video_only_concat_v1_a0(self) -> None:
-        """映像あり・音声 0: concat=n=N:v=1:a=0（ADR-7）。"""
+        """Video only, no audio: concat=n=N:v=1:a=0 (ADR-7)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
@@ -355,7 +355,7 @@ class TestBuildPlanFilterComplex:
         assert "v=1:a=0" in plan.filter_complex
 
     def test_audio1_concat_v1_a1(self) -> None:
-        """映像あり・音声 1: concat=n=N:v=1:a=1（ADR-7）。"""
+        """Video with 1 audio stream: concat=n=N:v=1:a=1 (ADR-7)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
@@ -365,7 +365,7 @@ class TestBuildPlanFilterComplex:
         assert "v=1:a=1" in plan.filter_complex
 
     def test_audio_multiple_treated_as_one(self) -> None:
-        """音声複数: 第1音声のみ採用（v=1,a=1、ADR-7）。"""
+        """Multiple audio streams: only the first is used (v=1, a=1, ADR-7)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
@@ -375,7 +375,7 @@ class TestBuildPlanFilterComplex:
         assert "v=1:a=1" in plan.filter_complex
 
     def test_outv_label_present(self) -> None:
-        """[outv] ラベルが filter_complex に含まれる（ADR-1）。"""
+        """[outv] label must be present in filter_complex (ADR-1)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
@@ -385,7 +385,7 @@ class TestBuildPlanFilterComplex:
         assert "[outv]" in plan.filter_complex
 
     def test_outa_label_present_when_audio(self) -> None:
-        """音声ありの場合 [outa] ラベルが filter_complex に含まれる（ADR-1）。"""
+        """When audio is present, [outa] label must be in filter_complex (ADR-1)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
@@ -396,15 +396,15 @@ class TestBuildPlanFilterComplex:
 
 
 # ---------------------------------------------------------------------------
-# build_plan — 音声/映像マトリクス（ADR-7/DC-AS-002）
+# build_plan — audio/video matrix (ADR-7/DC-AS-002)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanAudioVideoMatrix:
-    """音声/映像構成マトリクスを検証する（ADR-7/DC-AS-002）。"""
+    """Verify audio/video composition matrix (ADR-7/DC-AS-002)."""
 
     def test_no_video_raises_unsupported(self) -> None:
-        """映像なし → UNSUPPORTED_OPERATION（DC-AS-002）。"""
+        """No video stream -> UNSUPPORTED_OPERATION (DC-AS-002)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
@@ -415,7 +415,7 @@ class TestBuildPlanAudioVideoMatrix:
         assert exc_info.value.code == ErrorCode.UNSUPPORTED_OPERATION
 
     def test_video_no_audio_map_outv_only(self) -> None:
-        """映像あり・音声 0: ffmpeg 引数に -map [outv] のみ（ADR-7）。"""
+        """Video with no audio: ffmpeg args contain only -map [outv] (ADR-7)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
@@ -423,12 +423,12 @@ class TestBuildPlanAudioVideoMatrix:
         probe = ProbeInfo(has_video=True, audio_count=0, bit_rate=None)
         plan = build_plan(ranges, probe, RenderOptions())
         args = plan.ffmpeg_args
-        # -map [outv] が含まれ -map [outa] は含まれない
+        # -map [outv] is present, -map [outa] is not
         assert "[outv]" in " ".join(str(a) for a in args)
         assert "[outa]" not in " ".join(str(a) for a in args)
 
     def test_video_audio1_map_outv_and_outa(self) -> None:
-        """映像あり・音声 1: -map [outv] -map [outa] が両方含まれる（ADR-7）。"""
+        """Video with 1 audio stream: both -map [outv] and -map [outa] are present (ADR-7)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
@@ -440,7 +440,7 @@ class TestBuildPlanAudioVideoMatrix:
         assert "[outa]" in args_str
 
     def test_ffmpeg_args_is_list_of_str(self) -> None:
-        """ffmpeg_args は list[str]（M-1: str 統一・コマンドインジェクション防止）。"""
+        """ffmpeg_args is list[str] (M-1: str uniformity, prevents command injection)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
@@ -449,19 +449,19 @@ class TestBuildPlanAudioVideoMatrix:
         plan = build_plan(ranges, probe, RenderOptions())
         assert isinstance(plan.ffmpeg_args, list)
         for item in plan.ffmpeg_args:
-            assert isinstance(item, str), f"ffmpeg_args の要素が str でない: {item!r}"
+            assert isinstance(item, str), f"ffmpeg_args element is not str: {item!r}"
 
 
 # ---------------------------------------------------------------------------
-# build_plan — RenderOptions 写像テスト（ADR-1/DC-AM-004）
+# build_plan — RenderOptions mapping tests (ADR-1/DC-AM-004)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanRenderOptions:
-    """RenderOptions のフィールドが ffmpeg 引数に正しく写像される。"""
+    """Verify RenderOptions fields are correctly mapped to ffmpeg arguments."""
 
     def test_video_codec_mapped(self) -> None:
-        """-c:v が ffmpeg_args に含まれる。"""
+        """-c:v must be present in ffmpeg_args."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
@@ -473,7 +473,7 @@ class TestBuildPlanRenderOptions:
         assert plan.ffmpeg_args[idx + 1] == "libx264"
 
     def test_audio_codec_mapped(self) -> None:
-        """-c:a が ffmpeg_args に含まれる。"""
+        """-c:a must be present in ffmpeg_args."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
@@ -485,10 +485,10 @@ class TestBuildPlanRenderOptions:
         assert plan.ffmpeg_args[idx + 1] == "aac"
 
     def test_scale_filter_in_filter_complex_when_width_height(self) -> None:
-        """width/height 指定: scale が filter_complex 内統合され -vf 不使用（L-4）。
+        """With width/height specified: scale is integrated inside filter_complex, not via -vf (L-4).
 
-        -filter_complex と -vf の同時指定で ffmpeg エラーになるため、
-        scale は filter_complex 内の concat 出力後に連結する。
+        Specifying both -filter_complex and -vf causes ffmpeg errors, so
+        scale is chained after concat output inside filter_complex.
         """
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
@@ -496,18 +496,18 @@ class TestBuildPlanRenderOptions:
         ranges = resolve_kept_ranges(tl)
         probe = ProbeInfo(has_video=True, audio_count=0, bit_rate=None)
         plan = build_plan(ranges, probe, RenderOptions(width=1280, height=720))
-        # scale は filter_complex 内に含まれる
+        # scale is inside filter_complex
         assert "scale=1280:720" in plan.filter_complex
-        # -vf は ffmpeg_args に含まれない（filter_complex と競合するため禁止）
+        # -vf must not be in ffmpeg_args (conflicts with filter_complex)
         assert "-vf" not in plan.ffmpeg_args
-        # [outvscaled] ラベルが filter_complex に含まれる
+        # [outvscaled] label must be in filter_complex
         assert "[outvscaled]" in plan.filter_complex
-        # -map [outvscaled] が ffmpeg_args に含まれる
+        # -map [outvscaled] must be in ffmpeg_args
         args_str = " ".join(plan.ffmpeg_args)
         assert "[outvscaled]" in args_str
 
     def test_fps_mapped(self) -> None:
-        """-r が ffmpeg_args に含まれる。"""
+        """-r must be present in ffmpeg_args."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
@@ -517,7 +517,7 @@ class TestBuildPlanRenderOptions:
         assert "-r" in plan.ffmpeg_args
 
     def test_crf_mapped(self) -> None:
-        """-crf が ffmpeg_args に含まれる。"""
+        """-crf must be present in ffmpeg_args."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
@@ -528,15 +528,15 @@ class TestBuildPlanRenderOptions:
 
 
 # ---------------------------------------------------------------------------
-# build_plan — dry_run 概算テスト（ADR-3/DC-AM-005）
+# build_plan — dry_run estimation tests (ADR-3/DC-AM-005)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanDryRun:
-    """dry_run 概算（区間数・尺・概算サイズ・警告）を検証する。"""
+    """Verify dry_run estimates (segment count, duration, estimated size, warnings)."""
 
     def test_dry_run_segment_count(self) -> None:
-        """plan.segment_count が残区間数と一致する（ADR-3）。"""
+        """plan.segment_count matches the number of kept ranges (ADR-3)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         clips = [
@@ -550,7 +550,7 @@ class TestBuildPlanDryRun:
         assert plan.segment_count == 2
 
     def test_dry_run_total_duration(self) -> None:
-        """plan.total_duration_seconds が Σduration と一致する（ADR-3）。"""
+        """plan.total_duration_seconds matches the sum of durations (ADR-3)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         clips = [
@@ -564,18 +564,18 @@ class TestBuildPlanDryRun:
         assert abs(plan.total_duration_seconds - 5.0) < _EPSILON
 
     def test_estimated_size_bytes_with_bit_rate(self) -> None:
-        """bit_rate あり: estimated_size_bytes = bit_rate × 尺 / 8（ADR-3）。"""
+        """With bit_rate: estimated_size_bytes = bit_rate * duration / 8 (ADR-3)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 10.0)])
         ranges = resolve_kept_ranges(tl)
         probe = ProbeInfo(has_video=True, audio_count=0, bit_rate=8_000_000)
         plan = build_plan(ranges, probe, RenderOptions())
-        # 8Mbps × 10s / 8 = 10_000_000 bytes
+        # 8Mbps * 10s / 8 = 10_000_000 bytes
         assert plan.estimated_size_bytes == pytest.approx(10_000_000, rel=_EPSILON)
 
     def test_estimated_size_none_when_no_bit_rate(self) -> None:
-        """bit_rate None: estimated_size_bytes が None（ADR-3）。"""
+        """bit_rate None: estimated_size_bytes is None (ADR-3)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
@@ -585,7 +585,7 @@ class TestBuildPlanDryRun:
         assert plan.estimated_size_bytes is None
 
     def test_no_bit_rate_adds_warning(self) -> None:
-        """bit_rate None のとき warnings に警告が追加される（ADR-3）。"""
+        """When bit_rate is None, a warning is added to warnings (ADR-3)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
@@ -607,8 +607,8 @@ class TestBuildPlanDryRun:
     def test_estimate_is_rough_warning_when_options_specified(
         self, options: RenderOptions
     ) -> None:
-        """video_codec/width/height/fps/crf のいずれか非 None → 「概算は目安」
-        warning が追加される（DC-AM-005）。"""
+        """Any of video_codec/width/height/fps/crf is non-None -> rough estimate warning
+        is added (DC-AM-005)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
@@ -618,7 +618,7 @@ class TestBuildPlanDryRun:
         assert len(plan.warnings) > 0
 
     def test_no_extra_warning_without_codec_options(self) -> None:
-        """変換オプション非指定・bit_rate あり: warnings が空（DC-AM-005）。"""
+        """No conversion options, bit_rate present: warnings is empty (DC-AM-005)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
@@ -628,7 +628,7 @@ class TestBuildPlanDryRun:
         assert plan.warnings == []
 
     def test_plan_has_command_list(self) -> None:
-        """plan.ffmpeg_args は予定コマンドのリスト（ADR-3）。"""
+        """plan.ffmpeg_args is the list of planned command tokens (ADR-3)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
@@ -640,7 +640,7 @@ class TestBuildPlanDryRun:
 
 
 # ===========================================================================
-# 複数ソース連結拡張テスト（v2 契約・ADR-C1〜C12）
+# Multi-source concatenation extension tests (v2 contract, ADR-C1~C12)
 # ===========================================================================
 
 
@@ -652,7 +652,7 @@ def _make_probe(
     height: int | None = 1080,
     fps: float | None = 30.0,
 ) -> ProbeInfo:
-    """複数ソーステスト用 ProbeInfo ヘルパー。"""
+    """ProbeInfo helper for multi-source tests."""
     return ProbeInfo(
         has_video=has_video,
         audio_count=audio_count,
@@ -664,20 +664,20 @@ def _make_probe(
 
 
 def _make_source_probes(**overrides: ProbeInfo) -> dict[str, ProbeInfo]:
-    """source_url → ProbeInfo の辞書を返すヘルパー。"""
+    """Return a source_url -> ProbeInfo dict helper."""
     return dict(overrides)
 
 
 # ---------------------------------------------------------------------------
-# 観点3: ProbeInfo 新フィールド（width / height / fps）保持テスト
+# Aspect 3: ProbeInfo new fields (width / height / fps) storage tests
 # ---------------------------------------------------------------------------
 
 
 class TestProbeInfoExtendedFields:
-    """ProbeInfo の width/height/fps フィールドが保持される（観点3・ADR-C2）。"""
+    """Verify ProbeInfo width/height/fps fields are stored (Aspect 3, ADR-C2)."""
 
     def test_probe_info_width_height_fps_stored(self) -> None:
-        """ProbeInfo(width=1920, height=1080, fps=30.0) → 各値が保持される。"""
+        """ProbeInfo(width=1920, height=1080, fps=30.0) -> each value is stored."""
         probe = ProbeInfo(
             has_video=True,
             audio_count=1,
@@ -691,14 +691,14 @@ class TestProbeInfoExtendedFields:
         assert probe.fps == 30.0
 
     def test_probe_info_new_fields_default_none(self) -> None:
-        """width/height/fps を省略したとき default=None（後方互換・ADR-C2）。"""
+        """Omitting width/height/fps defaults to None (backward compat, ADR-C2)."""
         probe = ProbeInfo(has_video=True, audio_count=0, bit_rate=None)
         assert probe.width is None
         assert probe.height is None
         assert probe.fps is None
 
     def test_probe_info_width_none_height_none_fps_set(self) -> None:
-        """fps のみ設定・width/height=None の組み合わせが保持される。"""
+        """fps only, width/height=None combination is stored correctly."""
         probe = ProbeInfo(
             has_video=True,
             audio_count=1,
@@ -713,15 +713,15 @@ class TestProbeInfoExtendedFields:
 
 
 # ---------------------------------------------------------------------------
-# 観点4: unique_sources_in_order 単体テスト（ADR-C9-r2）
+# Aspect 4: unique_sources_in_order unit tests (ADR-C9-r2)
 # ---------------------------------------------------------------------------
 
 
 class TestUniqueSourcesInOrder:
-    """unique_sources_in_order(ranges) → 出現順・重複排除（観点4・ADR-C9-r2）。"""
+    """unique_sources_in_order(ranges) -> appearance-order deduplication (Aspect 4, ADR-C9-r2)."""
 
     def test_single_source_returns_one_element(self) -> None:
-        """単一ソースの複数クリップ → リスト1要素（重複排除）。"""
+        """Multiple clips from a single source -> list with 1 element (deduplication)."""
         from clipwright_render.plan import KeptRange, unique_sources_in_order
 
         ranges = [
@@ -732,7 +732,7 @@ class TestUniqueSourcesInOrder:
         assert result == ["/src/a.mp4"]
 
     def test_two_sources_preserves_appearance_order(self) -> None:
-        """2ソース → 出現順を維持する（a→b の順）。"""
+        """2 sources -> appearance order is preserved (a->b)."""
         from clipwright_render.plan import KeptRange, unique_sources_in_order
 
         ranges = [
@@ -743,7 +743,7 @@ class TestUniqueSourcesInOrder:
         assert result == ["/src/a.mp4", "/src/b.mp4"]
 
     def test_interleaved_sources_deduplicates_preserves_order(self) -> None:
-        """a→b→a→b の出現 → [a, b]（出現順・重複排除）。"""
+        """a->b->a->b appearance -> [a, b] (appearance order, deduplication)."""
         from clipwright_render.plan import KeptRange, unique_sources_in_order
 
         ranges = [
@@ -756,7 +756,7 @@ class TestUniqueSourcesInOrder:
         assert result == ["/src/a.mp4", "/src/b.mp4"]
 
     def test_three_sources_order_preserved(self) -> None:
-        """3ソース a→b→c → [a, b, c] の順。"""
+        """3 sources a->b->c -> [a, b, c] order."""
         from clipwright_render.plan import KeptRange, unique_sources_in_order
 
         ranges = [
@@ -768,7 +768,7 @@ class TestUniqueSourcesInOrder:
         assert result == ["/src/a.mp4", "/src/b.mp4", "/src/c.mp4"]
 
     def test_render_plan_input_sources_matches_unique_sources_in_order(self) -> None:
-        """RenderPlan.input_sources が unique_sources_in_order と同一順になる（ADR-C9-r2）。"""
+        """RenderPlan.input_sources matches the order from unique_sources_in_order (ADR-C9-r2)."""
         from clipwright_render.plan import build_plan, unique_sources_in_order
 
         clips = [
@@ -794,12 +794,12 @@ class TestUniqueSourcesInOrder:
 
 
 # ---------------------------------------------------------------------------
-# 観点5: 複数ソース経路 filter_complex 文字列（ADR-C1/C5-r2/C7-r2/C11-r2）
+# Aspect 5: Multi-source path filter_complex string (ADR-C1/C5-r2/C7-r2/C11-r2)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanMultiSourceFilterComplex:
-    """複数ソース経路の filter_complex 文字列を検証する（観点5・ADR-C1/C5-r2/C7-r2/C11-r2）。"""
+    """Verify filter_complex string for the multi-source path (Aspect 5, ADR-C1/C5-r2/C7-r2/C11-r2)."""
 
     def _build_multi(
         self,
@@ -809,7 +809,7 @@ class TestBuildPlanMultiSourceFilterComplex:
         denoise: dict | None = None,
         loudness: dict | None = None,
     ) -> RenderPlan:
-        """複数ソース build_plan のテストヘルパー。"""
+        """Test helper for multi-source build_plan."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         clip_objs = [_make_clip(src, start, dur) for src, start, dur in clips]
@@ -827,8 +827,8 @@ class TestBuildPlanMultiSourceFilterComplex:
         )
 
     def test_5a_input_labels_use_source_index(self) -> None:
-        """観点5a: ソース index k に基づく [k:v] が filter_complex に含まれる（ADR-C1）。
-        同一ソースの複数クリップは同じ index を共有する。"""
+        """Aspect 5a: [k:v] based on source index k is present in filter_complex (ADR-C1).
+        Multiple clips from the same source share the same index."""
         clips = [
             ("/src/a.mp4", 0.0, 3.0),
             ("/src/b.mp4", 0.0, 2.0),
@@ -839,12 +839,12 @@ class TestBuildPlanMultiSourceFilterComplex:
         }
         plan = self._build_multi(clips, source_probes)
         fc = plan.filter_complex
-        # a.mp4 は index 0、b.mp4 は index 1
+        # a.mp4 is index 0, b.mp4 is index 1
         assert "[0:v]" in fc
         assert "[1:v]" in fc
 
     def test_5a_same_source_multiple_clips_share_index(self) -> None:
-        """観点5a: 同一ソースの複数クリップは同じ index を共有する（ADR-C1）。"""
+        """Aspect 5a: Multiple clips from the same source share the same index (ADR-C1)."""
         clips = [
             ("/src/a.mp4", 0.0, 2.0),
             ("/src/b.mp4", 0.0, 2.0),
@@ -856,13 +856,13 @@ class TestBuildPlanMultiSourceFilterComplex:
         }
         plan = self._build_multi(clips, source_probes)
         fc = plan.filter_complex
-        # a.mp4（index=0）が2回、b.mp4（index=1）が1回出現（[2:v]は存在しない）
+        # a.mp4 (index=0) appears twice, b.mp4 (index=1) once ([2:v] does not exist)
         assert "[0:v]" in fc
         assert "[1:v]" in fc
         assert "[2:v]" not in fc
 
     def test_5b_per_clip_normalize_chain_contains_fps_scale_pad_setsar(self) -> None:
-        """観点5b: 各クリップ前段に fps=/scale=.../pad=.../setsar=1 が含まれる（ADR-C5-r2）。"""
+        """Aspect 5b: Each clip's pre-chain contains fps=/scale=.../pad=.../setsar=1 (ADR-C5-r2)."""
         clips = [
             ("/src/a.mp4", 0.0, 3.0),
             ("/src/b.mp4", 1.0, 2.0),
@@ -879,8 +879,8 @@ class TestBuildPlanMultiSourceFilterComplex:
         assert "setsar=1" in fc
 
     def test_5b_target_width_height_are_even(self) -> None:
-        """観点5b: target_w/h は偶数（ADR-C4-r2・yuv420p 偶数制約）。"""
-        # 奇数解像度のソース → 偶数に丸められた target が pad= に現れる
+        """Aspect 5b: target_w/h are even numbers (ADR-C4-r2, yuv420p even constraint)."""
+        # Odd-resolution source -> even-rounded target appears in pad=
         clips = [
             ("/src/a.mp4", 0.0, 3.0),
             ("/src/b.mp4", 0.0, 2.0),
@@ -891,21 +891,21 @@ class TestBuildPlanMultiSourceFilterComplex:
         }
         plan = self._build_multi(clips, source_probes)
         fc = plan.filter_complex
-        # 1921→1920、1081→1080 に偶数丸めされた値が pad 式に出現する
+        # 1921->1920, 1081->1080 even-rounded values appear in pad expression
         assert "1920" in fc
         assert "1080" in fc
-        # 奇数値が target として出現しない（1921 や 1081 はソース解像度であり pad= 後の値ではない）
-        # filter には scale=TW:TH の形で偶数が出る
+        # Odd values must not appear as target (1921 and 1081 are source resolutions, not pad= output)
+        # filter has scale=TW:TH with even numbers
         import re
 
-        # scale=偶数:偶数 のパターン
+        # pattern: scale=even:even
         scale_matches = re.findall(r"scale=(\d+):(\d+)", fc)
         for w_str, h_str in scale_matches:
-            assert int(w_str) % 2 == 0, f"scale width {w_str} は奇数"
-            assert int(h_str) % 2 == 0, f"scale height {h_str} は奇数"
+            assert int(w_str) % 2 == 0, f"scale width {w_str} is odd"
+            assert int(h_str) % 2 == 0, f"scale height {h_str} is odd"
 
     def test_5b_fps_precision_at_least_5_decimal_places(self) -> None:
-        """観点5b: fps= の値は小数5桁以上の精度で書かれる（ADR-C2-r2・NTSC fps 対応）。"""
+        """Aspect 5b: fps= value is written with at least 5 decimal places (ADR-C2-r2, NTSC fps support)."""
         clips = [
             ("/src/a.mp4", 0.0, 3.0),
             ("/src/b.mp4", 0.0, 2.0),
@@ -919,18 +919,18 @@ class TestBuildPlanMultiSourceFilterComplex:
         fc = plan.filter_complex
         import re
 
-        # fps=X.XXXXX の形式で5桁以上の小数が出現する
+        # fps=X.XXXXX format with at least 5 decimal places
         fps_matches = re.findall(r"fps=(\d+\.\d+)", fc)
-        assert len(fps_matches) > 0, "fps= が filter_complex に含まれない"
+        assert len(fps_matches) > 0, "fps= not found in filter_complex"
         for fps_str in fps_matches:
             decimal_part = fps_str.split(".")[1]
             assert len(decimal_part) >= 5, (
-                f"fps={fps_str} の小数桁数が5未満（NTSC 精度不足）"
+                f"fps={fps_str} has fewer than 5 decimal places (NTSC precision insufficient)"
             )
 
     def test_5c_aformat_stereo_48000_required_in_audio_chain(self) -> None:
-        """観点5c: 音声あり音声ラベルに aformat=sample_rates=48000:channel_layouts=stereo が
-        必須挿入される（ADR-C7-r2・DC-AS-002/AM-007）。"""
+        """Aspect 5c: aformat=sample_rates=48000:channel_layouts=stereo must be inserted
+        in audio labels when audio is present (ADR-C7-r2, DC-AS-002/AM-007)."""
         clips = [
             ("/src/a.mp4", 0.0, 3.0),
             ("/src/b.mp4", 0.0, 2.0),
@@ -944,7 +944,7 @@ class TestBuildPlanMultiSourceFilterComplex:
         assert "aformat=sample_rates=48000:channel_layouts=stereo" in fc
 
     def test_5d_concat_label_outv_outa_with_audio(self) -> None:
-        """観点5d: concat=n=N:v=1:a=1 と [outv][outa] が含まれる（ADR-C11-r2）。"""
+        """Aspect 5d: concat=n=N:v=1:a=1 and [outv][outa] are present (ADR-C11-r2)."""
         clips = [
             ("/src/a.mp4", 0.0, 3.0),
             ("/src/b.mp4", 0.0, 2.0),
@@ -960,7 +960,7 @@ class TestBuildPlanMultiSourceFilterComplex:
         assert "[outa]" in fc
 
     def test_5d_concat_n_equals_clip_count(self) -> None:
-        """観点5d: concat=n= がクリップ数と一致する（ADR-C11-r2）。"""
+        """Aspect 5d: concat=n= matches the clip count (ADR-C11-r2)."""
         clips = [
             ("/src/a.mp4", 0.0, 2.0),
             ("/src/b.mp4", 0.0, 2.0),
@@ -972,17 +972,17 @@ class TestBuildPlanMultiSourceFilterComplex:
         }
         plan = self._build_multi(clips, source_probes)
         fc = plan.filter_complex
-        # クリップ数3
+        # 3 clips
         assert "concat=n=3" in fc
 
 
 # ---------------------------------------------------------------------------
-# 観点6: 出力規格決定（ADR-C4-r2）
+# Aspect 6: Output spec resolution (ADR-C4-r2)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanOutputSpec:
-    """出力規格決定ロジックを検証する（観点6・ADR-C4-r2）。"""
+    """Verify output spec resolution logic (Aspect 6, ADR-C4-r2)."""
 
     def _build_2source(
         self,
@@ -1001,43 +1001,43 @@ class TestBuildPlanOutputSpec:
         return build_plan(ranges, pa, options, source_probes=source_probes)
 
     def test_6_both_width_height_specified_uses_options(self) -> None:
-        """width/height 両方指定 → その値（偶数）が scale に使われる（ADR-C4-r2）。"""
+        """Both width/height specified -> those values (even) are used in scale (ADR-C4-r2)."""
         plan = self._build_2source(RenderOptions(width=1280, height=720))
         assert "scale=1280:720" in plan.filter_complex
 
     def test_6_width_only_specified_raises_validation_error(self) -> None:
-        """片方のみ（width のみ）指定 → RenderOptions 構築時に pydantic ValidationError。
+        """Only width specified -> pydantic ValidationError at RenderOptions construction.
 
-        width/height はペアで指定するか両方 None でなければならない（厳格拒否）。
-        build_plan には到達しない契約なので、RenderOptions 構築レベルで検証する。
+        width/height must be specified as a pair or both None (strict rejection).
+        This is a contract that never reaches build_plan, so it is validated at RenderOptions.
         """
         with pytest.raises(ValidationError):
             RenderOptions(width=640)
 
     def test_6_height_only_specified_raises_validation_error(self) -> None:
-        """片方のみ（height のみ）指定 → RenderOptions 構築時に pydantic ValidationError。
+        """Only height specified -> pydantic ValidationError at RenderOptions construction.
 
-        width/height はペアで指定するか両方 None でなければならない（厳格拒否）。
-        build_plan には到達しない契約なので、RenderOptions 構築レベルで検証する。
+        width/height must be specified as a pair or both None (strict rejection).
+        This is a contract that never reaches build_plan, so it is validated at RenderOptions.
         """
         with pytest.raises(ValidationError):
             RenderOptions(height=480)
 
     def test_6_no_options_uses_first_source_spec(self) -> None:
-        """未指定 → 先頭クリップのソース規格（width/height/fps）を使う（ADR-C4-r2）。"""
+        """No options -> first clip's source spec (width/height/fps) is used (ADR-C4-r2)."""
         plan = self._build_2source(RenderOptions())
         fc = plan.filter_complex
-        # 先頭ソース a.mp4 の 1920x1080 が target になる
+        # First source a.mp4 1920x1080 becomes the target
         assert "scale=1920:1080" in fc
 
     def test_6_fps_option_alone_adopted(self) -> None:
-        """options.fps のみ指定 → その fps が filter_complex の fps= に使われる（ADR-C4-r2）。"""
+        """options.fps only specified -> that fps is used in filter_complex fps= (ADR-C4-r2)."""
         plan = self._build_2source(RenderOptions(fps=60.0))
         fc = plan.filter_complex
         assert "fps=60" in fc or "fps=60." in fc
 
     def test_6_first_source_width_none_raises_invalid_input(self) -> None:
-        """先頭ソースの width=None → INVALID_INPUT（規格決定不能・ADR-C4-r2）。"""
+        """First source width=None -> INVALID_INPUT (cannot resolve output spec, ADR-C4-r2)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         pa = _make_probe(width=None, height=1080, fps=30.0)
@@ -1051,7 +1051,7 @@ class TestBuildPlanOutputSpec:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_6_first_source_fps_none_raises_invalid_input(self) -> None:
-        """先頭ソースの fps=None → INVALID_INPUT（規格決定不能・ADR-C2-r2）。"""
+        """First source fps=None -> INVALID_INPUT (cannot resolve output spec, ADR-C2-r2)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         pa = _make_probe(width=1920, height=1080, fps=None)
@@ -1066,15 +1066,15 @@ class TestBuildPlanOutputSpec:
 
 
 # ---------------------------------------------------------------------------
-# 観点7: 音声混在 anullsrc 補完（ADR-C7-r2）
+# Aspect 7: Audio-absent source anullsrc padding (ADR-C7-r2)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanAudioMixedAnullsrc:
-    """音声なしソースを anullsrc で補完し concat a=1 が成立する（観点7・ADR-C7-r2）。"""
+    """Audio-absent sources are padded with anullsrc enabling concat a=1 (Aspect 7, ADR-C7-r2)."""
 
     def test_7_audio_absent_source_generates_anullsrc(self) -> None:
-        """音声なしソースのクリップ → filter_complex に 'anullsrc' が含まれる（ADR-C7-r2）。"""
+        """Clip from audio-absent source -> 'anullsrc' is present in filter_complex (ADR-C7-r2)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         clips = [
@@ -1101,10 +1101,10 @@ class TestBuildPlanAudioMixedAnullsrc:
         assert "anullsrc" in fc
 
     def test_7_anullsrc_clip_duration_matches_video_duration(self) -> None:
-        """anullsrc の atrim=0:DUR は映像と同じ秒尺（ADR-C7-r2・DC-AM-005）。"""
+        """anullsrc's atrim=0:DUR matches the video duration in seconds (ADR-C7-r2, DC-AM-005)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
-        # 音声なしクリップの duration=2.5 秒
+        # audio-absent clip duration=2.5 seconds
         clips = [
             _make_clip("/src/with_audio.mp4", 0.0, 3.0),
             _make_clip("/src/no_audio.mp4", 0.0, 2.5),
@@ -1126,17 +1126,17 @@ class TestBuildPlanAudioMixedAnullsrc:
             source_probes=source_probes,
         )
         fc = plan.filter_complex
-        # anullsrc が "atrim=0:2.5" か "atrim=0:2.50000" 等の形で含まれる
-        # re.search で境界付き一致（atrim=0:2.5001 等の丸め誤差を誤検知しない）
+        # anullsrc is present as "atrim=0:2.5" or "atrim=0:2.50000" etc.
+        # re.search with boundary to avoid false positives like atrim=0:2.5001
         import re
 
         assert "anullsrc" in fc
         assert re.search(r"atrim=0:2\.5(?:0*)?(?:[^0-9]|$)", fc), (
-            f"atrim=0:2.5... が filter_complex に含まれない: {fc}"
+            f"atrim=0:2.5... not found in filter_complex: {fc}"
         )
 
     def test_7_audio_mixed_concat_a1(self) -> None:
-        """音声混在でも concat a=1 が成立する（ADR-C7-r2）。"""
+        """Even with mixed audio sources, concat a=1 is achieved (ADR-C7-r2)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         clips = [
@@ -1160,15 +1160,15 @@ class TestBuildPlanAudioMixedAnullsrc:
 
 
 # ---------------------------------------------------------------------------
-# 観点8: 全ソース音声なし（DC-GP-002）
+# Aspect 8: All sources audio-absent (DC-GP-002)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanAllAudiolessMultiSource:
-    """全ソース音声なし → a=0・映像のみ、denoise/loudness はスキップ（観点8・DC-GP-002）。"""
+    """All sources audio-absent -> a=0 video-only, denoise/loudness skipped (Aspect 8, DC-GP-002)."""
 
     def test_8_all_audioless_concat_a0(self) -> None:
-        """全ソース audio_count=0 → concat a=0（映像のみ）。"""
+        """All sources audio_count=0 -> concat a=0 (video only)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         clips = [
@@ -1192,7 +1192,7 @@ class TestBuildPlanAllAudiolessMultiSource:
         assert "[outa]" not in fc
 
     def test_8_all_audioless_with_denoise_skips_filter_adds_warning(self) -> None:
-        """全ソース音声なし ＋ denoise 指示 → フィルタ非注入・警告追加（ADR-C11-r2）。"""
+        """All sources audio-absent + denoise directive -> filter not injected, warning added (ADR-C11-r2)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         clips = [
@@ -1219,13 +1219,13 @@ class TestBuildPlanAllAudiolessMultiSource:
             denoise=denoise,
             source_probes=source_probes,
         )
-        # afftdn は注入されない
+        # afftdn is not injected
         assert "afftdn" not in plan.filter_complex
-        # 警告が追加される
+        # warning is added
         assert len(plan.warnings) > 0
 
     def test_8_all_audioless_with_loudness_skips_filter_adds_warning(self) -> None:
-        """全ソース音声なし ＋ loudness 指示 → フィルタ非注入・警告追加（ADR-C11-r2）。"""
+        """All sources audio-absent + loudness directive -> filter not injected, warning added (ADR-C11-r2)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         clips = [
@@ -1254,23 +1254,23 @@ class TestBuildPlanAllAudiolessMultiSource:
             loudness=loudness,
             source_probes=source_probes,
         )
-        # loudnorm/volume は注入されない
+        # loudnorm/volume is not injected
         assert "loudnorm" not in plan.filter_complex
         assert "volume=" not in plan.filter_complex
-        # 警告が追加される
+        # warning is added
         assert len(plan.warnings) > 0
 
 
 # ---------------------------------------------------------------------------
-# 観点9: has_video 混在 → UNSUPPORTED_OPERATION（DC-GP-004・ADR-C12）
+# Aspect 9: has_video mixed -> UNSUPPORTED_OPERATION (DC-GP-004, ADR-C12)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanHasVideoMixed:
-    """複数ソースのいずれかが has_video=False → UNSUPPORTED_OPERATION（観点9・ADR-C12）。"""
+    """Any source with has_video=False -> UNSUPPORTED_OPERATION (Aspect 9, ADR-C12)."""
 
     def test_9_second_source_no_video_raises_unsupported(self) -> None:
-        """2番目ソースが has_video=False → UNSUPPORTED_OPERATION（ADR-C12）。"""
+        """Second source has_video=False -> UNSUPPORTED_OPERATION (ADR-C12)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         clips = [
@@ -1295,14 +1295,14 @@ class TestBuildPlanHasVideoMixed:
                 source_probes=source_probes,
             )
         assert exc_info.value.code == ErrorCode.UNSUPPORTED_OPERATION
-        # hint に basename が含まれる
+        # hint contains basename
         assert "b_audio_only" in exc_info.value.hint
-        # message / hint に絶対パスが露出しない（SR L-2: CWE-209 情報漏洩防止）
+        # absolute path must not be exposed in message / hint (SR L-2: CWE-209 info leak prevention)
         assert "/src/" not in exc_info.value.message
         assert "/src/" not in exc_info.value.hint
 
     def test_9_first_source_no_video_raises_unsupported(self) -> None:
-        """先頭ソースが has_video=False でも UNSUPPORTED_OPERATION（ADR-C12）。"""
+        """First source has_video=False also raises UNSUPPORTED_OPERATION (ADR-C12)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         clips = [
@@ -1330,15 +1330,15 @@ class TestBuildPlanHasVideoMixed:
 
 
 # ---------------------------------------------------------------------------
-# 観点10: 後方互換（単一ソース経路・ADR-C3）
+# Aspect 10: Backward compatibility (single-source path, ADR-C3)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanSingleSourceBackwardCompat:
-    """単一ソース経路が複数ソース拡張後も filter_complex 不変（観点10・ADR-C3）。"""
+    """Single-source path produces unchanged filter_complex after multi-source extension (Aspect 10, ADR-C3)."""
 
     def test_10_single_source_filter_complex_unchanged(self) -> None:
-        """source_probes 未指定（単一ソース）→ 既存単一ソース filter_complex と完全一致（ADR-C3）。"""
+        """source_probes not specified (single source) -> identical to existing single-source filter_complex (ADR-C3)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         clips = [
@@ -1349,32 +1349,32 @@ class TestBuildPlanSingleSourceBackwardCompat:
         ranges = resolve_kept_ranges(tl)
         probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=8_000_000)
 
-        # source_probes 未指定
+        # source_probes not specified
         plan_no_sp = build_plan(ranges, probe, RenderOptions())
-        # source_probes=None 明示
+        # source_probes=None explicitly
         plan_sp_none = build_plan(ranges, probe, RenderOptions(), source_probes=None)
-        # source_probes にユニークソース1個だけ
+        # source_probes with only one unique source
         plan_sp_single = build_plan(
             ranges, probe, RenderOptions(), source_probes={"/src/a.mp4": probe}
         )
 
-        # 3パターンで filter_complex が一致
+        # All 3 patterns produce identical filter_complex
         assert plan_no_sp.filter_complex == plan_sp_none.filter_complex
         assert plan_no_sp.filter_complex == plan_sp_single.filter_complex
 
     def test_10_single_source_no_aformat_in_filter_complex(self) -> None:
-        """単一ソース経路では aformat が filter_complex に含まれない（ADR-C3 後方互換）。"""
+        """Single-source path does not include aformat in filter_complex (ADR-C3 backward compat)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
         ranges = resolve_kept_ranges(tl)
         probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=8_000_000)
         plan = build_plan(ranges, probe, RenderOptions())
-        # 単一ソース経路では音声規格統一フィルタは不要
+        # audio normalisation filter (aformat) is not needed on the single-source path
         assert "aformat" not in plan.filter_complex
 
     def test_10_single_source_no_fps_scale_pad_per_clip(self) -> None:
-        """単一ソース経路では per-clip fps/scale/pad が含まれない（ADR-C3 後方互換）。"""
+        """Single-source path does not include per-clip fps/scale/pad (ADR-C3 backward compat)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
@@ -1382,13 +1382,13 @@ class TestBuildPlanSingleSourceBackwardCompat:
         probe = ProbeInfo(has_video=True, audio_count=0, bit_rate=8_000_000)
         plan = build_plan(ranges, probe, RenderOptions())
         fc = plan.filter_complex
-        # 単一ソース経路には fps= / pad= / setsar= が含まれない（per-clip 規格統一なし）
+        # Single-source path has no fps= / pad= / setsar= (no per-clip spec normalization)
         assert "fps=" not in fc
         assert "pad=" not in fc
         assert "setsar" not in fc
 
     def test_10_single_source_input_sources_has_one_element(self) -> None:
-        """単一ソース経路で RenderPlan.input_sources が1要素（ADR-C9-r2）。"""
+        """Single-source path: RenderPlan.input_sources has 1 element (ADR-C9-r2)."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         clips = [
@@ -1403,10 +1403,10 @@ class TestBuildPlanSingleSourceBackwardCompat:
 
 
 # ---------------------------------------------------------------------------
-# 観点11: 複数ソース経路 _append_audio_pipe 適用テスト（DC-GP-005 / plan.py:739,741,961）
+# Aspect 11: Multi-source path _append_audio_pipe application tests (DC-GP-005 / plan.py:739,741,961)
 # ---------------------------------------------------------------------------
 
-# 有効な afftdn denoise 指示（複数ソーステスト用）
+# Valid afftdn denoise directive (for multi-source tests)
 _VALID_AFFTDN_DIRECTIVE: dict = {
     "tool": "clipwright-noise",
     "version": "0.1.0",
@@ -1415,7 +1415,7 @@ _VALID_AFFTDN_DIRECTIVE: dict = {
     "params": {"nr": 12.0, "nf": -50.0, "nt": "w"},
 }
 
-# 有効な peak loudness 指示（複数ソーステスト用）
+# Valid peak loudness directive (for multi-source tests)
 _VALID_PEAK_DIRECTIVE: dict = {
     "tool": "clipwright-loudness",
     "version": "0.1.0",
@@ -1426,7 +1426,7 @@ _VALID_PEAK_DIRECTIVE: dict = {
     "measured": {"max_volume_db": -7.68},
 }
 
-# 有効な loudnorm 指示（複数ソーステスト用）
+# Valid loudnorm directive (for multi-source tests)
 _VALID_LOUDNORM_DIRECTIVE: dict = {
     "tool": "clipwright-loudness",
     "version": "0.1.0",
@@ -1445,11 +1445,11 @@ _VALID_LOUDNORM_DIRECTIVE: dict = {
 
 
 class TestBuildPlanMultiSourceAudioPipe:
-    """複数ソース経路の _append_audio_pipe 適用を検証する（観点11・DC-GP-005）。
+    """Verify _append_audio_pipe application for the multi-source path (Aspect 11, DC-GP-005).
 
-    plan.py:739/741: 複数ソース ＋ 音声あり ＋ denoise/loudness で
-    audio map 終端ラベルが [outa_dn] / [outa_ln] になることを確認する。
-    plan.py:961: 複数ソース ＋ loudness で測定値ずれ警告が追加されることを確認する。
+    plan.py:739/741: Confirm audio map terminal label becomes [outa_dn] / [outa_ln]
+    for multi-source + audio + denoise/loudness.
+    plan.py:961: Confirm measurement mismatch warning is added for multi-source + loudness.
     """
 
     def _build_multi_with_audio(
@@ -1457,7 +1457,7 @@ class TestBuildPlanMultiSourceAudioPipe:
         denoise: dict | None = None,
         loudness: dict | None = None,
     ) -> object:
-        """複数ソース（a.mp4 / b.mp4）＋ 音声あり で build_plan を呼ぶヘルパー。"""
+        """Helper to call build_plan with multi-source (a.mp4 / b.mp4) + audio."""
         from clipwright_render.plan import build_plan, resolve_kept_ranges
 
         clips = [
@@ -1481,29 +1481,29 @@ class TestBuildPlanMultiSourceAudioPipe:
         )
 
     def test_11a_multi_source_with_audio_and_denoise_injects_afftdn(self) -> None:
-        """複数ソース ＋ 音声あり ＋ denoise → afftdn が filter_complex に注入される（plan.py:739-741）。"""
+        """Multi-source + audio + denoise -> afftdn is injected into filter_complex (plan.py:739-741)."""
         plan = self._build_multi_with_audio(denoise=_VALID_AFFTDN_DIRECTIVE)
         assert "afftdn" in plan.filter_complex
 
     def test_11b_multi_source_with_audio_and_denoise_audio_map_label_outa_dn(
         self,
     ) -> None:
-        """複数ソース ＋ 音声あり ＋ denoise → audio map 終端ラベルが [outa_dn]（plan.py:741）。"""
+        """Multi-source + audio + denoise -> audio map terminal label is [outa_dn] (plan.py:741)."""
         plan = self._build_multi_with_audio(denoise=_VALID_AFFTDN_DIRECTIVE)
-        # -map [outa_dn] が ffmpeg_args に含まれる（list[str] 直接比較）
+        # -map [outa_dn] is present in ffmpeg_args (list[str] direct comparison)
         assert "[outa_dn]" in plan.ffmpeg_args
-        # -map [outa] は含まれない（[outa_dn] に差し替えられている）
+        # -map [outa] is not present (replaced by [outa_dn])
         assert "[outa]" not in plan.ffmpeg_args
 
     def test_11c_multi_source_with_audio_and_loudness_injects_loudnorm(self) -> None:
-        """複数ソース ＋ 音声あり ＋ loudnorm → loudnorm が filter_complex に注入される（plan.py:739）。"""
+        """Multi-source + audio + loudnorm -> loudnorm is injected into filter_complex (plan.py:739)."""
         plan = self._build_multi_with_audio(loudness=_VALID_LOUDNORM_DIRECTIVE)
         assert "loudnorm" in plan.filter_complex
 
     def test_11d_multi_source_with_audio_and_loudness_audio_map_label_outa_ln(
         self,
     ) -> None:
-        """複数ソース ＋ 音声あり ＋ loudness → audio map 終端ラベルが [outa_ln]（plan.py:739）。"""
+        """Multi-source + audio + loudness -> audio map terminal label is [outa_ln] (plan.py:739)."""
         plan = self._build_multi_with_audio(loudness=_VALID_PEAK_DIRECTIVE)
         args_str = " ".join(plan.ffmpeg_args)
         assert "[outa_ln]" in args_str
@@ -1511,39 +1511,39 @@ class TestBuildPlanMultiSourceAudioPipe:
     def test_11e_multi_source_with_audio_and_peak_loudness_adds_measurement_warning(
         self,
     ) -> None:
-        """複数ソース（ユニークソース ≥ 2） ＋ loudness → 測定値ずれ警告が warnings に含まれる（plan.py:961）。"""
+        """Multi-source (unique sources >= 2) + loudness -> measurement warning in warnings (plan.py:961)."""
         plan = self._build_multi_with_audio(loudness=_VALID_PEAK_DIRECTIVE)
-        # ADR-C11-r2 の測定値ずれ警告テキストを確認する
+        # Verify ADR-C11-r2 measurement mismatch warning text
         warning_text = " ".join(plan.warnings)
         assert (
-            "複数ソース合体" in warning_text
+            "multi-source" in warning_text
             or "measured" in warning_text
-            or "ずれ" in warning_text
+            or "deviation" in warning_text
         )
 
     def test_11f_multi_source_with_audio_and_loudnorm_adds_measurement_warning(
         self,
     ) -> None:
-        """複数ソース ＋ loudnorm でも測定値ずれ警告が含まれる（plan.py:961）。"""
+        """Multi-source + loudnorm also includes measurement mismatch warning (plan.py:961)."""
         plan = self._build_multi_with_audio(loudness=_VALID_LOUDNORM_DIRECTIVE)
         warning_text = " ".join(plan.warnings)
-        assert "複数ソース合体" in warning_text or "ずれ" in warning_text
+        assert "multi-source" in warning_text or "measured" in warning_text
 
 
 # ===========================================================================
-# BGM ミックス拡張テスト（ADR-B4-r2/B5-r2/B5-r3/B6-r2/B9-r3）
+# BGM mix extension tests (ADR-B4-r2/B5-r2/B5-r3/B6-r2/B9-r3)
 # ===========================================================================
-# 実 ffmpeg 確認済み構文（2026-06-11）:
-# - -stream_loop -1 + atrim=0:{main_dur} → 5秒出力 OK
-# - [N:a]aformat=48000:stereo,atrim=0:{d},asetpts=PTS-STARTPTS,volume={v}dB[bgm] → OK
-# - [main_fmt][bgm]amix=inputs=2:normalize=0,alimiter=limit=1.0[outa_bgm] → OK
-# - sidechaincompress: BGM=第1入力・本編=第2(サイドチェーン) → OK
-# - afade=t=in:st=0:d={d}, afade=t=out:st={st}:d={d} → OK
-# - 本編無音 + BGM単独系統（amixなし） → 出力に音声1ストリーム OK
+# Real ffmpeg verified syntax (2026-06-11):
+# - -stream_loop -1 + atrim=0:{main_dur} -> 5s output OK
+# - [N:a]aformat=48000:stereo,atrim=0:{d},asetpts=PTS-STARTPTS,volume={v}dB[bgm] -> OK
+# - [main_fmt][bgm]amix=inputs=2:normalize=0,alimiter=limit=1.0[outa_bgm] -> OK
+# - sidechaincompress: BGM=1st input, main=2nd (sidechain) -> OK
+# - afade=t=in:st=0:d={d}, afade=t=out:st={st}:d={d} -> OK
+# - main silent + BGM standalone path (no amix) -> 1 audio stream in output OK
 # ===========================================================================
 
 # ---------------------------------------------------------------------------
-# BGM テスト用ヘルパー定数
+# BGM test helper constants
 # ---------------------------------------------------------------------------
 
 _VALID_BGM_DIRECTIVE: dict = {
@@ -1582,7 +1582,7 @@ def _make_bgm_clip(
     directive: dict | None = None,
     timeline_duration_sec: float = 5.0,
 ) -> BgmClip:
-    """BGM テスト用 BgmClip を構築するヘルパー。"""
+    """Helper to build a BgmClip for BGM tests."""
     from pydantic import TypeAdapter
 
     from clipwright_render.plan import (  # type: ignore[attr-defined]
@@ -1604,7 +1604,7 @@ def _make_single_source_timeline_with_audio(
     source: str = "/src/a.mp4",
     duration: float = 5.0,
 ) -> otio.schema.Timeline:
-    """単一ソース・音声あり Timeline を返すヘルパー。"""
+    """Return a single-source Timeline with audio."""
     video_track = otio.schema.Track(kind=otio.schema.TrackKind.Video)
     video_track.append(_make_clip(source, 0.0, duration))
     tl = otio.schema.Timeline()
@@ -1618,16 +1618,16 @@ def _make_bgm_otio_timeline(
     main_source: str = "/src/a.mp4",
     main_duration: float = 5.0,
 ) -> otio.schema.Timeline:
-    """BGM クリップを A2 トラックに含む Timeline を返すヘルパー（resolve_bgm テスト用）。"""
+    """Return a Timeline containing a BGM clip on the A2 track (for resolve_bgm tests)."""
     d = directive or _VALID_BGM_DIRECTIVE
-    # V1 video トラック
+    # V1 video track
     video_track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
     video_track.append(_make_clip(main_source, 0.0, main_duration))
-    # A1 本編音声トラック（kind!="bgm" クリップ）
+    # A1 main audio track (kind!="bgm" clip)
     audio_track_a1 = otio.schema.Track(name="A1", kind=otio.schema.TrackKind.Audio)
     clip_a1 = _make_clip(main_source, 0.0, main_duration)
     audio_track_a1.append(clip_a1)
-    # A2 BGM トラック（kind=="bgm" クリップ）
+    # A2 BGM track (kind=="bgm" clip)
     audio_track_a2 = otio.schema.Track(name="A2", kind=otio.schema.TrackKind.Audio)
     clip_bgm = otio.schema.Clip()
     clip_bgm.media_reference = otio.schema.ExternalReference(target_url=bgm_source)
@@ -1642,15 +1642,15 @@ def _make_bgm_otio_timeline(
 
 
 # ---------------------------------------------------------------------------
-# 観点1: BgmDirective reader-strict バリデーション（ADR-B9-r2/B9-r3）
+# Aspect 1: BgmDirective reader-strict validation (ADR-B9-r2/B9-r3)
 # ---------------------------------------------------------------------------
 
 
 class TestBgmDirectiveValidation:
-    """BgmDirective の reader-strict バリデーションを検証する（観点1・ADR-B9-r2）。"""
+    """Verify BgmDirective reader-strict validation (Aspect 1, ADR-B9-r2)."""
 
     def test_1_valid_directive_accepts_normal_values(self) -> None:
-        """正常値の BgmDirective が構築できる（観点1）。"""
+        """Normal values build a valid BgmDirective (Aspect 1)."""
         from clipwright_render.plan import BgmDirective  # type: ignore[attr-defined]
 
         d = BgmDirective(**_VALID_BGM_DIRECTIVE)
@@ -1660,7 +1660,7 @@ class TestBgmDirectiveValidation:
         assert d.kind == "bgm"
 
     def test_1_invalid_kind_raises(self) -> None:
-        """kind が "bgm" 以外 → ValidationError（観点1）。"""
+        """kind other than "bgm" -> ValidationError (Aspect 1)."""
         from pydantic import ValidationError
 
         from clipwright_render.plan import BgmDirective  # type: ignore[attr-defined]
@@ -1670,7 +1670,7 @@ class TestBgmDirectiveValidation:
             BgmDirective(**bad)
 
     def test_1_negative_fade_in_raises(self) -> None:
-        """fade_in_sec が負 → ValidationError（ge=0 制約・ADR-B9-r3）。"""
+        """Negative fade_in_sec -> ValidationError (ge=0 constraint, ADR-B9-r3)."""
         from pydantic import ValidationError
 
         from clipwright_render.plan import BgmDirective  # type: ignore[attr-defined]
@@ -1680,7 +1680,7 @@ class TestBgmDirectiveValidation:
             BgmDirective(**bad)
 
     def test_1_negative_fade_out_raises(self) -> None:
-        """fade_out_sec が負 → ValidationError（ge=0 制約・ADR-B9-r3）。"""
+        """Negative fade_out_sec -> ValidationError (ge=0 constraint, ADR-B9-r3)."""
         from pydantic import ValidationError
 
         from clipwright_render.plan import BgmDirective  # type: ignore[attr-defined]
@@ -1690,7 +1690,7 @@ class TestBgmDirectiveValidation:
             BgmDirective(**bad)
 
     def test_1_tool_over_64_chars_raises(self) -> None:
-        """tool が max_length=64 超 → ValidationError（ADR-B9-r2）。"""
+        """tool exceeds max_length=64 -> ValidationError (ADR-B9-r2)."""
         from pydantic import ValidationError
 
         from clipwright_render.plan import BgmDirective  # type: ignore[attr-defined]
@@ -1700,7 +1700,7 @@ class TestBgmDirectiveValidation:
             BgmDirective(**bad)
 
     def test_1_version_over_64_chars_raises(self) -> None:
-        """version が max_length=64 超 → ValidationError（ADR-B9-r2）。"""
+        """version exceeds max_length=64 -> ValidationError (ADR-B9-r2)."""
         from pydantic import ValidationError
 
         from clipwright_render.plan import BgmDirective  # type: ignore[attr-defined]
@@ -1710,7 +1710,7 @@ class TestBgmDirectiveValidation:
             BgmDirective(**bad)
 
     def test_1_unknown_key_raises_forbidden_extra(self) -> None:
-        """未知キー → reader-strict（forbid extra）で ValidationError（観点1）。"""
+        """Unknown key -> reader-strict (forbid extra) raises ValidationError (Aspect 1)."""
         from pydantic import ValidationError
 
         from clipwright_render.plan import BgmDirective  # type: ignore[attr-defined]
@@ -1720,7 +1720,7 @@ class TestBgmDirectiveValidation:
             BgmDirective(**bad)
 
     def test_1_inf_volume_db_raises(self) -> None:
-        """volume_db が inf → allow_inf_nan=False で ValidationError（観点1）。"""
+        """volume_db is inf -> allow_inf_nan=False raises ValidationError (Aspect 1)."""
         import math
 
         from pydantic import ValidationError
@@ -1732,7 +1732,7 @@ class TestBgmDirectiveValidation:
             BgmDirective(**bad)
 
     def test_1_nan_volume_db_raises(self) -> None:
-        """volume_db が nan → allow_inf_nan=False で ValidationError（観点1）。"""
+        """volume_db is nan -> allow_inf_nan=False raises ValidationError (Aspect 1)."""
         import math
 
         from pydantic import ValidationError
@@ -1745,15 +1745,15 @@ class TestBgmDirectiveValidation:
 
 
 # ---------------------------------------------------------------------------
-# 観点2: resolve_bgm（ADR-B4-r2）
+# Aspect 2: resolve_bgm (ADR-B4-r2)
 # ---------------------------------------------------------------------------
 
 
 class TestResolveBgm:
-    """resolve_bgm の挙動を検証する（観点2・ADR-B4-r2）。"""
+    """Verify resolve_bgm behaviour (Aspect 2, ADR-B4-r2)."""
 
     def test_2_single_bgm_clip_returns_bgm_clip(self) -> None:
-        """kind=="bgm" クリップ 1件 → BgmClip を返す（ADR-B4-r2）。"""
+        """1 clip with kind=="bgm" -> returns BgmClip (ADR-B4-r2)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             BgmClip,
             resolve_bgm,
@@ -1765,21 +1765,21 @@ class TestResolveBgm:
         assert result.source == "/proj/bgm.mp3"
 
     def test_2_no_bgm_clip_returns_none(self) -> None:
-        """kind=="bgm" クリップ 0件 → None（後方互換・ADR-B4-r2）。"""
+        """0 clips with kind=="bgm" -> None (backward compat, ADR-B4-r2)."""
         from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
 
-        # BGMトラックなし: V1 + A1 のみ
+        # No BGM track: V1 + A1 only
         tl = _make_single_source_timeline_with_audio()
         result = resolve_bgm(tl)
         assert result is None
 
     def test_2_two_bgm_clips_raises_unsupported(self) -> None:
-        """kind=="bgm" クリップ 2件以上 → UNSUPPORTED_OPERATION（ADR-B4-r2）。"""
+        """2+ clips with kind=="bgm" -> UNSUPPORTED_OPERATION (ADR-B4-r2)."""
         from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
 
-        # A2 と A3 に BGM クリップを置く
-        tl = _make_bgm_otio_timeline()  # A2 に 1件追加済み
-        # A3 にもう1件追加
+        # Place BGM clips on A2 and A3
+        tl = _make_bgm_otio_timeline()  # A2 already has 1 clip
+        # Add another to A3
         audio_track_a3 = otio.schema.Track(name="A3", kind=otio.schema.TrackKind.Audio)
         clip_bgm2 = otio.schema.Clip()
         clip_bgm2.media_reference = otio.schema.ExternalReference(
@@ -1794,23 +1794,23 @@ class TestResolveBgm:
         assert exc_info.value.code == ErrorCode.UNSUPPORTED_OPERATION
 
     def test_2_a1_with_main_audio_and_one_bgm_does_not_raise_unsupported(self) -> None:
-        """A1 本編音声（kind!="bgm"）+ A2 BGM 1件 → UNSUPPORTED にならない（ADR-B4-r2 DC-AS-002）。
+        """A1 main audio (kind!="bgm") + 1 BGM clip on A2 -> does not raise UNSUPPORTED (ADR-B4-r2 DC-AS-002).
 
-        Audio トラックが2本あっても BGM クリップが1件なら正常。
-        複数 Audio トラック数では判定しない（A1 本編常在の誤検出回避）。
+        Having 2 audio tracks is fine as long as there is only 1 BGM clip.
+        Do not judge by the number of audio tracks (avoids false positives for permanent A1 main audio).
         """
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             BgmClip,
             resolve_bgm,
         )
 
-        tl = _make_bgm_otio_timeline()  # V1 + A1(本編) + A2(BGM)
-        # Audio トラックは 2本だが BGM クリップは 1件
+        tl = _make_bgm_otio_timeline()  # V1 + A1(main) + A2(BGM)
+        # 2 audio tracks but only 1 BGM clip
         result = resolve_bgm(tl)
         assert isinstance(result, BgmClip)
 
     def test_2_bgm_clip_source_preserved(self) -> None:
-        """resolve_bgm が返す BgmClip の source が正しいパス（観点2）。"""
+        """BgmClip returned by resolve_bgm has the correct source path (Aspect 2)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             BgmClip,
             resolve_bgm,
@@ -1822,7 +1822,7 @@ class TestResolveBgm:
         assert result.source == "/music/track.mp3"
 
     def test_2_bgm_clip_directive_volume_preserved(self) -> None:
-        """resolve_bgm が返す BgmClip の directive.volume_db が正しい値（観点2）。"""
+        """BgmClip returned by resolve_bgm has the correct directive.volume_db (Aspect 2)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             BgmClip,
             resolve_bgm,
@@ -1835,25 +1835,25 @@ class TestResolveBgm:
         assert result.directive.volume_db == -12.0
 
     def test_2_bgm_only_in_a2_but_a1_has_normal_clips(self) -> None:
-        """A1 に kind 未設定の通常クリップ + A2 に kind=="bgm" → 1件正常検出（ADR-B4-r2）。"""
+        """A1 has normal clips without kind + A2 has kind=="bgm" -> 1 clip detected correctly (ADR-B4-r2)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             BgmClip,
             resolve_bgm,
         )
 
-        # A1 は metadata なし通常クリップ
+        # A1 is a normal clip without metadata
         tl = _make_bgm_otio_timeline()
         result = resolve_bgm(tl)
         assert isinstance(result, BgmClip)
 
 
 # ---------------------------------------------------------------------------
-# 観点3・4: build_plan(bgm=BgmClip) → audio_map_label / RenderPlan.bgm_source / BGM index
+# Aspects 3 & 4: build_plan(bgm=BgmClip) -> audio_map_label / RenderPlan.bgm_source / BGM index
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanBgmOutputLabels:
-    """build_plan(bgm=...) が正しい audio_map_label と RenderPlan フィールドを返す（観点3・4）。"""
+    """Verify build_plan(bgm=...) returns correct audio_map_label and RenderPlan fields (Aspects 3 & 4)."""
 
     def _build_with_bgm(
         self,
@@ -1861,7 +1861,7 @@ class TestBuildPlanBgmOutputLabels:
         directive: dict | None = None,
         audio_count: int = 1,
     ) -> RenderPlan:  # type: ignore[name-defined]
-        """単一ソース + BGM の build_plan ヘルパー。"""
+        """Helper for single-source + BGM build_plan."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -1874,18 +1874,18 @@ class TestBuildPlanBgmOutputLabels:
         return build_plan(ranges, probe, RenderOptions(), bgm=bgm_clip)  # type: ignore[call-arg]
 
     def test_3_audio_map_label_is_outa_bgm(self) -> None:
-        """bgm=BgmClip → audio_map_label == [outa_bgm]（観点3）。"""
+        """bgm=BgmClip -> audio_map_label == [outa_bgm] (Aspect 3)."""
         plan = self._build_with_bgm()
         args_str = " ".join(plan.ffmpeg_args)
         assert "[outa_bgm]" in args_str
 
     def test_3_bgm_source_set_in_render_plan(self) -> None:
-        """build_plan(bgm=...) → RenderPlan.bgm_source == bgm.source（観点3）。"""
+        """build_plan(bgm=...) -> RenderPlan.bgm_source == bgm.source (Aspect 3)."""
         plan = self._build_with_bgm(bgm_source="/proj/bgm.mp3")
         assert plan.bgm_source == "/proj/bgm.mp3"  # type: ignore[attr-defined]
 
     def test_3_bgm_source_none_when_bgm_not_provided(self) -> None:
-        """bgm=None → RenderPlan.bgm_source is None（後方互換・ADR-B7）。"""
+        """bgm=None -> RenderPlan.bgm_source is None (backward compat, ADR-B7)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -1898,19 +1898,19 @@ class TestBuildPlanBgmOutputLabels:
         assert plan.bgm_source is None  # type: ignore[attr-defined]
 
     def test_4_bgm_index_equals_len_input_sources(self) -> None:
-        """BGM filter の入力ラベルが [len(input_sources):a]（DC-AS-005・観点4）。"""
+        """BGM filter input label is [len(input_sources):a] (DC-AS-005, Aspect 4)."""
         plan = self._build_with_bgm()
-        # 単一ソース経路: input_sources=1件 → BGM index=1 → [1:a]
+        # Single-source path: input_sources=1 -> BGM index=1 -> [1:a]
         expected_label = f"[{len(plan.input_sources)}:a]"
         assert expected_label in plan.filter_complex
 
     def test_4_bgm_source_not_in_input_sources(self) -> None:
-        """bgm_source は input_sources に含まれない（DC-AS-005・観点4）。"""
+        """bgm_source is not in input_sources (DC-AS-005, Aspect 4)."""
         plan = self._build_with_bgm(bgm_source="/proj/bgm.mp3")
         assert plan.bgm_source not in plan.input_sources  # type: ignore[attr-defined]
 
     def test_4_bgm_index_two_sources(self) -> None:
-        """2本編ソース + BGM → BGM index=2（[2:a] が filter に含まれる・DC-AS-005）。"""
+        """2 main sources + BGM -> BGM index=2 ([2:a] in filter, DC-AS-005)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -1931,19 +1931,19 @@ class TestBuildPlanBgmOutputLabels:
             source_probes=source_probes,
             bgm=bgm_clip,  # type: ignore[call-arg]
         )
-        # 2ソース → BGM index=2
+        # 2 sources -> BGM index=2
         assert "[2:a]" in plan.filter_complex
         assert plan.bgm_source not in plan.input_sources  # type: ignore[attr-defined]
         assert len(plan.input_sources) == 2
 
 
 # ---------------------------------------------------------------------------
-# 観点5: BGM filter 文字列（実機確認済み構文・ADR-B5-r3/B6-r2）
+# Aspect 5: BGM filter string (real ffmpeg verified syntax, ADR-B5-r3/B6-r2)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanBgmFilterComplex:
-    """BGM filter_complex の文字列構成を検証する（観点5・ADR-B5-r3/B6-r2）。"""
+    """Verify BGM filter_complex string composition (Aspect 5, ADR-B5-r3/B6-r2)."""
 
     def _build_with_bgm_fc(
         self,
@@ -1951,7 +1951,7 @@ class TestBuildPlanBgmFilterComplex:
         audio_count: int = 1,
         bgm_source: str = "/proj/bgm.mp3",
     ) -> tuple[str, RenderPlan]:  # type: ignore[name-defined]
-        """filter_complex 文字列と RenderPlan を返す単一ソース BGM テストヘルパー。"""
+        """Single-source BGM test helper returning filter_complex string and RenderPlan."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -1965,67 +1965,67 @@ class TestBuildPlanBgmFilterComplex:
         return plan.filter_complex, plan
 
     def test_5_bgm_filter_has_aformat_48000_stereo(self) -> None:
-        """BGM 側に aformat=sample_rates=48000:channel_layouts=stereo が含まれる（DC-AS-007）。"""
+        """BGM side contains aformat=sample_rates=48000:channel_layouts=stereo (DC-AS-007)."""
         fc, _ = self._build_with_bgm_fc()
         assert "aformat=sample_rates=48000:channel_layouts=stereo" in fc
 
     def test_5_bgm_filter_has_atrim_main_dur(self) -> None:
-        """BGM filter に atrim=0:{main_dur} が含まれる（ADR-B6-r2・-stream_loop + atrim）。"""
+        """BGM filter contains atrim=0:{main_dur} (ADR-B6-r2, -stream_loop + atrim)."""
         fc, _ = self._build_with_bgm_fc()
-        # main_dur=5.0（1クリップ duration=5.0）
+        # main_dur=5.0 (1 clip duration=5.0)
         assert "atrim=0:5" in fc
 
     def test_5_bgm_filter_has_volume_db(self) -> None:
-        """BGM filter に volume={db}dB が含まれる（観点5）。"""
+        """BGM filter contains volume={db}dB (Aspect 5)."""
         fc, _ = self._build_with_bgm_fc()
         assert "volume=-6dB" in fc or "volume=-6.0dB" in fc
 
     def test_5_bgm_filter_has_asetpts(self) -> None:
-        """BGM filter に asetpts=PTS-STARTPTS が含まれる（観点5）。"""
+        """BGM filter contains asetpts=PTS-STARTPTS (Aspect 5)."""
         fc, _ = self._build_with_bgm_fc()
         assert "asetpts=PTS-STARTPTS" in fc
 
     def test_5_main_fmt_aformat_present(self) -> None:
-        """本編側に aformat=sample_rates=48000:channel_layouts=stereo が含まれる（DC-AS-007）。
+        """Main side contains aformat=sample_rates=48000:channel_layouts=stereo (DC-AS-007).
 
-        単一ソース経路でも amix 入力規格統一のため本編側 aformat は必須（ADR-B5-r3）。
+        Even on the single-source path, the main-side aformat is required for amix input spec normalization (ADR-B5-r3).
         """
         fc, _ = self._build_with_bgm_fc()
-        # [main_fmt] が作られ、aformat が含まれる
+        # [main_fmt] is created and aformat is present
         assert "main_fmt" in fc
         assert "aformat=sample_rates=48000:channel_layouts=stereo" in fc
 
     def test_5_amix_inputs2_normalize0_present(self) -> None:
-        """amix=inputs=2:normalize=0 が含まれる（ADR-B5-r3）。"""
+        """amix=inputs=2:normalize=0 is present (ADR-B5-r3)."""
         fc, _ = self._build_with_bgm_fc()
         assert "amix=inputs=2:normalize=0" in fc
 
     def test_5_alimiter_present(self) -> None:
-        """alimiter=limit=1.0 が含まれる（DC-AM-001・クリッピング対策）。"""
+        """alimiter=limit=1.0 is present (DC-AM-001, anti-clipping)."""
         fc, _ = self._build_with_bgm_fc()
         assert "alimiter=limit=1.0" in fc
 
     def test_5_outa_bgm_label_present(self) -> None:
-        """[outa_bgm] ラベルが filter_complex に含まれる（観点5）。"""
+        """[outa_bgm] label is present in filter_complex (Aspect 5)."""
         fc, _ = self._build_with_bgm_fc()
         assert "[outa_bgm]" in fc
 
     def test_5_aloop_not_present(self) -> None:
-        """aloop は filter_complex に含まれない（ADR-B6-r2・aloop 廃止）。"""
+        """aloop is not present in filter_complex (ADR-B6-r2, aloop deprecated)."""
         fc, _ = self._build_with_bgm_fc()
         assert "aloop" not in fc
 
 
 # ---------------------------------------------------------------------------
-# 観点6: fade_in/out=0 では afade が入らない（ADR-B9-r3・DC-AM-003）
+# Aspect 6: fade_in/out=0 does not inject afade (ADR-B9-r3, DC-AM-003)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanBgmFade:
-    """afade の注入条件を検証する（観点6・ADR-B9-r3/DC-AM-003）。"""
+    """Verify afade injection conditions (Aspect 6, ADR-B9-r3/DC-AM-003)."""
 
     def test_6_fade_in_zero_no_afade_in(self) -> None:
-        """fade_in_sec=0.0 → afade=t=in が filter_complex に含まれない（DC-AM-003）。"""
+        """fade_in_sec=0.0 -> afade=t=in is not present in filter_complex (DC-AM-003)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -2040,7 +2040,7 @@ class TestBuildPlanBgmFade:
         assert "afade=t=in" not in plan.filter_complex
 
     def test_6_fade_out_zero_no_afade_out(self) -> None:
-        """fade_out_sec=0.0 → afade=t=out が filter_complex に含まれない（DC-AM-003）。"""
+        """fade_out_sec=0.0 -> afade=t=out is not present in filter_complex (DC-AM-003)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -2055,7 +2055,7 @@ class TestBuildPlanBgmFade:
         assert "afade=t=out" not in plan.filter_complex
 
     def test_6_fade_in_positive_afade_in_present(self) -> None:
-        """fade_in_sec > 0 → afade=t=in が filter_complex に含まれる（DC-AM-003）。"""
+        """fade_in_sec > 0 -> afade=t=in is present in filter_complex (DC-AM-003)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -2070,7 +2070,7 @@ class TestBuildPlanBgmFade:
         assert "afade=t=in" in plan.filter_complex
 
     def test_6_fade_out_positive_afade_out_present(self) -> None:
-        """fade_out_sec > 0 → afade=t=out が filter_complex に含まれる（DC-AM-003）。"""
+        """fade_out_sec > 0 -> afade=t=out is present in filter_complex (DC-AM-003)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -2086,15 +2086,15 @@ class TestBuildPlanBgmFade:
 
 
 # ---------------------------------------------------------------------------
-# 観点7: ducking ON/OFF（ADR-B5-r3・DC-AS-006）
+# Aspect 7: ducking ON/OFF (ADR-B5-r3, DC-AS-006)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanBgmDucking:
-    """ducking ON/OFF の filter 生成を検証する（観点7・ADR-B5-r3/DC-AS-006）。"""
+    """Verify ducking ON/OFF filter generation (Aspect 7, ADR-B5-r3/DC-AS-006)."""
 
     def test_7_ducking_off_no_sidechaincompress(self) -> None:
-        """ducking.enabled=False → sidechaincompress が filter に含まれない（観点7）。"""
+        """ducking.enabled=False -> sidechaincompress is not present in filter (Aspect 7)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -2108,7 +2108,7 @@ class TestBuildPlanBgmDucking:
         assert "sidechaincompress" not in plan.filter_complex
 
     def test_7_ducking_on_sidechaincompress_present(self) -> None:
-        """ducking.enabled=True → sidechaincompress が filter_complex に含まれる（観点7）。"""
+        """ducking.enabled=True -> sidechaincompress is present in filter_complex (Aspect 7)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -2122,7 +2122,7 @@ class TestBuildPlanBgmDucking:
         assert "sidechaincompress" in plan.filter_complex
 
     def test_7_ducking_on_threshold_ratio_in_filter(self) -> None:
-        """ducking ON → threshold=0.05:ratio=4.0 が filter に含まれる（DC-AS-006）。"""
+        """ducking ON -> threshold=0.05:ratio=4.0 is present in filter (DC-AS-006)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -2138,7 +2138,7 @@ class TestBuildPlanBgmDucking:
         assert "ratio=4.0" in fc or "ratio=4" in fc
 
     def test_7_ducking_on_bgm_is_first_input_of_sidechaincompress(self) -> None:
-        """ducking ON: [bgm][main_sc]sidechaincompress の順序（BGM=第1入力・DC-AS-006）。"""
+        """ducking ON: order is [bgm][main_sc]sidechaincompress (BGM=1st input, DC-AS-006)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -2150,16 +2150,16 @@ class TestBuildPlanBgmDucking:
         bgm_clip = _make_bgm_clip(directive=_VALID_BGM_DIRECTIVE_DUCKING)
         plan = build_plan(ranges, probe, RenderOptions(), bgm=bgm_clip)  # type: ignore[call-arg]
         fc = plan.filter_complex
-        # [bgm] が sidechaincompress より前に出現（[bgm]...[main_sc]sidechaincompress の順）
+        # [bgm] appears before sidechaincompress ([bgm]...[main_sc]sidechaincompress order)
         bgm_pos = fc.find("[bgm]")
         sc_pos = fc.find("sidechaincompress")
         assert bgm_pos != -1 and sc_pos != -1
         assert bgm_pos < sc_pos, (
-            f"[bgm] (pos={bgm_pos}) が sidechaincompress (pos={sc_pos}) より後にある"
+            f"[bgm] (pos={bgm_pos}) is after sidechaincompress (pos={sc_pos})"
         )
 
     def test_7_ducking_on_asplit_present(self) -> None:
-        """ducking ON → asplit が filter_complex に含まれる（本編を2分岐・DC-AS-006）。"""
+        """ducking ON -> asplit is present in filter_complex (splits main audio into 2, DC-AS-006)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -2173,7 +2173,7 @@ class TestBuildPlanBgmDucking:
         assert "asplit" in plan.filter_complex
 
     def test_7_ducking_on_outa_bgm_in_ffmpeg_args(self) -> None:
-        """ducking ON でも audio_map_label == [outa_bgm]（観点7）。"""
+        """ducking ON: audio_map_label is still [outa_bgm] (Aspect 7)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -2188,15 +2188,15 @@ class TestBuildPlanBgmDucking:
 
 
 # ---------------------------------------------------------------------------
-# 観点8: 既存音声パイプ後段に BGM 段が乗る（denoise/loudness との連携）
+# Aspect 8: BGM stage is appended after the existing audio pipe (denoise/loudness interop)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanBgmAfterAudioPipe:
-    """denoise/loudness 後段に BGM 段が乗り、終端ラベルを正しく参照する（観点8）。"""
+    """BGM stage is appended after denoise/loudness and correctly references the terminal label (Aspect 8)."""
 
     def _build_with_denoise_and_bgm(self) -> RenderPlan:  # type: ignore[name-defined]
-        """denoise + BGM の build_plan ヘルパー。"""
+        """Helper for denoise + BGM build_plan."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -2215,7 +2215,7 @@ class TestBuildPlanBgmAfterAudioPipe:
         )
 
     def _build_with_loudness_and_bgm(self) -> RenderPlan:  # type: ignore[name-defined]
-        """loudness + BGM の build_plan ヘルパー。"""
+        """Helper for loudness + BGM build_plan."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -2234,56 +2234,55 @@ class TestBuildPlanBgmAfterAudioPipe:
         )
 
     def test_8_denoise_then_bgm_audio_map_label_outa_bgm(self) -> None:
-        """denoise あり + BGM → audio_map_label == [outa_bgm]（観点8）。"""
+        """denoise + BGM -> audio_map_label == [outa_bgm] (Aspect 8)."""
         plan = self._build_with_denoise_and_bgm()
         assert "[outa_bgm]" in plan.ffmpeg_args
 
     def test_8_denoise_then_bgm_afftdn_present_in_filter(self) -> None:
-        """denoise あり + BGM → afftdn が filter_complex に含まれる（観点8）。"""
+        """denoise + BGM -> afftdn is present in filter_complex (Aspect 8)."""
         plan = self._build_with_denoise_and_bgm()
         assert "afftdn" in plan.filter_complex
 
     def test_8_denoise_then_bgm_main_fmt_uses_outa_dn(self) -> None:
-        """denoise あり + BGM → [main_fmt] は [outa_dn] を aformat した系統（観点8）。
+        """denoise + BGM -> [main_fmt] is the aformat chain from [outa_dn] (Aspect 8).
 
-        BGM 段の本編入力は denoise 終端 [outa_dn] を aformat したものになる。
-        [outa_dn] または [outa_dn] 後に aformat されたラベルが main_fmt として
-        filter_complex に現れることを確認する。
+        The BGM stage's main input is an aformat of the denoise terminal [outa_dn].
+        Verify [outa_dn] or its aformat label appears as main_fmt in filter_complex.
         """
         plan = self._build_with_denoise_and_bgm()
         fc = plan.filter_complex
-        # [outa_dn] が filter に含まれる
+        # [outa_dn] is present in filter
         assert "[outa_dn]" in fc
-        # [main_fmt] が filter に含まれる（aformat の先頭入力として [outa_dn] 参照）
+        # [main_fmt] is present in filter (referencing [outa_dn] as aformat input)
         assert "main_fmt" in fc
-        # [outa_dn] が main_fmt の前に出現する（正しい接続順）
+        # [outa_dn] appears before main_fmt (correct connection order)
         dn_pos = fc.find("[outa_dn]")
         fmt_pos = fc.find("main_fmt")
         assert dn_pos < fmt_pos, (
-            f"[outa_dn] (pos={dn_pos}) が main_fmt (pos={fmt_pos}) より後"
+            f"[outa_dn] (pos={dn_pos}) is after main_fmt (pos={fmt_pos})"
         )
 
     def test_8_loudness_then_bgm_audio_map_label_outa_bgm(self) -> None:
-        """loudness あり + BGM → audio_map_label == [outa_bgm]（観点8）。"""
+        """loudness + BGM -> audio_map_label == [outa_bgm] (Aspect 8)."""
         plan = self._build_with_loudness_and_bgm()
         assert "[outa_bgm]" in plan.ffmpeg_args
 
     def test_8_loudness_then_bgm_outa_ln_present_in_filter(self) -> None:
-        """loudness あり + BGM → [outa_ln] が filter_complex に含まれる（観点8）。"""
+        """loudness + BGM -> [outa_ln] is present in filter_complex (Aspect 8)."""
         plan = self._build_with_loudness_and_bgm()
         assert "[outa_ln]" in plan.filter_complex
 
 
 # ---------------------------------------------------------------------------
-# 観点9: 後方互換（BGM なしで既存 filter_complex と完全一致・ADR-B7）
+# Aspect 9: Backward compatibility (no BGM produces same filter_complex as before, ADR-B7)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanBgmBackwardCompat:
-    """bgm=None のとき既存 filter_complex が変わらない（観点9・ADR-B7）。"""
+    """bgm=None produces unchanged filter_complex (Aspect 9, ADR-B7)."""
 
     def test_9_bgm_none_filter_complex_unchanged(self) -> None:
-        """bgm=None → filter_complex が BGM 段なし従来形式と完全一致（ADR-B7）。"""
+        """bgm=None -> filter_complex is identical to the legacy BGM-absent form (ADR-B7)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -2292,14 +2291,14 @@ class TestBuildPlanBgmBackwardCompat:
         tl = _make_single_source_timeline_with_audio()
         ranges = resolve_kept_ranges(tl)
         probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
-        # BGM なし（デフォルト）
+        # No BGM (default)
         plan_no_bgm = build_plan(ranges, probe, RenderOptions())
-        # bgm=None 明示
+        # bgm=None explicit
         plan_bgm_none = build_plan(ranges, probe, RenderOptions(), bgm=None)  # type: ignore[call-arg]
         assert plan_no_bgm.filter_complex == plan_bgm_none.filter_complex
 
     def test_9_bgm_none_no_outa_bgm_in_filter(self) -> None:
-        """bgm=None → [outa_bgm] が filter_complex に含まれない（ADR-B7）。"""
+        """bgm=None -> [outa_bgm] is not present in filter_complex (ADR-B7)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -2312,7 +2311,7 @@ class TestBuildPlanBgmBackwardCompat:
         assert "[outa_bgm]" not in plan.filter_complex
 
     def test_9_bgm_none_bgm_source_is_none(self) -> None:
-        """bgm=None → RenderPlan.bgm_source is None（ADR-B7）。"""
+        """bgm=None -> RenderPlan.bgm_source is None (ADR-B7)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -2325,7 +2324,7 @@ class TestBuildPlanBgmBackwardCompat:
         assert plan.bgm_source is None  # type: ignore[attr-defined]
 
     def test_9_bgm_none_no_alimiter_in_filter(self) -> None:
-        """bgm=None → alimiter が filter_complex に含まれない（BGM 段なし確認・ADR-B7）。"""
+        """bgm=None -> alimiter is not present in filter_complex (confirms no BGM stage, ADR-B7)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -2339,15 +2338,15 @@ class TestBuildPlanBgmBackwardCompat:
 
 
 # ---------------------------------------------------------------------------
-# 観点10: 本編無音（has_main_audio=False）+ BGM（ADR-B5-r2・DC-AS-004）
+# Aspect 10: Main audio absent (has_main_audio=False) + BGM (ADR-B5-r2, DC-AS-004)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanBgmNoMainAudio:
-    """本編無音 + BGM → BGM 単独系統で has_audio_output=True（観点10・ADR-B5-r2）。"""
+    """Main audio absent + BGM -> BGM standalone path with has_audio_output=True (Aspect 10, ADR-B5-r2)."""
 
     def _build_no_main_audio_with_bgm(self) -> RenderPlan:  # type: ignore[name-defined]
-        """本編音声なし（audio_count=0）+ BGM の build_plan ヘルパー。"""
+        """Helper for no main audio (audio_count=0) + BGM build_plan."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -2360,37 +2359,37 @@ class TestBuildPlanBgmNoMainAudio:
         return build_plan(ranges, probe, RenderOptions(), bgm=bgm_clip)  # type: ignore[call-arg]
 
     def test_10_no_main_audio_with_bgm_has_audio_map(self) -> None:
-        """本編無音 + BGM → -map [outa_bgm] が ffmpeg_args に含まれる（観点10）。"""
+        """Main audio absent + BGM -> -map [outa_bgm] is present in ffmpeg_args (Aspect 10)."""
         plan = self._build_no_main_audio_with_bgm()
         assert "[outa_bgm]" in plan.ffmpeg_args
 
     def test_10_no_main_audio_with_bgm_no_amix(self) -> None:
-        """本編無音 + BGM → amix が filter_complex に含まれない（BGM 単独系統・ADR-B5-r2）。"""
+        """Main audio absent + BGM -> amix is not present in filter_complex (BGM standalone path, ADR-B5-r2)."""
         plan = self._build_no_main_audio_with_bgm()
-        # 本編音声がないため amix は不要（BGM が唯一の音声）
+        # No main audio means amix is unnecessary (BGM is the only audio)
         assert "amix" not in plan.filter_complex
 
     def test_10_no_main_audio_with_bgm_concat_a0(self) -> None:
-        """本編無音 + BGM → concat は a=0（映像のみ concat・ADR-B5-r2）。"""
+        """Main audio absent + BGM -> concat is a=0 (video-only concat, ADR-B5-r2)."""
         plan = self._build_no_main_audio_with_bgm()
         assert "a=0" in plan.filter_complex
 
     def test_10_no_main_audio_with_bgm_outa_bgm_in_filter(self) -> None:
-        """本編無音 + BGM → [outa_bgm] が filter_complex に含まれる（ADR-B5-r2）。"""
+        """Main audio absent + BGM -> [outa_bgm] is present in filter_complex (ADR-B5-r2)."""
         plan = self._build_no_main_audio_with_bgm()
         assert "[outa_bgm]" in plan.filter_complex
 
 
 # ---------------------------------------------------------------------------
-# 観点11: denoise/loudness スキップ警告は has_main_audio=False で出る（DC-AM-004）
+# Aspect 11: denoise/loudness skip warning when has_main_audio=False (DC-AM-004)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanBgmAudioWarnings:
-    """denoise/loudness スキップ警告の出現条件を検証する（観点11・DC-AM-004）。"""
+    """Verify conditions under which denoise/loudness skip warnings are emitted (Aspect 11, DC-AM-004)."""
 
     def test_11_no_main_audio_with_denoise_adds_warning(self) -> None:
-        """has_main_audio=False + denoise → スキップ警告が出る（DC-AM-004）。"""
+        """has_main_audio=False + denoise -> skip warning is emitted (DC-AM-004)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -2408,10 +2407,10 @@ class TestBuildPlanBgmAudioWarnings:
             bgm=bgm_clip,  # type: ignore[call-arg]
         )
         warning_text = " ".join(plan.warnings)
-        assert "denoise" in warning_text or "スキップ" in warning_text
+        assert "denoise" in warning_text or "skip" in warning_text.lower()
 
     def test_11_no_main_audio_with_loudness_adds_warning(self) -> None:
-        """has_main_audio=False + loudness → スキップ警告が出る（DC-AM-004）。"""
+        """has_main_audio=False + loudness -> skip warning is emitted (DC-AM-004)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -2429,10 +2428,10 @@ class TestBuildPlanBgmAudioWarnings:
             bgm=bgm_clip,  # type: ignore[call-arg]
         )
         warning_text = " ".join(plan.warnings)
-        assert "loudness" in warning_text or "スキップ" in warning_text
+        assert "loudness" in warning_text or "skip" in warning_text.lower()
 
     def test_11_has_main_audio_with_bgm_no_skip_warning(self) -> None:
-        """has_main_audio=True + BGM → denoise/loudness スキップ警告は出ない（DC-AM-004）。"""
+        """has_main_audio=True + BGM -> no denoise/loudness skip warning (DC-AM-004)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -2442,29 +2441,29 @@ class TestBuildPlanBgmAudioWarnings:
         ranges = resolve_kept_ranges(tl)
         probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
         bgm_clip = _make_bgm_clip()
-        # denoise/loudness なし・BGM ありで警告がないこと
+        # No denoise/loudness + BGM: should produce no warnings
         plan = build_plan(ranges, probe, RenderOptions(), bgm=bgm_clip)  # type: ignore[call-arg]
         warning_text = " ".join(plan.warnings)
-        # BGM あっても音声スキップ警告は出ない（has_main_audio=True）
-        assert "denoise スキップ" not in warning_text
-        assert "loudness スキップ" not in warning_text
+        # BGM present but no audio skip warning (has_main_audio=True)
+        assert "denoise skip" not in warning_text
+        assert "loudness skip" not in warning_text
 
 
 # ===========================================================================
-# レビュー指摘テスト（CR L-1/L-2/M-1、SR M-1/I-1/M-3）
+# Review-flagged tests (CR L-1/L-2/M-1, SR M-1/I-1/M-3)
 # ===========================================================================
 
 
 # ---------------------------------------------------------------------------
-# 観点12: resolve_bgm の ValidationError パス（CR L-2/M-1）
+# Aspect 12: resolve_bgm ValidationError path (CR L-2/M-1)
 # ---------------------------------------------------------------------------
 
 
 class TestResolveBgmValidationError:
-    """resolve_bgm に不正 metadata を持つ Timeline を渡したとき INVALID_INPUT が送出される（CR L-2/M-1）。"""
+    """resolve_bgm raises INVALID_INPUT when given a Timeline with invalid metadata (CR L-2/M-1)."""
 
     def test_12_volume_db_string_raises_invalid_input(self) -> None:
-        """volume_db が文字列型 → resolve_bgm が INVALID_INPUT を送出する（CR L-2）。"""
+        """volume_db is a string -> resolve_bgm raises INVALID_INPUT (CR L-2)."""
         from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
 
         bad_directive = dict(_VALID_BGM_DIRECTIVE, volume_db="not_a_number")
@@ -2474,10 +2473,10 @@ class TestResolveBgmValidationError:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_12_missing_required_tool_field_raises_invalid_input(self) -> None:
-        """必須フィールド tool 欠落（kind="bgm" は残す） → resolve_bgm が INVALID_INPUT を送出する（CR L-2）。
+        """Required field 'tool' missing (kind="bgm" still present) -> resolve_bgm raises INVALID_INPUT (CR L-2).
 
-        kind="bgm" は存在するため BGM クリップとして収集されるが、
-        tool フィールド欠落で BgmDirective バリデーションが失敗する。
+        kind="bgm" exists so the clip is collected as BGM, but the missing 'tool' field
+        causes BgmDirective validation to fail.
         """
         from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
 
@@ -2488,7 +2487,7 @@ class TestResolveBgmValidationError:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_12_unknown_extra_field_raises_invalid_input(self) -> None:
-        """未知フィールド（extra=forbid） → resolve_bgm が INVALID_INPUT を送出する（CR M-1）。"""
+        """Unknown field (extra=forbid) -> resolve_bgm raises INVALID_INPUT (CR M-1)."""
         from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
 
         bad_directive = dict(_VALID_BGM_DIRECTIVE, unknown_evil_field="x")
@@ -2498,7 +2497,7 @@ class TestResolveBgmValidationError:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_12_volume_db_inf_raises_invalid_input(self) -> None:
-        """volume_db=inf → resolve_bgm が INVALID_INPUT を送出する（CR L-2）。"""
+        """volume_db=inf -> resolve_bgm raises INVALID_INPUT (CR L-2)."""
         import math
 
         from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
@@ -2511,15 +2510,15 @@ class TestResolveBgmValidationError:
 
 
 # ---------------------------------------------------------------------------
-# 観点13: DuckingDirective の inf/nan・範囲外バリデーション（SR M-1）
+# Aspect 13: DuckingDirective inf/nan and out-of-range validation (SR M-1)
 # ---------------------------------------------------------------------------
 
 
 class TestResolveBgmDuckingDirectiveValidation:
-    """DuckingDirective に inf/nan・範囲外値を持つ Timeline を resolve_bgm に渡したとき INVALID_INPUT が送出される（SR M-1）。"""
+    """resolve_bgm raises INVALID_INPUT when given a Timeline with inf/nan or out-of-range DuckingDirective (SR M-1)."""
 
     def test_13_ducking_threshold_inf_raises_invalid_input(self) -> None:
-        """ducking.threshold=inf → resolve_bgm が INVALID_INPUT を送出する（SR M-1）。"""
+        """ducking.threshold=inf -> resolve_bgm raises INVALID_INPUT (SR M-1)."""
         import math
 
         from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
@@ -2534,7 +2533,7 @@ class TestResolveBgmDuckingDirectiveValidation:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_13_ducking_threshold_nan_raises_invalid_input(self) -> None:
-        """ducking.threshold=nan → resolve_bgm が INVALID_INPUT を送出する（SR M-1）。"""
+        """ducking.threshold=nan -> resolve_bgm raises INVALID_INPUT (SR M-1)."""
         import math
 
         from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
@@ -2549,7 +2548,7 @@ class TestResolveBgmDuckingDirectiveValidation:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_13_ducking_threshold_zero_raises_invalid_input(self) -> None:
-        """ducking.threshold=0.0（gt=0.0 制約違反） → resolve_bgm が INVALID_INPUT を送出する（SR M-1）。"""
+        """ducking.threshold=0.0 (violates gt=0.0) -> resolve_bgm raises INVALID_INPUT (SR M-1)."""
         from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
 
         bad_directive = dict(
@@ -2562,7 +2561,7 @@ class TestResolveBgmDuckingDirectiveValidation:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_13_ducking_threshold_over_one_raises_invalid_input(self) -> None:
-        """ducking.threshold=1.1（le=1.0 制約違反） → resolve_bgm が INVALID_INPUT を送出する（SR M-1）。"""
+        """ducking.threshold=1.1 (violates le=1.0) -> resolve_bgm raises INVALID_INPUT (SR M-1)."""
         from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
 
         bad_directive = dict(
@@ -2575,7 +2574,7 @@ class TestResolveBgmDuckingDirectiveValidation:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_13_ducking_ratio_zero_raises_invalid_input(self) -> None:
-        """ducking.ratio=0.9（ge=1.0 制約違反） → resolve_bgm が INVALID_INPUT を送出する（SR M-1）。"""
+        """ducking.ratio=0.9 (violates ge=1.0) -> resolve_bgm raises INVALID_INPUT (SR M-1)."""
         from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
 
         bad_directive = dict(
@@ -2588,7 +2587,7 @@ class TestResolveBgmDuckingDirectiveValidation:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_13_ducking_ratio_over_twenty_raises_invalid_input(self) -> None:
-        """ducking.ratio=20.1（le=20.0 制約違反） → resolve_bgm が INVALID_INPUT を送出する（SR M-1）。"""
+        """ducking.ratio=20.1 (violates le=20.0) -> resolve_bgm raises INVALID_INPUT (SR M-1)."""
         from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
 
         bad_directive = dict(
@@ -2601,7 +2600,7 @@ class TestResolveBgmDuckingDirectiveValidation:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_13_ducking_ratio_nan_raises_invalid_input(self) -> None:
-        """ducking.ratio=nan → resolve_bgm が INVALID_INPUT を送出する（SR M-1）。"""
+        """ducking.ratio=nan -> resolve_bgm raises INVALID_INPUT (SR M-1)."""
         import math
 
         from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
@@ -2616,7 +2615,7 @@ class TestResolveBgmDuckingDirectiveValidation:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_13_valid_ducking_defaults_resolve_ok(self) -> None:
-        """既定値 threshold=0.05/ratio=4.0 → resolve_bgm が正常終了する（SR M-1 正常系）。"""
+        """Default values threshold=0.05/ratio=4.0 -> resolve_bgm succeeds (SR M-1 happy path)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             BgmClip,
             resolve_bgm,
@@ -2630,15 +2629,15 @@ class TestResolveBgmDuckingDirectiveValidation:
 
 
 # ---------------------------------------------------------------------------
-# 観点14: BgmDirective.volume_db 範囲外バリデーション（SR I-1）
+# Aspect 14: BgmDirective.volume_db out-of-range validation (SR I-1)
 # ---------------------------------------------------------------------------
 
 
 class TestBgmDirectiveVolumeDbRange:
-    """BgmDirective.volume_db の範囲外値が resolve_bgm で INVALID_INPUT になることを検証する（SR I-1）。"""
+    """Verify out-of-range volume_db in BgmDirective causes INVALID_INPUT in resolve_bgm (SR I-1)."""
 
     def test_14_volume_db_too_low_raises_invalid_input(self) -> None:
-        """volume_db=-200（ge=-60.0 制約違反） → resolve_bgm が INVALID_INPUT を送出する（SR I-1）。"""
+        """volume_db=-200 (violates ge=-60.0) -> resolve_bgm raises INVALID_INPUT (SR I-1)."""
         from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
 
         bad_directive = dict(_VALID_BGM_DIRECTIVE, volume_db=-200.0)
@@ -2648,7 +2647,7 @@ class TestBgmDirectiveVolumeDbRange:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_14_volume_db_too_high_raises_invalid_input(self) -> None:
-        """volume_db=100（le=20.0 制約違反） → resolve_bgm が INVALID_INPUT を送出する（SR I-1）。"""
+        """volume_db=100 (violates le=20.0) -> resolve_bgm raises INVALID_INPUT (SR I-1)."""
         from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
 
         bad_directive = dict(_VALID_BGM_DIRECTIVE, volume_db=100.0)
@@ -2658,7 +2657,7 @@ class TestBgmDirectiveVolumeDbRange:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_14_volume_db_boundary_low_ok(self) -> None:
-        """volume_db=-60.0（境界値・ge=-60 ちょうど） → resolve_bgm が正常終了する（SR I-1 正常系）。"""
+        """volume_db=-60.0 (boundary, ge=-60 exactly) -> resolve_bgm succeeds (SR I-1 happy path)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             BgmClip,
             resolve_bgm,
@@ -2671,7 +2670,7 @@ class TestBgmDirectiveVolumeDbRange:
         assert result.directive.volume_db == -60.0
 
     def test_14_volume_db_boundary_high_ok(self) -> None:
-        """volume_db=20.0（境界値・le=20 ちょうど） → resolve_bgm が正常終了する（SR I-1 正常系）。"""
+        """volume_db=20.0 (boundary, le=20 exactly) -> resolve_bgm succeeds (SR I-1 happy path)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             BgmClip,
             resolve_bgm,
@@ -2685,12 +2684,12 @@ class TestBgmDirectiveVolumeDbRange:
 
 
 # ---------------------------------------------------------------------------
-# 観点15: fade_out_sec/fade_in_sec > main_dur ガード（SR M-3）
+# Aspect 15: fade_out_sec/fade_in_sec > main_dur guard (SR M-3)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanBgmFadeGuard:
-    """fade_out_sec/fade_in_sec が本編尺を超える場合に INVALID_INPUT が送出されることを検証する（SR M-3）。"""
+    """Verify INVALID_INPUT is raised when fade_out_sec/fade_in_sec exceeds main duration (SR M-3)."""
 
     def _build_with_fade(
         self,
@@ -2698,7 +2697,7 @@ class TestBuildPlanBgmFadeGuard:
         fade_out_sec: float = 0.0,
         main_duration: float = 5.0,
     ) -> None:
-        """指定 fade 設定で build_plan を実行するヘルパー（例外伝播を呼び出し側でハンドル）。"""
+        """Helper to run build_plan with specified fade settings (caller handles exception propagation)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -2714,45 +2713,45 @@ class TestBuildPlanBgmFadeGuard:
         build_plan(ranges, probe, RenderOptions(), bgm=bgm_clip)  # type: ignore[call-arg]
 
     def test_15_fade_out_exceeds_main_dur_raises_invalid_input(self) -> None:
-        """fade_out_sec > main_dur → build_plan が INVALID_INPUT を送出する（SR M-3）。"""
+        """fade_out_sec > main_dur -> build_plan raises INVALID_INPUT (SR M-3)."""
         with pytest.raises(ClipwrightError) as exc_info:
             self._build_with_fade(fade_out_sec=10.0, main_duration=5.0)
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_15_fade_in_exceeds_main_dur_raises_invalid_input(self) -> None:
-        """fade_in_sec > main_dur → build_plan が INVALID_INPUT を送出する（SR M-3）。"""
+        """fade_in_sec > main_dur -> build_plan raises INVALID_INPUT (SR M-3)."""
         with pytest.raises(ClipwrightError) as exc_info:
             self._build_with_fade(fade_in_sec=6.0, main_duration=5.0)
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_15_fade_out_error_message_contains_fade_out(self) -> None:
-        """fade_out_sec 超過エラーの message に "fade_out" が含まれる（NR-L-3: どちらが超過したか区別）。"""
+        """fade_out_sec exceeded: error message contains "fade_out" (NR-L-3: distinguishes which exceeded)."""
         # Arrange / Act
         with pytest.raises(ClipwrightError) as exc_info:
             self._build_with_fade(fade_out_sec=10.0, main_duration=5.0)
-        # Assert: fade_out_sec 超過であることが message から識別できる
+        # Assert: fade_out_sec excess is identifiable from message
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
         assert "fade_out" in exc_info.value.message
 
     def test_15_fade_in_error_message_contains_fade_in(self) -> None:
-        """fade_in_sec 超過エラーの message に "fade_in" が含まれる（NR-L-3: どちらが超過したか区別）。"""
+        """fade_in_sec exceeded: error message contains "fade_in" (NR-L-3: distinguishes which exceeded)."""
         # Arrange / Act
         with pytest.raises(ClipwrightError) as exc_info:
             self._build_with_fade(fade_in_sec=6.0, main_duration=5.0)
-        # Assert: fade_in_sec 超過であることが message から識別できる
+        # Assert: fade_in_sec excess is identifiable from message
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
         assert "fade_in" in exc_info.value.message
 
     def test_15_fade_out_equals_main_dur_ok(self) -> None:
-        """fade_out_sec == main_dur（ちょうど） → build_plan が正常終了する（SR M-3 境界値）。"""
+        """fade_out_sec == main_dur (exactly) -> build_plan succeeds (SR M-3 boundary value)."""
         self._build_with_fade(fade_out_sec=5.0, main_duration=5.0)
 
     def test_15_fade_in_equals_main_dur_ok(self) -> None:
-        """fade_in_sec == main_dur（ちょうど） → build_plan が正常終了する（SR M-3 境界値）。"""
+        """fade_in_sec == main_dur (exactly) -> build_plan succeeds (SR M-3 boundary value)."""
         self._build_with_fade(fade_in_sec=5.0, main_duration=5.0)
 
     def test_15_fade_zero_is_ok(self) -> None:
-        """fade_in_sec=0・fade_out_sec=0 → build_plan が正常終了し afade が含まれない（従来動作）。"""
+        """fade_in_sec=0, fade_out_sec=0 -> build_plan succeeds and afade is absent (legacy behaviour)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -2767,7 +2766,7 @@ class TestBuildPlanBgmFadeGuard:
         assert "afade" not in plan.filter_complex
 
     def test_15_fade_out_within_main_dur_ok_afade_out_present(self) -> None:
-        """fade_out_sec < main_dur → build_plan が正常終了し afade=t=out が含まれる（従来動作）。"""
+        """fade_out_sec < main_dur -> build_plan succeeds and afade=t=out is present (legacy behaviour)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -2783,32 +2782,32 @@ class TestBuildPlanBgmFadeGuard:
 
 
 # ===========================================================================
-# 字幕焼き込み拡張テスト（ADR-S4-r2/S4-r3/S5-r2/S2-r2/S6-r2/S6-r3）
+# Subtitle burn-in extension tests (ADR-S4-r2/S4-r3/S5-r2/S2-r2/S6-r2/S6-r3)
 # ===========================================================================
-# 実機確認済み (M2 2026-06-11):
-#   - Windowsパスエスケープ確定構文: \ → \\ then : → \:
-#     例: C:\path\to\sub.srt → C\:\\path\\to\\sub.srt
-#   - VTT直読: 可能 (ffmpeg 8.1.1 subtitles フィルタで RC=0)
-#   - PrimaryColour 6桁 &HBBGGRR: 受理可 / 8桁 &HAABBGGRR: 受理可
-#     不透明描画には AA=00 (8桁) 推奨（6桁のみでは alpha 未定義になる実装依存あり）
-#   - force_style: FontName/FontSize/Outline/Alignment/MarginV 全て受理
-#   - fontsdir: :fontsdir='<esc_path>' で受理
-#   - Alignment 1〜9 全値受理（ASS v4+ numpad: 1=左下 2=中下 3=右下
-#                               4=左中 5=中央 6=右中 7=左上 8=中上 9=右上）
-#   - ASS + force_style: RC=0（内蔵スタイル優先は libass 動作・API エラーなし）
+# Real ffmpeg verified (M2 2026-06-11):
+#   - Windows path escape final syntax: \ -> \\ then : -> \:
+#     Example: C:\path\to\sub.srt -> C\:\\path\\to\\sub.srt
+#   - VTT direct read: possible (ffmpeg 8.1.1 subtitles filter RC=0)
+#   - PrimaryColour 6-digit &HBBGGRR: accepted / 8-digit &HAABBGGRR: accepted
+#     AA=00 (8-digit) recommended for opaque rendering (6-digit alpha is implementation-dependent)
+#   - force_style: FontName/FontSize/Outline/Alignment/MarginV all accepted
+#   - fontsdir: :fontsdir='<esc_path>' accepted
+#   - Alignment 1-9 all values accepted (ASS v4+ numpad: 1=bottom-left 2=bottom-center 3=bottom-right
+#                               4=mid-left 5=center 6=mid-right 7=top-left 8=top-center 9=top-right)
+#   - ASS + force_style: RC=0 (embedded style priority is libass behaviour, no API error)
 #   - ASS + charenc=UTF-8: RC=0
-#   - filter_complex 内 [outv]subtitles=...[outvsub]: 全経路で RC=0
-#   - 字幕段は builder 内注入（ADR-S4-r3）・build_plan は video_map_label 不変
+#   - filter_complex [outv]subtitles=...[outvsub]: RC=0 on all paths
+#   - subtitle stage injected inside builder (ADR-S4-r3), build_plan video_map_label unchanged
 # ===========================================================================
 
 
 def _escape_filtergraph_path(path: str) -> str:
-    """テスト用 filtergraph パスエスケープ関数。
+    """Test-only filtergraph path escape function.
 
-    実機確認済みの確定エスケープ規則（M2 2026-06-11）:
-    1. バックスラッシュ → \\\\
-    2. コロン → \\:
-    この順序を守ることで Windows 絶対パスが cwd 非依存に ffmpeg へ渡せる。
+    Confirmed escape rules from real ffmpeg (M2 2026-06-11):
+    1. Backslash -> \\\\
+    2. Colon -> \\:
+    This order makes Windows absolute paths cwd-independent when passed to ffmpeg.
     """
     return path.replace("\\", "\\\\").replace(":", "\\:")
 
@@ -2823,7 +2822,7 @@ def _make_subtitle_options(
     alignment: int | None = None,
     margin_v: int | None = None,
 ) -> Any:
-    """テスト用 SubtitleOptions 構築ヘルパー。"""
+    """Test helper to construct SubtitleOptions."""
     from clipwright_render.schemas import SubtitleOptions  # type: ignore[attr-defined]
 
     return SubtitleOptions(
@@ -2839,21 +2838,21 @@ def _make_subtitle_options(
 
 
 def _make_subtitle_render_options(**kwargs: Any) -> RenderOptions:
-    """字幕付き RenderOptions を構築するテストヘルパー。"""
+    """Test helper to construct RenderOptions with subtitle."""
     sub = _make_subtitle_options(**kwargs)
     return RenderOptions(subtitle=sub)  # type: ignore[call-arg]
 
 
 # ---------------------------------------------------------------------------
-# 観点S1: _append_subtitle_filter — 基本動作（ADR-S4-r2）
+# Aspect S1: _append_subtitle_filter — basic behaviour (ADR-S4-r2)
 # ---------------------------------------------------------------------------
 
 
 class TestAppendSubtitleFilter:
-    """_append_subtitle_filter の filter 文字列・ラベル返却を検証する（ADR-S4-r2）。"""
+    """Verify _append_subtitle_filter filter string and label return (ADR-S4-r2)."""
 
     def test_s1_returns_outvsub_label(self) -> None:
-        """_append_subtitle_filter が [outvsub] ラベルを返す（ADR-S4-r2）。"""
+        """_append_subtitle_filter returns [outvsub] label (ADR-S4-r2)."""
         from clipwright_render.plan import (
             _append_subtitle_filter,  # type: ignore[attr-defined]
         )
@@ -2866,7 +2865,7 @@ class TestAppendSubtitleFilter:
         assert result == "[outvsub]"
 
     def test_s1_appends_subtitles_filter_to_filter_parts(self) -> None:
-        """_append_subtitle_filter が filter_parts に subtitles 段を追記する（ADR-S4-r2）。"""
+        """_append_subtitle_filter appends a subtitles stage to filter_parts (ADR-S4-r2)."""
         from clipwright_render.plan import (
             _append_subtitle_filter,  # type: ignore[attr-defined]
         )
@@ -2879,7 +2878,7 @@ class TestAppendSubtitleFilter:
         assert "subtitles=" in filter_parts[0]
 
     def test_s1_filter_part_starts_with_video_map_label(self) -> None:
-        """追記された filter 段が video_map_label から始まる（ADR-S4-r2）。"""
+        """The appended filter stage starts with video_map_label (ADR-S4-r2)."""
         from clipwright_render.plan import (
             _append_subtitle_filter,  # type: ignore[attr-defined]
         )
@@ -2891,7 +2890,7 @@ class TestAppendSubtitleFilter:
         assert filter_parts[0].startswith("[outv]")
 
     def test_s1_filter_part_ends_with_outvsub_label(self) -> None:
-        """追記された filter 段が [outvsub] で終わる（ADR-S4-r2）。"""
+        """The appended filter stage ends with [outvsub] (ADR-S4-r2)."""
         from clipwright_render.plan import (
             _append_subtitle_filter,  # type: ignore[attr-defined]
         )
@@ -2903,7 +2902,7 @@ class TestAppendSubtitleFilter:
         assert filter_parts[0].endswith("[outvsub]")
 
     def test_s1_outvscaled_input_label_works(self) -> None:
-        """scale あり経路（[outvscaled]）を video_map_label として受理する（ADR-S4-r2）。"""
+        """With-scale path ([outvscaled]) is accepted as video_map_label (ADR-S4-r2)."""
         from clipwright_render.plan import (
             _append_subtitle_filter,  # type: ignore[attr-defined]
         )
@@ -2917,20 +2916,20 @@ class TestAppendSubtitleFilter:
 
 
 # ---------------------------------------------------------------------------
-# 観点S2: エスケープ構文（ADR-S5-r2 / 実機確認済み構文）
+# Aspect S2: Escape syntax (ADR-S5-r2 / real ffmpeg verified syntax)
 # ---------------------------------------------------------------------------
 
 
 class TestSubtitleFilterEscape:
-    """filtergraph エスケープ構文を検証する（ADR-S5-r2 / M2実機確認）。
+    """Verify filtergraph escape syntax (ADR-S5-r2, M2 real ffmpeg verification).
 
-    確定エスケープ: \\ → \\\\ then : → \\:
-    Windows絶対パスは render.py が絶対パス化して渡す（ADR-S5-r2）。
-    _append_subtitle_filter はエスケープ済みパスを filename= に埋め込む。
+    Confirmed escape: \\ -> \\\\ then : -> \\:
+    render.py converts to absolute path before passing (ADR-S5-r2).
+    _append_subtitle_filter embeds the escaped path in filename=.
     """
 
     def test_s2_unix_path_embedded_in_filename(self) -> None:
-        """UNIX パス（/ のみ）の場合 filename= にパスがそのまま含まれる。"""
+        """UNIX path (/ only) is embedded as-is in filename=."""
         from clipwright_render.plan import (
             _append_subtitle_filter,  # type: ignore[attr-defined]
         )
@@ -2943,29 +2942,29 @@ class TestSubtitleFilterEscape:
         assert "subs.srt" in filter_parts[0]
 
     def test_s2_windows_absolute_path_backslash_escaped(self) -> None:
-        """Windows絶対パス（バックスラッシュ含む）がエスケープされて filename= に含まれる。
+        """Windows absolute path (with backslashes) is escaped and embedded in filename=.
 
-        確定エスケープ（M2): \\ → \\\\ then : → \\:
-        例: C:\\Users\\sub.srt → C\\\\:\\\\Users\\\\sub.srt
+        Confirmed escape (M2): \\ -> \\\\ then : -> \\:
+        Example: C:\\Users\\sub.srt -> C\\\\:\\\\Users\\\\sub.srt
         """
         from clipwright_render.plan import (
             _append_subtitle_filter,  # type: ignore[attr-defined]
         )
 
         win_path = r"C:\Users\shoma\proj\sub.srt"
-        # render.py が絶対パス化した後のパスをそのまま渡すと想定
+        # Assume render.py converts to absolute path before passing
         sub = _make_subtitle_options(path=win_path)
         filter_parts: list[str] = []
         _append_subtitle_filter(filter_parts, "[outv]", sub)
 
         fc_part = filter_parts[0]
-        # コロン ( : ) が \: にエスケープされていること
+        # Colon ( : ) must be escaped to \:
         assert "\\:" in fc_part or "C\\\\" in fc_part, (
-            f"Windows パスのエスケープが不正: {fc_part}"
+            f"Windows path escape is incorrect: {fc_part}"
         )
 
     def test_s2_path_without_special_chars_embedded_directly(self) -> None:
-        """特殊文字なしパスは変換されずに filename= に含まれる。"""
+        """Path without special characters is embedded directly in filename=."""
         from clipwright_render.plan import (
             _append_subtitle_filter,  # type: ignore[attr-defined]
         )
@@ -2978,22 +2977,22 @@ class TestSubtitleFilterEscape:
 
 
 # ---------------------------------------------------------------------------
-# 観点S3: force_style 組み立て（ADR-S6-r2 / DC-AM-001 / DC-AM-002 / DC-AS-002）
+# Aspect S3: force_style construction (ADR-S6-r2 / DC-AM-001 / DC-AM-002 / DC-AS-002)
 # ---------------------------------------------------------------------------
 
 
 class TestSubtitleFilterForceStyle:
-    """force_style 文字列の組み立てを検証する（ADR-S6-r2 / DC-AM-001 / DC-AM-002）。
+    """Verify force_style string construction (ADR-S6-r2, DC-AM-001, DC-AM-002).
 
-    実機確認済み（M2）:
+    Real ffmpeg verified (M2):
     - force_style='FontName=...,FontSize=...,PrimaryColour=&H...,Outline=...,
-                  Alignment=...,MarginV=...' は全て受理
-    - PrimaryColour は 8桁 &HAABBGGRR（AA=00 が不透明）推奨
-    - Alignment は ASS v4+ numpad 1〜9 で全て受理
+                  Alignment=...,MarginV=...' all accepted
+    - PrimaryColour: 8-digit &HAABBGGRR (AA=00 = opaque) recommended
+    - Alignment: ASS v4+ numpad 1-9 all accepted
     """
 
     def test_s3_no_style_options_no_force_style(self) -> None:
-        """スタイル系フィールドが全て None のとき force_style が含まれない。"""
+        """When all style fields are None, force_style is not present."""
         from clipwright_render.plan import (
             _append_subtitle_filter,  # type: ignore[attr-defined]
         )
@@ -3005,7 +3004,7 @@ class TestSubtitleFilterForceStyle:
         assert "force_style" not in filter_parts[0]
 
     def test_s3_font_name_included_in_force_style(self) -> None:
-        """font_name 指定時 force_style に FontName= が含まれる。"""
+        """With font_name specified, force_style contains FontName=."""
         from clipwright_render.plan import (
             _append_subtitle_filter,  # type: ignore[attr-defined]
         )
@@ -3017,7 +3016,7 @@ class TestSubtitleFilterForceStyle:
         assert "FontName=Arial" in filter_parts[0]
 
     def test_s3_font_size_included_in_force_style(self) -> None:
-        """font_size 指定時 force_style に FontSize= が含まれる。"""
+        """With font_size specified, force_style contains FontSize=."""
         from clipwright_render.plan import (
             _append_subtitle_filter,  # type: ignore[attr-defined]
         )
@@ -3029,7 +3028,7 @@ class TestSubtitleFilterForceStyle:
         assert "FontSize=28" in filter_parts[0]
 
     def test_s3_outline_included_in_force_style(self) -> None:
-        """outline 指定時 force_style に Outline= が含まれる。"""
+        """With outline specified, force_style contains Outline=."""
         from clipwright_render.plan import (
             _append_subtitle_filter,  # type: ignore[attr-defined]
         )
@@ -3041,10 +3040,10 @@ class TestSubtitleFilterForceStyle:
         assert "Outline=" in filter_parts[0]
 
     def test_s3_outline_zero_explicit_in_force_style(self) -> None:
-        """outline=0.0 のとき force_style に Outline=0 が含まれる（縁取りなし明示・NR-L-1）。
+        """outline=0.0: force_style contains Outline=0 (explicit no-outline, NR-L-1).
 
-        0.0 は「縁取りなし」を明示する有効な指定であり、
-        libass 既定（None）とは区別される。:g フォーマットで 0.0 → "0" に変換される。
+        0.0 explicitly means "no outline" and is distinguished from
+        the libass default (None). Formatted with :g so 0.0 becomes "0".
         """
         from clipwright_render.plan import (
             _append_subtitle_filter,  # type: ignore[attr-defined]
@@ -3057,9 +3056,9 @@ class TestSubtitleFilterForceStyle:
         assert "Outline=0" in filter_parts[0]
 
     def test_s3_outline_none_not_in_force_style(self) -> None:
-        """outline=None のとき force_style に Outline キーが含まれない（libass 既定に委ねる・NR-L-1）。
+        """outline=None: force_style does not contain the Outline key (defers to libass default, NR-L-1).
 
-        None は「未指定」を意味し、0.0（縁取りなし明示）とは明確に区別される。
+        None means "unspecified" and is clearly distinguished from 0.0 (explicit no-outline).
         """
         from clipwright_render.plan import (
             _append_subtitle_filter,  # type: ignore[attr-defined]
@@ -3072,7 +3071,7 @@ class TestSubtitleFilterForceStyle:
         assert "Outline" not in filter_parts[0]
 
     def test_s3_margin_v_included_in_force_style(self) -> None:
-        """margin_v 指定時 force_style に MarginV= が含まれる。"""
+        """With margin_v specified, force_style contains MarginV=."""
         from clipwright_render.plan import (
             _append_subtitle_filter,  # type: ignore[attr-defined]
         )
@@ -3084,7 +3083,7 @@ class TestSubtitleFilterForceStyle:
         assert "MarginV=20" in filter_parts[0]
 
     def test_s3_alignment_1_included_in_force_style(self) -> None:
-        """alignment=1（左下・ASS v4+）が force_style に Alignment=1 として含まれる（DC-AM-001）。"""
+        """alignment=1 (bottom-left, ASS v4+) is included in force_style as Alignment=1 (DC-AM-001)."""
         from clipwright_render.plan import (
             _append_subtitle_filter,  # type: ignore[attr-defined]
         )
@@ -3096,7 +3095,7 @@ class TestSubtitleFilterForceStyle:
         assert "Alignment=1" in filter_parts[0]
 
     def test_s3_alignment_5_included_in_force_style(self) -> None:
-        """alignment=5（中央・ASS v4+）が force_style に Alignment=5 として含まれる（DC-AM-001）。"""
+        """alignment=5 (center, ASS v4+) is included in force_style as Alignment=5 (DC-AM-001)."""
         from clipwright_render.plan import (
             _append_subtitle_filter,  # type: ignore[attr-defined]
         )
@@ -3108,7 +3107,7 @@ class TestSubtitleFilterForceStyle:
         assert "Alignment=5" in filter_parts[0]
 
     def test_s3_alignment_9_included_in_force_style(self) -> None:
-        """alignment=9（右上・ASS v4+）が force_style に Alignment=9 として含まれる（DC-AM-001）。"""
+        """alignment=9 (top-right, ASS v4+) is included in force_style as Alignment=9 (DC-AM-001)."""
         from clipwright_render.plan import (
             _append_subtitle_filter,  # type: ignore[attr-defined]
         )
@@ -3120,32 +3119,32 @@ class TestSubtitleFilterForceStyle:
         assert "Alignment=9" in filter_parts[0]
 
     def test_s3_font_color_converted_to_ass_primarycolour_8digit(self) -> None:
-        """font_color='#RRGGBB' → force_style に PrimaryColour=&HAABBGGRR（8桁・AA=00）が含まれる（DC-AM-002）。
+        """font_color='#RRGGBB' → force_style includes PrimaryColour=&HAABBGGRR (8-digit, AA=00) (DC-AM-002).
 
-        M2確認: 8桁 &H00BBGGRR（AA=00 = 不透明）で不透明描画が確実。
-        #FF0000（赤: R=FF G=00 B=00）→ BGR順 &H000000FF。
+        M2 confirmed: 8-digit &H00BBGGRR (AA=00 = opaque) guarantees opaque rendering.
+        #FF0000 (red: R=FF G=00 B=00) → BGR order → &H000000FF.
         """
         from clipwright_render.plan import (
             _append_subtitle_filter,  # type: ignore[attr-defined]
         )
 
-        # 赤: #FF0000 → BGR → &H000000FF (8桁 AA=00)
+        # red: #FF0000 → BGR → &H000000FF (8-digit AA=00)
         sub = _make_subtitle_options(path="/sub.srt", font_color="#FF0000")
         filter_parts: list[str] = []
         _append_subtitle_filter(filter_parts, "[outv]", sub)
 
         fc_part = filter_parts[0]
-        # PrimaryColour= が含まれる
+        # PrimaryColour= must be present
         assert "PrimaryColour=" in fc_part
-        # BGR変換確認: #FF0000(R=FF,G=00,B=00) → &H000000FF（8桁 AA=00 固定・M2確認済み）
+        # BGR conversion check: #FF0000(R=FF,G=00,B=00) → &H000000FF (8-digit AA=00 fixed, M2 confirmed)
         assert "&H000000FF" in fc_part, (
-            f"#FF0000 の色変換が不正（8桁 &H00BBGGRR 形式で出力されること）: {fc_part}"
+            f"#FF0000 color conversion is incorrect (expected 8-digit &H00BBGGRR format): {fc_part}"
         )
 
     def test_s3_font_color_white_converted_correctly(self) -> None:
-        """font_color='#FFFFFF'（白）→ PrimaryColour=&H00FFFFFF が含まれる（DC-AM-002）。
+        """font_color='#FFFFFF' (white) → PrimaryColour=&H00FFFFFF is included (DC-AM-002).
 
-        白: R=FF,G=FF,B=FF → BGR = &HFFFFFF → 8桁: &H00FFFFFF
+        White: R=FF,G=FF,B=FF → BGR = &HFFFFFF → 8-digit: &H00FFFFFF
         """
         from clipwright_render.plan import (
             _append_subtitle_filter,  # type: ignore[attr-defined]
@@ -3157,28 +3156,28 @@ class TestSubtitleFilterForceStyle:
 
         fc_part = filter_parts[0]
         assert "PrimaryColour=" in fc_part
-        # 白: R=FF,G=FF,B=FF → BGR = &HFFFFFF → 8桁: &H00FFFFFF（AA=00 固定・M2確認済み）
+        # white: R=FF,G=FF,B=FF → BGR = &HFFFFFF → 8-digit: &H00FFFFFF (AA=00 fixed, M2 confirmed)
         assert "&H00FFFFFF" in fc_part, (
-            f"#FFFFFF の色変換が不正（8桁 &H00BBGGRR 形式で出力されること）: {fc_part}"
+            f"#FFFFFF color conversion is incorrect (expected 8-digit &H00BBGGRR format): {fc_part}"
         )
 
 
 # ---------------------------------------------------------------------------
-# 観点S4: ASS 入力時の force_style/charenc 制御（DC-AS-002）
+# Aspect S4: force_style/charenc control for ASS input (DC-AS-002)
 # ---------------------------------------------------------------------------
 
 
 class TestSubtitleFilterAssInput:
-    """ASS 入力時の force_style/charenc 挙動を検証する（DC-AS-002 / ADR-S6-r2）。
+    """Verify force_style/charenc behaviour for ASS input (DC-AS-002 / ADR-S6-r2).
 
-    M2確認済み真理値表:
-    - SRT: charenc=UTF-8 + force_style 付与
-    - ASS: force_style 不適用（内蔵スタイル優先）・charenc/fontsdir は実機確認で決定
-    - 本テストでは「ASS は force_style なし」を確定仕様として assert する
+    M2-confirmed truth table:
+    - SRT: charenc=UTF-8 + force_style applied
+    - ASS: force_style not applied (built-in style takes priority); charenc/fontsdir determined by M2
+    - This test asserts "ASS has no force_style" as the confirmed specification
     """
 
     def test_s4_srt_input_has_force_style_when_style_specified(self) -> None:
-        """.srt 入力 + スタイル指定 → force_style が含まれる（SRT/VTT は force_style 付与）。"""
+        """.srt input + style specified → force_style is included (SRT/VTT receive force_style)."""
         from clipwright_render.plan import (
             _append_subtitle_filter,  # type: ignore[attr-defined]
         )
@@ -3190,7 +3189,7 @@ class TestSubtitleFilterAssInput:
         assert "force_style" in filter_parts[0]
 
     def test_s4_vtt_input_has_force_style_when_style_specified(self) -> None:
-        """.vtt 入力 + スタイル指定 → force_style が含まれる（VTT も SRT と同等）。"""
+        """.vtt input + style specified → force_style is included (VTT behaves the same as SRT)."""
         from clipwright_render.plan import (
             _append_subtitle_filter,  # type: ignore[attr-defined]
         )
@@ -3202,7 +3201,7 @@ class TestSubtitleFilterAssInput:
         assert "force_style" in filter_parts[0]
 
     def test_s4_ass_input_no_force_style_even_when_style_specified(self) -> None:
-        """.ass 入力 + スタイル指定 → force_style は含まれない（ASS は内蔵スタイル優先・DC-AS-002）。"""
+        """.ass input + style specified → force_style is NOT included (ASS uses built-in style; DC-AS-002)."""
         from clipwright_render.plan import (
             _append_subtitle_filter,  # type: ignore[attr-defined]
         )
@@ -3215,18 +3214,18 @@ class TestSubtitleFilterAssInput:
 
 
 # ---------------------------------------------------------------------------
-# 観点S5: fontsdir 指定（ADR-S2-r2 / M2確認済み）
+# Aspect S5: fontsdir option (ADR-S2-r2 / M2 confirmed)
 # ---------------------------------------------------------------------------
 
 
 class TestSubtitleFilterFontsDir:
-    """fontsdir オプションの付与・不付与を検証する（ADR-S2-r2）。
+    """Verify that the fontsdir option is added or omitted correctly (ADR-S2-r2).
 
-    M2確認: :fontsdir='<esc_path>' で受理。複合（charenc+fontsdir+force_style）も受理。
+    M2 confirmed: accepted with :fontsdir='<esc_path>'. Combined (charenc+fontsdir+force_style) also accepted.
     """
 
     def test_s5_fontsdir_included_when_specified(self) -> None:
-        """fonts_dir 指定時 fontsdir= が filter に含まれる（M2確認）。"""
+        """When fonts_dir is specified, fontsdir= is included in the filter (M2 confirmed)."""
         from clipwright_render.plan import (
             _append_subtitle_filter,  # type: ignore[attr-defined]
         )
@@ -3238,7 +3237,7 @@ class TestSubtitleFilterFontsDir:
         assert "fontsdir=" in filter_parts[0]
 
     def test_s5_fontsdir_not_included_when_not_specified(self) -> None:
-        """fonts_dir 未指定のとき fontsdir= が含まれない。"""
+        """When fonts_dir is not specified, fontsdir= is not included."""
         from clipwright_render.plan import (
             _append_subtitle_filter,  # type: ignore[attr-defined]
         )
@@ -3250,7 +3249,7 @@ class TestSubtitleFilterFontsDir:
         assert "fontsdir=" not in filter_parts[0]
 
     def test_s5_fontsdir_path_embedded_in_filter(self) -> None:
-        """fonts_dir のパスが filtergraph に含まれる。"""
+        """The fonts_dir path is embedded in the filtergraph."""
         from clipwright_render.plan import (
             _append_subtitle_filter,  # type: ignore[attr-defined]
         )
@@ -3261,21 +3260,21 @@ class TestSubtitleFilterFontsDir:
         filter_parts: list[str] = []
         _append_subtitle_filter(filter_parts, "[outv]", sub)
 
-        # フォントディレクトリのパス要素が含まれる（エスケープ後）
+        # path component of font directory is present (after escaping)
         assert "fonts" in filter_parts[0]
 
 
 # ---------------------------------------------------------------------------
-# 観点S6: build_plan 経由の字幕段注入（ADR-S4-r3 / ADR-S8）
+# Aspect S6: subtitle stage injection via build_plan (ADR-S4-r3 / ADR-S8)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanSubtitle:
-    """build_plan で字幕段が映像終端に注入される動作を検証する（ADR-S4-r3 / ADR-S8）。
+    """Verify that build_plan injects the subtitle stage at the video chain tail (ADR-S4-r3 / ADR-S8).
 
-    ADR-S4-r3: 字幕段は builder 内（video_map_label 確定直後）に注入する。
-    build_plan は video_map_label を変更しない（[outvsub] は builder 戻り値が確定）。
-    後方互換: subtitle=None のとき filter_complex 不変・video_map_label 不変。
+    ADR-S4-r3: the subtitle stage is injected inside the builder (immediately after video_map_label is fixed).
+    build_plan does not change video_map_label ([outvsub] is fixed when the builder returns).
+    Backwards compatibility: when subtitle=None, filter_complex and video_map_label are unchanged.
     """
 
     def _build_with_subtitle(
@@ -3286,7 +3285,7 @@ class TestBuildPlanSubtitle:
         use_scale: bool = False,
         use_multi_source: bool = False,
     ) -> RenderPlan:  # type: ignore[name-defined]
-        """字幕付き build_plan テストヘルパー（単一ソース）。"""
+        """Helper for build_plan tests with a subtitle (single source)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -3302,50 +3301,50 @@ class TestBuildPlanSubtitle:
         return build_plan(ranges, probe, opts)
 
     def test_s6_subtitle_filter_in_filter_complex(self) -> None:
-        """subtitle 指定時 filter_complex に 'subtitles=' が含まれる（ADR-S4-r3）。"""
+        """When subtitle is specified, filter_complex contains 'subtitles=' (ADR-S4-r3)."""
         plan = self._build_with_subtitle()
         assert "subtitles=" in plan.filter_complex
 
     def test_s6_outvsub_label_in_filter_complex(self) -> None:
-        """subtitle 指定時 filter_complex に [outvsub] が含まれる（ADR-S4-r3）。"""
+        """When subtitle is specified, filter_complex contains [outvsub] (ADR-S4-r3)."""
         plan = self._build_with_subtitle()
         assert "[outvsub]" in plan.filter_complex
 
     def test_s6_ffmpeg_args_maps_outvsub(self) -> None:
-        """subtitle 指定時 -map [outvsub] が ffmpeg_args に含まれる（ADR-S4-r3）。"""
+        """When subtitle is specified, -map [outvsub] is included in ffmpeg_args (ADR-S4-r3)."""
         plan = self._build_with_subtitle()
         args_str = " ".join(plan.ffmpeg_args)
         assert "[outvsub]" in args_str
 
     def test_s6_ffmpeg_args_does_not_map_outv_when_subtitle(self) -> None:
-        """subtitle 指定時 -map [outv] は ffmpeg_args に含まれない（[outvsub] に差し替え）。"""
+        """When subtitle is specified, -map [outv] is NOT in ffmpeg_args (replaced by [outvsub])."""
         plan = self._build_with_subtitle()
-        # -map 直後の値は [outvsub] で [outv] は来ない
+        # the value immediately after -map must be [outvsub], never [outv]
         map_indices = [i for i, a in enumerate(plan.ffmpeg_args) if a == "-map"]
         map_targets = [plan.ffmpeg_args[i + 1] for i in map_indices]
         assert "[outvsub]" in map_targets
         assert "[outv]" not in map_targets
 
     def test_s6_subtitle_appended_after_scale_when_scale_specified(self) -> None:
-        """scale あり + subtitle: [outvscaled] の後に字幕段が入り [outvsub] が終端になる（ADR-S4-r3）。"""
+        """With scale + subtitle: subtitle stage follows [outvscaled] and [outvsub] becomes the tail (ADR-S4-r3)."""
         plan = self._build_with_subtitle(use_scale=True)
         fc = plan.filter_complex
-        # scale が含まれる
+        # scale must be present
         assert "scale=1280:720" in fc
-        # [outvscaled] の後に subtitles が来る（字幕は scale 後の出力解像度に焼く）
+        # subtitles comes after [outvscaled] (subtitle is burned at the scaled output resolution)
         assert "[outvscaled]subtitles=" in fc or "[outvscaled]" in fc
-        # 最終 map は [outvsub]
+        # final map is [outvsub]
         args_str = " ".join(plan.ffmpeg_args)
         assert "[outvsub]" in args_str
 
     def test_s6_audio_map_label_unchanged_with_subtitle(self) -> None:
-        """字幕付き build_plan で audio_map_label ([outa]) は変化しない（ADR-S4-r3 独立性）。"""
+        """With subtitle, audio_map_label ([outa]) is unchanged in build_plan (ADR-S4-r3 independence)."""
         plan = self._build_with_subtitle(audio_count=1)
         args_str = " ".join(plan.ffmpeg_args)
         assert "[outa]" in args_str
 
     def test_s6_subtitle_none_filter_complex_unchanged(self) -> None:
-        """subtitle=None のとき filter_complex が subtitle なし版と完全一致する（ADR-S8 後方互換・最重要）。"""
+        """When subtitle=None, filter_complex is identical to the no-subtitle version (ADR-S8 backwards compat — critical)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -3358,11 +3357,11 @@ class TestBuildPlanSubtitle:
         plan_no_sub = build_plan(ranges, probe, RenderOptions())
         plan_sub_none = build_plan(ranges, probe, RenderOptions(subtitle=None))  # type: ignore[call-arg]
 
-        # subtitle=None は完全後方互換
+        # subtitle=None is fully backwards-compatible
         assert plan_no_sub.filter_complex == plan_sub_none.filter_complex
 
     def test_s6_subtitle_none_video_map_unchanged(self) -> None:
-        """subtitle=None のとき ffmpeg_args の map ラベルが変化しない（ADR-S8 後方互換）。"""
+        """When subtitle=None, map labels in ffmpeg_args are unchanged (ADR-S8 backwards compat)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -3378,7 +3377,7 @@ class TestBuildPlanSubtitle:
         assert plan_no_sub.ffmpeg_args == plan_sub_none.ffmpeg_args
 
     def test_s6_subtitle_none_no_outvsub_in_filter_complex(self) -> None:
-        """subtitle=None のとき [outvsub] が filter_complex に含まれない（後方互換）。"""
+        """When subtitle=None, [outvsub] is not present in filter_complex (backwards compat)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -3393,18 +3392,18 @@ class TestBuildPlanSubtitle:
 
 
 # ---------------------------------------------------------------------------
-# 観点S7: 複数ソース経路での字幕段注入（ADR-S4-r3）
+# Aspect S7: subtitle stage injection via multi-source path (ADR-S4-r3)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanSubtitleMultiSource:
-    """複数ソース経路でも字幕段が映像終端に注入される（ADR-S4-r3）。"""
+    """Verify that the subtitle stage is injected at the video chain tail even in the multi-source path (ADR-S4-r3)."""
 
     def _build_multi_with_subtitle(
         self,
         subtitle_path: str = "/proj/subs.srt",
     ) -> RenderPlan:  # type: ignore[name-defined]
-        """複数ソース + 字幕の build_plan テストヘルパー。"""
+        """Helper for build_plan tests with multiple sources + subtitle."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -3430,43 +3429,43 @@ class TestBuildPlanSubtitleMultiSource:
         )
 
     def test_s7_multi_source_subtitle_in_filter_complex(self) -> None:
-        """複数ソース経路で subtitle 指定時 filter_complex に 'subtitles=' が含まれる。"""
+        """In multi-source path with subtitle, filter_complex contains 'subtitles='."""
         plan = self._build_multi_with_subtitle()
         assert "subtitles=" in plan.filter_complex
 
     def test_s7_multi_source_outvsub_in_filter_complex(self) -> None:
-        """複数ソース経路で [outvsub] が filter_complex に含まれる（ADR-S4-r3）。"""
+        """In multi-source path, [outvsub] is present in filter_complex (ADR-S4-r3)."""
         plan = self._build_multi_with_subtitle()
         assert "[outvsub]" in plan.filter_complex
 
     def test_s7_multi_source_ffmpeg_args_maps_outvsub(self) -> None:
-        """複数ソース経路で -map [outvsub] が ffmpeg_args に含まれる（ADR-S4-r3）。"""
+        """In multi-source path, -map [outvsub] is included in ffmpeg_args (ADR-S4-r3)."""
         plan = self._build_multi_with_subtitle()
         args_str = " ".join(plan.ffmpeg_args)
         assert "[outvsub]" in args_str
 
     def test_s7_multi_source_audio_map_label_unchanged(self) -> None:
-        """複数ソース + 字幕で audio_map_label は不変（字幕は映像専用・ADR-S4-r3）。"""
+        """With multiple sources + subtitle, audio_map_label is unchanged (subtitle is video-only; ADR-S4-r3)."""
         plan = self._build_multi_with_subtitle()
         args_str = " ".join(plan.ffmpeg_args)
         assert "[outa]" in args_str
 
 
 # ---------------------------------------------------------------------------
-# 観点S8: BGM + 字幕の独立性（ADR-S4-r3）
+# Aspect S8: independence of BGM + subtitle (ADR-S4-r3)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanSubtitleAndBgmIndependence:
-    """字幕段と BGM 段が独立していることを検証する（ADR-S4-r3）。
+    """Verify that the subtitle stage and BGM stage are independent (ADR-S4-r3).
 
-    ADR-S4-r3: 字幕は builder 内（video チェーン側）で注入。
-    BGM は build_plan 内（audio 側）で追記。両者は独立。
-    字幕段は BGM 追記より前（video_map_label が確定してから BGM が audio に追記される）。
+    ADR-S4-r3: subtitle is injected inside the builder (video chain side).
+    BGM is appended inside build_plan (audio side). They are independent.
+    The subtitle stage precedes the BGM append (BGM is appended to audio after video_map_label is fixed).
     """
 
     def test_s8_subtitle_and_bgm_both_present(self) -> None:
-        """subtitle + BGM 両方指定 → filter_complex に subtitles と BGM 両方含まれる。"""
+        """subtitle + BGM both specified → filter_complex contains both subtitles and BGM."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -3485,7 +3484,7 @@ class TestBuildPlanSubtitleAndBgmIndependence:
         assert "[outa_bgm]" in fc
 
     def test_s8_subtitle_video_map_is_outvsub_with_bgm(self) -> None:
-        """subtitle + BGM: video は [outvsub] にマップされる（BGM は audio のみ）。"""
+        """subtitle + BGM: video is mapped to [outvsub] (BGM affects audio only)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -3504,7 +3503,7 @@ class TestBuildPlanSubtitleAndBgmIndependence:
         assert "[outa_bgm]" in args_str
 
     def test_s8_subtitle_before_bgm_in_filter_complex(self) -> None:
-        """filter_complex 内で字幕段（[outvsub]）が BGM 段（[outa_bgm]）より前に位置する（ADR-S4-r3）。"""
+        """In filter_complex, the subtitle stage ([outvsub]) appears before the BGM stage ([outa_bgm]) (ADR-S4-r3)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             build_plan,
             resolve_kept_ranges,
@@ -3521,9 +3520,9 @@ class TestBuildPlanSubtitleAndBgmIndependence:
         fc = plan.filter_complex
         outvsub_pos = fc.find("[outvsub]")
         outa_bgm_pos = fc.find("[outa_bgm]")
-        assert outvsub_pos != -1, "[outvsub] が filter_complex に見つからない"
-        assert outa_bgm_pos != -1, "[outa_bgm] が filter_complex に見つからない"
-        # 字幕段が BGM 段より前に現れる
+        assert outvsub_pos != -1, "[outvsub] not found in filter_complex"
+        assert outa_bgm_pos != -1, "[outa_bgm] not found in filter_complex"
+        # subtitle stage must appear before BGM stage
         assert outvsub_pos < outa_bgm_pos, (
-            f"字幕段({outvsub_pos}) が BGM 段({outa_bgm_pos}) より後ろにある"
+            f"subtitle stage ({outvsub_pos}) appears after BGM stage ({outa_bgm_pos})"
         )

@@ -1,13 +1,15 @@
-"""captions.py — clipwright-wrap 純ロジック層。
+"""captions.py — clipwright-wrap pure-logic layer.
 
-SRT/VTT の parse・文節トークン列の max_chars 貪欲行詰め・SRT/VTT の再シリアライズ・
-overflow 判定を担う。budoux を一切 import しない純関数群（契約面 100% 目標）。
+Handles SRT/VTT parsing, greedy line-filling of phrase-boundary token sequences
+with max_chars, SRT/VTT re-serialisation, and overflow detection.
+Pure functions with no budoux import (contract coverage target: ~100%).
 
-設計判断:
-- タイムコード文字列は float 変換せず不変保持する（WR-AD-06）。
-- SRT/VTT のバイト構造は WR-AD-12 の仕様に準拠する。
-- 文節トークン結合時の区切り文字は挿入しない（WR-AD-14）。
-- overflow 判定は行数超過(a) + 行幅超過(b) の両方を対象とする（WR-AD-15(1)）。
+Design decisions:
+- Timecode strings are preserved as-is without float conversion (WR-AD-06).
+- SRT/VTT byte structure conforms to the WR-AD-12 specification.
+- No delimiter is inserted when joining phrase-boundary tokens (WR-AD-14).
+- Overflow detection covers both line-count excess (a) and line-width excess (b)
+  (WR-AD-15(1)).
 """
 
 from __future__ import annotations
@@ -18,31 +20,32 @@ from typing import TypedDict
 
 from clipwright.errors import ClipwrightError, ErrorCode
 
-# VTT タイムライン行: "HH:MM:SS.mmm --> HH:MM:SS.mmm [settings]" にマッチする正規表現
+# Regex matching a VTT timeline line: "HH:MM:SS.mmm --> HH:MM:SS.mmm [settings]"
 _VTT_TIMELINE_RE = re.compile(
     r"^(\d{2}:\d{2}:\d{2}\.\d{3})\s+-->\s+(\d{2}:\d{2}:\d{2}\.\d{3})(.*)"
 )
 
-# SRT タイムライン行: "HH:MM:SS,mmm --> HH:MM:SS,mmm" にマッチする正規表現
-# HH:MM:SS,mmm 固定桁・WR-AD-12 準拠（transcribe to_srt は固定桁を保証する）
+# Regex matching an SRT timeline line: "HH:MM:SS,mmm --> HH:MM:SS,mmm"
+# Fixed-width HH:MM:SS,mmm digits; conforms to WR-AD-12
+# (transcribe to_srt guarantees fixed width)
 _SRT_TIMELINE_RE = re.compile(
     r"^(\d{2}:\d{2}:\d{2},\d{3})\s+-->\s+(\d{2}:\d{2}:\d{2},\d{3})\s*$"
 )
 
-# VTT インラインタグ（<c> <b> <i> <v> <ruby> 等）の検出
-# [^>]{0,200} の上限で ReDoS を緩和する（CWE-1333）
+# Detection of VTT inline tags (<c>, <b>, <i>, <v>, <ruby>, etc.)
+# The [^>]{0,200} upper bound mitigates ReDoS (CWE-1333)
 _VTT_INLINE_TAG_RE = re.compile(r"<[a-zA-Z/][^>]{0,200}>")
 
 
 @dataclass
 class Cue:
-    """字幕 1 cue の正規化表現。
+    """Normalised representation of a single subtitle cue.
 
-    index はシーケンス番号（1始まり）。
-    start / end はタイムコード文字列（float 変換しない・WR-AD-06）。
-    text は cue の本文テキスト（改行は '\\n' で表現）。
-    VTT の cue settings は end フィールドの末尾に保持する
-    （例: "00:00:01.000 line:90% position:50%"）。
+    index is the sequence number (1-based).
+    start / end are timecode strings (not converted to float; WR-AD-06).
+    text is the cue body text (line breaks represented as '\\n').
+    VTT cue settings are appended to the end field
+    (e.g. "00:00:01.000 line:90% position:50%").
     """
 
     index: int
@@ -52,27 +55,29 @@ class Cue:
 
 
 class _OverflowResult(TypedDict):
-    """check_overflow の戻り値型。"""
+    """Return type of check_overflow."""
 
     line_count_overflow: bool
     line_width_overflow: bool
 
 
 def _parse_srt(text: str) -> list[Cue]:
-    """SRT テキストを cue リストに変換する。
+    """Convert an SRT text string into a list of Cues.
 
-    WR-AD-12(1)(2) のバイト構造仕様に準拠する:
-    - 空行区切り（連続/末尾空行に頑健）
-    - 末尾 cue に空行が無い（単一改行 EOF）ケースで最終 cue を取りこぼさない
-    - 0 件（空文字列・改行のみ）→ []
-    - cue 内複数行テキストは空文字結合（半角空白挿入なし・WR-AD-14）
-    - 不正な timecode 行 → ValueError を送出
-      （呼び出し側 wrap.py が INVALID_INPUT に変換）
+    Conforms to the WR-AD-12(1)(2) byte-structure specification:
+    - Blank-line delimited (robust to consecutive / trailing blank lines)
+    - Does not miss the last cue when the trailing cue has no blank line
+      (single newline EOF)
+    - 0 entries (empty string or newlines only) → []
+    - Multi-line text within a cue is joined without a delimiter
+      (no space inserted; WR-AD-14)
+    - Invalid timecode line → raises ValueError
+      (caller wrap.py converts this to INVALID_INPUT)
     """
     if not text.strip():
         return []
 
-    # 連続空行を 1 区切りとして扱うため、複数改行を 2 改行に正規化してから分割
+    # Normalise consecutive blank lines to a single blank line before splitting
     normalized = re.sub(r"\n{2,}", "\n\n", text.strip())
     blocks = normalized.split("\n\n")
 
@@ -80,42 +85,42 @@ def _parse_srt(text: str) -> list[Cue]:
     for block in blocks:
         lines = block.strip().splitlines()
         if not lines:  # pragma: no cover
-            # 到達不能（正規化後に空ブロックは生成されない防御）
+            # Unreachable: normalisation never produces an empty block (defensive guard)
             continue
 
-        # 行1: index 番号
+        # Line 1: index number
         try:
             index = int(lines[0].strip())
         except ValueError:
-            # index 行でないブロックはスキップ（空ブロック等の防御）
+            # Block does not start with an index line; skip (empty block, etc.)
             continue
 
         if len(lines) < 2:
             continue
 
-        # 行2: タイムライン行
+        # Line 2: timeline line
         timeline_line = lines[1].strip()
         m = _SRT_TIMELINE_RE.match(timeline_line)
         if m is None:
-            # タイムコード行が不正: ValueError を送出（テスト契約 WR-AD-09 に準拠）
+            # Invalid timecode line: raise ValueError (test contract WR-AD-09)
             raise ValueError(
-                f"SRT タイムコード行が不正です: {timeline_line!r}"
-                f" (期待形式: 'HH:MM:SS,mmm --> HH:MM:SS,mmm')"
+                f"Invalid SRT timecode line: {timeline_line!r}"
+                f" (expected format: 'HH:MM:SS,mmm --> HH:MM:SS,mmm')"
             )
 
         start = m.group(1)
         end = m.group(2)
 
-        # 値範囲チェック: MM/SS は 0-59 の範囲内であること（WR-AD-12 / SRT 仕様）
+        # Value range check: MM/SS must be within 0–59 (WR-AD-12 / SRT spec)
         for tc in (start, end):
             mm, ss = int(tc[3:5]), int(tc[6:8])
             if mm > 59 or ss > 59:
                 raise ValueError(
-                    f"SRT タイムコードの値が範囲外です: {tc!r}"
-                    f" (分・秒は 0-59 の範囲内である必要があります)"
+                    f"SRT timecode value out of range: {tc!r}"
+                    f" (minutes and seconds must be within 0–59)"
                 )
 
-        # 行3以降: テキスト（複数行は空文字結合・半角空白挿入なし）
+        # Line 3 onwards: text (multiple lines joined without delimiter; no space)
         text_lines = lines[2:] if len(lines) > 2 else []
         joined_text = "".join(text_lines)
 
@@ -125,28 +130,29 @@ def _parse_srt(text: str) -> list[Cue]:
 
 
 def _parse_vtt(text: str) -> list[Cue]:
-    """VTT テキストを cue リストに変換する。
+    """Convert a VTT text string into a list of Cues.
 
-    WR-AD-12(1)(2)(3) のバイト構造仕様・VTT エッジ 5 種の挙動に準拠する:
-    - WEBVTT ヘッダ直後の空行をスキップ
-    - 0 件（"WEBVTT\\n" のみ）→ []
-    - NOTE/STYLE ブロック: 原文保持（cue としては扱わない）
-    - cue id 行: 保持し text 行のみ整形対象
-    - cue settings（タイムライン行の後続文字列）: end フィールドの末尾に保持
-    - インラインタグを含む cue: text をそのまま保持（タグ込みで 1 行）
-    - cue 内複数行テキストは空文字結合（WR-AD-14）
+    Conforms to the WR-AD-12(1)(2)(3) byte-structure specification
+    and all 5 VTT edge-case behaviours:
+    - Skip the blank line immediately after the WEBVTT header
+    - 0 entries ("WEBVTT\\n" only) → []
+    - NOTE/STYLE blocks: preserved as-is (not treated as cues)
+    - cue id line: preserved; only the text lines are formatting targets
+    - cue settings (trailing part of the timeline line): appended to the end field
+    - cues containing inline tags: text preserved as-is (tags included, single line)
+    - Multi-line text within a cue is joined without a delimiter (WR-AD-14)
     """
     lines = text.splitlines()
 
-    # WEBVTT ヘッダの確認と除去
+    # Verify and skip the WEBVTT header
     if not lines or not lines[0].startswith("WEBVTT"):
         return []
 
-    # ヘッダ行以降を処理
+    # Process lines after the header
     pos = 1
     total = len(lines)
 
-    # ヘッダ直後の空行をスキップ
+    # Skip blank lines immediately after the header
     while pos < total and lines[pos].strip() == "":
         pos += 1
 
@@ -154,58 +160,58 @@ def _parse_vtt(text: str) -> list[Cue]:
     cue_index = 1
 
     while pos < total:
-        # 空行をスキップ（cue 区切り）
+        # Skip blank lines (cue separator)
         if lines[pos].strip() == "":
             pos += 1
             continue
 
-        # NOTE ブロック: 次の空行または EOF まで読み飛ばす
+        # NOTE block: skip until the next blank line or EOF
         if lines[pos].startswith("NOTE"):
             pos += 1
             while pos < total and lines[pos].strip() != "":
                 pos += 1
             continue
 
-        # STYLE ブロック: 次の空行または EOF まで読み飛ばす
+        # STYLE block: skip until the next blank line or EOF
         if lines[pos].startswith("STYLE"):
             pos += 1
             while pos < total and lines[pos].strip() != "":
                 pos += 1
             continue
 
-        # cue id 行の確認（タイムライン行ではない非空行）
+        # Check for a cue id line (non-empty line that is not a timeline line)
         if not _VTT_TIMELINE_RE.match(lines[pos]):
-            # cue id 行: タイムライン前の識別子行（保持のため読み飛ばす）
+            # cue id line: identifier before the timeline — skip (preserved implicitly)
             pos += 1
             if pos >= total:
                 break
 
-        # タイムライン行
+        # Timeline line
         if pos >= total or lines[pos].strip() == "":
             pos += 1
             continue
 
         m = _VTT_TIMELINE_RE.match(lines[pos])
         if m is None:  # pragma: no cover
-            # 到達不能（正常 VTT 入力では発生しないフォールバック防御）
+            # Unreachable for well-formed VTT input (fallback defensive guard)
             pos += 1
             continue
 
         start = m.group(1)
-        # settings 部分を end に付加して保持（WR-AD-12(3)(d)）
+        # Append settings to end field for preservation (WR-AD-12(3)(d))
         end_raw = m.group(2)
         settings = m.group(3).strip()
         end = f"{end_raw} {settings}" if settings else end_raw
 
         pos += 1
 
-        # テキスト行の収集（次の空行 or EOF まで）
+        # Collect text lines until the next blank line or EOF
         text_lines: list[str] = []
         while pos < total and lines[pos].strip() != "":
             text_lines.append(lines[pos])
             pos += 1
 
-        # テキストを空文字結合（半角空白挿入なし・WR-AD-14）
+        # Join text without a delimiter (no space inserted; WR-AD-14)
         joined_text = "".join(text_lines)
 
         cues.append(Cue(index=cue_index, start=start, end=end, text=joined_text))
@@ -215,20 +221,20 @@ def _parse_vtt(text: str) -> list[Cue]:
 
 
 def parse_captions(text: str, fmt: str) -> list[Cue]:
-    """SRT または VTT テキストを Cue リストに変換する。
+    """Convert an SRT or VTT text string into a list of Cues.
 
-    fmt は "srt" または "vtt" を指定する。
-    タイムコード文字列は不変保持する（WR-AD-06）。
-    cue 内の複数行テキストは空文字結合する（WR-AD-14）。
-    不正な timecode 行は _parse_srt が ValueError を送出し、
-    wrap.py が ClipwrightError(INVALID_INPUT) に変換する（WR-AD-09）。
+    fmt must be "srt" or "vtt".
+    Timecode strings are preserved as-is (WR-AD-06).
+    Multi-line text within a cue is joined without a delimiter (WR-AD-14).
+    An invalid timecode line causes _parse_srt to raise ValueError,
+    which wrap.py converts to ClipwrightError(INVALID_INPUT) (WR-AD-09).
 
     Args:
-        text: SRT または VTT 形式の文字列。
-        fmt: "srt" または "vtt"。
+        text: SRT or VTT format string.
+        fmt: "srt" or "vtt".
 
     Returns:
-        Cue のリスト。0 件の場合は空リストを返す。
+        List of Cues. Returns an empty list when there are 0 entries.
     """
     if fmt == "srt":
         return _parse_srt(text)
@@ -237,27 +243,31 @@ def parse_captions(text: str, fmt: str) -> list[Cue]:
     else:
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message=f"未対応の字幕形式です: {fmt!r}",
-            hint="fmt には 'srt' または 'vtt' を指定してください。",
+            message=f"Unsupported subtitle format: {fmt!r}",
+            hint="Specify 'srt' or 'vtt' for fmt.",
         )
 
 
 def wrap_cue_lines(segments: list[str], max_chars: int) -> list[str]:
-    """文節トークン列を max_chars で貪欲に行へ詰めた行リストを返す。
+    """Return lines formed by greedily packing phrase-boundary tokens up to max_chars.
 
-    WR-AD-04/WR-AD-14 の仕様に準拠する:
-    - 文節を 1 行に足していき、超過直前で改行する（貪欲行詰め）。
-    - 1 文節が単独で max_chars を超える場合はその文節を 1 行に置く（途中で割らない）。
-    - 文節間の区切り文字は挿入しない（WR-AD-14(i)・結合すると原文を復元できる）。
-    - 各行の len() に '\\n' は含まれない（WR-AD-14(ii)）。
-    - 全角/半角を同じ 1 文字としてカウントする（WR-AD-14(iii)・一律 len() 判定）。
+    Conforms to WR-AD-04/WR-AD-14:
+    - Segments are appended to a line; a line break is inserted just before the
+      limit is exceeded (greedy fill).
+    - If a single segment exceeds max_chars on its own, it is placed on its own
+      line without splitting.
+    - No delimiter is inserted between segments
+      (WR-AD-14(i); joining lines restores the original text).
+    - '\\n' is not included in len() of each line (WR-AD-14(ii)).
+    - Full-width and half-width characters are each counted as 1
+      (WR-AD-14(iii); uniform len() check).
 
     Args:
-        segments: 文節トークンのリスト。
-        max_chars: 1 行の最大文字数（gt=0）。
+        segments: List of phrase-boundary tokens.
+        max_chars: Maximum number of characters per line (gt=0).
 
     Returns:
-        行リスト（各行に '\\n' を含まない）。空の segments は [] を返す。
+        List of lines (no '\\n' within any line). Returns [] for empty segments.
     """
     if not segments:
         return []
@@ -267,13 +277,13 @@ def wrap_cue_lines(segments: list[str], max_chars: int) -> list[str]:
 
     for seg in segments:
         if not current_line:
-            # 行の先頭: 文節が max_chars を超えていても 1 行に置く（途中で割らない）
+            # Start of a line: place segment even if exceeds max_chars (no splitting)
             current_line = seg
         elif len(current_line) + len(seg) <= max_chars:
-            # 追加しても max_chars 以内 → 同じ行に連結
+            # Adding the segment stays within max_chars → append to the same line
             current_line += seg
         else:
-            # 超過直前で改行
+            # Would exceed the limit → insert a line break
             lines.append(current_line)
             current_line = seg
 
@@ -284,13 +294,13 @@ def wrap_cue_lines(segments: list[str], max_chars: int) -> list[str]:
 
 
 def _serialize_srt(cues: list[Cue]) -> str:
-    """Cue リストを SRT 文字列に変換する。
+    """Convert a list of Cues into an SRT string.
 
-    WR-AD-12(1) のバイト構造仕様:
-    - 各 block = "index\\nstart --> end\\ntext\\n"
-    - cue 間は空行 1 つ（block 末尾 \\n + join の \\n）
-    - 末尾 cue の後ろは単一改行（空行なし）
-    - 0 件 → ""
+    Byte-structure specification (WR-AD-12(1)):
+    - Each block = "index\\nstart --> end\\ntext\\n"
+    - One blank line between cues (trailing \\n of the block + the join \\n)
+    - Single newline after the last cue (no trailing blank line)
+    - 0 entries → ""
     """
     if not cues:
         return ""
@@ -303,13 +313,14 @@ def _serialize_srt(cues: list[Cue]) -> str:
 
 
 def _serialize_vtt(cues: list[Cue]) -> str:
-    """Cue リストを VTT 文字列に変換する。
+    """Convert a list of Cues into a VTT string.
 
-    WR-AD-12(1) のバイト構造仕様:
+    Byte-structure specification (WR-AD-12(1)):
     - "WEBVTT\\n" + "\\n" + cue1 + "\\n" + cue2 + ...
-    - 各 cue block = "start --> end\\ntext\\n"
-    - cue 間は空行 1 つ、末尾 cue の後ろは単一改行（空行なし）
-    - 0 件 → "WEBVTT\\n"
+    - Each cue block = "start --> end\\ntext\\n"
+    - One blank line between cues; single newline after the last cue
+      (no trailing blank line)
+    - 0 entries → "WEBVTT\\n"
     """
     if not cues:
         return "WEBVTT\n"
@@ -322,17 +333,17 @@ def _serialize_vtt(cues: list[Cue]) -> str:
 
 
 def serialize_captions(cues: list[Cue], fmt: str) -> str:
-    """Cue リストを SRT または VTT 文字列に変換する。
+    """Convert a list of Cues into an SRT or VTT string.
 
-    タイムコード文字列は不変で書き戻す（WR-AD-06）。
-    0 件時: SRT は "" / VTT は "WEBVTT\\n"（往復同一・WR-AD-12(2)）。
+    Timecode strings are written back unchanged (WR-AD-06).
+    For 0 entries: SRT → "" / VTT → "WEBVTT\\n" (round-trip identity; WR-AD-12(2)).
 
     Args:
-        cues: Cue のリスト。
-        fmt: "srt" または "vtt"。
+        cues: List of Cues.
+        fmt: "srt" or "vtt".
 
     Returns:
-        SRT または VTT 形式の文字列。
+        SRT or VTT format string.
     """
     if fmt == "srt":
         return _serialize_srt(cues)
@@ -341,27 +352,27 @@ def serialize_captions(cues: list[Cue], fmt: str) -> str:
     else:
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message=f"未対応の字幕形式です: {fmt!r}",
-            hint="fmt には 'srt' または 'vtt' を指定してください。",
+            message=f"Unsupported subtitle format: {fmt!r}",
+            hint="Specify 'srt' or 'vtt' for fmt.",
         )
 
 
 def check_overflow(lines: list[str], max_chars: int, max_lines: int) -> _OverflowResult:
-    """行リストの overflow（行数超過・行幅超過）を判定する。
+    """Detect overflow (line-count excess and line-width excess) in a list of lines.
 
-    WR-AD-15(1) の overflow 判定仕様:
-    - (a) 行数 > max_lines → line_count_overflow: True
-    - (b) いずれかの行の len() > max_chars → line_width_overflow: True
-    単一巨大文節（行数1・行幅超過）も (b) の対象になる。
-    lines は変更しない（情報欠落回避）。
+    Overflow detection specification (WR-AD-15(1)):
+    - (a) len(lines) > max_lines → line_count_overflow: True
+    - (b) any line's len() > max_chars → line_width_overflow: True
+    A single oversized segment (1 line, width excess) is also covered by (b).
+    lines is not modified (avoids information loss).
 
     Args:
-        lines: 判定対象の行リスト（各行に '\\n' を含まない想定）。
-        max_chars: 1 行の最大文字数。
-        max_lines: 最大行数。
+        lines: List of lines to inspect (each line must not contain '\\n').
+        max_chars: Maximum number of characters per line.
+        max_lines: Maximum number of lines.
 
     Returns:
-        line_count_overflow と line_width_overflow を持つ dict。
+        Dict with line_count_overflow and line_width_overflow keys.
     """
     line_count_overflow = len(lines) > max_lines
     line_width_overflow = any(len(line) > max_chars for line in lines)

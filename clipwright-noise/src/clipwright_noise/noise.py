@@ -1,18 +1,19 @@
-"""noise.py — clipwright-noise オーケストレーション層（設計 §1.1）。
+"""noise.py — clipwright-noise orchestration layer (design §1.1).
 
-フロー:
-  1. 出力検証（拡張子・親dir・output==media・output==timeline・同一dir）
-  2. inspect_media: 映像＋音声必須チェック（ADR-N8）
-  3. timeline 解決（None → 新規生成 / path → load + 検証）
-  4. measure_noise: astats でノイズフロア測定 → params 算出
-  5. denoise 指示を timeline-level metadata に部分更新
-  6. save_timeline → ok_result 返却
+Flow:
+  1. Output validation (extension, parent dir, output==media,
+     output==timeline, same dir)
+  2. inspect_media: video + audio required check (ADR-N8)
+  3. Timeline resolution (None → new / path → load + validate)
+  4. measure_noise: measure noise floor via astats → calculate params
+  5. Partial update of denoise directive into timeline-level metadata
+  6. save_timeline → return ok_result
 
-設計判断:
-- FILE_NOT_FOUND / SUBPROCESS_FAILED の message は basename のみ（DC-GP-005）。
-- output は media と同一ディレクトリ（MUST・DC-AS-002）。
-- source==media の比較は Path.resolve() で正規化（DC-AS-003 / B-4）。
-- timeline 検証: Video kind トラックがちょうど1本（B-5）。
+Design decisions:
+- FILE_NOT_FOUND / SUBPROCESS_FAILED messages use basename only (DC-GP-005).
+- output must be in the same directory as media (MUST; DC-AS-002).
+- source==media comparison is normalized with Path.resolve() (DC-AS-003 / B-4).
+- Timeline validation: exactly one Video-kind track (B-5).
 """
 
 from __future__ import annotations
@@ -44,16 +45,16 @@ def detect_noise(
     options: DetectNoiseOptions,
     timeline: str | None,
 ) -> dict[str, Any]:
-    """ノイズ検出のパブリック API。ClipwrightError を ok=False に変換して返す。
+    """Public API for noise detection. Converts ClipwrightError to ok=False.
 
     Args:
-        media: 入力メディアファイルパス（映像＋音声必須）。
-        output: 出力 OTIO タイムラインファイルパス（.otio・media と同一dir）。
-        options: DetectNoiseOptions。
-        timeline: 既存タイムラインパス（None=新規生成）。
+        media: Input media file path (video + audio required).
+        output: Output OTIO timeline file path (.otio; same directory as media).
+        options: DetectNoiseOptions.
+        timeline: Existing timeline path (None = create new).
 
     Returns:
-        ok_result または error_result のエンベロープ dict。
+        ok_result or error_result envelope dict.
     """
     try:
         return _detect_noise_inner(media, output, options, timeline)
@@ -67,43 +68,43 @@ def _detect_noise_inner(
     options: DetectNoiseOptions,
     timeline: str | None,
 ) -> dict[str, Any]:
-    """detect_noise の内部実装。ClipwrightError をそのまま送出する。"""
+    """Internal implementation of detect_noise. Raises ClipwrightError directly."""
     media_path = Path(media)
     output_path = Path(output)
 
-    # --- 1. 出力検証 ---
+    # --- 1. Output validation ---
 
     if output_path.suffix.lower() != ".otio":
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message=f"未対応の出力拡張子です: {output_path.suffix!r}",
-            hint="出力ファイルの拡張子を .otio にしてください。",
+            message=f"Unsupported output extension: {output_path.suffix!r}",
+            hint="Set the output file extension to .otio.",
         )
 
     if not output_path.parent.exists():
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message="出力先ディレクトリが存在しません。",
-            hint="出力先ディレクトリを先に作成してから再実行してください。",
+            message="Output directory does not exist.",
+            hint="Create the output directory first, then re-run.",
         )
 
-    # output == media 禁止（非破壊・M5）
+    # Prohibit output == media (non-destructive; M5)
     if _same_path(output_path, media_path):
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message="出力パスと入力メディアパスが同一です。",
-            hint="出力ファイルパスを入力メディアとは別のパスに変更してください。",
+            message="Output path and input media path are identical.",
+            hint="Change the output file path to differ from the input media.",
         )
 
-    # output == timeline 禁止（非破壊）
+    # Prohibit output == timeline (non-destructive)
     if timeline is not None and _same_path(output_path, Path(timeline)):
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message="出力パスと入力タイムラインパスが同一です。",
-            hint="出力ファイルパスを入力タイムラインとは別のパスに変更してください。",
+            message="Output path and input timeline path are identical.",
+            hint="Change the output file path to differ from the input timeline.",
         )
 
-    # output は media と同一ディレクトリ（MUST・DC-AS-002）
+    # output must be in same directory as media (MUST; DC-AS-002)
     try:
         media_resolved_dir = media_path.resolve().parent
         output_resolved_dir = output_path.resolve().parent
@@ -114,17 +115,19 @@ def _detect_noise_inner(
     if media_resolved_dir != output_resolved_dir:
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message="出力ファイルはメディアファイルと同一ディレクトリに配置する必要があります。",
-            hint="output パスをメディアファイルと同じディレクトリに変更してください。",
+            message=(
+                "The output file must be in the same directory as the media file."
+            ),
+            hint="Change the output path to the same directory as the media file.",
         )
 
-    # --- 2. inspect_media: 映像＋音声必須（ADR-N8 / DC-AS-003）---
+    # --- 2. inspect_media: video + audio required (ADR-N8 / DC-AS-003) ---
 
     if not media_path.exists():
         raise ClipwrightError(
             code=ErrorCode.FILE_NOT_FOUND,
-            message=f"ファイルが見つかりません: {media_path.name}",
-            hint="入力メディアファイルのパスが正しいか確認してください。",
+            message=f"File not found: {media_path.name}",
+            hint="Check that the input media file path is correct.",
         )
 
     media_info = inspect_media(media)
@@ -135,26 +138,26 @@ def _detect_noise_inner(
     if not has_video:
         raise ClipwrightError(
             code=ErrorCode.UNSUPPORTED_OPERATION,
-            message=f"映像ストリームが見つかりません: {media_path.name}",
-            hint="映像と音声の両方を含むメディアファイルを入力してください。",
+            message=f"No video stream found: {media_path.name}",
+            hint="Provide a media file that contains both video and audio.",
         )
 
     if not has_audio:
         raise ClipwrightError(
             code=ErrorCode.UNSUPPORTED_OPERATION,
-            message=f"音声ストリームが見つかりません: {media_path.name}",
-            hint="映像と音声の両方を含むメディアファイルを入力してください。",
+            message=f"No audio stream found: {media_path.name}",
+            hint="Provide a media file that contains both video and audio.",
         )
 
-    # duration の取得（_add_full_clip に渡す全長 clip の総尺（秒））
+    # Obtain duration (total duration in seconds passed to _add_full_clip)
     duration_sec: float = 0.0
     if media_info.duration is not None:
         duration_sec = media_info.duration.value / media_info.duration.rate
 
-    # --- 3. timeline 解決 ---
+    # --- 3. Timeline resolution ---
 
     if timeline is None:
-        # 新規生成: V1 に全長 keep clip を1本追加
+        # New timeline: append one full-length keep clip to V1
         tl = new_timeline(media_path.name)
         _add_full_clip(tl, media_path, duration_sec, media_info.duration)
     else:
@@ -162,7 +165,7 @@ def _detect_noise_inner(
             timeline, media_path, duration_sec, media_info.duration
         )
 
-    # --- 4. ノイズ解析 ---
+    # --- 4. Noise analysis ---
 
     analysis = measure_noise(
         media_path=media_path,
@@ -174,7 +177,7 @@ def _detect_noise_inner(
     measured: float | None = analysis["measured_noise_floor_db"]
     warnings: list[str] = list(analysis["warnings"])
 
-    # --- 5. denoise 指示を timeline-level metadata に部分更新 ---
+    # --- 5. Partial update of denoise directive into timeline-level metadata ---
 
     directive = DenoiseDirective(
         tool="clipwright-noise",
@@ -189,12 +192,12 @@ def _detect_noise_inner(
     existing_meta["denoise"] = directive.model_dump()
     set_clipwright_metadata(tl, existing_meta)
 
-    # deepfilternet 選択時は render 未対応 warning を追加（DC-GP-003）
+    # Add render-not-supported warning when deepfilternet is selected (DC-GP-003)
     if options.backend == "deepfilternet":
         warnings.append(
-            "backend=deepfilternet が選択されました。"
-            "render 適用は未対応です（初版 afftdn のみ）。"
-            " afftdn で再検出するか将来版をお待ちください。"
+            "backend=deepfilternet was selected."
+            " Render application is not supported (first release: afftdn only)."
+            " Re-detect with afftdn or wait for a future release."
         )
 
     # --- 6. save_timeline → ok_result ---
@@ -202,13 +205,13 @@ def _detect_noise_inner(
     save_timeline(tl, str(output_path))
 
     summary = (
-        f"{media_path.name} のノイズ解析が完了しました。"
-        f" backend={options.backend}, strength={options.strength}。"
-        f" denoise 指示を {output_path.name} に書き込みました。"
+        f"Noise analysis of {media_path.name} completed."
+        f" backend={options.backend}, strength={options.strength}."
+        f" Denoise directive written to {output_path.name}."
         + (
-            f" 測定ノイズフロア: {measured:.1f} dB。"
+            f" Measured noise floor: {measured:.1f} dB."
             if measured is not None
-            else " ノイズフロア測定不能のため既定値を使用しました。"
+            else " Noise floor measurement failed; default value used."
         )
     )
 
@@ -233,16 +236,17 @@ def _add_full_clip(
     duration_sec: float,
     duration_rt: RationalTimeModel | None,
 ) -> None:
-    """timeline の V1/A1 トラックに全長 keep clip を1本追加する（新規生成時）。
+    """Append one full-length keep clip to the V1/A1 tracks of the timeline.
 
-    target_url には media_path.resolve() の絶対パスを書く（DC-AS-002）。
+    Used for new timelines.
+    target_url is the absolute path of media_path.resolve() (DC-AS-002).
     """
     try:
         target_url = str(media_path.resolve())
     except OSError:
         target_url = str(media_path.absolute())
 
-    # rate の決定: duration が取れていれば使う、なければ 1000.0
+    # Determine rate: use the measured duration rate if available, otherwise 1000.0
     rate = duration_rt.rate if duration_rt is not None else 1000.0
 
     source_range = otio.opentime.TimeRange(
@@ -251,7 +255,7 @@ def _add_full_clip(
     )
     ref = otio.schema.ExternalReference(target_url=target_url)
 
-    # V1（index 0）と A1（index 1）に同じ clip を追加
+    # Append the same clip to V1 (index 0) and A1 (index 1)
     for track in tl.tracks:
         clip = otio.schema.Clip(
             name=media_path.name,
@@ -267,42 +271,45 @@ def _load_and_validate_timeline(
     duration_sec: float,
     duration_rt: RationalTimeModel | None,
 ) -> otio.schema.Timeline:
-    """既存 timeline をロードして整合性を検証する（DC-AM-003 / DC-AM-004 / B-4 / B-5）。
+    """Load an existing timeline and validate its consistency.
 
-    検証内容:
-    - V1 clip の target_url が media_path と同一（B-4: パス正規化比較）
-    - 単一 source（全 clip が同一 target_url）
-    - Video kind トラックがちょうど1本（B-5）
+    Validation references: DC-AM-003 / DC-AM-004 / B-4 / B-5.
 
-    V1 が空の場合は全長 keep clip を追加して続行する（render が INVALID_INPUT に
-    ならない renderable な timeline にするため・新規生成相当の扱い）。
+    Validation:
+    - V1 clip target_url matches media_path (B-4: normalized path comparison)
+    - Single source (all clips share the same target_url)
+    - Exactly one Video-kind track (B-5)
+
+    If V1 is empty, a full-length keep clip is appended and processing continues
+    (to make the timeline renderable, equivalent to creating a new one;
+    prevents render from rejecting with INVALID_INPUT due to zero clips).
 
     Raises:
-        ClipwrightError: INVALID_INPUT / OTIO_ERROR。
+        ClipwrightError: INVALID_INPUT / OTIO_ERROR.
     """
     tl = load_timeline(timeline_path)
 
-    # --- Video kind トラックがちょうど1本（B-5）---
+    # --- Exactly one Video-kind track (B-5) ---
     video_tracks = [t for t in tl.tracks if t.kind == otio.schema.TrackKind.Video]
     if len(video_tracks) != 1:
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
             message=(
-                f"タイムラインの Video トラック数が不正です: {len(video_tracks)} 本"
-                "（1本のみ対応）"
+                f"Invalid number of Video tracks in timeline: {len(video_tracks)}"
+                " (only 1 is supported)"
             ),
-            hint="Video トラックが1本の timeline を指定してください。",
+            hint="Specify a timeline with exactly one Video track.",
         )
 
     v1 = video_tracks[0]
 
-    # --- 全 clip の target_url を収集して単一 source 検証（DC-AM-004）---
+    # --- Collect all clip target_urls and validate single source (DC-AM-004) ---
     clips = [item for item in v1 if isinstance(item, otio.schema.Clip)]
 
     if not clips:
-        # V1 が空の場合は全長 keep clip を追加して続行する（新規生成相当）。
-        # render の resolve_kept_ranges が「Clip が0件」を INVALID_INPUT で弾くため、
-        # クリップを追加しておくことで renderable な timeline にする。
+        # V1 is empty: append a full-length keep clip and continue
+        # (equivalent to creating a new timeline).
+        # Prevents render's resolve_kept_ranges from rejecting due to zero clips.
         _add_full_clip(tl, media_path, duration_sec, duration_rt)
         return tl
 
@@ -315,18 +322,18 @@ def _load_and_validate_timeline(
     if len(urls) > 1:
         raise ClipwrightError(
             code=ErrorCode.UNSUPPORTED_OPERATION,
-            message="タイムラインに複数ソースの clip が含まれています。",
-            hint="単一ソース（同一メディアファイル）の timeline を指定してください。",
+            message="The timeline contains clips from multiple sources.",
+            hint="Specify a timeline with a single source (same media file).",
         )
 
-    # --- target_url == media_path 検証（B-4: resolve() 正規化比較）---
+    # --- Validate target_url == media_path (B-4: resolve() normalized comparison) ---
     if urls:
         target_url = next(iter(urls))
         try:
             tl_source = Path(target_url).resolve()
             media_resolved = media_path.resolve()
         except OSError:
-            # OSError 時は best-effort: absolute() で比較
+            # On OSError, fall back to absolute() comparison (best-effort)
             tl_source = Path(target_url).absolute()
             media_resolved = media_path.absolute()
 
@@ -334,12 +341,12 @@ def _load_and_validate_timeline(
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
                 message=(
-                    f"タイムラインのソースファイルと入力メディアが一致しません。"
+                    "Timeline source file does not match the input media."
                     f" timeline source: {Path(target_url).name}"
                     f" / media: {media_path.name}"
                 ),
                 hint=(
-                    "timeline を生成したときと同じメディアファイルを指定してください。"
+                    "Specify the same media file used when the timeline was generated."
                 ),
             )
 
@@ -347,7 +354,10 @@ def _load_and_validate_timeline(
 
 
 def _same_path(a: Path, b: Path) -> bool:
-    """2 パスが同一実体を指すかを判定する（resolve 失敗時は文字列比較に退避）。"""
+    """Return True if two paths refer to the same entity.
+
+    Falls back to string comparison on OSError.
+    """
     try:
         return a.resolve() == b.resolve()
     except OSError:

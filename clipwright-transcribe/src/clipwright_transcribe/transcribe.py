@@ -1,21 +1,24 @@
-"""transcribe.py — clipwright-transcribe オーケストレーション層（detect.py 同型）。
+"""transcribe.py — clipwright-transcribe orchestration layer (mirrors detect.py).
 
-入力検証 → inspect_media → モデル解決 → ffmpeg WAV 抽出 → whisper-cli 実行 →
-captions で SRT/VTT 生成 → OTIO 構築・保存 → エンベロープ返却 の一連フロー。
+Flow: input validation -> inspect_media -> model resolution -> ffmpeg WAV extraction ->
+whisper-cli execution -> SRT/VTT generation via captions -> OTIO construction/save ->
+envelope return.
 
-設計判断:
-- _run_whisper() が ffmpeg WAV 抽出と whisper-cli 起動・JSON 読み込みをカプセル化する
-  単一アダプタ関数（TR-AD-01）。将来バックエンド差し替え（faster-whisper 等）は
-  この関数のみ置換すればよい。
-- whisper バイナリ名・言語自動検出フラグはモジュール定数に隔離する
-  （spike-whisper 確定値・e2e 照合で差し替え可能・DC-AS-003/DC-AM-002）。
-- モデル解決は resolve_tool を使わず os.path.isfile 検査（モデルは実行ファイルでない・
-  DC-AS-003）。options.model_path → env CLIPWRIGHT_WHISPER_MODEL の順。
-- marker の marked_range は whisper の秒値（メディア座標）をそのまま使う。
-  全尺1clip かつ source_range.start_time=0 のため座標が一致する（DC-AM-001）。
-- SRT/VTT のタイムコードと marker 秒値は同一秒値由来（DC-AS-005）。
-- エラーは basename のみ・whisper/ffmpeg stderr 生断片はサニタイズ汎用文言に差し替え
-  （TR-AD-09・VAD M-1 知見踏襲）。
+Design decisions:
+- _run_whisper() is the single adapter function (TR-AD-01) that encapsulates ffmpeg WAV
+  extraction, whisper-cli invocation, and JSON loading. To swap backends
+  (e.g. faster-whisper), replace only this function.
+- The whisper binary name and language auto-detect flag are isolated as module constants
+  (spike-whisper confirmed values, replaceable via e2e; DC-AS-003/DC-AM-002).
+- Model resolution uses os.path.isfile rather than resolve_tool (the model is not an
+  executable; DC-AS-003). Resolution order: options.model_path -> env
+  CLIPWRIGHT_WHISPER_MODEL.
+- marker.marked_range uses whisper second values (media coordinates) directly.
+  Coordinates match because the clip is full-length with source_range.start_time=0
+  (DC-AM-001).
+- SRT/VTT timecodes and marker second values share the same origin (DC-AS-005).
+- Error messages expose only basename; raw whisper/ffmpeg stderr fragments are replaced
+  with a sanitised generic message (TR-AD-09, following VAD M-1 precedent).
 """
 
 from __future__ import annotations
@@ -38,34 +41,39 @@ import clipwright_transcribe
 from clipwright_transcribe.captions import Segment, normalize_segments, to_srt, to_vtt
 from clipwright_transcribe.schemas import TranscribeOptions
 
-# whisper.cpp の実行ファイル名（spike-whisper 確定値・最新版 whisper-cli・旧版 main）。
-# env CLIPWRIGHT_WHISPER が指す実体名と一致させる（DC-AS-003-R）。e2e で照合する。
+# whisper.cpp executable name (spike-whisper confirmed; latest = whisper-cli,
+# legacy = main).
+# Must match the binary name pointed to by env CLIPWRIGHT_WHISPER (DC-AS-003-R).
+# Verified by e2e test.
 WHISPER_BINARY_NAME = "whisper-cli"
-# 言語自動検出フラグ（spike 確定値・e2e 照合で差替可能（リストのまま）・DC-AM-002）
+# Language auto-detect flag (spike confirmed; replaceable via e2e as a list; DC-AM-002)
 LANG_AUTO_FLAG: list[str] = ["-l", "auto"]
-# marker name の最大表示文字数（超過分は省略・本文は metadata.text に全文・DC-GP-003）。
+# Maximum display length for marker name (excess is truncated; full text kept in
+# metadata.text; DC-GP-003).
 _MARKER_NAME_MAX = 40
-# SUBPROCESS_FAILED/TIMEOUT 時のサニタイズ済み文言（stderr パス漏洩防止・TR-AD-09）。
-_SUBPROCESS_SAFE_MESSAGE = "内部サブプロセスが失敗しました"
-# whisper モデル未解決時の hint（アクション可能・TR-AD-05）。
+# Sanitised message for SUBPROCESS_FAILED/TIMEOUT (prevents stderr/path leakage;
+# TR-AD-09).
+_SUBPROCESS_SAFE_MESSAGE = "internal subprocess failed"
+# Hint shown when the whisper model cannot be resolved (actionable; TR-AD-05).
 _MODEL_MISSING_HINT = (
-    "ggml モデルファイルのパスを options.model_path に指定するか、"
-    "環境変数 CLIPWRIGHT_WHISPER_MODEL に設定してください。"
-    "モデルは whisper.cpp の配布元から入手できます（例: ggml-base.bin）。"
+    "Specify the ggml model file path via options.model_path or "
+    "set the CLIPWRIGHT_WHISPER_MODEL environment variable. "
+    "Download the model from the whisper.cpp distribution (e.g. ggml-base.bin)."
 )
 
 
 def _fmt_sec(sec: float) -> str:
-    """秒を「分秒」の人間可読表現に変換する（summary 生成用）。"""
+    """Convert seconds to a human-readable "Xm Ys" string (used in summary)."""
     m = int(sec) // 60
     s = sec - m * 60
-    return f"{m}分{s:.1f}秒" if m > 0 else f"{s:.1f}秒"
+    return f"{m}m{s:.1f}s" if m > 0 else f"{s:.1f}s"
 
 
 def _truncate_name(text: str) -> str:
-    """marker name 用にテキストを先頭 _MARKER_NAME_MAX 文字へ短縮する（DC-GP-003）。
+    """Truncate text to the first _MARKER_NAME_MAX characters for use as a marker name
+    (DC-GP-003).
 
-    超過時は末尾に省略記号 "…" を付ける。本文全文は metadata.text に保持する。
+    Appends an ellipsis "…" when truncated. The full text is preserved in metadata.text.
     """
     if len(text) <= _MARKER_NAME_MAX:
         return text
@@ -73,36 +81,36 @@ def _truncate_name(text: str) -> str:
 
 
 def _sanitize_subprocess_error(exc: ClipwrightError) -> ClipwrightError:
-    """run() 由来の SUBPROCESS_FAILED/TIMEOUT を汎用文言に差し替える（TR-AD-09）。
+    """Replace SUBPROCESS_FAILED/TIMEOUT message with a generic string (TR-AD-09).
 
-    run() の message には stderr 断片・実行ファイルパスが含まれるため、
-    MCP レスポンスへ漏洩させないよう固定文言に置換する。hint は維持する。
-    その他のコードはそのまま返す。
+    run() messages may contain stderr fragments and executable paths; this function
+    substitutes a fixed string to prevent leakage into MCP responses. hint is
+    preserved. Other error codes are returned unchanged.
     """
     if exc.code in (ErrorCode.SUBPROCESS_FAILED, ErrorCode.SUBPROCESS_TIMEOUT):
         return ClipwrightError(
             code=exc.code,
-            message=f"{_SUBPROCESS_SAFE_MESSAGE}（code: {exc.code}）",
+            message=f"{_SUBPROCESS_SAFE_MESSAGE} (code: {exc.code})",
             hint=exc.hint,
         )
     return exc
 
 
 def _resolve_model_path(options: TranscribeOptions) -> str:
-    """whisper モデルファイルのパスを解決する（DC-AS-003）。
+    """Resolve the whisper model file path (DC-AS-003).
 
-    解決順: options.model_path → env CLIPWRIGHT_WHISPER_MODEL。
-    resolve_tool は使わず os.path.isfile で検査する（モデルは実行ファイルでない）。
-    どちらも存在しなければ DEPENDENCY_MISSING を送出する。
+    Resolution order: options.model_path -> env CLIPWRIGHT_WHISPER_MODEL.
+    Uses os.path.isfile rather than resolve_tool (the model is not an executable).
+    Raises DEPENDENCY_MISSING when neither candidate exists.
 
     Args:
-        options: TranscribeOptions（model_path を参照）。
+        options: TranscribeOptions (model_path field is inspected).
 
     Returns:
-        存在するモデルファイルの絶対/相対パス。
+        Absolute or relative path to an existing model file.
 
     Raises:
-        ClipwrightError: モデルが見つからない場合（DEPENDENCY_MISSING）。
+        ClipwrightError: When the model file cannot be found (DEPENDENCY_MISSING).
     """
     candidates: list[str] = []
     if options.model_path is not None:
@@ -117,16 +125,16 @@ def _resolve_model_path(options: TranscribeOptions) -> str:
 
     raise ClipwrightError(
         code=ErrorCode.DEPENDENCY_MISSING,
-        message="whisper のモデルファイルが見つかりません",
+        message="whisper model file not found",
         hint=_MODEL_MISSING_HINT,
     )
 
 
 def _extract_wav(ffmpeg: str, media: str, output_path: str, timeout: float) -> None:
-    """ffmpeg で 16kHz mono s16le WAV を一時ファイルに書き出す（TR-AD-01）。
+    """Extract a 16 kHz mono s16le WAV to a temporary file using ffmpeg (TR-AD-01).
 
-    whisper.cpp は 16kHz mono WAV を要求するため変換する。
-    shell=False・引数配列でのみ実行する（サブプロセス規律）。
+    whisper.cpp requires 16 kHz mono WAV; this conversion satisfies that requirement.
+    Executed with shell=False and an argument list (subprocess discipline).
     """
     cmd = [
         ffmpeg,
@@ -154,10 +162,11 @@ def _build_whisper_cmd(
     prefix: str,
     options: TranscribeOptions,
 ) -> list[str]:
-    """whisper-cli の引数配列を組み立てる（TR-AD-01・DC-AM-002/003）。
+    """Build the whisper-cli argument list (TR-AD-01, DC-AM-002/003).
 
-    `-oj` で JSON を `<prefix>.json` に出力させる。言語は None で自動検出
-    （LANG_AUTO_FLAG）、指定時は `-l <code>`。initial_prompt は `--prompt`。
+    `-oj` writes JSON to `<prefix>.json`. Language None uses auto-detection
+    (LANG_AUTO_FLAG); an explicit code uses `-l <code>`. initial_prompt is passed
+    via `--prompt`.
     """
     cmd = [whisper, "-m", model_path, "-f", wav_path, "-oj", "-of", prefix]
     if options.language is None:
@@ -175,28 +184,32 @@ def _run_whisper(
     total_duration_sec: float,
     model_path: str,
 ) -> tuple[list[Segment], str | None]:
-    """ffmpeg WAV 抽出 → whisper-cli 実行 → JSON 正規化を行う単一アダプタ（TR-AD-01）。
+    """Single adapter: ffmpeg WAV extraction -> whisper-cli -> JSON normalisation
+    (TR-AD-01).
 
-    将来バックエンドを差し替える際はこの関数のみ置き換えればよい。
-    一時ディレクトリに WAV と JSON を出力させ、元素材ディレクトリを汚さない。
+    Replace only this function to swap the backend (e.g. faster-whisper).
+    WAV and JSON are written to a temporary directory so the source media directory
+    is not polluted.
 
     Args:
-        media: 入力メディアファイルの絶対パス。
-        options: TranscribeOptions。
-        total_duration_sec: 素材の総尺（秒）。timeout 算出に使用。
-        model_path: 解決済みモデルファイルパス。
+        media: Absolute path to the input media file.
+        options: TranscribeOptions.
+        total_duration_sec: Total duration of the media (seconds); used to compute
+            timeouts.
+        model_path: Resolved model file path.
 
     Returns:
-        (正規化済み Segment リスト, 検出言語コード or None) のタプル。
+        Tuple of (normalised Segment list, detected language code or None).
 
     Raises:
-        ClipwrightError: 依存不在（DEPENDENCY_MISSING）・サブプロセス失敗/timeout
-            （サニタイズ済み）・JSON パース失敗（SUBPROCESS_FAILED）。
+        ClipwrightError: DEPENDENCY_MISSING (missing tool), sanitised
+            SUBPROCESS_FAILED/SUBPROCESS_TIMEOUT, or SUBPROCESS_FAILED on JSON parse
+            failure.
     """
     ffmpeg = resolve_tool("ffmpeg", "CLIPWRIGHT_FFMPEG")
     whisper = resolve_tool(WHISPER_BINARY_NAME, "CLIPWRIGHT_WHISPER")
 
-    # timeout は total 連動。whisper は処理が重いため係数を大きくする（TR-AD-10）
+    # Timeouts scale with duration; whisper is computationally expensive (TR-AD-10).
     ffmpeg_timeout = float(max(60, math.ceil(total_duration_sec * 2)))
     whisper_timeout = float(max(300, math.ceil(total_duration_sec * 30)))
 
@@ -215,7 +228,7 @@ def _run_whisper(
         except ClipwrightError as exc:
             raise _sanitize_subprocess_error(exc) from exc
 
-        # whisper `-oj -of <prefix>` は <prefix>.json を生成する（DC-AM-003）
+        # whisper `-oj -of <prefix>` produces <prefix>.json (DC-AM-003).
         json_path = prefix + ".json"
         try:
             with open(json_path, encoding="utf-8") as f:
@@ -223,15 +236,15 @@ def _run_whisper(
         except (OSError, json.JSONDecodeError):
             raise ClipwrightError(
                 code=ErrorCode.SUBPROCESS_FAILED,
-                message="whisper の出力 JSON を読み込めませんでした",
+                message="failed to read whisper output JSON",
                 hint=(
-                    "whisper.cpp のバージョン・引数を確認してください。"
-                    "再現条件を添えて報告してください。"
+                    "Check the whisper.cpp version and arguments. "
+                    "Please report with reproduction steps."
                 ),
             ) from None
 
-        # JSON 読み込み・正規化を with ブロック内で完結させ、一時 dir が残存している
-        # 間にのみデータを参照することを明示する（CR M-2）
+        # Complete JSON loading and normalisation inside the with block so that the
+        # temporary directory still exists while data is accessed (CR M-2).
         segments = normalize_segments(whisper_json)
         result = whisper_json.get("result")
         language = result.get("language") if isinstance(result, dict) else None
@@ -244,18 +257,18 @@ def transcribe_media(
     output: str,
     options: TranscribeOptions,
 ) -> dict[str, Any]:
-    """音声を文字起こしして SRT/VTT 字幕と OTIO タイムラインを生成する（TR-AD-04）。
+    """Transcribe audio and produce SRT/VTT captions and an OTIO timeline (TR-AD-04).
 
-    非破壊: 入力メディアファイルは一切書き換えない。
-    出力は新規生成した timeline.otio / SRT / VTT のパスを artifacts に返す。
+    Non-destructive: the input media file is never modified.
+    Outputs are newly created files; their paths are returned in artifacts.
 
     Args:
-        media: 入力メディアファイルパス（音声必須・映像任意）。
-        output: 出力 timeline.otio ファイルパス（media と同一ディレクトリ）。
-        options: TranscribeOptions。
+        media: Input media file path (audio required; video optional).
+        output: Output timeline.otio file path (must be in the same directory as media).
+        options: TranscribeOptions.
 
     Returns:
-        ok_result または error_result のエンベロープ dict。
+        ok_result or error_result envelope dict.
     """
     try:
         return _transcribe_inner(media, output, options)
@@ -268,63 +281,64 @@ def _transcribe_inner(
     output: str,
     options: TranscribeOptions,
 ) -> dict[str, Any]:
-    """transcribe_media の内部実装。ClipwrightError をそのまま送出する。"""
+    """Internal implementation of transcribe_media. Raises ClipwrightError directly."""
     output_path = Path(output)
     media_path = Path(media)
 
-    # --- 1. 出力検証 ---
+    # --- 1. Output validation ---
 
     if output_path.suffix.lower() != ".otio":
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
             message=(
-                f"出力ファイルの拡張子が不正です: {output_path.suffix!r}。"
-                ".otio のみ許可されています。"
+                f"Invalid output file extension: {output_path.suffix!r}. "
+                "Only .otio is allowed."
             ),
-            hint="出力ファイルパスの拡張子を .otio にしてください。",
+            hint="Change the output file path extension to .otio.",
         )
 
     if not output_path.parent.exists():
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
             message=(
-                "出力先ディレクトリが存在しません。"
-                "指定 output の親ディレクトリを確認してください。"
+                "Output directory does not exist. "
+                "Check the parent directory of the specified output path."
             ),
-            hint="出力先ディレクトリを先に作成してから再実行してください。",
+            hint="Create the output directory before running again.",
         )
 
     try:
         if output_path.resolve() == media_path.resolve():
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
-                message="出力パスと入力メディアパスが同一です。",
-                hint="出力ファイルパスを入力メディアとは別のパスに変更してください。",
+                message="Output path and input media path are identical.",
+                hint="Change the output file path to differ from the input media.",
             )
     except OSError as exc:
         if str(output_path) == str(media_path):
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
-                message="出力パスと入力メディアパスが同一です。",
-                hint="出力ファイルパスを入力メディアとは別のパスに変更してください。",
+                message="Output path and input media path are identical.",
+                hint="Change the output file path to differ from the input media.",
             ) from exc
 
-    # --- 2. inspect_media → ストリーム・duration 確認 ---
+    # --- 2. inspect_media -> stream and duration check ---
 
-    # FILE_NOT_FOUND の message は basename のみに差し替える（TR-AD-09・フルパス非露出）
+    # Replace FILE_NOT_FOUND message with basename only (TR-AD-09; no full path
+    # exposure).
     try:
         media_info = inspect_media(media)
     except ClipwrightError as exc:
         if exc.code == ErrorCode.FILE_NOT_FOUND:
             raise ClipwrightError(
                 code=ErrorCode.FILE_NOT_FOUND,
-                message=f"ファイルが見つかりません: {media_path.name}",
+                message=f"File not found: {media_path.name}",
                 hint=exc.hint,
             ) from exc
         raise
 
-    # output が media と同一ディレクトリ配下にあることを検証（TR-AD-08）。
-    # ClipwrightError はこのブロック外で伝播する。OSError は best-effort でスキップ
+    # Verify that output is in the same directory as media (TR-AD-08).
+    # ClipwrightError propagates; OSError is skipped best-effort.
     try:
         media_dir = media_path.resolve().parent
         output_dir = output_path.parent.resolve()
@@ -332,38 +346,38 @@ def _transcribe_inner(
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
                 message=(
-                    f"出力 timeline は入力メディアと同じディレクトリに配置してください"
-                    f"（入力: {media_path.name}）。"
+                    "Output timeline must be placed in the same directory as "
+                    f"the input media (input: {media_path.name})."
                 ),
                 hint=(
-                    "output のパスを media ファイルと同じディレクトリ内に"
-                    "変更してください。"
+                    "Change the output path to a location inside the same directory as "
+                    "the media file."
                 ),
             )
     except OSError:
-        # resolve 失敗（ネットワークパス等）は best-effort でスキップ
+        # resolve() may fail for network paths; skip best-effort.
         pass
 
-    # 音声ストリーム確認（TR-AD-03）。映像は任意（音声のみ素材を受ける）
+    # Audio stream check (TR-AD-03). Video is optional (audio-only sources accepted).
     has_audio = any(s.codec_type == "audio" for s in media_info.streams)
     if not has_audio:
         raise ClipwrightError(
             code=ErrorCode.UNSUPPORTED_OPERATION,
-            message=f"音声ストリームが見つかりません: {media_path.name}",
+            message=f"No audio stream found: {media_path.name}",
             hint=(
-                "文字起こしには音声ストリームが必要です。"
-                "音声を含むメディアファイルを指定してください。"
+                "Transcription requires an audio stream. "
+                "Provide a media file that contains audio."
             ),
         )
 
-    # duration 確認
+    # Duration check
     if media_info.duration is None:
         raise ClipwrightError(
             code=ErrorCode.PROBE_FAILED,
-            message=f"素材の尺を取得できませんでした: {media_path.name}",
+            message=f"Could not retrieve media duration: {media_path.name}",
             hint=(
-                "メディアファイルが破損していないか確認してください。"
-                "ffprobe で手動確認することもできます。"
+                "Check that the media file is not corrupted. "
+                "You can also inspect it manually with ffprobe."
             ),
         )
 
@@ -371,32 +385,32 @@ def _transcribe_inner(
     rate = media_info.duration.rate
     abs_media = str(media_path.resolve())
 
-    # --- 3. モデル解決（DC-AS-003）---
+    # --- 3. Model resolution (DC-AS-003) ---
 
     model_path = _resolve_model_path(options)
 
-    # --- 4. whisper 実行（アダプタ）---
+    # --- 4. whisper execution (adapter) ---
 
     segments, detected_language = _run_whisper(
         abs_media, options, total_duration_sec, model_path
     )
 
-    # 言語: 検出結果優先 → 明示指定 → 不明
+    # Language priority: detected result > explicit option > unknown
     language = detected_language or options.language or "unknown"
 
-    # --- 5. SRT/VTT 生成・書き込み（TR-AD-08）---
+    # --- 5. SRT/VTT generation and write (TR-AD-08) ---
 
     srt_path = output_path.with_suffix(".srt")
     vtt_path = output_path.with_suffix(".vtt")
     srt_path.write_text(to_srt(segments), encoding="utf-8")
     vtt_path.write_text(to_vtt(segments), encoding="utf-8")
 
-    # --- 6. OTIO 構築・保存（TR-AD-04/DC-AM-001/DC-AM-101）---
+    # --- 6. OTIO construction and save (TR-AD-04/DC-AM-001/DC-AM-101) ---
 
     timeline = new_timeline(media_path.name)
-    v1 = timeline.tracks[0]  # V1（Video）トラック
+    v1 = timeline.tracks[0]  # V1 (Video) track
 
-    # 全尺 1 clip（source_range.start_time=0）
+    # Full-length single clip (source_range.start_time=0)
     full_source_range = TimeRangeModel(
         start_time=RationalTimeModel(value=0.0, rate=rate),
         duration=RationalTimeModel(value=media_info.duration.value, rate=rate),
@@ -413,8 +427,9 @@ def _transcribe_inner(
         },
     )
 
-    # 各セグメントを V1 トラックの marker として付与（DC-AM-101）。
-    # marked_range は whisper 秒値そのまま（メディア座標=トラック座標・DC-AM-001）
+    # Attach each segment as a marker on the V1 track (DC-AM-101).
+    # marked_range uses whisper second values directly (media coord = track coord;
+    # DC-AM-001).
     for seg in segments:
         start_value = seg["start_sec"] * rate
         dur_value = (seg["end_sec"] - seg["start_sec"]) * rate
@@ -437,21 +452,22 @@ def _transcribe_inner(
 
     save_timeline(timeline, output)
 
-    # --- 7. エンベロープ返却 ---
+    # --- 7. Return envelope ---
 
     segment_count = len(segments)
     summary = (
-        f"言語 {language}・{segment_count} セグメント・"
-        f"総尺 {_fmt_sec(total_duration_sec)} を文字起こし。"
-        f"{srt_path.name} / {vtt_path.name} / {output_path.name} を生成しました。"
+        f"Language {language} · {segment_count} segment(s) · "
+        f"total duration {_fmt_sec(total_duration_sec)} transcribed. "
+        f"Generated {srt_path.name} / {vtt_path.name} / {output_path.name}."
     )
 
     warnings: list[str] = []
     if segment_count == 0:
         warnings.append(
-            "文字起こしセグメントが0件でした（無音または認識失敗の可能性）。"
-            "SRT は空・VTT はヘッダのみ・marker は付与されていません。"
-            "timeline には全尺1clip のみ含まれます。"
+            "No transcription segments found "
+            "(possible silence or recognition failure). "
+            "SRT is empty, VTT has header only, no markers were added. "
+            "The timeline contains only the full-length clip."
         )
 
     return ok_result(

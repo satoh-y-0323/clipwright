@@ -1,12 +1,14 @@
-"""test_server.py — clipwright-transcribe server.py（MCP + CLI）のテスト。
+"""test_server.py — Tests for clipwright-transcribe server.py (MCP + CLI).
 
-対象:
-  - clipwright_transcribe ツールが MCP に登録され transcribe.transcribe_media へ委譲
-  - MCP annotations（§6.2・detect 系・TR-AD-11）:
-    readOnlyHint:true / destructiveHint:false / idempotentHint:true / openWorldHint:false
-  - 成功・失敗エンベロープのパススルー
-  - options None 時に TranscribeOptions() 既定
-  - main() が mcp.run(transport="stdio") を呼ぶ
+Target:
+  - clipwright_transcribe tool is registered in MCP and delegates to
+    transcribe.transcribe_media
+  - MCP annotations (§6.2, detect-class, TR-AD-11):
+    readOnlyHint:true / destructiveHint:false / idempotentHint:true /
+    openWorldHint:false
+  - Success and error envelope pass-through
+  - options=None uses TranscribeOptions() defaults
+  - main() calls mcp.run(transport="stdio")
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from clipwright_transcribe.server import (
 from clipwright_transcribe.server import main, mcp
 
 # ---------------------------------------------------------------------------
-# ヘルパー
+# Helpers
 # ---------------------------------------------------------------------------
 
 
@@ -45,18 +47,18 @@ def _error_envelope(code: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# MCP annotations（§6.2・detect 系・TR-AD-11）
+# MCP annotations (§6.2, detect-class, TR-AD-11)
 # ---------------------------------------------------------------------------
 
 
 class TestMcpAnnotations:
-    """clipwright_transcribe ツールの MCP annotations を検証する。"""
+    """Verify MCP annotations for the clipwright_transcribe tool."""
 
     def _get_annotations(self) -> Any:
-        # CR L-1: FastMCP の公開 API でツール情報を取得する手段がないため
-        # プライベート API (_tool_manager) に依存している（silence と同方針）。
+        # CR L-1: No public FastMCP API exists to retrieve tool info, so the private
+        # _tool_manager API is used (same approach as the silence package).
         tool = mcp._tool_manager.get_tool("clipwright_transcribe")  # noqa: SLF001
-        assert tool is not None, "clipwright_transcribe が mcp に登録されていること"
+        assert tool is not None, "clipwright_transcribe must be registered in mcp"
         return tool.annotations
 
     def test_tool_is_registered(self) -> None:
@@ -73,12 +75,12 @@ class TestMcpAnnotations:
         assert self._get_annotations().idempotentHint is True
 
     def test_open_world_hint_is_false(self) -> None:
-        """openWorldHint=False（完全オフライン・ネット非依存・TR-AD-11）。"""
+        """openWorldHint=False (fully offline, no network dependency; TR-AD-11)."""
         assert self._get_annotations().openWorldHint is False
 
 
 # ---------------------------------------------------------------------------
-# 委譲とエンベロープのパススルー
+# Delegation and envelope pass-through
 # ---------------------------------------------------------------------------
 
 
@@ -118,7 +120,8 @@ class TestDelegation:
         assert "hint" in error
 
     def test_options_none_uses_default(self) -> None:
-        """options=None のとき TranscribeOptions() 既定が委譲先へ渡ること。"""
+        """When options=None, TranscribeOptions() defaults are passed to the
+        delegate."""
         with patch(
             "clipwright_transcribe.server.transcribe_media",
             return_value=_ok_envelope(),
@@ -130,7 +133,7 @@ class TestDelegation:
         assert passed.language is None
 
     def test_options_passed_through(self) -> None:
-        """指定した options がそのまま委譲先へ渡ること。"""
+        """Explicitly provided options are forwarded unchanged to the delegate."""
         opts = TranscribeOptions(language="ja", initial_prompt="clipwright")
         with patch(
             "clipwright_transcribe.server.transcribe_media",
@@ -142,7 +145,7 @@ class TestDelegation:
 
 
 # ---------------------------------------------------------------------------
-# main() エントリポイント
+# main() entry point
 # ---------------------------------------------------------------------------
 
 
@@ -151,7 +154,7 @@ class TestCliMain:
         assert callable(main)
 
     def test_main_runs_mcp_stdio(self) -> None:
-        """main() が mcp.run(transport="stdio") を呼ぶこと。"""
+        """main() calls mcp.run(transport="stdio")."""
         with patch.object(mcp, "run") as mock_run:
             main()
         mock_run.assert_called_once()

@@ -1,16 +1,16 @@
-"""test_wrap_cli.py — wrap_cli.py（budoux 文節分割小 CLI）の Red テスト。
+"""test_wrap_cli.py — Red tests for wrap_cli.py (small BudouX phrase-segmentation CLI).
 
-テスト対象: clipwright_wrap.wrap_cli.main(argv)
-I/O 契約 (WR-AD-02):
+Target: clipwright_wrap.wrap_cli.main(argv)
+I/O contract (WR-AD-02):
   - stdin: JSON {"language": "ja", "texts": ["cue1", ...]}
-  - stdout: JSON {"segments": [["文節1", ...], ...]}
-  - エラー時 stdout: {"error": {"code", "message", "hint"}}
-  - 常に return 0（exit code でエラーを伝えない）
-  - stdout は JSON のみ（進捗・ログ混入なし）
+  - stdout: JSON {"segments": [["segment1", ...], ...]}
+  - On error, stdout: {"error": {"code", "message", "hint"}}
+  - Always return 0 (errors are not communicated via exit code)
+  - stdout contains JSON only (no progress/log output mixed in)
 
-budoux は pytest-mock でモック（実 budoux は e2e で使用）。
-DC-AS-002: parser ロードは texts ループ外で 1 回のみ。
-DC-AS-003: error JSON は手書き構築（ClipwrightError / ffmpeg 由来 except なし）。
+budoux is mocked via pytest-mock (real budoux is used in e2e tests).
+DC-AS-002: parser is loaded exactly once, outside the texts loop.
+DC-AS-003: error JSON is constructed by hand (no ClipwrightError / ffmpeg-derived except).
 """
 
 from __future__ import annotations
@@ -23,14 +23,13 @@ from unittest.mock import MagicMock, call
 
 import pytest
 
-# wrap_cli が存在するかどうかでモジュールオブジェクトを取得
-# 実装前はこの import が失敗し、テスト全体が収集時に失敗する。
-# 収集は成功させつつ、実行時に失敗させるため、pytestmark で skip せず
-# 各テストで個別に import して失敗させる方針とする。
+# Obtain the module object depending on whether wrap_cli exists.
+# Before implementation this import fails, causing collection-time failure for the whole test.
+# Rather than skip via pytestmark, each test imports individually at runtime to fail explicitly.
 
 
 # ---------------------------------------------------------------------------
-# ヘルパー: main() を stdin/stdout モックで実行して stdout JSON を取得する
+# Helper: run main() with mocked stdin/stdout and return the stdout JSON
 # ---------------------------------------------------------------------------
 
 
@@ -40,12 +39,12 @@ def _run_main(
     monkeypatch: pytest.MonkeyPatch,
     loader_map: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], int]:
-    """wrap_cli.main(argv) を stdin JSON 付きで実行し、(stdout_json, return_code) を返す。
+    """Run wrap_cli.main(argv) with a stdin JSON payload and return (stdout_json, return_code).
 
-    stdout は StringIO にリダイレクトし JSON をパースして返す。
-    loader_map が指定された場合は _PARSER_LOADERS をそのマップで差し替える。
+    stdout is redirected to StringIO and the JSON is parsed before returning.
+    When loader_map is provided, _PARSER_LOADERS is replaced with that map.
     """
-    import clipwright_wrap.wrap_cli as wrap_cli_mod  # 実装なければ ImportError で Red
+    import clipwright_wrap.wrap_cli as wrap_cli_mod  # ImportError → Red if not implemented
 
     stdin_payload = json.dumps(stdin_data, ensure_ascii=False)
     fake_stdin = io.StringIO(stdin_payload)
@@ -65,15 +64,15 @@ def _run_main(
 
 
 # ---------------------------------------------------------------------------
-# フィクスチャ: budoux parser モック
+# Fixture: budoux parser mock
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
 def mock_parser() -> MagicMock:
-    """budoux parser の parse() を返すモック。
+    """Mock for a budoux parser whose parse() returns [text] (single-segment dummy).
 
-    parse(text) は呼び出しごとに [text] を返す（1文節として返すダミー）。
+    parse(text) returns [text] for each call.
     """
     p = MagicMock()
     p.parse.side_effect = lambda text: [text]
@@ -82,9 +81,9 @@ def mock_parser() -> MagicMock:
 
 @pytest.fixture
 def mock_parser_with_segments() -> MagicMock:
-    """budoux_sample.json の実セグメントを返す parser モック。
+    """Parser mock that returns real segments from budoux_sample.json.
 
-    tests = ["今日はいい天気です。", ...] に対応した順番で segments を返す。
+    Returns segments in the order corresponding to the texts list.
     """
     import json as _json
     from pathlib import Path
@@ -96,24 +95,24 @@ def mock_parser_with_segments() -> MagicMock:
     )
 
     p = MagicMock()
-    # CR L-4: fixture にないテキストでサイレントフォールバックせず KeyError を送出する。
-    # 登録済みテキスト以外を渡したテスト側のバグを即座に検出できる。
+    # CR L-4: raise KeyError instead of silent fallback for texts not in fixture,
+    # so that a bug in the test side (passing an unregistered text) is caught immediately.
     p.parse.side_effect = lambda text: segs_map[text]
     return p
 
 
 # ---------------------------------------------------------------------------
-# テスト群 1: 正常系 — stdout JSON・segments 構造
+# Test group 1: Success path — stdout JSON and segments structure
 # ---------------------------------------------------------------------------
 
 
 class TestWrapCliNormal:
-    """正常系: main() が stdin JSON を処理して stdout に segments JSON を返す。"""
+    """Success path: main() processes stdin JSON and returns a segments JSON to stdout."""
 
     def test_returns_zero(
         self, monkeypatch: pytest.MonkeyPatch, mock_parser: MagicMock
     ) -> None:
-        """main() は常に 0 を返す。"""
+        """main() always returns 0."""
         _, rc = _run_main(
             argv=None,
             stdin_data={"language": "ja", "texts": ["今日はいい天気です。"]},
@@ -125,7 +124,7 @@ class TestWrapCliNormal:
     def test_stdout_is_valid_json(
         self, monkeypatch: pytest.MonkeyPatch, mock_parser: MagicMock
     ) -> None:
-        """stdout は JSON のみ（進捗・ログ混入なし）。"""
+        """stdout contains JSON only (no progress/log output mixed in)."""
         result, _ = _run_main(
             argv=None,
             stdin_data={"language": "ja", "texts": ["今日はいい天気です。"]},
@@ -137,7 +136,7 @@ class TestWrapCliNormal:
     def test_segments_key_present(
         self, monkeypatch: pytest.MonkeyPatch, mock_parser: MagicMock
     ) -> None:
-        """正常時: stdout JSON に 'segments' キーがある。"""
+        """On success: stdout JSON contains the 'segments' key."""
         result, _ = _run_main(
             argv=None,
             stdin_data={"language": "ja", "texts": ["今日はいい天気です。"]},
@@ -149,7 +148,7 @@ class TestWrapCliNormal:
     def test_segments_length_matches_texts(
         self, monkeypatch: pytest.MonkeyPatch, mock_parser: MagicMock
     ) -> None:
-        """segments の要素数は texts の要素数と一致する。"""
+        """The number of elements in segments matches the number of elements in texts."""
         texts = ["cue1", "cue2", "cue3"]
         result, _ = _run_main(
             argv=None,
@@ -162,7 +161,7 @@ class TestWrapCliNormal:
     def test_segments_each_is_list_of_str(
         self, monkeypatch: pytest.MonkeyPatch, mock_parser: MagicMock
     ) -> None:
-        """segments の各要素は list[str] である。"""
+        """Each element of segments is list[str]."""
         result, _ = _run_main(
             argv=None,
             stdin_data={"language": "ja", "texts": ["今日はいい天気です。"]},
@@ -177,7 +176,7 @@ class TestWrapCliNormal:
     def test_parse_called_for_each_text(
         self, monkeypatch: pytest.MonkeyPatch, mock_parser: MagicMock
     ) -> None:
-        """parser.parse() が texts の各要素に対して 1 回ずつ呼ばれる。"""
+        """parser.parse() is called once for each element of texts."""
         texts = ["cue1のテキスト", "cue2のテキスト", "cue3のテキスト"]
         _run_main(
             argv=None,
@@ -194,7 +193,7 @@ class TestWrapCliNormal:
         mock_parser_with_segments: MagicMock,
         budoux_segments_ja: list[list[str]],
     ) -> None:
-        """budoux_sample.json の期待セグメントが返される（conftest fixture 活用）。"""
+        """Expected segments from budoux_sample.json are returned (using conftest fixture)."""
         import json as _json
         from pathlib import Path
 
@@ -214,7 +213,7 @@ class TestWrapCliNormal:
     def test_empty_texts_returns_empty_segments(
         self, monkeypatch: pytest.MonkeyPatch, mock_parser: MagicMock
     ) -> None:
-        """texts が空リストのとき segments は空リスト。"""
+        """When texts is an empty list, segments is an empty list."""
         result, rc = _run_main(
             argv=None,
             stdin_data={"language": "ja", "texts": []},
@@ -226,17 +225,17 @@ class TestWrapCliNormal:
 
 
 # ---------------------------------------------------------------------------
-# テスト群 2: DC-AS-002 — parser ロードは texts ループ外で 1 回のみ
+# Test group 2: DC-AS-002 — parser is loaded exactly once, outside the texts loop
 # ---------------------------------------------------------------------------
 
 
 class TestParserLoadOnceDcAs002:
-    """DC-AS-002: parser ロード関数が texts 数に依らず 1 回だけ呼ばれる。"""
+    """DC-AS-002: the parser load function is called exactly once regardless of the number of texts."""
 
     def test_parser_load_called_once_for_single_cue(
         self, monkeypatch: pytest.MonkeyPatch, mock_parser: MagicMock
     ) -> None:
-        """texts が 1 件のとき parser ロード関数は 1 回だけ呼ばれる。"""
+        """When texts has 1 element, the parser load function is called exactly once."""
         loader = MagicMock(return_value=mock_parser)
         _run_main(
             argv=None,
@@ -249,7 +248,7 @@ class TestParserLoadOnceDcAs002:
     def test_parser_load_called_once_for_multiple_cues(
         self, monkeypatch: pytest.MonkeyPatch, mock_parser: MagicMock
     ) -> None:
-        """texts が複数件のとき parser ロード関数は 1 回だけ呼ばれる（cue 数非依存）。"""
+        """When texts has multiple elements, the parser load function is still called exactly once (cue-count-independent)."""
         texts = ["cue1", "cue2", "cue3", "cue4", "cue5"]
         loader = MagicMock(return_value=mock_parser)
         _run_main(
@@ -258,12 +257,12 @@ class TestParserLoadOnceDcAs002:
             monkeypatch=monkeypatch,
             loader_map={"ja": loader},
         )
-        loader.assert_called_once()  # cue 数 5 でもロードは 1 回
+        loader.assert_called_once()  # even with 5 cues, load is called once
 
     def test_parser_load_called_once_for_10_cues(
         self, monkeypatch: pytest.MonkeyPatch, mock_parser: MagicMock
     ) -> None:
-        """texts が 10 件のとき parser ロード関数は依然として 1 回だけ。"""
+        """When texts has 10 elements, the parser load function is still called exactly once."""
         texts = [f"cue{i}のテキスト" for i in range(10)]
         loader = MagicMock(return_value=mock_parser)
         _run_main(
@@ -273,17 +272,17 @@ class TestParserLoadOnceDcAs002:
             loader_map={"ja": loader},
         )
         loader.assert_called_once()
-        # parse は 10 回呼ばれる（cue ごと）
+        # parse is called once per cue (10 times)
         assert mock_parser.parse.call_count == 10
 
 
 # ---------------------------------------------------------------------------
-# テスト群 3: language → parser 選択
+# Test group 3: language → parser selection
 # ---------------------------------------------------------------------------
 
 
 class TestLanguageParserSelection:
-    """language 値によって対応する parser ロード関数が選ばれる。"""
+    """The loader function corresponding to the language value is selected."""
 
     @pytest.mark.parametrize(
         "language",
@@ -292,7 +291,7 @@ class TestLanguageParserSelection:
     def test_correct_loader_called_for_language(
         self, monkeypatch: pytest.MonkeyPatch, language: str
     ) -> None:
-        """language に対応するロード関数が呼ばれる（他のロード関数は呼ばれない）。"""
+        """The loader for the specified language is called; loaders for other languages are not called."""
         mock_parsers: dict[str, MagicMock] = {
             lang: MagicMock(
                 return_value=MagicMock(parse=MagicMock(return_value=["トークン"]))
@@ -305,36 +304,36 @@ class TestLanguageParserSelection:
             monkeypatch=monkeypatch,
             loader_map=mock_parsers,
         )
-        # 指定言語のローダーが呼ばれた
+        # The loader for the specified language was called
         mock_parsers[language].assert_called_once()
-        # 他の言語のローダーは呼ばれない
+        # Loaders for other languages were not called
         for lang, loader in mock_parsers.items():
             if lang != language:
                 loader.assert_not_called()
 
     def test_parser_loaders_dict_has_ja(self) -> None:
-        """_PARSER_LOADERS["ja"] のキーが存在し、呼び出し可能オブジェクトである。"""
+        """_PARSER_LOADERS["ja"] key exists and is callable."""
         import clipwright_wrap.wrap_cli as wrap_cli_mod
 
         assert "ja" in wrap_cli_mod._PARSER_LOADERS
         assert callable(wrap_cli_mod._PARSER_LOADERS["ja"])
 
     def test_parser_loaders_dict_has_zh_hans(self) -> None:
-        """_PARSER_LOADERS["zh-hans"] が存在し呼び出し可能。"""
+        """_PARSER_LOADERS["zh-hans"] exists and is callable."""
         import clipwright_wrap.wrap_cli as wrap_cli_mod
 
         assert "zh-hans" in wrap_cli_mod._PARSER_LOADERS
         assert callable(wrap_cli_mod._PARSER_LOADERS["zh-hans"])
 
     def test_parser_loaders_dict_has_zh_hant(self) -> None:
-        """_PARSER_LOADERS["zh-hant"] が存在し呼び出し可能。"""
+        """_PARSER_LOADERS["zh-hant"] exists and is callable."""
         import clipwright_wrap.wrap_cli as wrap_cli_mod
 
         assert "zh-hant" in wrap_cli_mod._PARSER_LOADERS
         assert callable(wrap_cli_mod._PARSER_LOADERS["zh-hant"])
 
     def test_parser_loaders_dict_has_th(self) -> None:
-        """_PARSER_LOADERS["th"] が存在し呼び出し可能。"""
+        """_PARSER_LOADERS["th"] exists and is callable."""
         import clipwright_wrap.wrap_cli as wrap_cli_mod
 
         assert "th" in wrap_cli_mod._PARSER_LOADERS
@@ -342,19 +341,19 @@ class TestLanguageParserSelection:
 
 
 # ---------------------------------------------------------------------------
-# テスト群 4: エラー系 — DC-AS-003 / WR-AD-09
+# Test group 4: Error paths — DC-AS-003 / WR-AD-09
 # ---------------------------------------------------------------------------
 
 
 class TestWrapCliErrors:
-    """エラー系: error JSON は手書き構築・stdout のみ・return 0。"""
+    """Error paths: error JSON is hand-constructed, stdout only, return 0."""
 
     # --- DEPENDENCY_MISSING: budoux ImportError ---
 
     def test_dependency_missing_on_budoux_import_error(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """budoux ImportError → stdout {"error": {"code": "DEPENDENCY_MISSING", ...}} return 0。"""
+        """budoux ImportError → stdout {"error": {"code": "DEPENDENCY_MISSING", ...}} return 0."""
         result, rc = _run_main(
             argv=None,
             stdin_data={"language": "ja", "texts": ["テキスト"]},
@@ -370,7 +369,7 @@ class TestWrapCliErrors:
     def test_dependency_missing_hint_no_str_exc(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """DEPENDENCY_MISSING の hint に str(exc) の内部パス情報が含まれない（固定 hint）。"""
+        """DEPENDENCY_MISSING hint must not contain internal path information from str(exc) (fixed hint)."""
         exc_msg = "internal/secret/path/budoux/__init__.py not found"
         result, _ = _run_main(
             argv=None,
@@ -378,14 +377,14 @@ class TestWrapCliErrors:
             monkeypatch=monkeypatch,
             loader_map={"ja": MagicMock(side_effect=ImportError(exc_msg))},
         )
-        # str(exc) の内容が hint/message に露出しないことを確認
+        # str(exc) content must not be exposed in hint/message
         assert exc_msg not in result["error"].get("hint", "")
         assert exc_msg not in result["error"].get("message", "")
 
     def test_dependency_missing_no_segments_key(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """DEPENDENCY_MISSING 時は 'segments' キーが存在しない。"""
+        """On DEPENDENCY_MISSING, the 'segments' key must not be present."""
         result, _ = _run_main(
             argv=None,
             stdin_data={"language": "ja", "texts": ["テキスト"]},
@@ -394,12 +393,12 @@ class TestWrapCliErrors:
         )
         assert "segments" not in result
 
-    # --- INVALID_INPUT: 不正 stdin JSON ---
+    # --- INVALID_INPUT: malformed stdin JSON ---
 
     def test_invalid_input_on_malformed_json(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """不正な stdin JSON → stdout {"error": {"code": "INVALID_INPUT", ...}} return 0。"""
+        """Malformed stdin JSON → stdout {"error": {"code": "INVALID_INPUT", ...}} return 0."""
         import clipwright_wrap.wrap_cli as wrap_cli_mod
 
         fake_stdin = io.StringIO("{not valid json}")
@@ -417,7 +416,7 @@ class TestWrapCliErrors:
     def test_invalid_input_on_missing_language_key(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """stdin JSON に 'language' キーがない → INVALID_INPUT。"""
+        """stdin JSON missing 'language' key → INVALID_INPUT."""
         import clipwright_wrap.wrap_cli as wrap_cli_mod
 
         fake_stdin = io.StringIO(json.dumps({"texts": ["テキスト"]}))
@@ -434,7 +433,7 @@ class TestWrapCliErrors:
     def test_invalid_input_on_missing_texts_key(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """stdin JSON に 'texts' キーがない → INVALID_INPUT。"""
+        """stdin JSON missing 'texts' key → INVALID_INPUT."""
         import clipwright_wrap.wrap_cli as wrap_cli_mod
 
         fake_stdin = io.StringIO(json.dumps({"language": "ja"}))
@@ -451,7 +450,7 @@ class TestWrapCliErrors:
     def test_invalid_input_on_texts_not_list(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """texts が list でない（str 等） → INVALID_INPUT。"""
+        """texts is not a list (e.g. str) → INVALID_INPUT."""
         import clipwright_wrap.wrap_cli as wrap_cli_mod
 
         fake_stdin = io.StringIO(json.dumps({"language": "ja", "texts": "文字列"}))
@@ -468,7 +467,7 @@ class TestWrapCliErrors:
     def test_invalid_input_on_unknown_language(
         self, monkeypatch: pytest.MonkeyPatch, mock_parser: MagicMock
     ) -> None:
-        """対応外 language → INVALID_INPUT（_PARSER_LOADERS にキーなし）。"""
+        """Unsupported language → INVALID_INPUT (key not in _PARSER_LOADERS)."""
         result, rc = _run_main(
             argv=None,
             stdin_data={"language": "ko", "texts": ["テキスト"]},
@@ -478,15 +477,15 @@ class TestWrapCliErrors:
         assert rc == 0
         assert result["error"]["code"] == "INVALID_INPUT"
 
-    # --- SR M-2: 不正 language エラーに入力値・内部辞書キーを露出しない ---
+    # --- SR M-2: invalid language error must not expose input value or internal dict keys ---
 
     def test_invalid_language_message_does_not_contain_input_value(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """SR M-2: 不正 language のエラー message に入力 language 値が含まれない。
+        """SR M-2: error message for invalid language must not contain the input language value.
 
-        現行実装は f"対応していない language: {language!r}" で入力値を露出する。
-        固定文言「対応していない language が指定されました」に変更することを要求する。
+        The current implementation exposes the input value via f"unsupported language: {language!r}".
+        This requires changing to the fixed string "Unsupported language specified".
         """
         malicious_lang = "xx'; DROP TABLE users; --"
         result, rc = _run_main(
@@ -497,20 +496,20 @@ class TestWrapCliErrors:
         )
         assert rc == 0
         assert result["error"]["code"] == "INVALID_INPUT"
-        # 入力値が message に含まれてはならない（固定文言のみ）
+        # Input value must not appear in message (fixed string only)
         assert malicious_lang not in result["error"]["message"]
         assert repr(malicious_lang) not in result["error"]["message"]
-        # 固定文言が含まれる
-        assert "対応していない language が指定されました" in result["error"]["message"]
+        # Fixed string must be present
+        assert "Unsupported language specified" in result["error"]["message"]
 
     def test_invalid_language_hint_does_not_expose_parser_loaders_keys(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """SR M-2: 不正 language の hint に _PARSER_LOADERS.keys() 展開が含まれない。
+        """SR M-2: hint for invalid language must not expose _PARSER_LOADERS.keys() expansion.
 
-        現行実装は f"language は {list(_PARSER_LOADERS.keys())} のいずれか..."
-        で内部辞書の動的展開を露出する。
-        固定文言 "ja / zh-hans / zh-hant / th" に変更することを要求する。
+        The current implementation exposes the internal dict dynamically via
+        f"language is one of {list(_PARSER_LOADERS.keys())} ...".
+        This requires changing to the fixed string "ja / zh-hans / zh-hant / th".
         """
         result, rc = _run_main(
             argv=None,
@@ -521,24 +520,24 @@ class TestWrapCliErrors:
         assert rc == 0
         assert result["error"]["code"] == "INVALID_INPUT"
         hint = result["error"]["hint"]
-        # dict キー展開形式（["ja", "zh-hans", ...]）が含まれてはならない
+        # dict key expansion format (["ja", "zh-hans", ...]) must not appear
         assert "['" not in hint
         assert "']" not in hint
-        # 固定列挙が含まれる
+        # Fixed enumeration must be present
         assert "ja" in hint
         assert "zh-hans" in hint
         assert "zh-hant" in hint
         assert "th" in hint
 
-    # --- SR L-3: texts 要素が str でない場合の型チェック ---
+    # --- SR L-3: type check when texts elements are not str ---
 
     def test_invalid_input_on_texts_with_non_str_elements(
         self, monkeypatch: pytest.MonkeyPatch, mock_parser: MagicMock
     ) -> None:
-        """SR L-3: texts に str 以外の要素が含まれる場合 INVALID_INPUT を返す。
+        """SR L-3: when texts contains non-str elements, INVALID_INPUT is returned.
 
-        現行実装は型チェックを行わないため parser.parse(None) で AttributeError が発生し
-        INTERNAL エラーになる。texts 要素の型チェックを追加することを要求する。
+        The current implementation has no type check, causing AttributeError from
+        parser.parse(None) → INTERNAL error. Adding a type check for texts elements is required.
         """
         result, rc = _run_main(
             argv=None,
@@ -547,14 +546,14 @@ class TestWrapCliErrors:
             loader_map={"ja": lambda: mock_parser},
         )
         assert rc == 0
-        # AttributeError/TypeError で INTERNAL に落ちてはならない
+        # Must not fall through to INTERNAL via AttributeError/TypeError
         assert result["error"]["code"] == "INVALID_INPUT"
         assert "texts" in result["error"]["message"]
 
     def test_invalid_input_on_texts_with_mixed_str_and_non_str(
         self, monkeypatch: pytest.MonkeyPatch, mock_parser: MagicMock
     ) -> None:
-        """SR L-3: texts が str と非 str の混在リストでも INVALID_INPUT を返す。"""
+        """SR L-3: INVALID_INPUT is returned even when texts is a mixed list of str and non-str."""
         result, rc = _run_main(
             argv=None,
             stdin_data={
@@ -567,27 +566,27 @@ class TestWrapCliErrors:
         assert rc == 0
         assert result["error"]["code"] == "INVALID_INPUT"
 
-    # --- CR L-2: _PARSER_LOADERS 空辞書時の DEPENDENCY_MISSING ---
+    # --- CR L-2: DEPENDENCY_MISSING when _PARSER_LOADERS is empty ---
 
     def test_dependency_missing_when_parser_loaders_is_empty(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """CR L-2: budoux 未インストールで _PARSER_LOADERS={} のとき DEPENDENCY_MISSING を返す。
+        """CR L-2: when budoux is not installed and _PARSER_LOADERS={}, DEPENDENCY_MISSING is returned.
 
-        現行実装は language not in _PARSER_LOADERS で INVALID_INPUT を返す。
-        main() 先頭で _PARSER_LOADERS が空辞書の場合は DEPENDENCY_MISSING を返すべき。
+        The current implementation returns INVALID_INPUT via "language not in _PARSER_LOADERS".
+        When _PARSER_LOADERS is empty at the start of main(), DEPENDENCY_MISSING should be returned.
         """
         result, rc = _run_main(
             argv=None,
             stdin_data={"language": "ja", "texts": ["テキスト"]},
             monkeypatch=monkeypatch,
-            loader_map={},  # budoux 未インストール状態を再現
+            loader_map={},  # simulate budoux not installed
         )
-        # monkeypatch.setattr でも確認（_run_main の loader_map が優先だが念のため）
+        # also confirmed via monkeypatch.setattr (_run_main's loader_map takes precedence)
         assert rc == 0
-        # INVALID_INPUT ではなく DEPENDENCY_MISSING であること
+        # Must be DEPENDENCY_MISSING, not INVALID_INPUT
         assert result["error"]["code"] == "DEPENDENCY_MISSING"
-        # install hint が含まれる
+        # install hint must be present
         assert "hint" in result["error"]
         assert (
             "install" in result["error"]["hint"].lower()
@@ -598,7 +597,7 @@ class TestWrapCliErrors:
     def test_dependency_missing_when_parser_loaders_is_empty_no_invalid_input(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """CR L-2: _PARSER_LOADERS={} のとき INVALID_INPUT に落ちてはならない。"""
+        """CR L-2: when _PARSER_LOADERS={}, must not fall through to INVALID_INPUT."""
         result, rc = _run_main(
             argv=None,
             stdin_data={"language": "ja", "texts": ["テキスト"]},
@@ -608,12 +607,12 @@ class TestWrapCliErrors:
         assert rc == 0
         assert result["error"]["code"] != "INVALID_INPUT"
 
-    # --- INTERNAL: 想定外例外 ---
+    # --- INTERNAL: unexpected exception ---
 
     def test_internal_error_on_unexpected_exception(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """parser.parse() が RuntimeError を投げた場合 → stdout {"error": {"code": "INTERNAL"}} return 0。"""
+        """When parser.parse() raises RuntimeError → stdout {"error": {"code": "INTERNAL"}} return 0."""
         broken_parser = MagicMock()
         broken_parser.parse.side_effect = RuntimeError("unexpected crash")
         result, rc = _run_main(
@@ -629,7 +628,7 @@ class TestWrapCliErrors:
     def test_internal_error_no_traceback_in_stdout(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """INTERNAL エラー時: stdout に traceback が混入しない（stderr 限定）。"""
+        """On INTERNAL error: stdout must not contain a traceback (stderr only)."""
         broken_parser = MagicMock()
         broken_parser.parse.side_effect = RuntimeError("crash detail")
         result, _ = _run_main(
@@ -638,7 +637,7 @@ class TestWrapCliErrors:
             monkeypatch=monkeypatch,
             loader_map={"ja": MagicMock(return_value=broken_parser)},
         )
-        # stdout は JSON のみ（traceback が混入していない）
+        # stdout is JSON only (no traceback mixed in)
         assert "Traceback" not in str(result)
         assert "RuntimeError" not in result["error"].get("message", "")
         assert "RuntimeError" not in result["error"].get("hint", "")
@@ -646,7 +645,7 @@ class TestWrapCliErrors:
     def test_internal_error_hint_is_fixed_message(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """INTERNAL の hint は固定文言（str(exc) 非露出）。"""
+        """INTERNAL hint must be a fixed string (str(exc) not exposed)."""
         broken_parser = MagicMock()
         exc_detail = "internal/secret/path/detail"
         broken_parser.parse.side_effect = RuntimeError(exc_detail)
@@ -659,12 +658,12 @@ class TestWrapCliErrors:
         assert exc_detail not in result["error"].get("hint", "")
         assert exc_detail not in result["error"].get("message", "")
 
-    # --- エラー時のフォーマット共通検証 ---
+    # --- Common format verification for all error cases ---
 
     def test_error_json_has_code_message_hint(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """エラー時: error オブジェクトが code / message / hint の3キーを持つ。"""
+        """On error: the error object has all three keys — code / message / hint."""
         import clipwright_wrap.wrap_cli as wrap_cli_mod
 
         fake_stdin = io.StringIO("{invalid}")
@@ -681,21 +680,21 @@ class TestWrapCliErrors:
         assert "hint" in error
 
     def test_no_clipwright_error_except_path(self) -> None:
-        """wrap_cli には ClipwrightError の except 節が存在しない前提を確認。
+        """Confirm that wrap_cli contains no ClipwrightError except clause.
 
-        wrap_cli は ffmpeg を呼ばないため ClipwrightError を捕捉するコードが
-        混入していてはならない（DC-AS-003 遵守確認）。
+        wrap_cli does not call ffmpeg, so code that catches ClipwrightError
+        must not be present (DC-AS-003 compliance check).
         """
         import inspect
 
         import clipwright_wrap.wrap_cli as wrap_cli_mod
 
         source = inspect.getsource(wrap_cli_mod)
-        # ClipwrightError を except する行が存在しないことを検証
+        # No line that excepts ClipwrightError must exist
         assert "except ClipwrightError" not in source
 
     def test_no_ffmpeg_references_in_wrap_cli(self) -> None:
-        """wrap_cli に ffmpeg 関連の参照が存在しない（DC-AS-003）。"""
+        """wrap_cli must contain no ffmpeg-related references (DC-AS-003)."""
         import inspect
 
         import clipwright_wrap.wrap_cli as wrap_cli_mod
@@ -707,17 +706,17 @@ class TestWrapCliErrors:
 
 
 # ---------------------------------------------------------------------------
-# テスト群 5: stdout は JSON のみ（進捗・ログ混入なし）
+# Test group 5: stdout contains JSON only (no progress/log output mixed in)
 # ---------------------------------------------------------------------------
 
 
 class TestStdoutJsonOnly:
-    """stdout は JSON 1 オブジェクトのみ。複数行・余計な文字列が含まれない。"""
+    """stdout contains exactly one JSON object. No multiple lines or extra strings."""
 
     def test_stdout_single_json_object(
         self, monkeypatch: pytest.MonkeyPatch, mock_parser: MagicMock
     ) -> None:
-        """stdout が JSON としてパース可能な単一オブジェクトである。"""
+        """stdout is a single object parseable as JSON."""
         import clipwright_wrap.wrap_cli as wrap_cli_mod
 
         fake_stdin = io.StringIO(json.dumps({"language": "ja", "texts": ["テキスト"]}))
@@ -731,8 +730,8 @@ class TestStdoutJsonOnly:
         wrap_cli_mod.main([])
 
         raw_output = fake_stdout.getvalue().strip()
-        # 余計な改行・ログ行が混入していないことを確認
-        # JSON は1行のみ
+        # Confirm no extra newlines or log lines mixed in
+        # JSON is exactly 1 line
         lines = [ln for ln in raw_output.splitlines() if ln.strip()]
         assert len(lines) == 1
         parsed = json.loads(raw_output)
@@ -741,7 +740,7 @@ class TestStdoutJsonOnly:
     def test_no_extra_output_before_json(
         self, monkeypatch: pytest.MonkeyPatch, mock_parser: MagicMock
     ) -> None:
-        """stdout の最初の文字が '{' である（JSON 前に余計な文字列がない）。"""
+        """The first character of stdout is '{' (no extra string before the JSON)."""
         import clipwright_wrap.wrap_cli as wrap_cli_mod
 
         fake_stdin = io.StringIO(json.dumps({"language": "ja", "texts": ["テキスト"]}))

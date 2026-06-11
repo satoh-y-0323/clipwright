@@ -1,19 +1,19 @@
-"""test_captions.py — captions.py 純ロジックの Red テスト（契約面 100% 目標）。
+"""test_captions.py — Red tests for captions.py pure logic (contract coverage target: 100%).
 
-architecture WR-AD-03/04/06/12/14/15 の仕様を観点に固定する。
-このファイルは captions.py が存在しない段階で import 失敗により
-機能未実装として失敗することを意図した Red テスト群。
+Pins the spec from architecture WR-AD-03/04/06/12/14/15.
+These tests are intended to fail due to ImportError when captions.py does not exist yet
+(Red phase).
 
-対象 API（すべて budoux 非依存):
-  - Cue: dataclass（index, start, end, text）
+Target API (all budoux-independent):
+  - Cue: dataclass (index, start, end, text)
   - parse_captions(text, fmt) -> list[Cue]
   - wrap_cue_lines(segments, max_chars) -> list[str]
   - serialize_captions(cues, fmt) -> str
 
-WR-AD-06: タイムコード文字列は不変保持（float 変換しない）。
-WR-AD-12: transcribe のバイト構造仕様（末尾 cue 空行なし・WEBVTT\\n\\n・0件時）。
-WR-AD-14: 文字カウント一律 1 文字・区切り未挿入・len(line) に \\n 含めない。
-WR-AD-15(1): overflow 判定 = 行数超過 (a) + 行幅超過 (b) 両方。
+WR-AD-06: timecode strings are preserved as-is (no float conversion).
+WR-AD-12: transcribe byte-structure spec (no trailing blank after last cue / WEBVTT\\n\\n / 0 cues).
+WR-AD-14: character count is uniformly 1 per character; no delimiter inserted; \\n not included in len(line).
+WR-AD-15(1): overflow detection = line-count excess (a) + line-width excess (b) both.
 """
 
 from __future__ import annotations
@@ -28,42 +28,42 @@ from clipwright_wrap.captions import (
 )
 
 # ===========================================================================
-# Cue 型の確認
+# Cue type verification
 # ===========================================================================
 
 
 class TestCueType:
-    """Cue 型が必要なフィールドを持つ dataclass（または同等の型）であること。"""
+    """Cue type must be a dataclass (or equivalent) with the required fields."""
 
     def test_cue_has_index_field(self) -> None:
-        """Cue に index フィールドがあること。"""
+        """Cue has an index field."""
         cue = Cue(index=1, start="00:00:00,000", end="00:00:01,000", text="テスト")
         assert cue.index == 1
 
     def test_cue_has_start_field(self) -> None:
-        """Cue に start フィールドがあること（タイムコード文字列）。"""
+        """Cue has a start field (timecode string)."""
         cue = Cue(index=1, start="00:00:00,000", end="00:00:01,000", text="テスト")
         assert cue.start == "00:00:00,000"
 
     def test_cue_has_end_field(self) -> None:
-        """Cue に end フィールドがあること（タイムコード文字列）。"""
+        """Cue has an end field (timecode string)."""
         cue = Cue(index=1, start="00:00:00,000", end="00:00:01,000", text="テスト")
         assert cue.end == "00:00:01,000"
 
     def test_cue_has_text_field(self) -> None:
-        """Cue に text フィールドがあること。"""
+        """Cue has a text field."""
         cue = Cue(index=1, start="00:00:00,000", end="00:00:01,000", text="テスト")
         assert cue.text == "テスト"
 
     def test_cue_start_is_string(self) -> None:
-        """Cue.start はタイムコード文字列のまま保持されること（WR-AD-06・float 変換しない）。"""
+        """Cue.start is preserved as a timecode string (WR-AD-06; no float conversion)."""
         tc = "00:00:12,345"
         cue = Cue(index=1, start=tc, end="00:00:13,000", text="x")
         assert isinstance(cue.start, str)
         assert cue.start == tc
 
     def test_cue_end_is_string(self) -> None:
-        """Cue.end はタイムコード文字列のまま保持されること（WR-AD-06・float 変換しない）。"""
+        """Cue.end is preserved as a timecode string (WR-AD-06; no float conversion)."""
         tc = "00:00:13,000"
         cue = Cue(index=1, start="00:00:12,345", end=tc, text="x")
         assert isinstance(cue.end, str)
@@ -71,51 +71,51 @@ class TestCueType:
 
 
 # ===========================================================================
-# parse_captions — SRT 基本動作（WR-AD-12 バイト構造仕様）
+# parse_captions — SRT basic behaviour (WR-AD-12 byte-structure spec)
 # ===========================================================================
 
 
 class TestParseCaptionsSrtBasic:
-    """parse_captions('srt') の基本動作を検証する（WR-AD-03/WR-AD-12）。"""
+    """Verify the basic behaviour of parse_captions('srt') (WR-AD-03/WR-AD-12)."""
 
     def test_single_cue_srt_returns_list(self) -> None:
-        """1 cue の SRT を parse して list を返すこと。"""
+        """Parsing a 1-cue SRT returns a list."""
         srt = "1\n00:00:00,000 --> 00:00:01,000\nあいう\n"
         result = parse_captions(srt, "srt")
         assert isinstance(result, list)
         assert len(result) == 1
 
     def test_single_cue_srt_index(self) -> None:
-        """SRT の cue index が正しく取得されること。"""
+        """The cue index from SRT is correctly retrieved."""
         srt = "1\n00:00:00,000 --> 00:00:01,000\nあいう\n"
         cues = parse_captions(srt, "srt")
         assert cues[0].index == 1
 
     def test_single_cue_srt_start_timecode(self) -> None:
-        """SRT の start タイムコードが文字列のまま保持されること（WR-AD-06）。"""
+        """SRT start timecode is preserved as a string (WR-AD-06)."""
         srt = "1\n00:00:00,000 --> 00:00:01,000\nあいう\n"
         cues = parse_captions(srt, "srt")
         assert cues[0].start == "00:00:00,000"
 
     def test_single_cue_srt_end_timecode(self) -> None:
-        """SRT の end タイムコードが文字列のまま保持されること（WR-AD-06）。"""
+        """SRT end timecode is preserved as a string (WR-AD-06)."""
         srt = "1\n00:00:00,000 --> 00:00:01,000\nあいう\n"
         cues = parse_captions(srt, "srt")
         assert cues[0].end == "00:00:01,000"
 
     def test_single_cue_srt_text(self) -> None:
-        """SRT の cue テキストが正しく取得されること。"""
+        """SRT cue text is correctly retrieved."""
         srt = "1\n00:00:00,000 --> 00:00:01,000\nあいう\n"
         cues = parse_captions(srt, "srt")
         assert cues[0].text == "あいう"
 
 
 class TestParseCaptionsSrtTwoCues:
-    """2 cue の SRT パース（WR-AD-12 の transcribe バイト構造仕様固定テスト）。"""
+    """2-cue SRT parsing (spec-pinning test for transcribe byte-structure in WR-AD-12)."""
 
-    # DC-AS-001/WR-AD-12 固定フィクスチャ
-    # transcribe to_srt の正確なバイト構造:
-    #   cue 間は空行1つ・末尾 cue は空行なし単一改行 EOF
+    # DC-AS-001/WR-AD-12 fixed fixture
+    # Exact byte structure of transcribe to_srt:
+    #   1 blank line between cues; last cue has no trailing blank, single newline at EOF
     SRT_2CUE = (
         "1\n00:00:00,000 --> 00:00:01,000\nあいう\n"
         "\n"
@@ -123,124 +123,124 @@ class TestParseCaptionsSrtTwoCues:
     )
 
     def test_two_cues_parsed(self) -> None:
-        """2 cue SRT（cue 間空行1・末尾空行なし単一改行 EOF）が正しく 2 件 parse されること（DC-AS-001）。"""
+        """2-cue SRT (1 blank between cues, no trailing blank, single newline EOF) parses to 2 cues (DC-AS-001)."""
         cues = parse_captions(self.SRT_2CUE, "srt")
         assert len(cues) == 2
 
     def test_first_cue_index(self) -> None:
-        """1 番目の cue の index が 1 であること。"""
+        """The first cue has index 1."""
         cues = parse_captions(self.SRT_2CUE, "srt")
         assert cues[0].index == 1
 
     def test_second_cue_index(self) -> None:
-        """2 番目の cue の index が 2 であること。"""
+        """The second cue has index 2."""
         cues = parse_captions(self.SRT_2CUE, "srt")
         assert cues[1].index == 2
 
     def test_first_cue_text(self) -> None:
-        """1 番目の cue テキストが 'あいう' であること。"""
+        """The first cue text is 'あいう'."""
         cues = parse_captions(self.SRT_2CUE, "srt")
         assert cues[0].text == "あいう"
 
     def test_second_cue_text(self) -> None:
-        """2 番目の cue テキストが 'えお' であること（末尾 cue 取りこぼしなし）。"""
+        """The second cue text is 'えお' (no trailing cue dropped)."""
         cues = parse_captions(self.SRT_2CUE, "srt")
         assert cues[1].text == "えお"
 
     def test_second_cue_timecode_preserved(self) -> None:
-        """2 番目の cue のタイムコードが不変保持されること（WR-AD-06）。"""
+        """The second cue timecode is preserved (WR-AD-06)."""
         cues = parse_captions(self.SRT_2CUE, "srt")
         assert cues[1].start == "00:00:01,000"
         assert cues[1].end == "00:00:02,000"
 
 
 class TestParseCaptionsSrtEdgeCases:
-    """SRT パースの境界・防御ケースを検証する（WR-AD-12(2)）。"""
+    """Verify boundary/defensive cases for SRT parsing (WR-AD-12(2))."""
 
     def test_empty_string_returns_empty_list(self) -> None:
-        """SRT の空文字列 '' → [] を返すこと（0件・例外なし）（WR-AD-12(2)）。"""
+        """Empty string SRT '' → [] (0 cues, no exception) (WR-AD-12(2))."""
         result = parse_captions("", "srt")
         assert result == []
 
     def test_trailing_newline_only_returns_empty_list(self) -> None:
-        """SRT の '\\n' のみ → [] を返すこと（0件・例外なし）。"""
+        """SRT with only '\\n' → [] (0 cues, no exception)."""
         result = parse_captions("\n", "srt")
         assert result == []
 
     def test_trailing_blank_lines_handled(self) -> None:
-        """末尾に複数の空行がある SRT でも正しく parse されること（頑健性）。"""
+        """SRT with multiple trailing blank lines is still parsed correctly (robustness)."""
         srt = "1\n00:00:00,000 --> 00:00:01,000\nテスト\n\n\n"
         cues = parse_captions(srt, "srt")
         assert len(cues) == 1
         assert cues[0].text == "テスト"
 
     def test_multiple_blank_lines_between_cues_handled(self) -> None:
-        """cue 間に複数の空行がある SRT でも正しく parse されること（頑健性）。"""
+        """SRT with multiple blank lines between cues is still parsed correctly (robustness)."""
         srt = "1\n00:00:00,000 --> 00:00:01,000\nあ\n\n\n2\n00:00:01,000 --> 00:00:02,000\nい\n"
         cues = parse_captions(srt, "srt")
         assert len(cues) == 2
 
     def test_multiline_text_in_cue_joined_without_space(self) -> None:
-        """cue 内の複数行テキストは空文字結合されること（WR-AD-14・半角空白挿入なし）。"""
+        """Multi-line text within a cue is concatenated with empty string (WR-AD-14; no space inserted)."""
         srt = "1\n00:00:00,000 --> 00:00:01,000\nあいう\nえおか\n"
         cues = parse_captions(srt, "srt")
-        # \\n を空文字で除去して連結（半角空白を入れない）
+        # \\n removed and joined without space
         assert cues[0].text == "あいうえおか"
 
     def test_multiline_text_no_space_inserted(self) -> None:
-        """cue 内複数行結合時に半角空白が挿入されないこと（WR-AD-14 明示）。"""
+        """No half-width space is inserted when joining multi-line cue text (WR-AD-14 explicit)."""
         srt = "1\n00:00:00,000 --> 00:00:01,000\nHello\nWorld\n"
         cues = parse_captions(srt, "srt")
-        # 厳密: 半角空白挿入なしの確認
+        # Strict: confirm no space inserted
         assert cues[0].text == "HelloWorld"
 
     def test_invalid_timecode_raises_exception(self) -> None:
-        """不正な timecode 行が含まれる SRT → 例外（INVALID_INPUT 相当）が送出されること（WR-AD-09）。"""
+        """SRT with invalid timecode line → exception (INVALID_INPUT equivalent) is raised (WR-AD-09)."""
         srt = "1\nINVALID_TIMECODE\nテスト\n"
         with pytest.raises((ValueError, RuntimeError)):
             parse_captions(srt, "srt")
 
 
 # ===========================================================================
-# parse_captions — VTT 基本動作（WR-AD-12 バイト構造仕様）
+# parse_captions — VTT basic behaviour (WR-AD-12 byte-structure spec)
 # ===========================================================================
 
 
 class TestParseCaptionsVttBasic:
-    """parse_captions('vtt') の基本動作を検証する（WR-AD-03/WR-AD-12）。"""
+    """Verify the basic behaviour of parse_captions('vtt') (WR-AD-03/WR-AD-12)."""
 
     def test_single_cue_vtt_returns_list(self) -> None:
-        """1 cue の VTT（WEBVTT\\n\\n<cue>）が正しく parse されること（WR-AD-12 ヘッダ仕様）。"""
+        """1-cue VTT (WEBVTT\\n\\n<cue>) is parsed correctly (WR-AD-12 header spec)."""
         vtt = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nあいう\n"
         result = parse_captions(vtt, "vtt")
         assert isinstance(result, list)
         assert len(result) == 1
 
     def test_single_cue_vtt_start_timecode(self) -> None:
-        """VTT の start タイムコードが文字列のまま保持されること（WR-AD-06）。"""
+        """VTT start timecode is preserved as a string (WR-AD-06)."""
         vtt = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nあいう\n"
         cues = parse_captions(vtt, "vtt")
         assert cues[0].start == "00:00:00.000"
 
     def test_single_cue_vtt_end_timecode(self) -> None:
-        """VTT の end タイムコードが文字列のまま保持されること（WR-AD-06）。"""
+        """VTT end timecode is preserved as a string (WR-AD-06)."""
         vtt = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nあいう\n"
         cues = parse_captions(vtt, "vtt")
         assert cues[0].end == "00:00:01.000"
 
     def test_single_cue_vtt_text(self) -> None:
-        """VTT の cue テキストが正しく取得されること。"""
+        """VTT cue text is correctly retrieved."""
         vtt = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nあいう\n"
         cues = parse_captions(vtt, "vtt")
         assert cues[0].text == "あいう"
 
     def test_header_only_vtt_returns_empty_list(self) -> None:
-        """VTT の 'WEBVTT\\n'（ヘッダのみ）→ [] を返すこと（0件・例外なし）（WR-AD-12(2)）。"""
+        """VTT 'WEBVTT\\n' (header only) → [] (0 cues, no exception) (WR-AD-12(2))."""
         result = parse_captions("WEBVTT\n", "vtt")
         assert result == []
 
     def test_webvtt_header_blank_line_skipped(self) -> None:
-        """WEBVTT ヘッダ直後の空行が正常にスキップされて最初の cue に到達すること（WR-AD-12(2)）。"""
+        """Blank line immediately after WEBVTT header is skipped and first cue is reached (WR-AD-12(2))."""
         vtt = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nテスト\n"
         cues = parse_captions(vtt, "vtt")
         assert len(cues) == 1
@@ -248,59 +248,59 @@ class TestParseCaptionsVttBasic:
 
 
 class TestParseCaptionsVttEdgeCases:
-    """VTT エッジ 5 種の保持/warnings 挙動を検証する（WR-AD-12(3) / DC-AM-001）。"""
+    """Verify the 5 VTT edge-case preserve/warnings behaviours (WR-AD-12(3) / DC-AM-001)."""
 
     def test_vtt_cue_with_id_line_text_only_wrapped(self) -> None:
-        """(a) cue id 行付き VTT: cue id は保持・text 行のみ整形対象になること。"""
+        """(a) VTT with cue id line: cue id is preserved; only the text line is formatted."""
         vtt = "WEBVTT\n\ncue-1\n00:00:00.000 --> 00:00:01.000\nあいう\n"
         cues = parse_captions(vtt, "vtt")
         assert len(cues) == 1
         assert cues[0].text == "あいう"
-        # タイムコードが不変であること
+        # Timecode must be invariant
         assert cues[0].start == "00:00:00.000"
 
     def test_vtt_cue_with_settings_preserved(self) -> None:
-        """(d) cue settings 付き VTT: settings 部分は不変保持・text 行のみ整形されること。"""
+        """(d) VTT with cue settings: settings portion is preserved as-is; only text line is formatted."""
         vtt = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000 line:90% position:50%\nテスト\n"
         cues = parse_captions(vtt, "vtt")
         assert len(cues) == 1
         assert cues[0].text == "テスト"
-        # settings を含むタイムライン行が原文保持されること
+        # Timeline line including settings must be preserved as original
         assert "line:90%" in cues[0].end or "line:90%" in (cues[0].start + cues[0].end)
 
     def test_vtt_note_block_preserved_with_warnings(self) -> None:
-        """(b) NOTE ブロック: parse 結果に反映され、warnings 情報が得られること。
+        """(b) NOTE block: reflected in parse result, and warnings information is available.
 
-        NOTE ブロックは整形対象外で原文保持・warnings に記録される（WR-AD-12(3)(b)）。
-        parse_captions の戻り値の型または warnings 属性で確認する。
+        NOTE blocks are not formatting targets, preserved as-is, and recorded in warnings (WR-AD-12(3)(b)).
+        Verified via the return type or warnings attribute of parse_captions.
         """
         vtt = "WEBVTT\n\nNOTE これはコメントです\n\n00:00:00.000 --> 00:00:01.000\nテスト\n"
-        # NOTE ブロックが含まれても cue は正しく取得できること（整形対象外で保持）
+        # Even with a NOTE block, cue must be correctly retrieved (preserved, not a formatting target)
         cues = parse_captions(vtt, "vtt")
         assert any(c.text == "テスト" for c in cues)
 
     def test_vtt_style_block_preserved_with_warnings(self) -> None:
-        """(c) STYLE ブロック: parse 結果に反映され、cue は正しく取得できること。
+        """(c) STYLE block: reflected in parse result and cue is correctly retrieved.
 
-        STYLE ブロックは整形対象外で原文保持・warnings に記録される（WR-AD-12(3)(c)）。
+        STYLE blocks are not formatting targets, preserved as-is, and recorded in warnings (WR-AD-12(3)(c)).
         """
         vtt = "WEBVTT\n\nSTYLE\n::cue { color: white; }\n\n00:00:00.000 --> 00:00:01.000\nテスト\n"
         cues = parse_captions(vtt, "vtt")
         assert any(c.text == "テスト" for c in cues)
 
     def test_vtt_inline_tag_cue_text_preserved_with_warnings(self) -> None:
-        """(e) インラインタグ付き cue: タグ込みテキストが原文保持されること（WR-AD-12(3)(e)）。
+        """(e) Cue with inline tags: text including tags is preserved as original (WR-AD-12(3)(e)).
 
-        インラインタグを含む cue は文節整形をスキップし原文保持・warnings に記録される。
+        Cues with inline tags skip phrase-boundary formatting and are preserved as-is, recorded in warnings.
         """
         vtt = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n<c.yellow>テキスト</c>\n"
         cues = parse_captions(vtt, "vtt")
         assert len(cues) == 1
-        # タグ込みテキストが原文保持されること
+        # Text including tags must be preserved as original
         assert cues[0].text == "<c.yellow>テキスト</c>"
 
     def test_vtt_timecode_invariant_through_all_edge_cases(self) -> None:
-        """VTT エッジケースを通じてタイムコードが不変であること（WR-AD-06）。"""
+        """Timecodes must be invariant across all VTT edge cases (WR-AD-06)."""
         vtt = "WEBVTT\n\n00:01:23.456 --> 00:01:24.789\nテスト\n"
         cues = parse_captions(vtt, "vtt")
         assert cues[0].start == "00:01:23.456"
@@ -308,24 +308,24 @@ class TestParseCaptionsVttEdgeCases:
 
 
 # ===========================================================================
-# parse_captions — 往復同一（SRT/VTT）
+# parse_captions — round-trip identity (SRT/VTT)
 # ===========================================================================
 
 
 class TestParseCaptionsRoundTrip:
-    """parse → serialize の往復でタイムコードが同一であることを検証する（WR-AD-06）。"""
+    """Verify that timecodes are identical after a parse → serialize round trip (WR-AD-06)."""
 
     def test_srt_roundtrip_timecode_preserved(self) -> None:
-        """SRT の parse → serialize でタイムコードが不変であること。"""
+        """Timecodes are invariant after SRT parse → serialize."""
         original = "1\n00:00:00,000 --> 00:00:01,000\nあいう\n"
         cues = parse_captions(original, "srt")
         result = serialize_captions(cues, "srt")
-        # タイムコード文字列が復元されること
+        # Timecode strings must be restored
         assert "00:00:00,000" in result
         assert "00:00:01,000" in result
 
     def test_vtt_roundtrip_timecode_preserved(self) -> None:
-        """VTT の parse → serialize でタイムコードが不変であること。"""
+        """Timecodes are invariant after VTT parse → serialize."""
         original = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nあいう\n"
         cues = parse_captions(original, "vtt")
         result = serialize_captions(cues, "vtt")
@@ -334,151 +334,151 @@ class TestParseCaptionsRoundTrip:
 
 
 # ===========================================================================
-# wrap_cue_lines — 貪欲行詰め（WR-AD-04/WR-AD-14）
+# wrap_cue_lines — greedy line-filling (WR-AD-04/WR-AD-14)
 # ===========================================================================
 
 
 class TestWrapCueLinesBasic:
-    """wrap_cue_lines の基本動作を検証する（WR-AD-04）。"""
+    """Verify the basic behaviour of wrap_cue_lines (WR-AD-04)."""
 
     def test_returns_list_of_str(self) -> None:
-        """wrap_cue_lines が list[str] を返すこと。"""
+        """wrap_cue_lines returns list[str]."""
         result = wrap_cue_lines(["今日は", "いい", "天気です。"], max_chars=10)
         assert isinstance(result, list)
         assert all(isinstance(line, str) for line in result)
 
     def test_short_segments_fit_in_one_line(self) -> None:
-        """max_chars に収まる文節列は 1 行に詰められること。"""
-        # "今日は" + "いい" + "天気です。" = 10 文字 → max_chars=16 で 1 行
+        """Segments that fit within max_chars are packed into 1 line."""
+        # "今日は" + "いい" + "天気です。" = 10 chars → fits in 1 line with max_chars=16
         result = wrap_cue_lines(["今日は", "いい", "天気です。"], max_chars=16)
         assert len(result) == 1
 
     def test_segments_joined_without_delimiter(self) -> None:
-        """文節トークンを結合しても原文が復元されること（WR-AD-14(i)・区切り未挿入）。"""
+        """Joining phrase tokens restores the original text (WR-AD-14(i); no delimiter inserted)."""
         segments = ["今日は", "いい", "天気です。"]
         result = wrap_cue_lines(segments, max_chars=100)
-        # 1 行に全部入る → 区切り未挿入で結合が "今日はいい天気です。" になること
+        # All fit on 1 line → joined without delimiter gives "今日はいい天気です。"
         assert result[0] == "今日はいい天気です。"
 
     def test_join_restores_original_text(self) -> None:
-        """wrap 後の全行を結合すると元テキストを復元できること（WR-AD-14(i)）。"""
+        """Joining all lines after wrap restores the original text (WR-AD-14(i))."""
         segments = ["今日は", "いい", "天気です。"]
         result = wrap_cue_lines(segments, max_chars=5)
-        # 分割されても空文字結合で原文復元
+        # Even when split, joining with empty string restores the original
         assert "".join(result) == "今日はいい天気です。"
 
     def test_line_len_excludes_newline(self) -> None:
-        """各行の len() に '\\n' が含まれないこと（WR-AD-14(ii)）。"""
+        """len() of each line does not include '\\n' (WR-AD-14(ii))."""
         result = wrap_cue_lines(["今日は", "いい", "天気です。"], max_chars=5)
         for line in result:
             assert "\n" not in line
 
     def test_empty_segments_returns_empty_list(self) -> None:
-        """空の segments → [] を返すこと（防御）。"""
+        """Empty segments → [] (defensive)."""
         result = wrap_cue_lines([], max_chars=16)
         assert result == []
 
 
 class TestWrapCueLinesGreedy:
-    """貪欲行詰めの動作を検証する（WR-AD-04）。"""
+    """Verify greedy line-filling behaviour (WR-AD-04)."""
 
     def test_segments_split_at_max_chars_boundary(self) -> None:
-        """max_chars を超える直前で改行されること（貪欲）。"""
-        # "今日は"(3) + "とても"(3) = 6 文字 ≤ 5? → max_chars=5 の場合
-        # "今日は"(3) ≤ 5: OK → + "とても"(3) = 6 > 5: 改行
+        """A line break is inserted just before exceeding max_chars (greedy)."""
+        # "今日は"(3) + "とても"(3) = 6 chars; with max_chars=5:
+        # "今日は"(3) ≤ 5: OK → + "とても"(3) = 6 > 5: line break
         result = wrap_cue_lines(["今日は", "とても", "いい"], max_chars=5)
-        # 1行目: "今日は", 2行目: "ともも..." の想定で行数 > 1
+        # Expect: line 1 = "今日は", line 2 starts with "とても..." → more than 1 line
         assert len(result) >= 2
 
     def test_line_does_not_exceed_max_chars_when_possible(self) -> None:
-        """文節単独が max_chars 以下の場合、各行の len が max_chars 以下になること。"""
+        """When each segment alone is ≤ max_chars, len of each line is ≤ max_chars."""
         segments = ["今日は", "いい", "天気です。"]
         result = wrap_cue_lines(segments, max_chars=6)
         for line in result:
-            # 文節単独が max_chars を超えない場合、行は max_chars 以下
+            # When no single segment exceeds max_chars, each line is ≤ max_chars
             assert len(line) <= 6
 
     def test_exactly_max_chars_stays_in_same_line(self) -> None:
-        """1 行の長さがちょうど max_chars の場合、その行に収まること（境界値）。"""
-        # "あいうえ"(4文字) ちょうど max_chars=4
+        """A line whose length equals exactly max_chars stays on that line (boundary value)."""
+        # "あいうえ" (4 chars) exactly equals max_chars=4
         result = wrap_cue_lines(["あいうえ"], max_chars=4)
         assert len(result) == 1
         assert result[0] == "あいうえ"
 
     def test_greedy_fill_uses_max_chars_efficiently(self) -> None:
-        """貪欲詰めで max_chars を効率よく使っていること（budoux_sample.json fixture）。"""
-        # "今日は"(3) + "いい"(2) = 5文字 → max_chars=5 で 1 行に収まること
+        """Greedy filling uses max_chars efficiently (budoux_sample.json fixture)."""
+        # "今日は"(3) + "いい"(2) = 5 chars → fits on 1 line with max_chars=5
         result = wrap_cue_lines(["今日は", "いい"], max_chars=5)
         assert len(result) == 1
         assert result[0] == "今日はいい"
 
 
 class TestWrapCueLinesOversizedSegment:
-    """単一巨大文節の扱いを検証する（WR-AD-04・途中で割らない）。"""
+    """Verify handling of a single oversized segment (WR-AD-04; no mid-segment split)."""
 
     def test_oversized_single_segment_placed_on_own_line(self) -> None:
-        """1 文節が単独で max_chars を超える場合、その文節を 1 行に置くこと（途中で割らない）。"""
-        # "歩きながら春の"(8文字) が max_chars=5 を超える
+        """When a single segment alone exceeds max_chars, it is placed on its own line (no mid-split)."""
+        # "歩きながら春の" (8 chars) exceeds max_chars=5
         result = wrap_cue_lines(["歩きながら春の"], max_chars=5)
         assert len(result) == 1
         assert result[0] == "歩きながら春の"
 
     def test_oversized_segment_not_split(self) -> None:
-        """巨大文節は文字途中で分割されないこと（WR-AD-04・文節境界優先）。"""
-        big_segment = "字幕改行ツールclipwright-wrapは"  # 17文字
+        """An oversized segment is not split mid-character (WR-AD-04; phrase boundary priority)."""
+        big_segment = "字幕改行ツールclipwright-wrapは"  # 17 chars
         result = wrap_cue_lines([big_segment], max_chars=10)
         assert len(result) == 1
         assert result[0] == big_segment
 
     def test_oversized_segment_followed_by_small_segments(self) -> None:
-        """巨大文節の後に小文節が続く場合、巨大文節は単独行・後続は別行に詰められること。"""
-        # "歩きながら春の"(8) が max_chars=5 を超える → 1 行
-        # "訪れを"(4) → 次の行
+        """When a small segment follows an oversized one, the oversized segment is on its own line and the rest are packed on another."""
+        # "歩きながら春の"(8) exceeds max_chars=5 → 1 line
+        # "訪れを"(4) → next line
         result = wrap_cue_lines(["歩きながら春の", "訪れを", "感じた。"], max_chars=5)
         assert result[0] == "歩きながら春の"
-        # 後続が別の行に配置されること
+        # Following segments are placed on a different line
         assert len(result) >= 2
 
 
 class TestWrapCueLinesCharCount:
-    """文字カウント仕様を検証する（WR-AD-14）。"""
+    """Verify the character counting spec (WR-AD-14)."""
 
     def test_full_width_and_half_width_counted_equally(self) -> None:
-        """全角・半角を同じ 1 文字としてカウントすること（WR-AD-14(iii)・一律 1 文字）。"""
-        # "abc"(半角3文字) + "あいう"(全角3文字) = 6文字 → max_chars=6 で 1 行
+        """Full-width and half-width characters are both counted as 1 (WR-AD-14(iii); uniform 1-char)."""
+        # "abc"(3 half-width) + "あいう"(3 full-width) = 6 chars → fits on 1 line with max_chars=6
         result = wrap_cue_lines(["abc", "あいう"], max_chars=6)
         assert len(result) == 1
         assert result[0] == "abcあいう"
 
     def test_half_width_ascii_counted_as_one(self) -> None:
-        """半角英数字も len() で 1 文字としてカウントされること（WR-AD-14(iii)）。"""
-        # "BudouXを"(7文字: B,u,d,o,u,X,を) → max_chars=7 で 1 行
+        """Half-width ASCII is also counted as 1 by len() (WR-AD-14(iii))."""
+        # "BudouXを" (7 chars: B,u,d,o,u,X,を) → fits on 1 line with max_chars=7
         result = wrap_cue_lines(["BudouXを"], max_chars=7)
         assert len(result) == 1
 
     def test_len_matches_character_count(self) -> None:
-        """len(line) が \\n 除外の文字数と一致すること（WR-AD-14(ii)）。"""
+        """len(line) matches the character count excluding \\n (WR-AD-14(ii))."""
         segments = ["今日は", "いい", "天気です。"]
         result = wrap_cue_lines(segments, max_chars=100)
         for line in result:
             assert len(line) == len(line.replace("\n", ""))
 
     def test_space_in_original_text_counted_as_one_char(self) -> None:
-        """元テキストの半角空白は原文の一部として 1 文字カウントに含まれること（WR-AD-14）。"""
-        # "Hello "(6文字・空白含む) → len = 6
+        """A half-width space in the original text is counted as 1 character as part of the original (WR-AD-14)."""
+        # "Hello " (6 chars including space) → len = 6
         result = wrap_cue_lines(["Hello "], max_chars=6)
         assert len(result) == 1
         assert result[0] == "Hello "
 
 
 class TestWrapCueLinesWithBudouxFixture:
-    """budoux_sample.json の実セグメントで wrap_cue_lines を検証する。"""
+    """Verify wrap_cue_lines with real segments from budoux_sample.json."""
 
     def test_short_ja_segments_with_max_chars_10(
         self, budoux_segments_ja: list[list[str]]
     ) -> None:
-        """budoux fixture の短文（'今日はいい天気です。'）を max_chars=10 で詰めること。"""
-        # segments[0]: ["今日は", "いい", "天気です。"] = 9文字
+        """Short Japanese text from budoux fixture ('今日はいい天気です。') is packed with max_chars=10."""
+        # segments[0]: ["今日は", "いい", "天気です。"] = 9 chars
         segments = budoux_segments_ja[0]
         result = wrap_cue_lines(segments, max_chars=10)
         assert "".join(result) == "今日はいい天気です。"
@@ -486,19 +486,19 @@ class TestWrapCueLinesWithBudouxFixture:
     def test_long_ja_segments_wrapped_by_max_chars(
         self, budoux_segments_ja: list[list[str]]
     ) -> None:
-        """budoux fixture の長文（7文節）が max_chars=10 で複数行に分割されること。"""
+        """Long Japanese text from budoux fixture (7 segments) is split into multiple lines with max_chars=10."""
         # segments[1]: ["今日は", "とても", "いい", "天気なので", "公園に", "散歩に", "行きました。"]
         segments = budoux_segments_ja[1]
         result = wrap_cue_lines(segments, max_chars=10)
-        # 全部で 26 文字 → max_chars=10 なので複数行になること
+        # Total 26 chars → multiple lines with max_chars=10
         assert len(result) > 1
-        # 結合すると原文を復元できること
+        # Joining restores the original text
         assert "".join(result) == "今日はとてもいい天気なので公園に散歩に行きました。"
 
     def test_mixed_segments_join_without_delimiter(
         self, budoux_segments_ja: list[list[str]]
     ) -> None:
-        """英数字混じりセグメントでも区切り未挿入で結合されること（WR-AD-14(i)）。"""
+        """Mixed alphanumeric segments are also joined without delimiter (WR-AD-14(i))."""
         # segments[3]: ["字幕改行ツールclipwright-wrapは", "BudouXを", "使って", ...]
         segments = budoux_segments_ja[3]
         result = wrap_cue_lines(segments, max_chars=100)
@@ -507,15 +507,15 @@ class TestWrapCueLinesWithBudouxFixture:
 
 
 # ===========================================================================
-# serialize_captions — SRT 出力フォーマット（WR-AD-12 バイト構造）
+# serialize_captions — SRT output format (WR-AD-12 byte structure)
 # ===========================================================================
 
 
 class TestSerializeCaptionsSrt:
-    """serialize_captions('srt') の出力フォーマットを検証する（WR-AD-12(1)）。"""
+    """Verify the output format of serialize_captions('srt') (WR-AD-12(1))."""
 
     def test_single_cue_srt_format(self) -> None:
-        """1 cue の SRT 出力が正しいフォーマットであること（インデックス・タイムコード・テキスト）。"""
+        """1-cue SRT output has the correct format (index, timecode, text)."""
         cues = [Cue(index=1, start="00:00:00,000", end="00:00:01,000", text="あいう")]
         result = serialize_captions(cues, "srt")
         assert "1\n" in result
@@ -523,18 +523,18 @@ class TestSerializeCaptionsSrt:
         assert "あいう" in result
 
     def test_single_cue_srt_timecode_format(self) -> None:
-        """SRT タイムコードが 'HH:MM:SS,mmm' 形式で不変出力されること（WR-AD-06）。"""
+        """SRT timecode is output unchanged in 'HH:MM:SS,mmm' format (WR-AD-06)."""
         cues = [Cue(index=1, start="00:00:12,345", end="00:00:13,678", text="x")]
         result = serialize_captions(cues, "srt")
         assert "00:00:12,345 --> 00:00:13,678" in result
 
     def test_zero_cues_srt_returns_empty_string(self) -> None:
-        """0 件の SRT → '' を返すこと（WR-AD-12(2)）。"""
+        """0 cues SRT → '' (WR-AD-12(2))."""
         result = serialize_captions([], "srt")
         assert result == ""
 
     def test_two_cues_srt_separated_by_blank_line(self) -> None:
-        """2 cue SRT で cue 間に空行が 1 つあること（WR-AD-12(1) バイト構造）。"""
+        """2-cue SRT has exactly 1 blank line between cues (WR-AD-12(1) byte structure)."""
         cues = [
             Cue(index=1, start="00:00:00,000", end="00:00:01,000", text="あ"),
             Cue(index=2, start="00:00:01,000", end="00:00:02,000", text="い"),
@@ -543,19 +543,19 @@ class TestSerializeCaptionsSrt:
         assert "\n\n" in result
 
     def test_two_cues_srt_last_cue_no_trailing_blank_line(self) -> None:
-        """2 cue SRT の末尾 cue 後に空行がないこと（WR-AD-12(1) 末尾単一改行 EOF）。"""
+        """2-cue SRT has no trailing blank line after the last cue (WR-AD-12(1); single newline at EOF)."""
         cues = [
             Cue(index=1, start="00:00:00,000", end="00:00:01,000", text="あ"),
             Cue(index=2, start="00:00:01,000", end="00:00:02,000", text="い"),
         ]
         result = serialize_captions(cues, "srt")
-        # 末尾が "\n\n" で終わらないこと
+        # Must not end with "\n\n"
         assert not result.endswith("\n\n")
-        # 末尾が単一改行で終わること
+        # Must end with a single newline
         assert result.endswith("\n")
 
     def test_srt_two_cue_exact_byte_structure(self) -> None:
-        """SRT 2 cue の正確なバイト構造が WR-AD-12(1) フィクスチャと一致すること（DC-AS-001）。"""
+        """Exact byte structure of a 2-cue SRT matches the WR-AD-12(1) fixture (DC-AS-001)."""
         cues = [
             Cue(index=1, start="00:00:00,000", end="00:00:01,000", text="あいう"),
             Cue(index=2, start="00:00:01,000", end="00:00:02,000", text="えお"),
@@ -570,57 +570,57 @@ class TestSerializeCaptionsSrt:
 
 
 # ===========================================================================
-# serialize_captions — VTT 出力フォーマット（WR-AD-12 バイト構造）
+# serialize_captions — VTT output format (WR-AD-12 byte structure)
 # ===========================================================================
 
 
 class TestSerializeCaptionsVtt:
-    """serialize_captions('vtt') の出力フォーマットを検証する（WR-AD-12(1)）。"""
+    """Verify the output format of serialize_captions('vtt') (WR-AD-12(1))."""
 
     def test_vtt_starts_with_webvtt_header(self) -> None:
-        """VTT 出力が 'WEBVTT' ヘッダで始まること。"""
+        """VTT output starts with the 'WEBVTT' header."""
         cues = [Cue(index=1, start="00:00:00.000", end="00:00:01.000", text="あいう")]
         result = serialize_captions(cues, "vtt")
         assert result.startswith("WEBVTT")
 
     def test_vtt_header_followed_by_blank_line(self) -> None:
-        """VTT ヘッダ直後に空行があること（WEBVTT\\n\\n<cue> 構造・WR-AD-12(1)）。"""
+        """VTT header is followed by a blank line (WEBVTT\\n\\n<cue> structure; WR-AD-12(1))."""
         cues = [Cue(index=1, start="00:00:00.000", end="00:00:01.000", text="あいう")]
         result = serialize_captions(cues, "vtt")
         assert result.startswith("WEBVTT\n\n")
 
     def test_vtt_timecode_uses_dot_separator(self) -> None:
-        """VTT タイムコードがドット区切り 'HH:MM:SS.mmm' で不変出力されること（WR-AD-06）。"""
+        """VTT timecode is output unchanged with dot separator 'HH:MM:SS.mmm' (WR-AD-06)."""
         cues = [Cue(index=1, start="00:00:12.345", end="00:00:13.678", text="x")]
         result = serialize_captions(cues, "vtt")
         assert "00:00:12.345 --> 00:00:13.678" in result
 
     def test_zero_cues_vtt_returns_header_only(self) -> None:
-        """0 件の VTT → 'WEBVTT\\n' を返すこと（WR-AD-12(2)）。"""
+        """0 cues VTT → 'WEBVTT\\n' (WR-AD-12(2))."""
         result = serialize_captions([], "vtt")
         assert result == "WEBVTT\n"
 
     def test_vtt_one_cue_exact_byte_structure(self) -> None:
-        """VTT 1 cue の正確なバイト構造が WR-AD-12(1) フィクスチャと一致すること（DC-AS-001）。"""
+        """Exact byte structure of a 1-cue VTT matches the WR-AD-12(1) fixture (DC-AS-001)."""
         cues = [Cue(index=1, start="00:00:00.000", end="00:00:01.000", text="あいう")]
         expected = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nあいう\n"
         result = serialize_captions(cues, "vtt")
         assert result == expected
 
     def test_vtt_two_cues_separated_by_blank_line(self) -> None:
-        """2 cue VTT で cue 間に空行が 1 つあること（WR-AD-12(1) バイト構造）。"""
+        """2-cue VTT has exactly 1 blank line between cues (WR-AD-12(1) byte structure)."""
         cues = [
             Cue(index=1, start="00:00:00.000", end="00:00:01.000", text="あ"),
             Cue(index=2, start="00:00:01.000", end="00:00:02.000", text="い"),
         ]
         result = serialize_captions(cues, "vtt")
-        # WEBVTT\n\ncue1\n\ncue2\n の構造
+        # Structure: WEBVTT\n\ncue1\n\ncue2\n
         lines = result.split("\n")
-        # 空行が存在すること
+        # A blank line must exist
         assert "" in lines
 
     def test_vtt_last_cue_no_trailing_blank_line(self) -> None:
-        """VTT の末尾 cue 後に空行がないこと（WR-AD-12(1) 末尾単一改行 EOF）。"""
+        """VTT has no trailing blank line after the last cue (WR-AD-12(1); single newline at EOF)."""
         cues = [
             Cue(index=1, start="00:00:00.000", end="00:00:01.000", text="あ"),
             Cue(index=2, start="00:00:01.000", end="00:00:02.000", text="い"),
@@ -631,27 +631,27 @@ class TestSerializeCaptionsVtt:
 
 
 # ===========================================================================
-# serialize_captions — 往復同一（SRT/VTT）
+# serialize_captions — round-trip identity (SRT/VTT)
 # ===========================================================================
 
 
 class TestSerializeCaptionsRoundTrip:
-    """parse → serialize の往復同一性を検証する（WR-AD-06 不変保持）。"""
+    """Verify parse → serialize round-trip identity (WR-AD-06 invariant preservation)."""
 
     def test_srt_zero_cues_roundtrip(self) -> None:
-        """SRT 空文字列 parse → serialize が '' を返すこと（往復同一・WR-AD-12(2)）。"""
+        """Empty string SRT parse → serialize returns '' (round-trip identity; WR-AD-12(2))."""
         cues = parse_captions("", "srt")
         result = serialize_captions(cues, "srt")
         assert result == ""
 
     def test_vtt_header_only_roundtrip(self) -> None:
-        """VTT 'WEBVTT\\n' parse → serialize が 'WEBVTT\\n' を返すこと（往復同一・WR-AD-12(2)）。"""
+        """VTT 'WEBVTT\\n' parse → serialize returns 'WEBVTT\\n' (round-trip identity; WR-AD-12(2))."""
         cues = parse_captions("WEBVTT\n", "vtt")
         result = serialize_captions(cues, "vtt")
         assert result == "WEBVTT\n"
 
     def test_srt_two_cue_roundtrip_exact_match(self) -> None:
-        """SRT 2 cue の parse → serialize が元文字列と一致すること（往復同一・DC-AS-001）。"""
+        """2-cue SRT parse → serialize matches the original string (round-trip identity; DC-AS-001)."""
         original = (
             "1\n00:00:00,000 --> 00:00:01,000\nあいう\n"
             "\n"
@@ -663,164 +663,164 @@ class TestSerializeCaptionsRoundTrip:
 
 
 # ===========================================================================
-# overflow 判定（WR-AD-15(1) / DC-AM-003）
+# Overflow detection (WR-AD-15(1) / DC-AM-003)
 # ===========================================================================
 
-# overflow 判定は captions.py の純ロジック関数として実装される想定。
-# 関数シグネチャ: is_overflow(lines: list[str], max_chars: int, max_lines: int)
+# Overflow detection is expected to be implemented as a pure logic function in captions.py.
+# Function signature: is_overflow(lines: list[str], max_chars: int, max_lines: int)
 #   -> dict with "line_count_overflow": bool, "line_width_overflow": bool
-# または別途 Tuple / dataclass。
-# ここでは wrap_cue_lines の戻り値と組み合わせて overflow 判定ロジックを検証する。
-# 実装時に is_overflow 関数が存在する場合は直接 import して使う。
-# 存在しない場合は wrap_cue_lines 結果のメタデータから判定する。
+# (or Tuple / dataclass)
+# These tests verify the overflow detection logic combined with wrap_cue_lines output.
+# When is_overflow is available in captions.py, import and use it directly.
+# Otherwise, derive the result from wrap_cue_lines result metadata.
 
-# 注: overflow 判定は captions.py から is_overflow として export されることを想定。
-# Red テストとして: captions.py が存在しない = import 失敗で Red になる。
+# Note: overflow detection is expected to be exported from captions.py as is_overflow.
+# As a Red test: captions.py not present = ImportError → Red.
 
 
 class TestOverflowDetection:
-    """overflow 判定の境界値テストを検証する（WR-AD-15(1) / DC-AM-003）。
+    """Verify boundary-value tests for overflow detection (WR-AD-15(1) / DC-AM-003).
 
-    overflow 判定:
-      (a) 行数 > max_lines → 行数超過
-      (b) いずれかの行幅 > max_chars → 行幅超過（単一巨大文節も対象）
+    Overflow detection:
+      (a) line count > max_lines → line-count overflow
+      (b) any line width > max_chars → line-width overflow (including single oversized segment)
     """
 
     def test_no_overflow_when_within_limits(self) -> None:
-        """行数・行幅ともに制限内の場合、overflow でないこと。"""
+        """No overflow when both line count and line width are within limits."""
         from clipwright_wrap.captions import check_overflow
 
-        lines = ["あいうえ", "かきくけ"]  # 4文字 × 2行
+        lines = ["あいうえ", "かきくけ"]  # 4 chars × 2 lines
         result = check_overflow(lines, max_chars=5, max_lines=2)
         assert result["line_count_overflow"] is False
         assert result["line_width_overflow"] is False
 
     def test_line_count_overflow_at_max_lines_plus_1(self) -> None:
-        """行数が max_lines + 1 の場合、line_count_overflow が True であること（境界値）。"""
+        """line_count_overflow is True when line count is max_lines + 1 (boundary value)."""
         from clipwright_wrap.captions import check_overflow
 
-        lines = ["あ", "い", "う"]  # 3行, max_lines=2
+        lines = ["あ", "い", "う"]  # 3 lines, max_lines=2
         result = check_overflow(lines, max_chars=10, max_lines=2)
         assert result["line_count_overflow"] is True
 
     def test_no_line_count_overflow_at_exactly_max_lines(self) -> None:
-        """行数がちょうど max_lines の場合、line_count_overflow が False であること（境界値）。"""
+        """line_count_overflow is False when line count equals exactly max_lines (boundary value)."""
         from clipwright_wrap.captions import check_overflow
 
-        lines = ["あ", "い"]  # 2行, max_lines=2
+        lines = ["あ", "い"]  # 2 lines, max_lines=2
         result = check_overflow(lines, max_chars=10, max_lines=2)
         assert result["line_count_overflow"] is False
 
     def test_line_width_overflow_at_max_chars_plus_1(self) -> None:
-        """いずれかの行幅が max_chars + 1 の場合、line_width_overflow が True であること（境界値）。"""
+        """line_width_overflow is True when any line width is max_chars + 1 (boundary value)."""
         from clipwright_wrap.captions import check_overflow
 
-        lines = ["あいうえおか"]  # 6文字, max_chars=5
+        lines = ["あいうえおか"]  # 6 chars, max_chars=5
         result = check_overflow(lines, max_chars=5, max_lines=2)
         assert result["line_width_overflow"] is True
 
     def test_no_line_width_overflow_at_exactly_max_chars(self) -> None:
-        """行幅がちょうど max_chars の場合、line_width_overflow が False であること（境界値）。"""
+        """line_width_overflow is False when line width equals exactly max_chars (boundary value)."""
         from clipwright_wrap.captions import check_overflow
 
-        lines = ["あいうえお"]  # 5文字, max_chars=5
+        lines = ["あいうえお"]  # 5 chars, max_chars=5
         result = check_overflow(lines, max_chars=5, max_lines=2)
         assert result["line_width_overflow"] is False
 
     def test_single_oversized_segment_causes_width_overflow(self) -> None:
-        """単一巨大文節（行数1・行幅超過）が line_width_overflow=True になること（WR-AD-15(1)）。"""
+        """A single oversized segment (1 line, line-width overflow) → line_width_overflow=True (WR-AD-15(1))."""
         from clipwright_wrap.captions import check_overflow
 
-        # 行数は 1 ≤ max_lines=2 だが行幅超過
-        lines = ["歩きながら春の"]  # 8文字, max_chars=5
+        # 1 line ≤ max_lines=2 but line-width overflow
+        lines = ["歩きながら春の"]  # 8 chars, max_chars=5
         result = check_overflow(lines, max_chars=5, max_lines=2)
-        assert result["line_count_overflow"] is False  # 行数は OK
-        assert result["line_width_overflow"] is True  # 行幅は超過
+        assert result["line_count_overflow"] is False  # line count is OK
+        assert result["line_width_overflow"] is True  # line width overflows
 
     def test_both_overflow_simultaneously(self) -> None:
-        """行数超過かつ行幅超過の場合、両方が True であること。"""
+        """Both line_count_overflow and line_width_overflow are True when both conditions are met."""
         from clipwright_wrap.captions import check_overflow
 
         lines = [
             "あいうえおか",
             "きくけこ",
             "さしすせ",
-        ]  # 3行 > max_lines=2 かつ行幅超過
+        ]  # 3 lines > max_lines=2 and line-width overflow
         result = check_overflow(lines, max_chars=5, max_lines=2)
         assert result["line_count_overflow"] is True
         assert result["line_width_overflow"] is True
 
     def test_overflow_does_not_truncate_content(self) -> None:
-        """overflow 判定は内容を切り捨てないこと（情報欠落回避・WR-AD-15(1)）。"""
+        """Overflow detection does not truncate content (avoid information loss; WR-AD-15(1))."""
         from clipwright_wrap.captions import check_overflow
 
         lines = ["あいうえおか", "きくけこ", "さしすせ"]
-        # check_overflow は lines を変更しないこと
+        # check_overflow must not modify lines
         original_lines = lines.copy()
         check_overflow(lines, max_chars=5, max_lines=2)
         assert lines == original_lines
 
 
 # ===========================================================================
-# 防御ケース — 0件・空テキスト
+# Defensive cases — 0 cues and empty text
 # ===========================================================================
 
 
 class TestDefensiveCases:
-    """0件・空テキストの防御ケースを検証する。"""
+    """Verify defensive cases for 0 cues and empty text."""
 
     def test_parse_srt_empty_text_no_exception(self) -> None:
-        """空文字列の SRT parse が例外なく [] を返すこと。"""
+        """Empty string SRT parse returns [] without exception."""
         assert parse_captions("", "srt") == []
 
     def test_parse_vtt_header_only_no_exception(self) -> None:
-        """WEBVTT のみの VTT parse が例外なく [] を返すこと。"""
+        """WEBVTT-only VTT parse returns [] without exception."""
         assert parse_captions("WEBVTT\n", "vtt") == []
 
     def test_serialize_empty_cues_srt_no_exception(self) -> None:
-        """0件 cue の SRT serialize が例外なく '' を返すこと。"""
+        """SRT serialize with 0 cues returns '' without exception."""
         assert serialize_captions([], "srt") == ""
 
     def test_serialize_empty_cues_vtt_no_exception(self) -> None:
-        """0件 cue の VTT serialize が例外なく 'WEBVTT\\n' を返すこと。"""
+        """VTT serialize with 0 cues returns 'WEBVTT\\n' without exception."""
         assert serialize_captions([], "vtt") == "WEBVTT\n"
 
     def test_wrap_cue_lines_empty_segments_no_exception(self) -> None:
-        """空 segments の wrap_cue_lines が例外なく [] を返すこと。"""
+        """wrap_cue_lines with empty segments returns [] without exception."""
         assert wrap_cue_lines([], max_chars=16) == []
 
 
 # ===========================================================================
-# カバレッジ補完テスト（到達可能な未被覆行）
+# Coverage supplement tests (reachable uncovered lines)
 # ===========================================================================
 
 
 class TestParseSrtNonNumericIndex:
-    """L85-87: SRT ブロックの index 行が非数値の場合にスキップされること。"""
+    """L85-87: SRT blocks with a non-numeric index line are skipped."""
 
     def test_non_numeric_index_block_skipped(self) -> None:
-        """index 行が数値でないブロックはスキップされ、後続の正常ブロックは取得されること。"""
-        # 1番目のブロック: index が "abc"（非数値）→ スキップ
-        # 2番目のブロック: 正常
+        """Blocks with a non-numeric index line are skipped; subsequent valid blocks are retrieved."""
+        # First block: index is "abc" (non-numeric) → skipped
+        # Second block: valid
         srt = "abc\n00:00:00,000 --> 00:00:01,000\nスキップ\n\n1\n00:00:01,000 --> 00:00:02,000\nOK\n"
         cues = parse_captions(srt, "srt")
         assert len(cues) == 1
         assert cues[0].text == "OK"
 
     def test_non_numeric_index_only_block_returns_empty(self) -> None:
-        """非数値 index ブロックのみの SRT は [] を返すこと。"""
+        """SRT with only non-numeric index blocks returns []."""
         srt = "NOTE\n00:00:00,000 --> 00:00:01,000\nテスト\n"
         cues = parse_captions(srt, "srt")
         assert cues == []
 
 
 class TestParseSrtIndexOnlyBlock:
-    """L90: SRT ブロックに index 行のみ（timeline 行なし）の場合にスキップされること。"""
+    """L90: SRT blocks with only an index line (no timeline line) are skipped."""
 
     def test_index_only_block_skipped(self) -> None:
-        """index 行 1 行のみのブロックはスキップされ、後続の正常ブロックは取得されること。"""
-        # 1番目のブロック: index 行のみ（タイムライン行なし）
-        # 2番目のブロック: 正常
+        """Blocks with only an index line are skipped; subsequent valid blocks are retrieved."""
+        # First block: index line only (no timeline line)
+        # Second block: valid
         srt = "1\n\n2\n00:00:01,000 --> 00:00:02,000\nOK\n"
         cues = parse_captions(srt, "srt")
         assert len(cues) == 1
@@ -828,32 +828,32 @@ class TestParseSrtIndexOnlyBlock:
 
 
 class TestParseVttNoHeader:
-    """L130: WEBVTT ヘッダがない（空文字列 or 非 WEBVTT）入力は [] を返すこと。"""
+    """L130: Input without a WEBVTT header (empty string or non-WEBVTT) returns []."""
 
     def test_empty_string_returns_empty_list(self) -> None:
-        """VTT 空文字列入力は [] を返すこと。"""
+        """Empty string VTT input returns []."""
         result = parse_captions("", "vtt")
         assert result == []
 
     def test_non_webvtt_header_returns_empty_list(self) -> None:
-        """WEBVTT ではないヘッダで始まるテキストは [] を返すこと。"""
+        """Text that does not start with WEBVTT returns []."""
         result = parse_captions(
             "NOTWEBVTT\n\n00:00:00.000 --> 00:00:01.000\nテスト\n", "vtt"
         )
         assert result == []
 
     def test_srt_content_as_vtt_returns_empty_list(self) -> None:
-        """SRT 形式のテキストを vtt として渡すと [] を返すこと（WEBVTT ヘッダなし）。"""
+        """Passing SRT-format text as vtt returns [] (no WEBVTT header)."""
         srt = "1\n00:00:00,000 --> 00:00:01,000\nテスト\n"
         result = parse_captions(srt, "vtt")
         assert result == []
 
 
 class TestParseVttNoteMultiline:
-    """L153: NOTE ブロック複数行の本文が正しく読み飛ばされること。"""
+    """L153: Multi-line NOTE block body is correctly skipped."""
 
     def test_multiline_note_body_skipped(self) -> None:
-        """NOTE ブロックの複数行本文がスキップされ、後続 cue が取得されること。"""
+        """Multi-line NOTE block body is skipped and the subsequent cue is retrieved."""
         vtt = (
             "WEBVTT\n"
             "\n"
@@ -869,7 +869,7 @@ class TestParseVttNoteMultiline:
         assert cues[0].text == "テスト"
 
     def test_multiple_note_blocks_all_skipped(self) -> None:
-        """複数の NOTE ブロックがすべてスキップされ、cue だけが取得されること。"""
+        """All multiple NOTE blocks are skipped; only cues are retrieved."""
         vtt = (
             "WEBVTT\n"
             "\n"
@@ -892,47 +892,47 @@ class TestParseVttNoteMultiline:
 
 
 class TestParseVttCueIdAtEnd:
-    """L168: cue-id 行が VTT の末尾（その後コンテンツなし）の場合に安全に終了すること。"""
+    """L168: Safely terminates when a cue-id line is at the end of the VTT with no subsequent content."""
 
     def test_cue_id_at_eof_terminates_safely(self) -> None:
-        """cue-id 行が末尾にあるだけで後続がない場合、既存 cue のみ返され例外が出ないこと。"""
+        """When a cue-id line is at the end with no following content, only the existing cue is returned without exception."""
         vtt = (
             "WEBVTT\n"
             "\n"
             "00:00:00.000 --> 00:00:01.000\n"
             "テスト\n"
             "\n"
-            "dangling-cue-id"  # タイムライン行なし・末尾
+            "dangling-cue-id"  # no timeline line; at EOF
         )
         cues = parse_captions(vtt, "vtt")
-        # 正常な cue は取得されること
+        # The valid cue must be retrieved
         assert len(cues) == 1
         assert cues[0].text == "テスト"
 
 
 class TestParseVttCueIdFollowedByBlankLine:
-    """L172-173: cue-id 直後が空行の場合にスキップされること。"""
+    """L172-173: Block with cue-id immediately followed by blank line is skipped."""
 
     def test_cue_id_followed_by_blank_line_skipped(self) -> None:
-        """cue-id の次が空行（タイムライン行なし）のブロックはスキップされること。"""
+        """Block where cue-id is followed by a blank line (no timeline line) is skipped."""
         vtt = (
             "WEBVTT\n"
             "\n"
             "dangling-cue-id\n"
-            "\n"  # cue-id 直後が空行 → L172 で pos が空行を踏む
+            "\n"  # blank line immediately after cue-id → pos hits blank line at L172
             "00:00:00.000 --> 00:00:01.000\n"
             "OK\n"
         )
         cues = parse_captions(vtt, "vtt")
-        # cue-id ブロックはスキップされ、後続の正常 cue が取得されること
+        # cue-id block is skipped; subsequent valid cue is retrieved
         assert any(c.text == "OK" for c in cues)
 
 
 class TestParseCaptionsUnsupportedFmt:
-    """L224: parse_captions に未対応の fmt を渡すと ClipwrightError(INVALID_INPUT) が送出されること。"""
+    """L224: Passing an unsupported fmt to parse_captions raises ClipwrightError(INVALID_INPUT)."""
 
     def test_unsupported_fmt_raises_clipwright_error(self) -> None:
-        """未対応の fmt → ClipwrightError(INVALID_INPUT) が送出されること。"""
+        """Unsupported fmt → ClipwrightError(INVALID_INPUT) is raised."""
         from clipwright.errors import ClipwrightError, ErrorCode
 
         with pytest.raises(ClipwrightError) as exc_info:
@@ -940,7 +940,7 @@ class TestParseCaptionsUnsupportedFmt:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_unsupported_fmt_error_message_contains_fmt(self) -> None:
-        """ClipwrightError のメッセージに渡した fmt が含まれること。"""
+        """ClipwrightError message contains the passed fmt."""
         from clipwright.errors import ClipwrightError
 
         with pytest.raises(ClipwrightError) as exc_info:

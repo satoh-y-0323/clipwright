@@ -1,20 +1,20 @@
-"""test_server.py — clipwright-render server.py（MCP + CLI）の Red テスト。
+"""test_server.py — Red tests for clipwright-render server.py (MCP + CLI).
 
-対象:
-  - clipwright_render ツールが MCP に登録され、render.render_timeline へ委譲すること
-  - MCP annotations（§5）: readOnly:false / destructive:false
-    / idempotent:true / openWorld:false
-  - 成功時エンベロープ（ok:true）
-  - 失敗時エンベロープ（ok:false, error:{code,message,hint}）
-  - dry_run 委譲が render 層へ渡ること
-  - CLI main() の引数パース（DC-GP-003 / §6.3）:
-    - timeline / output 位置引数
-    - --dry-run でドライラン経路
-    - --width のみ（--height 欠落）→ INVALID_INPUT（ペア制約）
-    - --crf 52 → 範囲エラー（0–51）
-    - --overwrite が options.overwrite=True として render_timeline に渡ること
+Targets:
+  - clipwright_render tool is registered with MCP and delegates to render.render_timeline
+  - MCP annotations (§5): readOnly:false / destructive:false / idempotent:true / openWorld:false
+  - Success envelope (ok:true)
+  - Failure envelope (ok:false, error:{code,message,hint})
+  - dry_run delegation is passed to the render layer
+  - CLI main() argument parsing (DC-GP-003 / §6.3):
+    - timeline / output positional args
+    - --dry-run triggers the dry-run path
+    - --width only (--height missing) -> INVALID_INPUT (pair constraint)
+    - --crf 52 -> range error (0-51)
+    - --overwrite is passed as options.overwrite=True to render_timeline
 
-server.py は未実装のため全テストが「機能未実装による失敗」で Red になる。
+server.py is not yet implemented, so all tests are expected to fail Red
+due to missing implementation.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from unittest.mock import patch
 import pytest
 
 # ---------------------------------------------------------------------------
-# server.py の import 試行（未実装なら _SERVER_AVAILABLE = False）
+# Attempt to import server.py (if not implemented, _SERVER_AVAILABLE = False)
 # ---------------------------------------------------------------------------
 
 try:
@@ -40,21 +40,21 @@ try:
 except (ImportError, ModuleNotFoundError):
     _SERVER_AVAILABLE = False
 
-# server.py が存在しない限り全テストを xfail にする
+# Mark all tests as xfail until server.py is available
 pytestmark = pytest.mark.xfail(
     not _SERVER_AVAILABLE,
-    reason="server.py が未実装のため Red（機能未実装による失敗）",
+    reason="server.py not yet implemented — Red (failing due to missing implementation)",
     strict=True,
 )
 
 
 # ---------------------------------------------------------------------------
-# ヘルパー
+# Helpers
 # ---------------------------------------------------------------------------
 
 
 def _ok_envelope(**kwargs: Any) -> dict[str, Any]:
-    """成功エンベロープのひな型を返す。"""
+    """Return a success envelope template."""
     base: dict[str, Any] = {
         "ok": True,
         "summary": "ok",
@@ -67,7 +67,7 @@ def _ok_envelope(**kwargs: Any) -> dict[str, Any]:
 
 
 def _error_envelope(code: str) -> dict[str, Any]:
-    """失敗エンベロープのひな型を返す。"""
+    """Return a failure envelope template."""
     return {
         "ok": False,
         "error": {
@@ -79,63 +79,64 @@ def _error_envelope(code: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# MCP annotations テスト（§5）
+# MCP annotations tests (§5)
 # ---------------------------------------------------------------------------
 
 
 class TestMcpAnnotations:
-    """clipwright_render ツールの MCP annotations が §5 仕様どおりか検証する。"""
+    """Verify that the clipwright_render tool's MCP annotations match the §5 specification."""
 
     def _get_annotations(self) -> Any:
-        # FastMCP の公開 API でツール情報を取得する手段がないため、
-        # プライベート API (_tool_manager) に依存している（L-2）。
-        # FastMCP のバージョンアップで壊れる可能性があるが、
-        # Inspector による疎通確認で別途担保する方針とする。
+        # FastMCP has no stable public API to retrieve tool info, so we depend on
+        # the private _tool_manager API here (L-2).
+        # This may break on FastMCP version upgrades; it is supplemented by
+        # Inspector smoke-testing as a separate assurance.
         tool = mcp._tool_manager.get_tool(  # type: ignore[attr-defined]
             "clipwright_render"
         )
-        assert tool is not None, "clipwright_render が mcp に登録されていること"
+        assert tool is not None, "clipwright_render must be registered with mcp"
         return tool.annotations
 
     def test_tool_is_registered(self) -> None:
-        """clipwright_render が mcp に登録されていること。"""
-        # FastMCP 公開 API 不在のため内部依存・Inspector 疎通で別途担保（L-2）
+        """clipwright_render is registered with mcp."""
+        # Depends on internal API due to no stable public API (L-2);
+        # supplemented by Inspector smoke-testing.
         tool = mcp._tool_manager.get_tool(  # type: ignore[attr-defined]
             "clipwright_render"
         )
         assert tool is not None
 
     def test_read_only_hint_is_false(self) -> None:
-        """readOnlyHint=False（出力ファイルを生成する）。"""
+        """readOnlyHint=False (generates an output file)."""
         ann = self._get_annotations()
         assert ann.readOnlyHint is False
 
     def test_destructive_hint_is_false(self) -> None:
-        """destructiveHint=False（入力・OTIO は不変）。"""
+        """destructiveHint=False (input and OTIO are unchanged)."""
         ann = self._get_annotations()
         assert ann.destructiveHint is False
 
     def test_idempotent_hint_is_true(self) -> None:
-        """idempotentHint=True（同じ入力に同じ出力）。"""
+        """idempotentHint=True (same input produces same output)."""
         ann = self._get_annotations()
         assert ann.idempotentHint is True
 
     def test_open_world_hint_is_false(self) -> None:
-        """openWorldHint=False（外部ネットワークに触れない）。"""
+        """openWorldHint=False (does not touch the external network)."""
         ann = self._get_annotations()
         assert ann.openWorldHint is False
 
 
 # ---------------------------------------------------------------------------
-# MCP ツール呼び出し: render.render_timeline への委譲テスト
+# MCP tool call: delegation to render.render_timeline
 # ---------------------------------------------------------------------------
 
 
 class TestMcpToolDelegation:
-    """server.clipwright_render が render.render_timeline を呼ぶ薄いラッパー検証。"""
+    """Verify that server.clipwright_render is a thin wrapper that calls render.render_timeline."""
 
     def test_success_delegates_to_render_timeline(self, tmp_path: Path) -> None:
-        """成功時に render.render_timeline を呼び委譲すること。"""
+        """On success, render.render_timeline is called and the result is delegated."""
         expected = _ok_envelope(summary="rendered ok")
 
         with patch(
@@ -153,7 +154,7 @@ class TestMcpToolDelegation:
         assert result["ok"] is True
 
     def test_failure_returns_error_envelope(self, tmp_path: Path) -> None:
-        """render_timeline が失敗エンベロープを返すと server もそのまま返す。"""
+        """When render_timeline returns a failure envelope, the server returns it unchanged."""
         expected = _error_envelope("FILE_NOT_FOUND")
 
         with patch(
@@ -170,7 +171,7 @@ class TestMcpToolDelegation:
         assert result["error"]["code"] == "FILE_NOT_FOUND"
 
     def test_dry_run_passed_to_render_timeline(self, tmp_path: Path) -> None:
-        """dry_run=True が render_timeline に渡されること。"""
+        """dry_run=True is passed to render_timeline."""
         with patch(
             "clipwright_render.server.render_timeline",
             return_value=_ok_envelope(),
@@ -183,11 +184,11 @@ class TestMcpToolDelegation:
             )
 
         _args, kwargs = mock_render.call_args
-        # positional または keyword で dry_run=True が渡される
+        # dry_run=True must be passed as positional or keyword argument
         assert kwargs.get("dry_run") is True or (len(_args) >= 4 and _args[3] is True)
 
     def test_options_passed_to_render_timeline(self, tmp_path: Path) -> None:
-        """options の内容が render_timeline に渡されること。"""
+        """options content is passed to render_timeline."""
         from clipwright_render.schemas import RenderOptions
 
         opts = RenderOptions(video_codec="libx264", crf=23)
@@ -204,17 +205,17 @@ class TestMcpToolDelegation:
 
         mock_render.assert_called_once()
         call_args = mock_render.call_args
-        # options が何らかの形で渡されている
+        # options must be passed in some form
         assert call_args is not None
 
     def test_error_envelope_has_code_message_hint(self, tmp_path: Path) -> None:
-        """失敗エンベロープに code / message / hint が含まれること。"""
+        """The failure envelope contains code / message / hint."""
         expected: dict[str, Any] = {
             "ok": False,
             "error": {
                 "code": "INVALID_INPUT",
-                "message": "不正な入力",
-                "hint": "修正してください",
+                "message": "invalid input",
+                "hint": "please fix it",
             },
         }
 
@@ -236,15 +237,15 @@ class TestMcpToolDelegation:
 
 
 # ---------------------------------------------------------------------------
-# CLI main() テスト（DC-GP-003 / §6.3）
+# CLI main() tests (DC-GP-003 / §6.3)
 # ---------------------------------------------------------------------------
 
 
 class TestCliMain:
-    """main() の argparse 経由 CLI 引数パースと render_timeline 委譲を検証する。"""
+    """Verify CLI argument parsing and render_timeline delegation via main()."""
 
     def _run_main(self, argv: list[str]) -> dict[str, Any]:
-        """sys.argv を差し替えて main() を呼び出す。"""
+        """Replace sys.argv and call main()."""
         captured: dict[str, Any] = {}
 
         def _fake_render(
@@ -268,49 +269,49 @@ class TestCliMain:
         return captured
 
     def test_positional_args_timeline_and_output(self, tmp_path: Path) -> None:
-        """timeline / output が位置引数として main() に渡ること（§6.3）。"""
+        """timeline / output are passed as positional args to main() (§6.3)."""
         captured = self._run_main(["tl.otio", "out.mp4"])
         assert captured["timeline"] == "tl.otio"
         assert captured["output"] == "out.mp4"
 
     def test_dry_run_flag(self, tmp_path: Path) -> None:
-        """--dry-run フラグが dry_run=True として render_timeline に渡ること。"""
+        """--dry-run flag is passed as dry_run=True to render_timeline."""
         captured = self._run_main(["tl.otio", "out.mp4", "--dry-run"])
         assert captured["dry_run"] is True
 
     def test_no_dry_run_defaults_to_false(self, tmp_path: Path) -> None:
-        """--dry-run なしのとき dry_run=False であること。"""
+        """Without --dry-run, dry_run is False."""
         captured = self._run_main(["tl.otio", "out.mp4"])
         assert captured["dry_run"] is False
 
     def test_overwrite_flag_sets_options_overwrite(self, tmp_path: Path) -> None:
-        """--overwrite フラグが RenderOptions.overwrite=True として渡ること。"""
+        """--overwrite flag is passed as RenderOptions.overwrite=True."""
         captured = self._run_main(["tl.otio", "out.mp4", "--overwrite"])
         opts = captured["options"]
         assert opts.overwrite is True
 
     def test_video_codec_option(self, tmp_path: Path) -> None:
-        """--video-codec C が RenderOptions.video_codec=C として渡ること。"""
+        """--video-codec C is passed as RenderOptions.video_codec=C."""
         captured = self._run_main(["tl.otio", "out.mp4", "--video-codec", "libx264"])
         assert captured["options"].video_codec == "libx264"
 
     def test_audio_codec_option(self, tmp_path: Path) -> None:
-        """--audio-codec C が RenderOptions.audio_codec=C として渡ること。"""
+        """--audio-codec C is passed as RenderOptions.audio_codec=C."""
         captured = self._run_main(["tl.otio", "out.mp4", "--audio-codec", "aac"])
         assert captured["options"].audio_codec == "aac"
 
     def test_fps_option(self, tmp_path: Path) -> None:
-        """--fps F が RenderOptions.fps=F として渡ること。"""
+        """--fps F is passed as RenderOptions.fps=F."""
         captured = self._run_main(["tl.otio", "out.mp4", "--fps", "24"])
         assert captured["options"].fps == pytest.approx(24.0)
 
     def test_crf_option(self, tmp_path: Path) -> None:
-        """--crf N が RenderOptions.crf=N として渡ること。"""
+        """--crf N is passed as RenderOptions.crf=N."""
         captured = self._run_main(["tl.otio", "out.mp4", "--crf", "23"])
         assert captured["options"].crf == 23
 
     def test_width_and_height_option(self, tmp_path: Path) -> None:
-        """--width W --height H が RenderOptions に渡ること。"""
+        """--width W --height H are passed to RenderOptions."""
         captured = self._run_main(
             ["tl.otio", "out.mp4", "--width", "1920", "--height", "1080"]
         )
@@ -318,13 +319,15 @@ class TestCliMain:
         assert captured["options"].height == 1080
 
     def test_width_only_raises_invalid_input(self, tmp_path: Path) -> None:
-        """--width のみ（--height 欠落）→ INVALID_INPUT または SystemExit/ValueError。
+        """--width only (--height missing) raises INVALID_INPUT or SystemExit/ValueError.
 
-        ペア制約（DC-AM-004）が CLI でも有効であること。
-        argparse の段階か RenderOptions バリデーションで拒否される。
+        Pair constraint (DC-AM-004) must be enforced in the CLI as well.
+        Rejected at the argparse stage or at RenderOptions validation.
         """
         if not _SERVER_AVAILABLE:
-            pytest.xfail("server.py が未実装のため Red（機能未実装による失敗）")
+            pytest.xfail(
+                "server.py not yet implemented — Red (failing due to missing implementation)"
+            )
 
         raised = False
         try:
@@ -333,19 +336,23 @@ class TestCliMain:
             raised = True
             if isinstance(exc, SystemExit):
                 assert exc.code != 0
-        assert raised, "--width のみ指定は例外（ペア制約違反）になること"
+        assert raised, (
+            "--width only must raise an exception (pair constraint violation)"
+        )
 
     def test_crf_out_of_range_raises_error(self, tmp_path: Path) -> None:
-        """--crf 52 → 範囲外（0–51）で SystemExit/ValueError が発生すること。"""
+        """--crf 52 -> out of range (0-51): SystemExit/ValueError must be raised."""
         if not _SERVER_AVAILABLE:
-            pytest.xfail("server.py が未実装のため Red（機能未実装による失敗）")
+            pytest.xfail(
+                "server.py not yet implemented — Red (failing due to missing implementation)"
+            )
 
         raised = False
         try:
             self._run_main(["tl.otio", "out.mp4", "--crf", "52"])
         except (SystemExit, ValueError, Exception):
             raised = True
-        assert raised, "--crf 52 は例外（範囲外）になること"
+        assert raised, "--crf 52 must raise an exception (out of range)"
 
     @pytest.mark.parametrize(
         "extra_args,field,expected",
@@ -363,7 +370,7 @@ class TestCliMain:
         field: str,
         expected: Any,
     ) -> None:
-        """各オプションが RenderOptions の対応フィールドに正しく渡ること。"""
+        """Each option is correctly mapped to the corresponding RenderOptions field."""
         captured = self._run_main(["tl.otio", "out.mp4"] + extra_args)
         opts = captured["options"]
         assert getattr(opts, field) == expected

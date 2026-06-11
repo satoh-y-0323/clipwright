@@ -1,13 +1,15 @@
-"""vad_cli.py — Silero VAD バックエンドの別プロセス小 CLI。
+"""vad_cli.py — Separate-process small CLI for the Silero VAD backend.
 
-MCP サーバープロセスから import されない（§2.4 subprocess 疎結合）。
-detect.py が sys.executable -m clipwright_silence.vad_cli として別プロセス起動する。
+Not imported by the MCP server process (§2.4 subprocess loose coupling).
+detect.py spawns this as a separate process via
+sys.executable -m clipwright_silence.vad_cli.
 
-CLI 契約（§7.1 一本化）:
-  - main(argv) は全例外をトップレベルで捕捉し、必ず stdout JSON を出して return 0。
-  - 正常: {"speech_segments": [[start_sec, end_sec], ...]}
-  - エラー: {"error": {"code": str, "message": str, "hint": str}}
-  - stdout は JSON のみ。ログ・進捗は stderr へ。
+CLI contract (§7.1 unified):
+  - main(argv) catches all exceptions at the top level, always writes stdout JSON,
+    and returns 0.
+  - Success: {"speech_segments": [[start_sec, end_sec], ...]}
+  - Error:   {"error": {"code": str, "message": str, "hint": str}}
+  - stdout is JSON only. Logs and progress go to stderr.
 """
 
 from __future__ import annotations
@@ -25,20 +27,21 @@ from typing import Any
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.process import resolve_tool, run
 
-# サンプリングレート固定（§7.3）
+# Fixed sample rate (§7.3)
 _SAMPLE_RATE = 16000
-# pip install ヒント文字列
+# pip install hint string
 _VAD_INSTALL_HINT = (
-    "`pip install 'clipwright-silence[vad]'` で VAD 依存を導入してください。"
+    "Install VAD dependencies with `pip install 'clipwright-silence[vad]'`."
 )
-# SUBPROCESS_FAILED/TIMEOUT 時のサニタイズ済み汎用文言（SR M-1: ffmpeg stderr 漏洩防止）
-_SUBPROCESS_SAFE_MESSAGE = "内部サブプロセスが失敗しました"
+# Sanitized generic message for SUBPROCESS_FAILED/TIMEOUT
+# (SR M-1: prevents ffmpeg stderr leakage)
+_SUBPROCESS_SAFE_MESSAGE = "internal subprocess failed"
 
 
 def _error_output(code: str, message: str, hint: str) -> None:
-    """エラー JSON を stdout に出力する。
+    """Write error JSON to stdout.
 
-    呼び出し元でパス情報をサニタイズしてから渡すこと。
+    The caller must sanitize path information before passing it here.
     """
     result: dict[str, Any] = {
         "error": {
@@ -51,9 +54,9 @@ def _error_output(code: str, message: str, hint: str) -> None:
 
 
 def _extract_pcm(ffmpeg: str, media: str, output_path: str, timeout: float) -> None:
-    """ffmpeg で 16kHz mono s16le PCM を一時ファイルに書き出す。
+    """Write 16kHz mono s16le PCM to a temporary file using ffmpeg.
 
-    shell=False・引数配列でのみ実行（サブプロセス規律）。
+    Executed with shell=False and argument array only (subprocess discipline).
     """
     cmd = [
         ffmpeg,
@@ -77,16 +80,16 @@ def _extract_pcm(ffmpeg: str, media: str, output_path: str, timeout: float) -> N
 def _load_audio_as_float32(
     pcm_path: str,
 ) -> tuple[Any, int]:
-    """PCM WAV ファイルを読み込み float32 numpy array と sample_rate を返す。
+    """Read a PCM WAV file and return a float32 numpy array and sample_rate.
 
-    int16 → float32 正規化（/32768.0）を行う。
+    Normalizes int16 -> float32 (/32768.0).
 
-    前提: 本関数は必ず main() 経由で呼び出すこと。
-    main() 内で numpy を遅延 import して sys.modules に登録しているため、
-    本関数内の import は実質キャッシュ取得になる（NF-M-2: 前提条件の明記）。
-    テストやユーティリティから直接呼び出した場合は CR L-2 の疎結合目的が崩れる。
+    Precondition: This function must always be called via main().
+    main() lazily imports numpy and registers it in sys.modules, so the import
+    inside this function is effectively a cache lookup (NF-M-2: document precondition).
+    Calling directly from tests or utilities breaks the loose-coupling intent of CR L-2.
     """
-    import numpy as np  # docstring 参照（main() でキャッシュ済みのため再 import なし）
+    import numpy as np  # See docstring (cached in sys.modules by main())
 
     with wave.open(pcm_path, "rb") as wf:
         n_frames = wf.getnframes()
@@ -99,63 +102,65 @@ def _load_audio_as_float32(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """VAD CLI エントリポイント。
+    """VAD CLI entry point.
 
-    全例外をトップレベルで捕捉し、stdout に JSON を出力して return 0（§7.1）。
+    Catches all exceptions at the top level, writes JSON to stdout,
+    and returns 0 (§7.1).
 
     Args:
-        argv: コマンドライン引数リスト。None の場合は sys.argv[1:] を使う。
+        argv: Command-line argument list. Uses sys.argv[1:] if None.
 
     Returns:
-        終了コード（常に 0）。
+        Exit code (always 0).
     """
-    # numpy を main 内で遅延 import する（CR L-2: トップレベル import を避け
-    # サーバープロセス疎結合を徹底する。sys.executable -m での別プロセス起動前提）
-    # sys.modules へのキャッシュ登録用先行 import（_load_audio_as_float32 が参照）。
-    # noqa: F401 = 直接参照しないことによる lint 警告抑制（NF-L-2）。
+    # Lazily import numpy inside main (CR L-2: avoid top-level import to keep
+    # server process loosely coupled. Separate process via sys.executable -m).
+    # Pre-import to cache in sys.modules (referenced by _load_audio_as_float32).
+    # noqa: F401 = suppress lint warning for not referencing directly (NF-L-2).
     import numpy as np  # noqa: F401
 
-    # --- 引数パース ---
+    # --- Parse arguments ---
     parser = argparse.ArgumentParser(
-        description="Silero VAD で発話区間を検出して JSON で stdout 出力する。"
+        description="Detect speech intervals using Silero VAD and output JSON to stdout."  # noqa: E501
     )
-    parser.add_argument("--media", required=True, help="入力メディアファイルパス")
+    parser.add_argument("--media", required=True, help="Input media file path")
     parser.add_argument(
         "--threshold",
         type=float,
         default=0.5,
-        help="発話確率しきい値 (0.0–1.0, デフォルト: 0.5)",
+        help="Speech probability threshold (0.0-1.0, default: 0.5)",
     )
     parser.add_argument(
         "--min-speech",
         type=float,
         default=0.25,
-        help="最小発話長（秒, デフォルト: 0.25）",
+        help="Minimum speech duration (seconds, default: 0.25)",
     )
     parser.add_argument(
         "--min-silence",
         type=float,
         default=0.1,
-        help="発話間の最小無音長（秒, デフォルト: 0.1）",
+        help="Minimum silence duration between speech intervals (seconds, default: 0.1)",  # noqa: E501
     )
     parser.add_argument(
         "--media-duration",
         type=float,
         default=None,
         help=(
-            "メディアの総尺（秒）。内側 ffmpeg timeout を"
-            " total 連動で計算する（§7.7）。省略時は安全な既定（60秒）を使用。"
+            "Total media duration (seconds). Used to calculate the inner"
+            " ffmpeg timeout proportional to total duration (§7.7)."
+            " Uses a safe default (60s) if omitted."
         ),
     )
 
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
-        # argparse の --help や必須引数欠落による SystemExit を捕捉する
+        # Catch SystemExit from argparse (--help or missing required args)
         _error_output(
             code=ErrorCode.INVALID_INPUT,
-            message=f"引数解析に失敗しました: exit code {exc.code}",
-            hint="--media <path> を必須引数として指定してください。",
+            message=f"Argument parsing failed: exit code {exc.code}",
+            hint="Specify --media <path> as a required argument.",
         )
         return 0
 
@@ -166,29 +171,30 @@ def main(argv: list[str] | None = None) -> int:
     media_duration: float | None = args.media_duration
 
     try:
-        # --- silero_vad 遅延 import（サーバープロセスへ漏らさない・§2.4）---
+        # --- Lazy import of silero_vad (keep out of server process, §2.4) ---
         try:
             import silero_vad
         except ImportError:
-            # SR L-2: str(exc) には内部パスが含まれうるため固定文言を使用する
+            # SR L-2: str(exc) may contain internal paths; use fixed message
             _error_output(
                 code=ErrorCode.DEPENDENCY_MISSING,
-                message="silero_vad または onnxruntime のインポートに失敗しました",
+                message="Failed to import silero_vad or onnxruntime",
                 hint=_VAD_INSTALL_HINT,
             )
             return 0
 
-        # --- silero-vad モデルロード（ffmpeg より先に行い ImportError を早期捕捉）---
-        # onnxruntime 欠落時に load_silero_vad が ImportError を上げる（§7.3）
+        # --- Load Silero VAD model (before ffmpeg, to catch ImportError early) ---
+        # load_silero_vad raises ImportError if onnxruntime is missing (§7.3)
         model = silero_vad.load_silero_vad(onnx=True)
 
-        # --- ffmpeg 解決（§7.2）---
+        # --- Resolve ffmpeg (§7.2) ---
         ffmpeg = resolve_tool("ffmpeg", "CLIPWRIGHT_FFMPEG")
 
-        # --- ffmpeg で 16kHz mono s16le PCM を一時ファイルに生成（§7.3）---
-        # 内側 timeout は外側（max(60, ceil(total*4))）より必ず短くする（§7.7）
-        # --media-duration が渡された場合: max(30, ceil(total * 2)) で total 連動
-        # 未指定時: 安全な既定 60 秒
+        # --- Extract 16kHz mono s16le PCM to a temp file using ffmpeg (§7.3) ---
+        # Inner timeout must always be shorter than outer (§7.7)
+        # max(60, ceil(total*4)) for outer; proportional for inner
+        # When --media-duration given: max(30, ceil(total * 2))
+        # When omitted: safe default of 60 seconds
         if media_duration is not None:
             ffmpeg_timeout = float(max(30, math.ceil(media_duration * 2)))
         else:
@@ -198,20 +204,20 @@ def main(argv: list[str] | None = None) -> int:
         audio_float32: Any
         sample_rate: int
 
-        # delete=False で開いて name を取得し、try/finally で確実に削除する（§7.3）
+        # Open with delete=False to get the name, then delete in try/finally (§7.3)
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
             tmp_path = tmp_file.name
         try:
             _extract_pcm(ffmpeg, media, tmp_path, timeout=ffmpeg_timeout)
             audio_float32, sample_rate = _load_audio_as_float32(tmp_path)
         finally:
-            # 例外時も確実に削除（§7.3）
+            # Ensure deletion even on exception (§7.3)
             if tmp_path and os.path.exists(tmp_path):
                 with contextlib.suppress(OSError):
                     os.unlink(tmp_path)
 
-        # get_speech_timestamps はサンプル単位で返す
-        # min_speech_duration_ms / min_silence_duration_ms はミリ秒単位
+        # get_speech_timestamps returns sample-unit values
+        # min_speech_duration_ms / min_silence_duration_ms are in milliseconds
         raw_segments: list[dict[str, Any]] = silero_vad.get_speech_timestamps(
             audio_float32,
             model,
@@ -222,7 +228,7 @@ def main(argv: list[str] | None = None) -> int:
             return_seconds=False,
         )
 
-        # サンプル単位 → 秒換算（昇順で組み立て）
+        # Convert sample units -> seconds (built in ascending order)
         speech_segments: list[list[float]] = []
         for seg in sorted(raw_segments, key=lambda s: s["start"]):
             start_sec = float(seg["start"]) / sample_rate
@@ -234,12 +240,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     except ClipwrightError as exc:
-        # core run() が送出した ClipwrightError（SUBPROCESS_FAILED/TIMEOUT）と
-        # resolve_tool の DEPENDENCY_MISSING をここで捕捉する（§7.1/§7.2）
-        # SR M-1: SUBPROCESS_FAILED/TIMEOUT は ffmpeg stderr 断片を含むため
-        # 汎用文言に差し替えてパス情報漏洩を防ぐ
+        # Catch ClipwrightError from core run() (SUBPROCESS_FAILED/TIMEOUT) and
+        # resolve_tool DEPENDENCY_MISSING here (§7.1/§7.2)
+        # SR M-1: SUBPROCESS_FAILED/TIMEOUT may embed ffmpeg stderr in message;
+        # replace with generic message to prevent path leakage
         if exc.code in (ErrorCode.SUBPROCESS_FAILED, ErrorCode.SUBPROCESS_TIMEOUT):
-            safe_message = f"{_SUBPROCESS_SAFE_MESSAGE}（code: {exc.code}）"
+            safe_message = f"{_SUBPROCESS_SAFE_MESSAGE} (code: {exc.code})"
         else:
             safe_message = exc.message
         _error_output(
@@ -250,26 +256,26 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     except ImportError:
-        # load_silero_vad 等で onnxruntime の ImportError が伝播した場合
-        # SR L-2: str(exc) には内部パスが含まれうるため固定文言を使用する
+        # ImportError propagated from load_silero_vad etc. when onnxruntime is missing
+        # SR L-2: str(exc) may contain internal paths; use fixed message
         _error_output(
             code=ErrorCode.DEPENDENCY_MISSING,
-            message="silero_vad または onnxruntime のインポートに失敗しました",
+            message="Failed to import silero_vad or onnxruntime",
             hint=_VAD_INSTALL_HINT,
         )
         return 0
 
     except Exception:
-        # 想定外の例外もすべて捕捉して error JSON を返す（§7.1）
-        # SR NF-L-1: str(exc) に内部パスが含まれうるため固定文言を使用する。
-        # デバッグ詳細は stderr 限定・stdout JSON（MCP レスポンス）には漏洩させない。
+        # Catch all unexpected exceptions and return error JSON (§7.1)
+        # SR NF-L-1: str(exc) may contain internal paths; use fixed message.
+        # Debug details are stderr-only; do not leak into stdout JSON (MCP response).
         import traceback
 
         traceback.print_exc(file=sys.stderr)
         _error_output(
             code=ErrorCode.INTERNAL,
-            message="VAD CLI で予期しないエラーが発生しました",
-            hint="再現条件を添えて報告してください。",
+            message="An unexpected error occurred in VAD CLI",
+            hint="Please report with reproduction steps.",
         )
         return 0
 

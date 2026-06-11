@@ -1,9 +1,9 @@
-"""server.py — clipwright-transcribe MCP サーバー + CLI エントリポイント。
+"""server.py — clipwright-transcribe MCP server + CLI entry point.
 
-ビジネスロジックは transcribe.py に委譲する薄いラッパー。
-ClipwrightError の変換は transcribe.py 側で行うため、ここでは二重変換しない。
+Thin wrapper that delegates business logic to transcribe.py.
+ClipwrightError conversion is handled in transcribe.py; no double conversion here.
 
-トランスポートは stdio 既定（mcp.run(transport="stdio")）。
+Transport defaults to stdio (mcp.run(transport="stdio")).
 """
 
 from __future__ import annotations
@@ -17,12 +17,12 @@ from pydantic import Field
 from clipwright_transcribe.schemas import TranscribeOptions
 from clipwright_transcribe.transcribe import transcribe_media
 
-# FastMCP インスタンス（サーバー名）
+# FastMCP instance (server name)
 mcp = FastMCP("clipwright-transcribe")
 
 
 # ===========================================================================
-# clipwright_transcribe MCP ツール
+# clipwright_transcribe MCP tool
 # ===========================================================================
 
 
@@ -37,29 +37,32 @@ mcp = FastMCP("clipwright-transcribe")
 def clipwright_transcribe(
     media: Annotated[
         str,
-        Field(description="入力メディアファイルパス（音声を含む素材・映像は任意）。"),
+        Field(
+            description="Input media file path (must contain audio; video is optional)."
+        ),
     ],
     output: Annotated[
         str,
-        Field(description="出力 OTIO タイムラインファイルパス（.otio 拡張子）。"),
+        Field(description="Output OTIO timeline file path (.otio extension required)."),
     ],
     options: Annotated[
         TranscribeOptions | None,
         Field(
             description=(
-                "文字起こしオプション（language / model_path / initial_prompt）。"
-                "省略時は全てデフォルト値（言語自動検出・env モデル）を使用する。"
+                "Transcription options (language / model_path / initial_prompt). "
+                "When omitted, all fields use their defaults "
+                "(auto language detection, model from env)."
             )
         ),
     ] = None,
 ) -> dict[str, Any]:
-    """音声を文字起こしして SRT/VTT 字幕と OTIO タイムラインを生成する MCP ツール。
+    """MCP tool: transcribe audio and produce SRT/VTT captions and an OTIO timeline.
 
-    入力メディアファイルは一切書き換えない（非破壊・readOnly）。
-    出力は新規生成した timeline.otio / SRT / VTT のパスを artifacts に返す。
+    Non-destructive (readOnly): the input media file is never modified.
+    Outputs are newly created files; their paths are returned in artifacts.
 
-    ビジネスロジックは transcribe.transcribe_media へ委譲する。
-    options が None の場合はデフォルト TranscribeOptions() を使用する。
+    Business logic is delegated to transcribe.transcribe_media.
+    When options is None, default TranscribeOptions() is used.
     """
     resolved_options = options if options is not None else TranscribeOptions()
     return transcribe_media(
@@ -70,15 +73,15 @@ def clipwright_transcribe(
 
 
 # ===========================================================================
-# エントリポイント（MCP stdio 起動）
+# Entry point (MCP stdio)
 # ===========================================================================
 
 
 def main() -> None:
-    """CLI エントリポイント。MCP サーバーを stdio で起動する。
+    """CLI entry point. Starts the MCP server over stdio.
 
-    pyproject.toml の [project.scripts] で
-    clipwright-transcribe = "clipwright_transcribe.server:main" として登録する。
+    Registered in pyproject.toml [project.scripts] as:
+    clipwright-transcribe = "clipwright_transcribe.server:main"
     """
     mcp.run(transport="stdio")
 

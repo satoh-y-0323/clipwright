@@ -1,19 +1,19 @@
-"""test_denoise.py — clipwright-render の denoise 適用拡張 Red テスト（DC-AS-005/AS-006/GP-001 B-2）。
+"""test_denoise.py — Red tests for the denoise extension of clipwright-render (DC-AS-005/AS-006/GP-001 B-2).
 
-対象:
-  - build_plan(ranges, probe_info, options, denoise=...) — afftdn 注入・has_audio 分岐・scale 共存
-  - render_timeline() — DenoiseDirective 検証・get_clipwright_metadata 読み出し
+Targets:
+  - build_plan(ranges, probe_info, options, denoise=...) — afftdn injection, has_audio branching, scale coexistence
+  - render_timeline() — DenoiseDirective validation, get_clipwright_metadata read path
 
-設計根拠（architecture-report-20260611-090313 §3 / 20260611-092647 §B-2）:
-  - backend=afftdn ＋ has_audio=True: concat 後 [outa] に afftdn を注入し map を [outa_dn] に差し替える
-  - backend=afftdn ＋ has_audio=False: afftdn を入れず warnings に「音声なしのため denoise スキップ」を追加
-  - scale ＋ afftdn 両指定: filter_complex に [outvscaled] と [outa_dn] の両 map を持つ（B-2）
-  - backend=deepfilternet: UNSUPPORTED_OPERATION（hint 付き）
-  - denoise なし: 既存ロジックと完全同一（後方互換）
-  - 不正 directive: INVALID_INPUT（nr 型/範囲外、nt 不正値、未知 backend、params 欠落）
+Design rationale (architecture-report-20260611-090313 §3 / 20260611-092647 §B-2):
+  - backend=afftdn + has_audio=True: inject afftdn after concat [outa] and replace map with [outa_dn]
+  - backend=afftdn + has_audio=False: skip afftdn injection and add a warning about no audio
+  - scale + afftdn both specified: filter_complex has both [outvscaled] and [outa_dn] maps (B-2)
+  - backend=deepfilternet: UNSUPPORTED_OPERATION (with hint)
+  - no denoise: identical to existing logic (backward compatible)
+  - invalid directive: INVALID_INPUT (nr type/out of range, invalid nt, unknown backend, missing params)
 
-probe は ProbeInfo を直接構築し build_plan を純ロジックとして呼ぶ。
-render_timeline のシステムテストは timeline-level metadata への書き込み→読み出し経路を検証する。
+probe is constructed directly as ProbeInfo and build_plan is called as pure logic.
+System tests for render_timeline verify the write-to-timeline-metadata → read path.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from clipwright_render.plan import KeptRange, ProbeInfo
 from clipwright_render.schemas import RenderOptions
 
 # ---------------------------------------------------------------------------
-# ヘルパー: OTIO 構築
+# Helpers: OTIO construction
 # ---------------------------------------------------------------------------
 
 FPS = 30.0
@@ -59,10 +59,10 @@ def _make_timeline(
     clips: list[otio.schema.Clip],
     denoise_directive: dict[str, Any] | None = None,
 ) -> otio.schema.Timeline:
-    """単一 video トラックの Timeline を生成する。
+    """Build a Timeline with a single video track.
 
-    denoise_directive が指定された場合は set_clipwright_metadata 経由で
-    timeline-level metadata に書き込む（CR L-5: otio_utils ヘルパー統一）。
+    If denoise_directive is given, it is written to timeline-level metadata via
+    set_clipwright_metadata (CR L-5: otio_utils helper unified).
     """
     track = otio.schema.Track(kind=otio.schema.TrackKind.Video)
     for clip in clips:
@@ -79,14 +79,14 @@ def _make_timeline(
 
 
 def _single_range(source: str = "/src/a.mp4") -> list[KeptRange]:
-    """1区間の KeptRange リストを返すヘルパー。"""
+    """Return a KeptRange list with one segment."""
     from clipwright_render.plan import resolve_kept_ranges
 
     tl = _make_timeline([_make_clip(source, 0.0, 5.0)])
     return resolve_kept_ranges(tl)
 
 
-# 有効な afftdn denoise 指示の辞書（テスト共通ベース）
+# Valid afftdn denoise directive dict (common base for tests)
 _VALID_AFFTDN_DIRECTIVE: dict[str, Any] = {
     "tool": "clipwright-noise",
     "version": "0.1.0",
@@ -95,7 +95,7 @@ _VALID_AFFTDN_DIRECTIVE: dict[str, Any] = {
     "params": {"nr": 12.0, "nf": -50.0, "nt": "w"},
 }
 
-# deepfilternet 指示（params は空）
+# deepfilternet directive (params is empty)
 _VALID_DEEPFILTERNET_DIRECTIVE: dict[str, Any] = {
     "tool": "clipwright-noise",
     "version": "0.1.0",
@@ -106,15 +106,15 @@ _VALID_DEEPFILTERNET_DIRECTIVE: dict[str, Any] = {
 
 
 # ---------------------------------------------------------------------------
-# build_plan — afftdn 注入（has_audio=True）
+# build_plan — afftdn injection (has_audio=True)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanDenoiseAfftdnWithAudio:
-    """build_plan に denoise=afftdn + has_audio=True を渡したとき afftdn が注入される（DC-AS-005/B-2）。"""
+    """build_plan with denoise=afftdn + has_audio=True injects afftdn (DC-AS-005/B-2)."""
 
     def test_afftdn_present_in_filter_complex(self) -> None:
-        """afftdn フィルタ文字列が filter_complex に含まれる。"""
+        """afftdn filter string is present in filter_complex."""
         from clipwright_render.plan import build_plan
 
         ranges = _single_range()
@@ -125,7 +125,7 @@ class TestBuildPlanDenoiseAfftdnWithAudio:
         assert "afftdn" in plan.filter_complex
 
     def test_afftdn_uses_nr_from_params(self) -> None:
-        """afftdn の nr パラメータが params.nr の値と一致する。"""
+        """The afftdn nr parameter matches params.nr."""
         from clipwright_render.plan import build_plan
 
         directive = {
@@ -138,7 +138,7 @@ class TestBuildPlanDenoiseAfftdnWithAudio:
         assert "nr=12" in plan.filter_complex
 
     def test_afftdn_uses_nf_from_params(self) -> None:
-        """afftdn の nf パラメータが params.nf の値と一致する。"""
+        """The afftdn nf parameter matches params.nf."""
         from clipwright_render.plan import build_plan
 
         directive = {
@@ -151,7 +151,7 @@ class TestBuildPlanDenoiseAfftdnWithAudio:
         assert "nf=-50" in plan.filter_complex
 
     def test_afftdn_uses_nt_from_params(self) -> None:
-        """afftdn の nt パラメータが params.nt の値と一致する。"""
+        """The afftdn nt parameter matches params.nt."""
         from clipwright_render.plan import build_plan
 
         directive = {
@@ -164,7 +164,7 @@ class TestBuildPlanDenoiseAfftdnWithAudio:
         assert "nt=w" in plan.filter_complex
 
     def test_outa_dn_label_in_filter_complex(self) -> None:
-        """[outa_dn] ラベルが filter_complex に含まれる（concat 後 [outa] を afftdn に通した出力）。"""
+        """[outa_dn] label is present in filter_complex (afftdn output after concat [outa])."""
         from clipwright_render.plan import build_plan
 
         ranges = _single_range()
@@ -175,7 +175,7 @@ class TestBuildPlanDenoiseAfftdnWithAudio:
         assert "[outa_dn]" in plan.filter_complex
 
     def test_audio_map_is_outa_dn(self) -> None:
-        """ffmpeg_args の -map が [outa_dn] に差し替えられている（[outa] のままではない）。"""
+        """The -map in ffmpeg_args is replaced with [outa_dn] (not left as [outa])."""
         from clipwright_render.plan import build_plan
 
         ranges = _single_range()
@@ -184,17 +184,16 @@ class TestBuildPlanDenoiseAfftdnWithAudio:
             ranges, probe, RenderOptions(), denoise=_VALID_AFFTDN_DIRECTIVE
         )
         args_str = " ".join(plan.ffmpeg_args)
-        # [outa_dn] が -map の値として現れる
+        # [outa_dn] appears as the -map value
         assert "[outa_dn]" in args_str
-        # 生の [outa] が -map の値として残っていない
-        # ("[outa]" は filter_complex 内のラベルとして出現するが ffmpeg_args には [outa_dn] だけ)
-        # -map [outa] ではなく -map [outa_dn] になっていることを確認する
+        # raw [outa] must not remain as a -map value
+        # ([outa] may appear as a label inside filter_complex, but only [outa_dn] in ffmpeg_args)
         assert "-map [outa_dn]" in args_str or (
             args_str.count("[outa_dn]") >= 1 and "-map [outa]" not in args_str
         )
 
     def test_afftdn_position_after_concat(self) -> None:
-        """afftdn 行は concat 行より後に現れる（B-2 順序固定）。"""
+        """afftdn line appears after the concat line (B-2 ordering)."""
         from clipwright_render.plan import build_plan
 
         ranges = _single_range()
@@ -206,11 +205,11 @@ class TestBuildPlanDenoiseAfftdnWithAudio:
         concat_pos = fc.index("concat=")
         afftdn_pos = fc.index("afftdn")
         assert afftdn_pos > concat_pos, (
-            f"afftdn({afftdn_pos}) は concat({concat_pos}) より後に現れるべき"
+            f"afftdn({afftdn_pos}) must appear after concat({concat_pos})"
         )
 
     def test_filter_complex_is_single_string(self) -> None:
-        """denoise 指示があっても filter_complex は単一文字列（コマンドインジェクション防止）。"""
+        """filter_complex is a single string even with a denoise directive (prevents command injection)."""
         from clipwright_render.plan import build_plan
 
         ranges = _single_range()
@@ -222,15 +221,15 @@ class TestBuildPlanDenoiseAfftdnWithAudio:
 
 
 # ---------------------------------------------------------------------------
-# build_plan — afftdn + has_audio=False（DC-AS-005）
+# build_plan — afftdn + has_audio=False (DC-AS-005)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanDenoiseAfftdnNoAudio:
-    """has_audio=False ＋ denoise 指示 → afftdn 非注入 ＋ warnings（DC-AS-005）。"""
+    """has_audio=False + denoise directive -> no afftdn injection + warnings (DC-AS-005)."""
 
     def test_afftdn_not_in_filter_complex_when_no_audio(self) -> None:
-        """音声なしのとき afftdn が filter_complex に含まれない。"""
+        """afftdn is not present in filter_complex when there is no audio."""
         from clipwright_render.plan import build_plan
 
         ranges = _single_range()
@@ -241,7 +240,7 @@ class TestBuildPlanDenoiseAfftdnNoAudio:
         assert "afftdn" not in plan.filter_complex
 
     def test_outa_dn_not_in_ffmpeg_args_when_no_audio(self) -> None:
-        """音声なしのとき [outa_dn] が ffmpeg_args に含まれない。"""
+        """[outa_dn] is not present in ffmpeg_args when there is no audio."""
         from clipwright_render.plan import build_plan
 
         ranges = _single_range()
@@ -252,7 +251,7 @@ class TestBuildPlanDenoiseAfftdnNoAudio:
         assert "[outa_dn]" not in " ".join(plan.ffmpeg_args)
 
     def test_warning_added_when_no_audio(self) -> None:
-        """音声なし ＋ denoise 指示 → warnings に「denoise スキップ」メッセージが追加される。"""
+        """No audio + denoise directive -> a denoise-skip message is added to warnings."""
         from clipwright_render.plan import build_plan
 
         ranges = _single_range()
@@ -262,23 +261,20 @@ class TestBuildPlanDenoiseAfftdnNoAudio:
         )
         assert len(plan.warnings) > 0
         warning_text = " ".join(plan.warnings)
-        # denoise スキップを示す何らかのテキストが含まれる
-        assert any(
-            kw in warning_text.lower()
-            for kw in ("denoise", "skip", "スキップ", "音声なし")
-        )
+        # Some text indicating denoise was skipped must be present
+        assert any(kw in warning_text.lower() for kw in ("denoise", "skip", "no audio"))
 
 
 # ---------------------------------------------------------------------------
-# build_plan — scale ＋ afftdn 両指定（B-2）
+# build_plan — scale + afftdn both specified (B-2)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanDenoiseWithScale:
-    """scale ＋ afftdn 両指定時に [outvscaled] と [outa_dn] の両 map を持つ（B-2）。"""
+    """scale + afftdn both specified: filter_complex has both [outvscaled] and [outa_dn] maps (B-2)."""
 
     def test_both_outvscaled_and_outa_dn_in_ffmpeg_args(self) -> None:
-        """scale ＋ afftdn 指定: ffmpeg_args に [outvscaled] と [outa_dn] が共存する。"""
+        """scale + afftdn: ffmpeg_args contains both [outvscaled] and [outa_dn]."""
         from clipwright_render.plan import build_plan
 
         ranges = _single_range()
@@ -291,14 +287,14 @@ class TestBuildPlanDenoiseWithScale:
         )
         args_str = " ".join(plan.ffmpeg_args)
         assert "[outvscaled]" in args_str, (
-            "scale 指定時は [outvscaled] が ffmpeg_args に必要"
+            "[outvscaled] is required in ffmpeg_args when scale is specified"
         )
         assert "[outa_dn]" in args_str, (
-            "afftdn 適用時は [outa_dn] が ffmpeg_args に必要"
+            "[outa_dn] is required in ffmpeg_args when afftdn is applied"
         )
 
     def test_scale_in_filter_complex_with_afftdn(self) -> None:
-        """scale ＋ afftdn: filter_complex に scale と afftdn の両方が含まれる。"""
+        """scale + afftdn: filter_complex contains both scale and afftdn."""
         from clipwright_render.plan import build_plan
 
         ranges = _single_range()
@@ -313,7 +309,7 @@ class TestBuildPlanDenoiseWithScale:
         assert "afftdn" in plan.filter_complex
 
     def test_no_vf_in_ffmpeg_args_with_afftdn_and_scale(self) -> None:
-        """-vf は ffmpeg_args に含まれない（filter_complex と競合するため禁止）。"""
+        """-vf is not present in ffmpeg_args (conflicts with filter_complex — forbidden)."""
         from clipwright_render.plan import build_plan
 
         ranges = _single_range()
@@ -328,15 +324,15 @@ class TestBuildPlanDenoiseWithScale:
 
 
 # ---------------------------------------------------------------------------
-# build_plan — backend=deepfilternet → UNSUPPORTED_OPERATION
+# build_plan — backend=deepfilternet -> UNSUPPORTED_OPERATION
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanDenoiseDeepfilternet:
-    """backend=deepfilternet → UNSUPPORTED_OPERATION（hint 付き）。"""
+    """backend=deepfilternet -> UNSUPPORTED_OPERATION (with hint)."""
 
     def test_deepfilternet_raises_unsupported(self) -> None:
-        """deepfilternet → ClipwrightError(UNSUPPORTED_OPERATION)。"""
+        """deepfilternet -> ClipwrightError(UNSUPPORTED_OPERATION)."""
         from clipwright_render.plan import build_plan
 
         ranges = _single_range()
@@ -348,7 +344,7 @@ class TestBuildPlanDenoiseDeepfilternet:
         assert exc_info.value.code == ErrorCode.UNSUPPORTED_OPERATION
 
     def test_deepfilternet_error_has_hint(self) -> None:
-        """deepfilternet エラーには hint（代替案を示す）が含まれる。"""
+        """The deepfilternet error includes a hint (indicating an alternative)."""
         from clipwright_render.plan import build_plan
 
         ranges = _single_range()
@@ -357,31 +353,33 @@ class TestBuildPlanDenoiseDeepfilternet:
             build_plan(
                 ranges, probe, RenderOptions(), denoise=_VALID_DEEPFILTERNET_DIRECTIVE
             )
-        assert exc_info.value.hint, "hint が空であってはならない"
-        # hint は実質的な代替案（afftdn への切替 or 将来版）を示すこと（NR-L-3）
-        assert "afftdn" in exc_info.value.hint or "将来" in exc_info.value.hint
+        assert exc_info.value.hint, "hint must not be empty"
+        # hint must point to a practical alternative (switch to afftdn or future version) (NR-L-3)
+        assert (
+            "afftdn" in exc_info.value.hint or "future" in exc_info.value.hint.lower()
+        )
 
 
 # ---------------------------------------------------------------------------
-# build_plan — denoise=None（後方互換）
+# build_plan — denoise=None (backward compatible)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanDenoiseNone:
-    """denoise=None のとき既存ロジックと完全同一（後方互換保証）。"""
+    """denoise=None is identical to existing logic (backward compatibility guarantee)."""
 
     def test_no_afftdn_without_denoise(self) -> None:
-        """denoise=None: afftdn が filter_complex に含まれない。"""
+        """denoise=None: afftdn is not present in filter_complex."""
         from clipwright_render.plan import build_plan
 
         ranges = _single_range()
         probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
-        # denoise 引数なしで呼ぶ（既存インターフェース）
+        # call without denoise argument (existing interface)
         plan = build_plan(ranges, probe, RenderOptions())
         assert "afftdn" not in plan.filter_complex
 
     def test_no_outa_dn_without_denoise(self) -> None:
-        """denoise=None: [outa_dn] が filter_complex / ffmpeg_args に含まれない。"""
+        """denoise=None: [outa_dn] is not present in filter_complex or ffmpeg_args."""
         from clipwright_render.plan import build_plan
 
         ranges = _single_range()
@@ -391,7 +389,7 @@ class TestBuildPlanDenoiseNone:
         assert "[outa_dn]" not in " ".join(plan.ffmpeg_args)
 
     def test_audio_map_is_outa_without_denoise(self) -> None:
-        """denoise=None: 音声あり時の audio map は [outa] のまま（後方互換）。"""
+        """denoise=None: audio map is [outa] when audio is present (backward compatible)."""
         from clipwright_render.plan import build_plan
 
         ranges = _single_range()
@@ -401,7 +399,7 @@ class TestBuildPlanDenoiseNone:
         assert "[outa]" in args_str
 
     def test_explicit_none_denoise_same_as_omitted(self) -> None:
-        """denoise=None 明示と省略が同一の filter_complex を生成する。"""
+        """Explicitly passing denoise=None produces the same filter_complex as omitting it."""
         from clipwright_render.plan import build_plan
 
         ranges = _single_range()
@@ -413,15 +411,15 @@ class TestBuildPlanDenoiseNone:
 
 
 # ---------------------------------------------------------------------------
-# build_plan — 不正 denoise directive → INVALID_INPUT（DC-AS-006）
+# build_plan — invalid denoise directive -> INVALID_INPUT (DC-AS-006)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPlanDenoiseInvalidDirective:
-    """不正な denoise 指示は INVALID_INPUT（DC-AS-006 厳格検証）。"""
+    """Invalid denoise directives raise INVALID_INPUT (DC-AS-006 strict validation)."""
 
     def test_nr_as_string_raises_invalid_input(self) -> None:
-        """params.nr が文字列 → INVALID_INPUT。"""
+        """params.nr as a string -> INVALID_INPUT."""
         from clipwright_render.plan import build_plan
 
         directive = {
@@ -435,7 +433,7 @@ class TestBuildPlanDenoiseInvalidDirective:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_nr_out_of_range_raises_invalid_input(self) -> None:
-        """params.nr が範囲外（>97）→ INVALID_INPUT（AfftdnParams ge=0.01 le=97）。"""
+        """params.nr out of range (>97) -> INVALID_INPUT (AfftdnParams ge=0.01 le=97)."""
         from clipwright_render.plan import build_plan
 
         directive = {
@@ -449,7 +447,7 @@ class TestBuildPlanDenoiseInvalidDirective:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_nr_zero_raises_invalid_input(self) -> None:
-        """params.nr=0.0（ge=0.01 未満）→ INVALID_INPUT。"""
+        """params.nr=0.0 (below ge=0.01) -> INVALID_INPUT."""
         from clipwright_render.plan import build_plan
 
         directive = {
@@ -463,7 +461,7 @@ class TestBuildPlanDenoiseInvalidDirective:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_nt_invalid_value_raises_invalid_input(self) -> None:
-        """params.nt が Literal["w","v"] 以外 → INVALID_INPUT。"""
+        """params.nt other than Literal['w','v'] -> INVALID_INPUT."""
         from clipwright_render.plan import build_plan
 
         directive = {
@@ -477,7 +475,7 @@ class TestBuildPlanDenoiseInvalidDirective:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_unknown_backend_raises_invalid_input(self) -> None:
-        """未知の backend → INVALID_INPUT（Literal 検証失敗）。"""
+        """Unknown backend -> INVALID_INPUT (Literal validation failure)."""
         from clipwright_render.plan import build_plan
 
         directive = {**_VALID_AFFTDN_DIRECTIVE, "backend": "unknown_backend"}
@@ -488,7 +486,7 @@ class TestBuildPlanDenoiseInvalidDirective:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_missing_params_raises_invalid_input(self) -> None:
-        """params キーが存在しない → INVALID_INPUT。"""
+        """Missing params key -> INVALID_INPUT."""
         from clipwright_render.plan import build_plan
 
         directive = {
@@ -496,7 +494,7 @@ class TestBuildPlanDenoiseInvalidDirective:
             "version": "0.1.0",
             "kind": "denoise",
             "backend": "afftdn",
-            # params フィールドなし
+            # params field absent
         }
         ranges = _single_range()
         probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
@@ -505,7 +503,7 @@ class TestBuildPlanDenoiseInvalidDirective:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_nf_out_of_range_raises_invalid_input(self) -> None:
-        """params.nf が範囲外（>-20）→ INVALID_INPUT（AfftdnParams ge=-80 le=-20）。"""
+        """params.nf out of range (>-20) -> INVALID_INPUT (AfftdnParams ge=-80 le=-20)."""
         from clipwright_render.plan import build_plan
 
         directive = {
@@ -519,7 +517,7 @@ class TestBuildPlanDenoiseInvalidDirective:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_measured_noise_floor_inf_raises_invalid_input(self) -> None:
-        """measured_noise_floor_db=inf → INVALID_INPUT（SR L-3: inf/nan 排除）。"""
+        """measured_noise_floor_db=inf -> INVALID_INPUT (SR L-3: inf/nan rejected)."""
         from clipwright_render.plan import build_plan
 
         directive = {
@@ -533,7 +531,7 @@ class TestBuildPlanDenoiseInvalidDirective:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_measured_noise_floor_nan_raises_invalid_input(self) -> None:
-        """measured_noise_floor_db=nan → INVALID_INPUT（SR L-3: inf/nan 排除）。"""
+        """measured_noise_floor_db=nan -> INVALID_INPUT (SR L-3: inf/nan rejected)."""
         from clipwright_render.plan import build_plan
 
         directive = {
@@ -547,7 +545,7 @@ class TestBuildPlanDenoiseInvalidDirective:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_error_message_does_not_contain_exc_detail(self) -> None:
-        """不正 directive のエラーメッセージに ValidationError の詳細が含まれない（SR M-1）。"""
+        """Error message for an invalid directive does not expose ValidationError details (SR M-1)."""
         from clipwright_render.plan import build_plan
 
         directive = {
@@ -558,19 +556,19 @@ class TestBuildPlanDenoiseInvalidDirective:
         probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
         with pytest.raises(ClipwrightError) as exc_info:
             build_plan(ranges, probe, RenderOptions(), denoise=directive)
-        # 入力値がエラーメッセージに混入していないことを確認
+        # Input value must not leak into the error message
         assert "INJECTED_SENSITIVE_VALUE" not in exc_info.value.message
-        # 例外チェーンが切断されている（from None）
+        # Exception chain is severed (from None)
         assert exc_info.value.__cause__ is None
 
 
 # ---------------------------------------------------------------------------
-# render_timeline — DenoiseDirective 検証・get_clipwright_metadata 読み出し
+# render_timeline — DenoiseDirective validation / get_clipwright_metadata read path
 # ---------------------------------------------------------------------------
 
 
 class TestRenderTimelineDenoiseDirective:
-    """render_timeline が timeline metadata から DenoiseDirective を読み出し build_plan に渡す経路。"""
+    """render_timeline reads DenoiseDirective from timeline metadata and passes it to build_plan."""
 
     def _write_timeline_with_denoise(
         self,
@@ -578,13 +576,13 @@ class TestRenderTimelineDenoiseDirective:
         denoise_directive: dict[str, Any] | None,
         source_name: str = "source.mp4",
     ) -> tuple[Path, Path, Path]:
-        """OTIO ファイルを tmp_path に書き出す。
+        """Write an OTIO file to tmp_path.
 
         Returns:
-            (timeline_path, source_path, output_path) のタプル。
+            Tuple of (timeline_path, source_path, output_path).
         """
         source_path = tmp_path / source_name
-        source_path.write_bytes(b"fake")  # ファイル存在確認を通す
+        source_path.write_bytes(b"fake")  # pass the file-existence check
 
         tl = _make_timeline(
             [_make_clip(str(source_path), 0.0, 5.0)],
@@ -599,10 +597,10 @@ class TestRenderTimelineDenoiseDirective:
     def test_render_reads_denoise_from_metadata_and_passes_to_build_plan(
         self, tmp_path: Path
     ) -> None:
-        """render_timeline が timeline metadata の denoise を読み出し build_plan に渡す。
+        """render_timeline reads denoise from timeline metadata and passes it to build_plan.
 
-        build_plan が denoise=afftdn を受け取ったとき filter_complex に afftdn が
-        含まれることを dry_run で確認する（実 ffmpeg は呼ばない）。
+        Verifies via dry_run that afftdn is in filter_complex when denoise=afftdn is
+        received (real ffmpeg is not called).
         """
         from clipwright.schemas import MediaInfo, StreamInfo
 
@@ -631,21 +629,21 @@ class TestRenderTimelineDenoiseDirective:
                 dry_run=True,
             )
 
-        assert result["ok"] is True, f"dry_run が失敗した: {result}"
+        assert result["ok"] is True, f"dry_run failed: {result}"
         fc = result["data"]["filter_complex"]
-        assert "afftdn" in fc, f"afftdn が filter_complex に含まれていない: {fc}"
+        assert "afftdn" in fc, f"afftdn not found in filter_complex: {fc}"
 
     def test_render_no_denoise_metadata_backward_compatible(
         self, tmp_path: Path
     ) -> None:
-        """denoise メタデータなしの timeline は後方互換で既存ロジックと同一。"""
+        """A timeline without denoise metadata is identical to existing logic (backward compatible)."""
         from clipwright.schemas import MediaInfo, StreamInfo
 
         from clipwright_render.render import render_timeline
 
         timeline_path, source_path, output_path = self._write_timeline_with_denoise(
             tmp_path,
-            None,  # denoise なし
+            None,  # no denoise
         )
 
         fake_info = MediaInfo(
@@ -667,14 +665,14 @@ class TestRenderTimelineDenoiseDirective:
                 dry_run=True,
             )
 
-        assert result["ok"] is True, f"後方互換テストが失敗した: {result}"
+        assert result["ok"] is True, f"backward compatibility test failed: {result}"
         fc = result["data"]["filter_complex"]
-        assert "afftdn" not in fc, f"afftdn が誤って含まれている: {fc}"
+        assert "afftdn" not in fc, f"afftdn incorrectly present: {fc}"
 
     def test_render_invalid_denoise_directive_returns_invalid_input(
         self, tmp_path: Path
     ) -> None:
-        """不正な denoise 指示（nr が文字列）→ ok=False / code=INVALID_INPUT。"""
+        """Invalid denoise directive (nr as string) -> ok=False / code=INVALID_INPUT."""
         from clipwright.schemas import MediaInfo, StreamInfo
 
         from clipwright_render.render import render_timeline
@@ -712,7 +710,7 @@ class TestRenderTimelineDenoiseDirective:
     def test_render_deepfilternet_directive_returns_unsupported(
         self, tmp_path: Path
     ) -> None:
-        """deepfilternet 指示 → ok=False / code=UNSUPPORTED_OPERATION。"""
+        """deepfilternet directive -> ok=False / code=UNSUPPORTED_OPERATION."""
         from clipwright.schemas import MediaInfo, StreamInfo
 
         from clipwright_render.render import render_timeline

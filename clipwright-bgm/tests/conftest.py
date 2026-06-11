@@ -1,12 +1,12 @@
-"""conftest.py — clipwright-bgm テスト用共有フィクスチャ。
+"""conftest.py — Shared fixtures for clipwright-bgm tests.
 
-フィクスチャ一覧:
-  - tmp_timeline_dir: tmp_path 配下に timeline/bgm ファイル用 dir を生成
-  - bgm_audio_file: 許可拡張子 .mp3 のダミー BGM ファイル
-  - timeline_otio_path: .otio ファイルパス（ファイルは存在しない）
-  - output_otio_path: 出力 .otio ファイルパス（ファイルは存在しない）
-  - simple_timeline: V1/A1 の2トラックのみを持つ OTIO Timeline
-  - media_info_bgm: BGM 用 MediaInfo（duration=30.0s・rate=48000・audio ストリームのみ）
+Fixture list:
+  - tmp_timeline_dir: Creates a temporary directory under tmp_path for timeline/bgm files
+  - bgm_audio_file: Dummy BGM file with the allowed extension .mp3
+  - timeline_otio_path: .otio file path (file does not exist yet)
+  - output_otio_path: Output .otio file path (file does not exist yet)
+  - simple_timeline: OTIO Timeline with only two tracks: V1/A1
+  - media_info_bgm: MediaInfo for BGM (duration=30.0s, rate=48000, audio stream only)
 """
 
 from __future__ import annotations
@@ -19,13 +19,13 @@ import pytest
 from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo
 
 # ---------------------------------------------------------------------------
-# ディレクトリ・ファイルパス
+# Directories and file paths
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
 def tmp_timeline_dir(tmp_path: Path) -> Path:
-    """timeline・bgm ファイルを同一 dir に置くための一時ディレクトリを返す。"""
+    """Return a temporary directory for placing timeline and bgm files in the same location."""
     d = tmp_path / "project"
     d.mkdir()
     return d
@@ -33,7 +33,7 @@ def tmp_timeline_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def bgm_audio_file(tmp_timeline_dir: Path) -> Path:
-    """許可拡張子 .mp3 のダミー BGM ファイルを生成して返す。"""
+    """Generate and return a dummy BGM file with the allowed extension .mp3."""
     path = tmp_timeline_dir / "bgm.mp3"
     path.write_bytes(b"dummy bgm audio")
     return path
@@ -41,13 +41,13 @@ def bgm_audio_file(tmp_timeline_dir: Path) -> Path:
 
 @pytest.fixture
 def timeline_otio_path(tmp_timeline_dir: Path) -> Path:
-    """入力 .otio タイムラインファイルパス（ファイルは存在しない・書き込み前）。"""
+    """Input .otio timeline file path (file does not exist yet, before write)."""
     return tmp_timeline_dir / "timeline.otio"
 
 
 @pytest.fixture
 def output_otio_path(tmp_timeline_dir: Path) -> Path:
-    """出力 .otio タイムラインファイルパス（ファイルは存在しない・書き込み前）。"""
+    """Output .otio timeline file path (file does not exist yet, before write)."""
     return tmp_timeline_dir / "output.otio"
 
 
@@ -58,10 +58,10 @@ def output_otio_path(tmp_timeline_dir: Path) -> Path:
 
 @pytest.fixture
 def simple_timeline() -> otio.schema.Timeline:
-    """V1(Video) + A1(Audio) の 2 トラック構成 Timeline を返す。
+    """Return a Timeline with two tracks: V1 (Video) and A1 (Audio).
 
-    add_bgm の正常系テスト入力として使う。クリップは空（再呼び出し検出テストでは
-    kind=='bgm' クリップを手動で追加する）。
+    Used as input for add_bgm success path tests. Clips are empty
+    (kind=='bgm' clips are added manually in re-invocation detection tests).
     """
     tl = otio.schema.Timeline(name="test_timeline")
     v1 = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
@@ -72,7 +72,7 @@ def simple_timeline() -> otio.schema.Timeline:
 
 
 # ---------------------------------------------------------------------------
-# MediaInfo モック値
+# MediaInfo mock values
 # ---------------------------------------------------------------------------
 
 BGM_DURATION_SEC = 30.0
@@ -81,10 +81,10 @@ BGM_RATE = 48000.0
 
 @pytest.fixture
 def media_info_bgm() -> MediaInfo:
-    """BGM ファイル用 MediaInfo（audio ストリーム 1 本・30 秒）。
+    """MediaInfo for a BGM file (1 audio stream, 30 seconds).
 
-    inspect_media のモック戻り値として使う。
-    duration は RationalTimeModel(value=30.0 * 48000, rate=48000) で表現する。
+    Used as the mock return value for inspect_media.
+    duration is represented as RationalTimeModel(value=30.0 * 48000, rate=48000).
     """
     return MediaInfo(
         path="bgm.mp3",
@@ -109,10 +109,10 @@ def make_bgm_timeline(
     bgm_duration_sec: float = BGM_DURATION_SEC,
     bgm_rate: float = BGM_RATE,
 ) -> otio.schema.Timeline:
-    """BGM クリップを持つ timeline（add_bgm 後の想定構造）を構築して返すヘルパー。
+    """Build and return a timeline containing a BGM clip (expected structure after add_bgm).
 
-    実際の add_bgm を呼ばず OTIO を手動組み立てする。
-    unit テスト内で「期待する構造」と比較する用途に使う。
+    Assembles OTIO manually without calling add_bgm.
+    Intended for comparing against the expected structure in unit tests.
     """
     tl = otio.schema.Timeline(name="test_timeline")
     v1 = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)

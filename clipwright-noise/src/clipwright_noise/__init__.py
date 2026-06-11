@@ -1,3 +1,3 @@
-"""clipwright-noise: ノイズ検出 → OTIO タイムライン注記生成 MCP ツール。"""
+"""clipwright-noise: Noise detection → OTIO timeline annotation generation MCP tool."""
 
 __version__ = "0.1.0"

@@ -1,11 +1,11 @@
-"""clipwright-render テスト用共有フィクスチャ。
+"""conftest.py — Shared fixtures for clipwright-render tests.
 
-ffmpeg/ffprobe の探索順序:
+Binary resolution order for ffmpeg/ffprobe:
   1. PATH (shutil.which)
-  2. 環境変数 CLIPWRIGHT_FFMPEG / CLIPWRIGHT_FFPROBE
+  2. Environment variables CLIPWRIGHT_FFMPEG / CLIPWRIGHT_FFPROBE
 
-いずれも見つからない場合のみ integration テストを skip する。
-core の conftest.py と同じ解決方針を維持する（DC-GP-002）。
+Integration tests are skipped only when neither source finds the binary.
+Follows the same resolution strategy as core's conftest.py (DC-GP-002).
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import pytest
 
 
 def _find_binary(name: str, env_var: str) -> str | None:
-    """バイナリを PATH → env_var の順で探す。どちらも見つからなければ None。"""
+    """Search for a binary via PATH then env_var. Returns None if not found."""
     found = shutil.which(name)
     if found:
         return found
@@ -30,35 +30,33 @@ def _find_binary(name: str, env_var: str) -> str | None:
 
 @pytest.fixture(scope="session")
 def ffprobe_path() -> str | None:
-    """ffprobe 実行ファイルのパス。見つからなければ None。"""
+    """Path to the ffprobe executable, or None if not found."""
     return _find_binary("ffprobe", "CLIPWRIGHT_FFPROBE")
 
 
 @pytest.fixture(scope="session")
 def ffmpeg_path() -> str | None:
-    """ffmpeg 実行ファイルのパス。見つからなければ None。"""
+    """Path to the ffmpeg executable, or None if not found."""
     return _find_binary("ffmpeg", "CLIPWRIGHT_FFMPEG")
 
 
 @pytest.fixture
 def require_ffprobe(ffprobe_path: str | None) -> str:
-    """integration テスト用: ffprobe がなければ skip する。パスを返す。"""
+    """For integration tests: skip if ffprobe is unavailable. Returns the path."""
     if ffprobe_path is None:
         pytest.skip(
-            "ffprobe が見つかりません。"
-            "PATH に ffprobe を追加するか "
-            "CLIPWRIGHT_FFPROBE 環境変数にフルパスを設定してください。"
+            "ffprobe not found. "
+            "Add ffprobe to PATH or set the CLIPWRIGHT_FFPROBE environment variable."
         )
     return ffprobe_path
 
 
 @pytest.fixture
 def require_ffmpeg(ffmpeg_path: str | None) -> str:
-    """integration テスト用: ffmpeg がなければ skip する。パスを返す。"""
+    """For integration tests: skip if ffmpeg is unavailable. Returns the path."""
     if ffmpeg_path is None:
         pytest.skip(
-            "ffmpeg が見つかりません。"
-            "PATH に ffmpeg を追加するか "
-            "CLIPWRIGHT_FFMPEG 環境変数にフルパスを設定してください。"
+            "ffmpeg not found. "
+            "Add ffmpeg to PATH or set the CLIPWRIGHT_FFMPEG environment variable."
         )
     return ffmpeg_path

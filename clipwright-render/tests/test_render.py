@@ -1,16 +1,16 @@
-"""test_render.py — render.py（オーケストレーション + _probe()）の Red テスト。
+"""test_render.py — Red tests for render.py (orchestration + _probe()).
 
-対象:
+Targets:
   - _probe(source) -> ProbeInfo
-    inspect_media 呼び出し・MediaInfo→ProbeInfo アダプタ変換
-  - render_timeline(timeline, source, output, options, dry_run) のオーケストレーション
-    入力検証・dry_run 経路・実行経路・エラー伝播
-  - BGM オーケストレーション拡張（§7 ADR-B4-r2/B5-r2/B6-r2/B8）
-    resolve_bgm 呼び出し・build_plan bgm 受け渡し・-stream_loop -i 並び検証
+    inspect_media call and MediaInfo->ProbeInfo adapter conversion
+  - render_timeline(timeline, source, output, options, dry_run) orchestration
+    input validation, dry_run path, execution path, error propagation
+  - BGM orchestration extension (§7 ADR-B4-r2/B5-r2/B6-r2/B8)
+    resolve_bgm call, build_plan bgm forwarding, -stream_loop -i ordering
 
-inspect_media は clipwright_render.render.inspect_media をモックして検証する。
-process.run は ffmpeg 呼び出し専用に縮小して patch する。
-実 ffmpeg/ffprobe バイナリは一切呼ばない（integration テストは別ファイル担当）。
+inspect_media is verified by patching clipwright_render.render.inspect_media.
+process.run is patched exclusively for ffmpeg calls.
+No real ffmpeg/ffprobe binaries are used (integration tests are in a separate file).
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from clipwright.schemas import MediaInfo, StreamInfo
 from clipwright_render.schemas import RenderOptions
 
 # ---------------------------------------------------------------------------
-# ヘルパー: テスト用 OTIO Timeline ファイル / インメモリ構築
+# Helpers: OTIO Timeline file / in-memory construction for tests
 # ---------------------------------------------------------------------------
 
 FPS = 30.0
@@ -54,7 +54,7 @@ def _make_clip(source: str, start: float, duration: float) -> otio.schema.Clip:
 
 
 def _make_timeline(clips: list[otio.schema.Clip]) -> otio.schema.Timeline:
-    """単一 video トラックの Timeline を生成する。"""
+    """Build a single-video-track Timeline."""
     track = otio.schema.Track(kind=otio.schema.TrackKind.Video)
     for clip in clips:
         track.append(clip)
@@ -64,7 +64,7 @@ def _make_timeline(clips: list[otio.schema.Clip]) -> otio.schema.Timeline:
 
 
 def _write_timeline(path: Path, clips: list[otio.schema.Clip]) -> None:
-    """OTIO ファイルをディスクに書き出すヘルパー。"""
+    """Write an OTIO timeline to disk."""
     tl = _make_timeline(clips)
     otio.adapters.write_to_file(tl, str(path))
 
@@ -77,10 +77,10 @@ def _make_media_info(
     audio_streams: int = 1,
     extra_streams: list[StreamInfo] | None = None,
 ) -> MediaInfo:
-    """テスト用 MediaInfo を構築するヘルパー。
+    """Build a MediaInfo for tests.
 
-    inspect_media のモック戻り値として使用する。
-    bit_rate は int | None で渡す（_to_optional_int 変換済みを想定）。
+    Used as the mock return value for inspect_media.
+    bit_rate is passed as int | None (assumed already converted by _to_optional_int).
     """
     streams: list[StreamInfo] = []
     if has_video:
@@ -105,22 +105,22 @@ def _make_media_info(
 
 
 # ---------------------------------------------------------------------------
-# _probe() テスト群（DC-GP-001 / AS-001 / AM-007）
-# (a) inspect_media モックベースへ移行
+# _probe() tests (DC-GP-001 / AS-001 / AM-007)
+# (a) migrated to inspect_media mock-based style
 # ---------------------------------------------------------------------------
 
 
 class TestProbe:
-    """_probe(source) の動作検証。
+    """Verify _probe(source) behaviour.
 
-    ffprobe 直叩きモックを廃止し、clipwright_render.render.inspect_media を
-    patch して MediaInfo を供給するスタイルへ移行する（DC-GP-001/AD-3）。
+    Replaced direct ffprobe mock with patching clipwright_render.render.inspect_media
+    to supply MediaInfo (DC-GP-001/AD-3).
     """
 
     def test_probe_video_audio_bit_rate(self, tmp_path: Path) -> None:
-        """video+audio+bit_rate を持つ MediaInfo → ProbeInfo への変換確認。
+        """MediaInfo with video+audio+bit_rate -> ProbeInfo conversion.
 
-        has_video=True, audio_count=1, bit_rate=8000000 になる（DC-GP-001）。
+        Results in has_video=True, audio_count=1, bit_rate=8000000 (DC-GP-001).
         """
         from clipwright_render.render import _probe
 
@@ -143,7 +143,7 @@ class TestProbe:
         assert info.bit_rate == 8_000_000
 
     def test_probe_audio_count_zero(self, tmp_path: Path) -> None:
-        """音声ストリーム数 0 → audio_count=0（DC-GP-001）。"""
+        """Zero audio streams -> audio_count=0 (DC-GP-001)."""
         from clipwright_render.render import _probe
 
         source = str(tmp_path / "a.mp4")
@@ -160,7 +160,7 @@ class TestProbe:
         assert info.audio_count == 0
 
     def test_probe_audio_count_multiple(self, tmp_path: Path) -> None:
-        """音声ストリーム複数 → audio_count=N（DC-GP-001）。"""
+        """Multiple audio streams -> audio_count=N (DC-GP-001)."""
         from clipwright_render.render import _probe
 
         source = str(tmp_path / "a.mp4")
@@ -177,7 +177,7 @@ class TestProbe:
         assert info.audio_count == 3
 
     def test_probe_bit_rate_none(self, tmp_path: Path) -> None:
-        """MediaInfo.bit_rate が None → ProbeInfo.bit_rate is None（DC-GP-001）。"""
+        """MediaInfo.bit_rate is None -> ProbeInfo.bit_rate is None (DC-GP-001)."""
         from clipwright_render.render import _probe
 
         source = str(tmp_path / "a.mp4")
@@ -194,9 +194,9 @@ class TestProbe:
         assert info.bit_rate is None
 
     def test_probe_propagates_probe_failed(self, tmp_path: Path) -> None:
-        """inspect_media が PROBE_FAILED を送出 → _probe がそれを伝播する。
+        """inspect_media raises PROBE_FAILED -> _probe propagates it.
 
-        FILE_NOT_FOUND 以外のエラーコードはそのまま伝播すること（DC-GP-001）。
+        Error codes other than FILE_NOT_FOUND must propagate unchanged (DC-GP-001).
         """
         from clipwright_render.render import _probe
 
@@ -208,8 +208,8 @@ class TestProbe:
                 "clipwright_render.render.inspect_media",
                 side_effect=ClipwrightError(
                     code=ErrorCode.PROBE_FAILED,
-                    message="ffprobe の出力が有効な JSON ではありません。",
-                    hint="入力ファイルが有効なメディアファイルか確認してください。",
+                    message="ffprobe output is not valid JSON.",
+                    hint="Check that the input file is a valid media file.",
                 ),
             ),
             pytest.raises(ClipwrightError) as exc_info,
@@ -219,7 +219,7 @@ class TestProbe:
         assert exc_info.value.code == ErrorCode.PROBE_FAILED
 
     def test_probe_has_video_false(self, tmp_path: Path) -> None:
-        """video stream が無い場合 has_video=False（DC-GP-001）。"""
+        """No video stream -> has_video=False (DC-GP-001)."""
         from clipwright_render.render import _probe
 
         source = str(tmp_path / "a.mp4")
@@ -236,7 +236,7 @@ class TestProbe:
         assert info.has_video is False
 
     def test_probe_audio_count_single(self, tmp_path: Path) -> None:
-        """audio stream が1本のとき audio_count=1（DC-GP-001）。"""
+        """Single audio stream -> audio_count=1 (DC-GP-001)."""
         from clipwright_render.render import _probe
 
         source = str(tmp_path / "a.mp4")
@@ -253,23 +253,23 @@ class TestProbe:
         assert info.audio_count == 1
 
     def test_probe_file_not_found_replaces_abspath_with_basename(self) -> None:
-        """FILE_NOT_FOUND 時に _probe が message を basename のみに差し替えること。
+        """On FILE_NOT_FOUND, _probe replaces message with basename only.
 
-        inspect_media が FILE_NOT_FOUND を送出した場合、_probe が再送出する
-        ClipwrightError の message に絶対パスが含まれず basename のみを含む（Sec M-1）。
-        symlink を実際に作らないため Windows でも実行される（CR-T-001）。
+        When inspect_media raises FILE_NOT_FOUND, the ClipwrightError re-raised
+        by _probe must contain no absolute path — only the basename (Sec M-1).
+        No real symlink created, so this runs on Windows too (CR-T-001).
         """
         from clipwright_render.render import _probe
 
         source = "/abs/path/to/link.mp4"
-        expected_hint = "シンボリックリンクではなく実ファイルを指定してください。"
+        expected_hint = "Specify a real file instead of a symbolic link."
 
         with (
             patch(
                 "clipwright_render.render.inspect_media",
                 side_effect=ClipwrightError(
                     code=ErrorCode.FILE_NOT_FOUND,
-                    message="シンボリックリンクは受け付けません: /abs/path/to/link.mp4",
+                    message="Symbolic links are not accepted: /abs/path/to/link.mp4",
                     hint=expected_hint,
                 ),
             ),
@@ -278,52 +278,54 @@ class TestProbe:
             _probe(source)
 
         assert exc_info.value.code == ErrorCode.FILE_NOT_FOUND
-        # 絶対パス（ディレクトリ部分）が露出していない
+        # Absolute path (directory part) must not be exposed
         assert "/abs/path/to" not in exc_info.value.message
-        # basename のみ含まれる
+        # Basename must be present
         assert "link.mp4" in exc_info.value.message
-        # hint は inspect_media のものを引き継ぐ（差し替えで欠落しないこと・CR-T-004）
+        # hint from inspect_media must be preserved (CR-T-004)
         assert exc_info.value.hint == expected_hint
 
 
 # ---------------------------------------------------------------------------
-# (d) codec_type 欠落・空文字のエッジケース（DC-AM-002）
+# (d) Edge cases: missing/empty codec_type (DC-AM-002)
 # ---------------------------------------------------------------------------
 
 
 class TestProbeEdgeCases:
-    """_probe の codec_type 欠落・空文字等価性検証（DC-AM-002）。"""
+    """Verify _probe equivalence for missing/empty codec_type (DC-AM-002)."""
 
     def test_probe_codec_type_missing_or_empty_not_counted(
         self, tmp_path: Path
     ) -> None:
-        """codec_type 欠落（""に正規化済み）・空文字ストリームを含む MediaInfo で
-        has_video=False / audio_count=0 になる（旧実装と等価）。
+        """MediaInfo with missing (normalised to "") or empty codec_type streams
+        results in has_video=False / audio_count=0 (equivalent to old implementation).
 
-        旧実装: s.get("codec_type") == "video" → 欠落は None で不一致 → 数えない。
-        新実装: StreamInfo.codec_type は str(s.get("codec_type", "")) で "" に正規化 →
-                "video"/"audio" に一致しない → 数えない。両者は等価（DC-AM-002）。
+        Old impl: s.get("codec_type") == "video" -> None on missing -> not counted.
+        New impl: StreamInfo.codec_type normalised to "" via str(s.get("codec_type",""))
+                  -> does not match "video"/"audio" -> not counted. Both are equivalent (DC-AM-002).
 
-        空文字（ffprobe 欠落を "" に正規化したケース）と "data"/"subtitle" 等の
-        非 video/audio codec_type の両方を含めて、カウントされないことを検証する。
+        Covers both empty-string (ffprobe missing normalised to "") and non-video/audio
+        codec_type values like "data"/"subtitle".
         """
         from clipwright_render.render import _probe
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
 
-        # codec_type が "" の空文字（欠落を正規化）と非 video/audio 値を含む MediaInfo
+        # MediaInfo with "" codec_type (missing normalised) and non-video/audio values
         extra_streams = [
-            StreamInfo(index=0, codec_type="", codec_name=None),  # 欠落を "" に正規化
+            StreamInfo(
+                index=0, codec_type="", codec_name=None
+            ),  # missing normalised to ""
             StreamInfo(
                 index=1, codec_type="", codec_name="data"
-            ),  # 欠落を "" に正規化（codec_name あり）
+            ),  # missing normalised to "" (with codec_name)
             StreamInfo(
                 index=2, codec_type="data", codec_name=None
-            ),  # data ストリーム（非 video/audio）
+            ),  # data stream (non video/audio)
             StreamInfo(
                 index=3, codec_type="subtitle", codec_name=None
-            ),  # subtitle（非 video/audio）
+            ),  # subtitle (non video/audio)
         ]
         media_info = MediaInfo(
             path=source,
@@ -344,15 +346,15 @@ class TestProbeEdgeCases:
 
 
 # ---------------------------------------------------------------------------
-# clipwright_render — 入力検証テスト（DC-GP-005 / AM-002 / AM-003）
+# clipwright_render — input validation tests (DC-GP-005 / AM-002 / AM-003)
 # ---------------------------------------------------------------------------
 
 
 class TestInputValidation:
-    """clipwright_render の入力検証を検証する。"""
+    """Verify input validation for clipwright_render."""
 
     def test_timeline_not_found_raises_file_not_found(self, tmp_path: Path) -> None:
-        """timeline(.otio) 不在 → FILE_NOT_FOUND（DC-GP-005）。"""
+        """Missing timeline (.otio) -> FILE_NOT_FOUND (DC-GP-005)."""
         from clipwright_render.render import render_timeline
 
         missing_tl = str(tmp_path / "nonexistent.otio")
@@ -364,7 +366,7 @@ class TestInputValidation:
         assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
 
     def test_source_not_found_raises_file_not_found(self, tmp_path: Path) -> None:
-        """ソースファイル不在 → FILE_NOT_FOUND（DC-GP-005）。"""
+        """Missing source file -> FILE_NOT_FOUND (DC-GP-005)."""
         from clipwright_render.render import render_timeline
 
         tl_path = tmp_path / "tl.otio"
@@ -381,14 +383,14 @@ class TestInputValidation:
     def test_output_parent_dir_not_found_raises_file_not_found(
         self, tmp_path: Path
     ) -> None:
-        """出力親ディレクトリ不在 → FILE_NOT_FOUND（自動作成しない・DC-GP-005）。"""
+        """Missing output parent directory -> FILE_NOT_FOUND (no auto-creation, DC-GP-005)."""
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
         tl_path = tmp_path / "tl.otio"
         _write_timeline(tl_path, [_make_clip(source, 0.0, 5.0)])
-        # 存在しないサブディレクトリ
+        # Non-existent subdirectory
         output = str(tmp_path / "nonexistent_dir" / "out.mp4")
 
         result = render_timeline(
@@ -401,7 +403,7 @@ class TestInputValidation:
     def test_invalid_extension_raises_invalid_input(
         self, tmp_path: Path, ext: str
     ) -> None:
-        """不正拡張子（ホワイトリスト外）→ INVALID_INPUT（DC-AM-003）。"""
+        """Invalid extension (not on whitelist) -> INVALID_INPUT (DC-AM-003)."""
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
@@ -418,7 +420,7 @@ class TestInputValidation:
 
     @pytest.mark.parametrize("ext", [".mp4", ".mkv", ".mov", ".webm"])
     def test_valid_extensions_pass_validation(self, tmp_path: Path, ext: str) -> None:
-        """ホワイトリスト内拡張子は入力検証を通過する（dry_run で確認・DC-AM-003）。"""
+        """Whitelisted extensions pass input validation (verified via dry_run, DC-AM-003)."""
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
@@ -437,14 +439,14 @@ class TestInputValidation:
                 options=RenderOptions(),
                 dry_run=True,
             )
-        # INVALID_INPUT ではないこと（ok=True or 他エラー）
+        # Must not be INVALID_INPUT (ok=True or a different error)
         if not result["ok"]:
             assert result["error"]["code"] != ErrorCode.INVALID_INPUT
 
     def test_existing_output_without_overwrite_raises_invalid_input(
         self, tmp_path: Path
     ) -> None:
-        """既存 output かつ overwrite=False → INVALID_INPUT（DC-AM-002）。"""
+        """Existing output with overwrite=False -> INVALID_INPUT (DC-AM-002)."""
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
@@ -452,7 +454,7 @@ class TestInputValidation:
         tl_path = tmp_path / "tl.otio"
         _write_timeline(tl_path, [_make_clip(source, 0.0, 5.0)])
         output = str(tmp_path / "out.mp4")
-        Path(output).touch()  # 既存ファイルを作成
+        Path(output).touch()  # Create existing file
 
         result = render_timeline(
             timeline=str(tl_path),
@@ -461,11 +463,11 @@ class TestInputValidation:
         )
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.INVALID_INPUT
-        # hint に overwrite の案内が含まれる
+        # hint must mention overwrite
         assert "overwrite" in result["error"]["hint"].lower()
 
     def test_existing_output_with_overwrite_true_passes(self, tmp_path: Path) -> None:
-        """overwrite=True の場合は既存ファイルでも検証を通過する（DC-AM-002）。"""
+        """With overwrite=True, an existing output file passes validation (DC-AM-002)."""
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
@@ -485,12 +487,12 @@ class TestInputValidation:
                 options=RenderOptions(overwrite=True),
                 dry_run=True,
             )
-        # INVALID_INPUT ではないこと
+        # Must not be INVALID_INPUT
         if not result["ok"]:
             assert result["error"]["code"] != ErrorCode.INVALID_INPUT
 
     def test_output_equals_source_raises_path_not_allowed(self, tmp_path: Path) -> None:
-        """output == source → PATH_NOT_ALLOWED（DC-AM-002）。"""
+        """output == source -> PATH_NOT_ALLOWED (DC-AM-002)."""
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
@@ -509,18 +511,18 @@ class TestInputValidation:
     def test_source_outside_timeline_dir_raises_path_not_allowed(
         self, tmp_path: Path
     ) -> None:
-        """timeline 外の source → PATH_NOT_ALLOWED（Sec M-2: OTIO 境界チェック）。
+        """Source outside the timeline dir -> PATH_NOT_ALLOWED (Sec M-2: OTIO boundary check).
 
-        悪意ある OTIO に任意パスが埋め込まれた場合の境界チェック。
+        Guards against arbitrary paths embedded in a malicious OTIO file.
         """
         from clipwright_render.render import render_timeline
 
-        # timeline は subdir1 に配置
+        # timeline placed in subdir1
         subdir1 = tmp_path / "project"
         subdir1.mkdir()
         tl_path = subdir1 / "tl.otio"
 
-        # source は別ディレクトリ（境界外）
+        # source in a different directory (outside boundary)
         subdir2 = tmp_path / "outside"
         subdir2.mkdir()
         outside_source = str(subdir2 / "secret.mp4")
@@ -538,36 +540,35 @@ class TestInputValidation:
         assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
 
     def test_symlink_source_raises_file_not_found(self, tmp_path: Path) -> None:
-        """symlink ソースを render_timeline に渡すと FILE_NOT_FOUND を返す（DC-AS-001）
+        """Symlink source passed to render_timeline returns FILE_NOT_FOUND (DC-AS-001).
 
-        _probe → inspect_media が symlink を FILE_NOT_FOUND で拒否することを
-        render_timeline 経由で確認する回帰テスト。
-        source の Path.exists() は symlink 先が存在すれば True を返すため通過するが、
-        _probe 内の inspect_media で発火する。
-        error.message には絶対パス（ディレクトリ等）が露出せず、
-        basename のみが含まれることを確認する（Sec M-1）。
+        Regression test verifying that _probe -> inspect_media rejects symlinks with FILE_NOT_FOUND
+        when reached via render_timeline.
+        Path.exists() returns True if the symlink target exists, so it passes the existence check;
+        the rejection fires inside inspect_media within _probe.
+        error.message must not expose the absolute path (directory etc.) — only the basename (Sec M-1).
         """
         from clipwright_render.render import render_timeline
 
-        # 実ファイルと symlink を作成
+        # Create a real file and a symlink pointing to it
         real_file = tmp_path / "real.mp4"
         real_file.touch()
         symlink_source = tmp_path / "link.mp4"
-        # Windows では symlink 作成に権限が要るため失敗を skip でガード（core と同方針）
+        # Symlink creation requires elevated privileges on Windows; guard with skip (same policy as core)
         try:
             symlink_source.symlink_to(real_file)
         except (OSError, NotImplementedError) as exc:
             pytest.skip(
-                f"symlink の作成に失敗しました（権限不足または未対応環境）: {exc}"
+                f"Symlink creation failed (insufficient privileges or unsupported environment): {exc}"
             )
 
-        # timeline は symlink を source に参照する
+        # timeline references the symlink as its source
         tl_path = tmp_path / "tl.otio"
         _write_timeline(tl_path, [_make_clip(str(symlink_source), 0.0, 5.0)])
         output = str(tmp_path / "out.mp4")
 
-        # inspect_media を実際に通す（symlink 拒否は _validate_existing_file が担う）
-        # patch しないことで実装の symlink 拒否挙動が発火することを確認する
+        # Pass through real inspect_media (symlink rejection is handled by _validate_existing_file)
+        # Not patching confirms the symlink rejection logic fires in the actual implementation
         result = render_timeline(
             timeline=str(tl_path),
             output=output,
@@ -576,8 +577,8 @@ class TestInputValidation:
 
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
-        # error.message に絶対パス（real_file の親ディレクトリ等）が含まれず
-        # basename のみであることを確認する（Sec M-1）
+        # error.message must not expose absolute path (parent dir of real_file etc.)
+        # — only basename (Sec M-1)
         error_message: str = result["error"]["message"]
         assert str(tmp_path) not in error_message
         assert str(real_file.parent) not in error_message
@@ -585,16 +586,16 @@ class TestInputValidation:
 
 
 # ---------------------------------------------------------------------------
-# clipwright_render — dry_run テスト（§3 データフロー 6a）
-# (b) probe モック: clipwright_render.render.inspect_media を patch へ移行
+# clipwright_render — dry_run tests (§3 data flow 6a)
+# (b) probe mock: migrated to patching clipwright_render.render.inspect_media
 # ---------------------------------------------------------------------------
 
 
 class TestDryRun:
-    """dry_run=True 時の動作検証。"""
+    """Verify dry_run=True behaviour."""
 
     def test_dry_run_does_not_call_ffmpeg(self, tmp_path: Path) -> None:
-        """dry_run=True のとき ffmpeg が呼ばれない（inspect_media は呼ぶ）。"""
+        """dry_run=True -> ffmpeg is not called (inspect_media is still called)."""
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
@@ -628,12 +629,12 @@ class TestDryRun:
             )
 
         assert result["ok"] is True
-        # run は ffmpeg 専用 patch → dry_run=True なら呼ばれない
+        # run is patched exclusively for ffmpeg -> must not be called when dry_run=True
         ffmpeg_calls = [c for c in run_calls if "ffmpeg" in c[0]]
         assert len(ffmpeg_calls) == 0
 
     def test_dry_run_returns_ok_envelope(self, tmp_path: Path) -> None:
-        """dry_run=True の返り値が ok=True エンベロープ形式。"""
+        """dry_run=True returns an ok=True envelope."""
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
@@ -662,7 +663,7 @@ class TestDryRun:
     def test_dry_run_summary_contains_segment_count_and_duration(
         self, tmp_path: Path
     ) -> None:
-        """dry_run summary に残区間数と想定尺が含まれる（§3 データフロー 6a）。"""
+        """dry_run summary contains the segment count and expected duration (§3 data flow 6a)."""
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
@@ -690,11 +691,11 @@ class TestDryRun:
 
         assert result["ok"] is True
         summary: str = result["summary"]
-        # 2 区間・5秒 の情報が含まれる
+        # 2 segments info must be present
         assert "2" in summary
 
     def test_dry_run_data_contains_planned_command(self, tmp_path: Path) -> None:
-        """dry_run data に予定コマンドが含まれる（§3 データフロー 6a）。"""
+        """dry_run data contains the planned command (§3 data flow 6a)."""
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
@@ -721,11 +722,11 @@ class TestDryRun:
             )
 
         assert result["ok"] is True
-        # data に予定コマンド（ffmpeg_args またはそれに相当するキー）が含まれる
+        # data must contain the planned command (ffmpeg_args or equivalent key)
         assert len(result["data"]) > 0
 
     def test_dry_run_summary_contains_estimated_size(self, tmp_path: Path) -> None:
-        """bit_rate あり の dry_run summary に概算サイズ情報が含まれる（ADR-3）。"""
+        """dry_run summary with bit_rate contains estimated size information (ADR-3)."""
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
@@ -746,24 +747,24 @@ class TestDryRun:
             )
 
         assert result["ok"] is True
-        # summary に何らかのサイズ/bytes 関連の情報が含まれる
+        # summary or data must contain some size/bytes-related information
         assert result["data"] or result["summary"]
 
 
 # ---------------------------------------------------------------------------
-# clipwright_render — 実行経路テスト（dry_run=False・§3 データフロー 6b）
-# (b) probe モック: inspect_media → render.run(ffmpeg) の順序検証へ読み替え
+# clipwright_render — execution path tests (dry_run=False, §3 data flow 6b)
+# (b) probe mock: migrated to inspect_media -> render.run(ffmpeg) ordering
 # ---------------------------------------------------------------------------
 
 
 class TestExecutionPath:
-    """dry_run=False の実行経路検証。"""
+    """Verify the dry_run=False execution path."""
 
     def test_inspect_media_called_before_ffmpeg(self, tmp_path: Path) -> None:
-        """inspect_media → ffmpeg の順で呼ばれる（§3 データフロー）。
+        """inspect_media is called before ffmpeg (§3 data flow).
 
-        旧: ffprobe → ffmpeg の run 呼び出し順
-        新: inspect_media（内部で ffprobe）→ render.run(ffmpeg) の順序検証
+        Old: ordering of ffprobe -> ffmpeg run calls.
+        New: inspect_media (ffprobe internally) -> render.run(ffmpeg) ordering.
         """
         from clipwright_render.render import render_timeline
 
@@ -772,7 +773,7 @@ class TestExecutionPath:
         tl_path = tmp_path / "tl.otio"
         _write_timeline(tl_path, [_make_clip(source, 0.0, 5.0)])
         output = str(tmp_path / "out.mp4")
-        Path(output).touch()  # 成功後ファイル存在として扱う
+        Path(output).touch()  # Treat as an existing file after successful render
 
         call_order: list[str] = []
 
@@ -805,7 +806,7 @@ class TestExecutionPath:
         assert "ffmpeg" in call_order
 
     def test_ffmpeg_called_with_array_args(self, tmp_path: Path) -> None:
-        """ffmpeg が引数配列で呼ばれる（コマンドインジェクション防止・ADR-4）。"""
+        """ffmpeg is called with an argument array (prevents command injection, ADR-4)."""
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
@@ -840,13 +841,13 @@ class TestExecutionPath:
 
         assert isinstance(ffmpeg_cmd, list)
         assert len(ffmpeg_cmd) > 0
-        # filter_complex が単一引数として渡されている（文字列結合でない）
+        # filter_complex must be passed as a single argument (not string-concatenated)
         assert "-filter_complex" in ffmpeg_cmd
         fc_idx = ffmpeg_cmd.index("-filter_complex")
         assert isinstance(ffmpeg_cmd[fc_idx + 1], str)
 
     def test_ffmpeg_cmd_starts_with_resolved_path(self, tmp_path: Path) -> None:
-        """ffmpeg コマンド先頭が resolve_tool で返ったパスである（ADR-4）。"""
+        """ffmpeg command starts with the path returned by resolve_tool (ADR-4)."""
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
@@ -885,10 +886,10 @@ class TestExecutionPath:
     def test_ffmpeg_timeout_is_max_300_or_duration_times_10(
         self, tmp_path: Path
     ) -> None:
-        """ffmpeg timeout = max(300, ceil(総尺秒 × 10))（DC-AM-006）。"""
+        """ffmpeg timeout = max(300, ceil(total_seconds * 10)) (DC-AM-006)."""
         from clipwright_render.render import render_timeline
 
-        # 総尺 = 5s → 5×10=50 < 300 → timeout=300
+        # total_duration = 5s -> 5*10=50 < 300 -> timeout=300
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
         tl_path = tmp_path / "tl.otio"
@@ -925,7 +926,7 @@ class TestExecutionPath:
         assert ffmpeg_timeout[0] == 300  # max(300, ceil(5*10)) = 300
 
     def test_ffmpeg_timeout_long_video(self, tmp_path: Path) -> None:
-        """総尺 60s → timeout = max(300, ceil(600)) = 600（DC-AM-006）。"""
+        """Total duration 60s -> timeout = max(300, ceil(600)) = 600 (DC-AM-006)."""
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
@@ -964,7 +965,7 @@ class TestExecutionPath:
         assert ffmpeg_timeout[0] == 600  # max(300, ceil(60*10)) = 600
 
     def test_success_returns_ok_envelope_with_artifact(self, tmp_path: Path) -> None:
-        """成功時に ok=True エンベロープと出力パスを Artifact として返す（§3）。"""
+        """On success, returns an ok=True envelope with the output path as an Artifact (§3)."""
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
@@ -1001,7 +1002,7 @@ class TestExecutionPath:
     def test_success_summary_contains_duration_and_clip_count(
         self, tmp_path: Path
     ) -> None:
-        """成功時 summary に総尺と連結クリップ数が含まれる（§3 データフロー 6b）。"""
+        """Success summary contains total duration and concatenated clip count (§3 data flow 6b)."""
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
@@ -1039,20 +1040,20 @@ class TestExecutionPath:
 
         assert result["ok"] is True
         summary: str = result["summary"]
-        assert "2" in summary  # 2区間
+        assert "2" in summary  # 2 segments
 
 
 # ---------------------------------------------------------------------------
-# clipwright_render — エラー伝播テスト（DC-GP-004）
-# (b) probe モック: inspect_media patch へ移行
+# clipwright_render — error propagation tests (DC-GP-004)
+# (b) probe mock: migrated to patching inspect_media
 # ---------------------------------------------------------------------------
 
 
 class TestErrorPropagation:
-    """エラー伝播: ClipwrightError が error_result エンベロープに変換される。"""
+    """Error propagation: ClipwrightError is converted to an error_result envelope."""
 
     def test_ffmpeg_failed_returns_subprocess_failed(self, tmp_path: Path) -> None:
-        """ffmpeg 失敗 → SUBPROCESS_FAILED エンベロープ（DC-GP-004）。"""
+        """ffmpeg failure -> SUBPROCESS_FAILED envelope (DC-GP-004)."""
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
@@ -1064,8 +1065,8 @@ class TestErrorPropagation:
         def _fake_ffmpeg_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             raise ClipwrightError(
                 code=ErrorCode.SUBPROCESS_FAILED,
-                message="コマンドが終了コード 1 で失敗しました",
-                hint="コマンドの引数を確認してください。",
+                message="Command exited with code 1.",
+                hint="Check the command arguments.",
             )
 
         with (
@@ -1087,7 +1088,7 @@ class TestErrorPropagation:
         assert result["error"]["code"] == ErrorCode.SUBPROCESS_FAILED
 
     def test_ffmpeg_timeout_returns_subprocess_timeout(self, tmp_path: Path) -> None:
-        """ffmpeg timeout → SUBPROCESS_TIMEOUT エンベロープ（DC-GP-004）。"""
+        """ffmpeg timeout -> SUBPROCESS_TIMEOUT envelope (DC-GP-004)."""
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
@@ -1099,8 +1100,8 @@ class TestErrorPropagation:
         def _fake_ffmpeg_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             raise ClipwrightError(
                 code=ErrorCode.SUBPROCESS_TIMEOUT,
-                message="タイムアウト",
-                hint="timeout 値を大きくしてください。",
+                message="Timed out.",
+                hint="Increase the timeout value.",
             )
 
         with (
@@ -1122,7 +1123,7 @@ class TestErrorPropagation:
         assert result["error"]["code"] == ErrorCode.SUBPROCESS_TIMEOUT
 
     def test_ffmpeg_not_found_returns_dependency_missing(self, tmp_path: Path) -> None:
-        """ffmpeg 不在 → DEPENDENCY_MISSING エンベロープ（DC-GP-004）。"""
+        """ffmpeg not found -> DEPENDENCY_MISSING envelope (DC-GP-004)."""
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
@@ -1134,8 +1135,8 @@ class TestErrorPropagation:
         def _fake_resolve(name: str, env: str | None = None) -> str:
             raise ClipwrightError(
                 code=ErrorCode.DEPENDENCY_MISSING,
-                message="ffmpeg が見つかりません",
-                hint="ffmpeg を PATH に追加してください。",
+                message="ffmpeg not found.",
+                hint="Add ffmpeg to your PATH.",
             )
 
         with (
@@ -1153,9 +1154,9 @@ class TestErrorPropagation:
         assert result["error"]["code"] == ErrorCode.DEPENDENCY_MISSING
 
     def test_probe_failure_returns_probe_failed(self, tmp_path: Path) -> None:
-        """probe 失敗（inspect_media 送出）→ PROBE_FAILED エンベロープ（DC-GP-004）。
+        """probe failure (inspect_media raises) -> PROBE_FAILED envelope (DC-GP-004).
 
-        ClipwrightError が error_result に変換されることを確認する（GP-001）。
+        Verifies ClipwrightError is converted to error_result (GP-001).
         """
         from clipwright_render.render import render_timeline
 
@@ -1169,8 +1170,8 @@ class TestErrorPropagation:
             "clipwright_render.render.inspect_media",
             side_effect=ClipwrightError(
                 code=ErrorCode.PROBE_FAILED,
-                message="ffprobe の出力が有効な JSON ではありません。",
-                hint="入力ファイルが有効なメディアファイルか確認してください。",
+                message="ffprobe output is not valid JSON.",
+                hint="Check that the input file is a valid media file.",
             ),
         ):
             result = render_timeline(
@@ -1181,7 +1182,7 @@ class TestErrorPropagation:
         assert result["error"]["code"] == ErrorCode.PROBE_FAILED
 
     def test_error_does_not_expose_raw_stderr(self, tmp_path: Path) -> None:
-        """エラーメッセージに ffmpeg stderr 生文字列を露出しない（DC-GP-004）。"""
+        """Error message must not expose raw ffmpeg stderr (DC-GP-004)."""
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
@@ -1195,8 +1196,8 @@ class TestErrorPropagation:
         def _fake_ffmpeg_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             raise ClipwrightError(
                 code=ErrorCode.SUBPROCESS_FAILED,
-                message="コマンドが終了コード 1 で失敗しました: 一部エラー",
-                hint="コマンドを確認してください。",
+                message="Command exited with code 1: partial error",
+                hint="Check the command.",
             )
 
         with (
@@ -1215,12 +1216,12 @@ class TestErrorPropagation:
             )
 
         assert result["ok"] is False
-        # 生 stderr・内部パスが露出していない
+        # Raw stderr and internal paths must not be exposed
         error_str = json.dumps(result["error"])
         assert raw_stderr not in error_str
 
     def test_error_does_not_expose_internal_exception(self, tmp_path: Path) -> None:
-        """エラーエンベロープに生例外/スタックトレースが含まれない（DC-GP-004）。"""
+        """Error envelope must not contain raw exceptions or stack traces (DC-GP-004)."""
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "a.mp4")
@@ -1233,8 +1234,8 @@ class TestErrorPropagation:
             "clipwright_render.render.inspect_media",
             side_effect=ClipwrightError(
                 code=ErrorCode.PROBE_FAILED,
-                message="ffprobe の出力が有効な JSON ではありません。",
-                hint="入力ファイルが有効なメディアファイルか確認してください。",
+                message="ffprobe output is not valid JSON.",
+                hint="Check that the input file is a valid media file.",
             ),
         ):
             result = render_timeline(
@@ -1242,22 +1243,22 @@ class TestErrorPropagation:
             )
 
         assert result["ok"] is False
-        # Traceback・Exception クラス名が含まれない
+        # Traceback and Exception class name must not be present
         error_str = json.dumps(result["error"])
         assert "Traceback" not in error_str
         assert "JSONDecodeError" not in error_str
 
 
 # ---------------------------------------------------------------------------
-# 非破壊テスト
+# Non-destructive tests
 # ---------------------------------------------------------------------------
 
 
 class TestNonDestructive:
-    """入力 timeline / 元素材が書き換えられないことを検証する。"""
+    """Verify that the input timeline and source media are not modified."""
 
     def test_source_file_unchanged_after_render(self, tmp_path: Path) -> None:
-        """レンダリング後も元素材ファイルの内容が変化しない（非破壊）。"""
+        """Source file contents are unchanged after rendering (non-destructive)."""
         from clipwright_render.render import render_timeline
 
         source = tmp_path / "a.mp4"
@@ -1291,7 +1292,7 @@ class TestNonDestructive:
         assert source.read_bytes() == original_bytes
 
     def test_timeline_file_unchanged_after_render(self, tmp_path: Path) -> None:
-        """レンダリング後も timeline(.otio) の内容が変化しない（非破壊）。"""
+        """timeline (.otio) contents are unchanged after rendering (non-destructive)."""
         from clipwright_render.render import render_timeline
 
         source = tmp_path / "a.mp4"
@@ -1326,8 +1327,8 @@ class TestNonDestructive:
 
 
 # ---------------------------------------------------------------------------
-# 複数ソース・オーケストレーション拡張テスト
-# （ADR-C2-r2 / ADR-C8 / ADR-C9-r2 / DC-GP-001）
+# Multi-source orchestration extension tests
+# (ADR-C2-r2 / ADR-C8 / ADR-C9-r2 / DC-GP-001)
 # ---------------------------------------------------------------------------
 
 
@@ -1340,11 +1341,11 @@ def _make_media_info_with_video_stream(
     audio_streams: int = 1,
     fps_rate: float | None = 30.0,
 ) -> MediaInfo:
-    """video stream（width/height あり）と duration を持つ MediaInfo を生成するヘルパー。
+    """Build a MediaInfo with a video stream (width/height) and duration.
 
-    fps_rate が None のとき duration=None（音声のみソースのセンチネル回避検証に使う）。
-    fps_rate が指定されたとき duration.rate = fps_rate を持つ RationalTimeModel を生成する。
-    duration.rate=1000.0 は音声のみソースのセンチネルとして使用する。
+    fps_rate=None -> duration=None (used to verify sentinel avoidance for audio-only sources).
+    fps_rate specified -> generates RationalTimeModel with duration.rate = fps_rate.
+    duration.rate=1000.0 is used as the sentinel for audio-only sources.
     """
     from clipwright.schemas import RationalTimeModel
 
@@ -1365,7 +1366,7 @@ def _make_media_info_with_video_stream(
 
     duration = None
     if fps_rate is not None:
-        # duration.rate = fps_rate として ProbeInfo.fps 取得のテストに使う
+        # duration.rate = fps_rate, used to test ProbeInfo.fps retrieval
         duration = RationalTimeModel(value=10.0 * fps_rate, rate=fps_rate)
 
     return MediaInfo(
@@ -1378,15 +1379,15 @@ def _make_media_info_with_video_stream(
 
 
 def _make_audio_only_media_info(path: str) -> MediaInfo:
-    """音声のみソース（rate=1000.0 センチネル）の MediaInfo を生成するヘルパー。
+    """Build a MediaInfo for an audio-only source (rate=1000.0 sentinel).
 
-    media.py の rate 決定規則: video stream なし → rate=1000.0 センチネル。
-    duration.rate が 1000.0 であっても fps として採用してはならない（ADR-C2-r2）。
+    media.py rate determination rule: no video stream -> rate=1000.0 sentinel.
+    Even when duration.rate is 1000.0, it must not be adopted as fps (ADR-C2-r2).
     """
     from clipwright.schemas import RationalTimeModel
 
     streams = [StreamInfo(index=0, codec_type="audio", codec_name="aac")]
-    # センチネル rate=1000.0 で duration を生成（音声のみ素材の実際の挙動を模倣）
+    # Generate duration with sentinel rate=1000.0 (mimics actual behaviour of audio-only media)
     duration = RationalTimeModel(value=10000.0, rate=1000.0)
     return MediaInfo(
         path=path,
@@ -1401,11 +1402,11 @@ def _make_multi_source_otio_file(
     clips: list[tuple[str, float, float]],
     tmp_path: Path,
 ) -> Path:
-    """複数ソースを持つ Timeline の OTIO ファイルを生成し Path を返すヘルパー。
+    """Build and write an OTIO file for a multi-source Timeline; returns the Path.
 
     clips: [(source_path, start_sec, duration_sec), ...]
-    test_e2e_merge.py の同名ヘルパー（in-memory OTIO 返却）と区別するため
-    _make_multi_source_otio_file と命名する（CR L-1）。
+    Named _make_multi_source_otio_file to distinguish from the same-named helper in
+    test_e2e_merge.py (which returns an in-memory OTIO) (CR L-1).
     """
     otio_clips = [_make_clip(src, start, dur) for src, start, dur in clips]
     tl_path = tmp_path / "tl.otio"
@@ -1414,15 +1415,15 @@ def _make_multi_source_otio_file(
 
 
 class TestMultiSourceProbeAllSources:
-    """観点1: 複数ソース timeline で各ユニークソースに inspect_media が呼ばれる。
+    """Aspect 1: inspect_media is called for every unique source in a multi-source timeline.
 
-    ADR-C8: 全ユニークソースに probe を適用する。
-    render.py が build_plan 呼び出し前に source_probes を構築するため、
-    ユニークソース数と同じ回数 inspect_media が呼ばれることを検証する。
+    ADR-C8: probe is applied to all unique sources.
+    render.py builds source_probes before calling build_plan, so inspect_media is
+    called exactly as many times as there are unique sources.
     """
 
     def test_all_unique_sources_are_probed(self, tmp_path: Path) -> None:
-        """2ソース timeline で inspect_media が2回呼ばれる（各ソース1回）。"""
+        """2-source timeline -> inspect_media called twice (once per source)."""
         from clipwright_render.render import render_timeline
 
         src0 = str(tmp_path / "src0.mp4")
@@ -1462,16 +1463,16 @@ class TestMultiSourceProbeAllSources:
                 dry_run=True,
             )
 
-        # 各ユニークソースが1回ずつ probe されること（順序不問・重複排除）
+        # Each unique source probed exactly once (order irrelevant, deduplication)
         assert src0 in probe_calls
         assert src1 in probe_calls
-        # ユニークソースは2個なので呼び出し回数は2回
+        # 2 unique sources -> 2 calls
         assert len(probe_calls) == 2
 
     def test_duplicate_source_is_probed_once(self, tmp_path: Path) -> None:
-        """同一ソースを2クリップで使っても inspect_media は1回のみ呼ばれる。
+        """Same source used in 2 clips -> inspect_media is called only once.
 
-        重複排除により probe コストを最小化する（ADR-C1）。
+        Deduplication minimises probe cost (ADR-C1).
         """
         from clipwright_render.render import render_timeline
 
@@ -1510,20 +1511,20 @@ class TestMultiSourceProbeAllSources:
                 dry_run=True,
             )
 
-        # ユニークソースは1個なので probe は1回のみ
+        # 1 unique source -> probe called once
         assert len(probe_calls) == 1
         assert probe_calls[0] == src0
 
 
 class TestMultiSourceFfmpegInputOrder:
-    """観点2: ffmpeg -i 並びが RenderPlan.input_sources の順序と一致する。
+    """Aspect 2: ffmpeg -i ordering matches RenderPlan.input_sources order.
 
-    ADR-C9-r2: render.py は RenderPlan.input_sources をそのまま使い、
-    独自に順序を再計算しない。
+    ADR-C9-r2: render.py uses RenderPlan.input_sources as-is; it does not
+    recompute the order independently.
     """
 
     def test_two_source_ffmpeg_has_two_i_flags(self, tmp_path: Path) -> None:
-        """2ソース timeline で ffmpeg コマンドに -i が2つ並ぶ。"""
+        """2-source timeline -> ffmpeg command contains 2 -i flags."""
         from clipwright_render.render import render_timeline
 
         src0 = str(tmp_path / "src0.mp4")
@@ -1561,18 +1562,19 @@ class TestMultiSourceFfmpegInputOrder:
                 options=RenderOptions(overwrite=True),
             )
 
-        assert result["ok"] is True, f"失敗: {result.get('error')}"
-        # -i が2つ存在する
+        assert result["ok"] is True, f"failed: {result.get('error')}"
+        # 2 -i flags must be present
         i_indices = [i for i, v in enumerate(captured_cmd) if v == "-i"]
         assert len(i_indices) == 2
-        # -i の後ろのパスが src0→src1 の出現順（RenderPlan.input_sources 順）
+        # Paths after -i must follow src0->src1 order (RenderPlan.input_sources order)
         assert captured_cmd[i_indices[0] + 1] == src0
         assert captured_cmd[i_indices[1] + 1] == src1
 
     def test_single_source_ffmpeg_has_one_i_flag(self, tmp_path: Path) -> None:
-        """単一ソース timeline では -i が1つ（後方互換）。
+        """Single-source timeline has exactly 1 -i flag (backward compatibility).
 
-        観点7（後方互換）と兼ねる: 複数ソース拡張後も単一ソースは -i が1個。
+        Combines with aspect 7 (backward compat): single source still has 1 -i after
+        multi-source extension.
         """
         from clipwright_render.render import render_timeline
 
@@ -1609,7 +1611,7 @@ class TestMultiSourceFfmpegInputOrder:
                 options=RenderOptions(overwrite=True),
             )
 
-        assert result["ok"] is True, f"失敗: {result.get('error')}"
+        assert result["ok"] is True, f"failed: {result.get('error')}"
         i_indices = [i for i, v in enumerate(captured_cmd) if v == "-i"]
         assert len(i_indices) == 1
         assert captured_cmd[i_indices[0] + 1] == src0
@@ -1617,11 +1619,11 @@ class TestMultiSourceFfmpegInputOrder:
     def test_input_order_matches_render_plan_input_sources(
         self, tmp_path: Path
     ) -> None:
-        """ffmpeg -i 並びが RenderPlan.input_sources と厳密に一致する。
+        """ffmpeg -i ordering strictly matches RenderPlan.input_sources.
 
-        ADR-C9-r2: render.py は独自に順序を再計算せず RenderPlan.input_sources を使う。
-        build_plan をモックして input_sources を明示的に制御し、
-        ffmpeg コマンドの -i 並びがそれと一致することを検証する。
+        ADR-C9-r2: render.py uses RenderPlan.input_sources without recomputing order.
+        build_plan is mocked to explicitly control input_sources, and the -i ordering
+        in the ffmpeg command must match it exactly.
         """
         from clipwright_render.plan import RenderPlan
         from clipwright_render.render import render_timeline
@@ -1638,13 +1640,13 @@ class TestMultiSourceFfmpegInputOrder:
         )
         output = str(tmp_path / "out.mp4")
 
-        # build_plan が返す RenderPlan に input_sources を含める
+        # RenderPlan returned by build_plan includes input_sources
         fake_plan = RenderPlan(
             filter_complex="[0:v]trim=0:3,setpts=PTS-STARTPTS[v0];[1:v]trim=0:2,setpts=PTS-STARTPTS[v1];[v0][v1]concat=n=2:v=1:a=0[outv]",
             ffmpeg_args=["-filter_complex", "...", "-map", "[outv]", "-c:v", "libx264"],
             segment_count=2,
             total_duration_seconds=5.0,
-            input_sources=[src0, src1],  # ADR-C9-r2: 明示的な順序
+            input_sources=[src0, src1],  # ADR-C9-r2: explicit ordering
         )
 
         captured_cmd: list[str] = []
@@ -1671,26 +1673,27 @@ class TestMultiSourceFfmpegInputOrder:
                 options=RenderOptions(overwrite=True),
             )
 
-        assert result["ok"] is True, f"失敗: {result.get('error')}"
+        assert result["ok"] is True, f"failed: {result.get('error')}"
         i_indices = [i for i, v in enumerate(captured_cmd) if v == "-i"]
         assert len(i_indices) == 2
-        # input_sources=[src0, src1] の順序通りに -i が並ぶこと
+        # -i must follow input_sources=[src0, src1] order
         assert captured_cmd[i_indices[0] + 1] == src0
         assert captured_cmd[i_indices[1] + 1] == src1
 
 
 class TestMultiSourceBoundaryCheck:
-    """観点3/4/5: ADR-C8 全ユニークソースへの境界検証適用。
+    """Aspects 3/4/5: ADR-C8 boundary validation applied to all unique sources.
 
-    2番目以降のソースの境界外・パス衝突・不在をそれぞれ検出すること。
+    Detects boundary violations, path collisions, and missing files for
+    the second and subsequent sources.
     """
 
     def test_second_source_outside_timeline_dir_raises_path_not_allowed(
         self, tmp_path: Path
     ) -> None:
-        """2番目ソースが timeline ディレクトリ外 → PATH_NOT_ALLOWED（ADR-C8）。
+        """Second source outside the timeline directory -> PATH_NOT_ALLOWED (ADR-C8).
 
-        先頭ソースは境界内だが、2番目ソースが境界外のとき検出されること。
+        First source is within boundary; second source outside must be detected.
         """
         from clipwright_render.render import render_timeline
 
@@ -1700,13 +1703,13 @@ class TestMultiSourceBoundaryCheck:
         outside_dir.mkdir()
 
         src0 = str(project_dir / "src0.mp4")
-        src1 = str(outside_dir / "secret.mp4")  # 境界外
+        src1 = str(outside_dir / "secret.mp4")  # outside boundary
         Path(src0).touch()
         Path(src1).touch()
 
         tl_path = _make_multi_source_otio_file(
             [(src0, 0.0, 3.0), (src1, 0.0, 2.0)],
-            project_dir,  # timeline は project_dir 下
+            project_dir,  # timeline is placed under project_dir
         )
         output = str(project_dir / "out.mp4")
 
@@ -1726,10 +1729,10 @@ class TestMultiSourceBoundaryCheck:
     def test_second_source_equals_output_raises_path_not_allowed(
         self, tmp_path: Path
     ) -> None:
-        """output == 2番目ソース → PATH_NOT_ALLOWED（DC-GP-001・非破壊原則）。
+        """output == second source -> PATH_NOT_ALLOWED (DC-GP-001, non-destructive principle).
 
-        _check_path_not_allowed が先頭ソースだけでなく全ソースに適用されること。
-        先頭ソースとは異なるが2番目ソースが output と一致する場合に検出される。
+        _check_path_not_allowed must apply to all sources, not only the first.
+        Detects when the second source (different from the first) matches the output.
         """
         from clipwright_render.render import render_timeline
 
@@ -1742,7 +1745,7 @@ class TestMultiSourceBoundaryCheck:
             [(src0, 0.0, 3.0), (src1, 0.0, 2.0)],
             tmp_path,
         )
-        # output == src1（2番目ソース）
+        # output == src1 (second source)
         output = src1
 
         with patch(
@@ -1761,13 +1764,13 @@ class TestMultiSourceBoundaryCheck:
     def test_second_source_not_found_returns_file_not_found(
         self, tmp_path: Path
     ) -> None:
-        """2番目ソースが存在しない → FILE_NOT_FOUND（ADR-C8）。"""
+        """Second source does not exist -> FILE_NOT_FOUND (ADR-C8)."""
         from clipwright_render.render import render_timeline
 
         src0 = str(tmp_path / "src0.mp4")
-        src1 = str(tmp_path / "missing_src1.mp4")  # 存在しない
+        src1 = str(tmp_path / "missing_src1.mp4")  # does not exist
         Path(src0).touch()
-        # src1 は作成しない
+        # src1 is intentionally not created
 
         tl_path = _make_multi_source_otio_file(
             [(src0, 0.0, 3.0), (src1, 0.0, 2.0)],
@@ -1791,9 +1794,9 @@ class TestMultiSourceBoundaryCheck:
     def test_second_source_not_found_basename_only_in_message(
         self, tmp_path: Path
     ) -> None:
-        """2番目ソース不在エラーのメッセージに絶対パスが露出しない（CWE-209）。
+        """Missing second source error message must not expose absolute path (CWE-209).
 
-        basename のみ含まれ、ディレクトリ部分が含まれないことを確認する。
+        Only the basename must be present; the directory part must not appear.
         """
         from clipwright_render.render import render_timeline
 
@@ -1820,30 +1823,30 @@ class TestMultiSourceBoundaryCheck:
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
         error_message: str = result["error"]["message"]
-        # 絶対パス（ディレクトリ部分）が露出していない
+        # Absolute path (directory part) must not be exposed
         assert str(tmp_path) not in error_message
-        # basename は含まれる
+        # Basename must be present
         assert "missing_src1.mp4" in error_message
 
 
 class TestProbeAudioOnlyFpsNone:
-    """観点6: 音声のみソースで _probe が fps=None を返す（ADR-C2-r2）。
+    """Aspect 6: _probe returns fps=None for audio-only sources (ADR-C2-r2).
 
-    rate=1000.0 センチネルを fps として誤採用しないこと。
-    ProbeInfo.fps は「第1 video StreamInfo あり AND duration not None」のときのみ設定。
+    The rate=1000.0 sentinel must not be mistakenly adopted as fps.
+    ProbeInfo.fps is set only when first video StreamInfo exists AND duration is not None.
     """
 
     def test_audio_only_source_probe_fps_is_none(self, tmp_path: Path) -> None:
-        """音声のみソース（video stream なし）→ ProbeInfo.fps = None（ADR-C2-r2）。
+        """Audio-only source (no video stream) -> ProbeInfo.fps = None (ADR-C2-r2).
 
-        duration.rate=1000.0（センチネル）があっても fps として採用しないこと。
+        Even with duration.rate=1000.0 (sentinel), it must not be adopted as fps.
         """
         from clipwright_render.render import _probe
 
         source = str(tmp_path / "audio_only.mp4")
         Path(source).touch()
 
-        # 音声のみ: rate=1000.0 センチネル・video stream なし
+        # Audio-only: rate=1000.0 sentinel, no video stream
         audio_only_info = _make_audio_only_media_info(source)
 
         with patch(
@@ -1852,27 +1855,27 @@ class TestProbeAudioOnlyFpsNone:
         ):
             info = _probe(source)
 
-        # video stream がないため fps は None
+        # fps is None because there is no video stream
         assert info.fps is None  # type: ignore[attr-defined]
-        # width/height も None（video stream なし）
+        # width/height also None (no video stream)
         assert info.width is None  # type: ignore[attr-defined]
         assert info.height is None  # type: ignore[attr-defined]
 
     def test_video_source_with_duration_none_fps_is_none(self, tmp_path: Path) -> None:
-        """video stream ありだが duration=None → ProbeInfo.fps = None（ADR-C2-r2）。
+        """Video stream present but duration=None -> ProbeInfo.fps = None (ADR-C2-r2).
 
-        duration が None のとき duration.rate へのアクセスで AttributeError が発生しない。
+        Accessing duration.rate when duration is None must not raise AttributeError.
         """
         from clipwright_render.render import _probe
 
         source = str(tmp_path / "no_duration.mp4")
         Path(source).touch()
 
-        # video stream あり・duration=None（format.duration が取得不能なケース）
+        # video stream present, duration=None (format.duration unavailable)
         info_no_duration = MediaInfo(
             path=source,
             container="mov,mp4,m4a,3gp,3g2,mj2",
-            duration=None,  # duration が None
+            duration=None,
             streams=[
                 StreamInfo(
                     index=0,
@@ -1891,16 +1894,16 @@ class TestProbeAudioOnlyFpsNone:
         ):
             info = _probe(source)
 
-        # duration=None のとき fps は None（AttributeError にならないこと）
+        # fps is None when duration=None (must not raise AttributeError)
         assert info.fps is None  # type: ignore[attr-defined]
-        # width/height は第1 video StreamInfo から取得される
+        # width/height are retrieved from the first video StreamInfo
         assert info.width == 1920  # type: ignore[attr-defined]
         assert info.height == 1080  # type: ignore[attr-defined]
 
     def test_video_source_with_valid_fps(self, tmp_path: Path) -> None:
-        """video stream あり・duration あり → fps が正しく設定される（ADR-C2-r2）。
+        """Video stream present with valid duration -> fps set correctly (ADR-C2-r2).
 
-        rate=30.0 の duration を持つ video ソースで fps=30.0 が返ること。
+        Video source with duration.rate=30.0 must return fps=30.0.
         """
         from clipwright_render.render import _probe
 
@@ -1917,20 +1920,20 @@ class TestProbeAudioOnlyFpsNone:
         ):
             info = _probe(source)
 
-        # fps は duration.rate から設定される
+        # fps is set from duration.rate
         assert info.fps == 30.0  # type: ignore[attr-defined]
         assert info.width == 1920  # type: ignore[attr-defined]
         assert info.height == 1080  # type: ignore[attr-defined]
 
 
 class TestSingleSourceBackwardCompat:
-    """観点7: 単一ソース timeline での後方互換確認。
+    """Aspect 7: backward compatibility verification for single-source timelines.
 
-    probe 1回・-i 1つ・summary フォーマットが現行と不変であること。
+    probe called once, 1 -i flag, summary format unchanged from current behaviour.
     """
 
     def test_single_source_probe_called_once(self, tmp_path: Path) -> None:
-        """単一ソース timeline で inspect_media が1回のみ呼ばれる（後方互換）。"""
+        """Single-source timeline -> inspect_media called only once (backward compat)."""
         from clipwright_render.render import render_timeline
 
         src0 = str(tmp_path / "src0.mp4")
@@ -1968,12 +1971,12 @@ class TestSingleSourceBackwardCompat:
                 dry_run=True,
             )
 
-        assert result["ok"] is True, f"失敗: {result.get('error')}"
-        # ユニークソース1個 → probe 1回
+        assert result["ok"] is True, f"failed: {result.get('error')}"
+        # 1 unique source -> 1 probe call
         assert len(probe_calls) == 1
 
     def test_single_source_summary_contains_segment_count(self, tmp_path: Path) -> None:
-        """単一ソース dry_run summary に segment_count が含まれる（後方互換）。"""
+        """Single-source dry_run summary contains segment_count (backward compat)."""
         from clipwright_render.render import render_timeline
 
         src0 = str(tmp_path / "src0.mp4")
@@ -1998,7 +2001,7 @@ class TestSingleSourceBackwardCompat:
                 dry_run=True,
             )
 
-        assert result["ok"] is True, f"失敗: {result.get('error')}"
+        assert result["ok"] is True, f"failed: {result.get('error')}"
         assert "segment_count" in result["data"]
         assert result["data"]["segment_count"] == 2
         assert "total_duration_seconds" in result["data"]
@@ -2006,13 +2009,13 @@ class TestSingleSourceBackwardCompat:
 
 
 class TestMultiSourceDryRun:
-    """観点8: dry_run 複数ソース → ok_result に連結予定情報が返り run 非呼び出し。
+    """Aspect 8: dry_run multi-source -> ok_result returns concatenation plan, run not called.
 
-    ADR-C10: total_duration = 各クリップ source_range duration 合計。
+    ADR-C10: total_duration = sum of each clip's source_range duration.
     """
 
     def test_dry_run_multi_source_no_run_called(self, tmp_path: Path) -> None:
-        """dry_run=True の複数ソース timeline で ffmpeg run が呼ばれない。"""
+        """dry_run=True multi-source timeline -> ffmpeg run is not called."""
         from clipwright_render.render import render_timeline
 
         src0 = str(tmp_path / "src0.mp4")
@@ -2051,15 +2054,15 @@ class TestMultiSourceDryRun:
                 dry_run=True,
             )
 
-        assert result["ok"] is True, f"失敗: {result.get('error')}"
+        assert result["ok"] is True, f"failed: {result.get('error')}"
         assert run_called is False
 
     def test_dry_run_multi_source_returns_segment_count_and_duration(
         self, tmp_path: Path
     ) -> None:
-        """dry_run 複数ソース結果に segment_count と total_duration が含まれる。
+        """dry_run multi-source result contains segment_count and total_duration.
 
-        3秒+2秒=5秒の timeline で segment_count=2・total_duration=5.0 が返ること。
+        3s + 2s = 5s timeline -> segment_count=2, total_duration=5.0.
         """
         from clipwright_render.render import render_timeline
 
@@ -2091,7 +2094,7 @@ class TestMultiSourceDryRun:
                 dry_run=True,
             )
 
-        assert result["ok"] is True, f"失敗: {result.get('error')}"
+        assert result["ok"] is True, f"failed: {result.get('error')}"
         assert "segment_count" in result["data"]
         assert result["data"]["segment_count"] == 2
         assert "total_duration_seconds" in result["data"]
@@ -2099,11 +2102,11 @@ class TestMultiSourceDryRun:
 
 
 # ---------------------------------------------------------------------------
-# BGM オーケストレーション拡張テスト（§7 ADR-B4-r2 / B5-r2 / B6-r2 / B8）
+# BGM orchestration extension tests (§7 ADR-B4-r2 / B5-r2 / B6-r2 / B8)
 # ---------------------------------------------------------------------------
 # plan.resolve_bgm / plan.BgmClip / plan.build_plan(bgm=...) / RenderPlan.bgm_source
-# inspect_media / resolve_tool / run / plan.resolve_bgm / plan.build_plan はすべてモック。
-# 実 ffmpeg/ffprobe バイナリは一切呼ばない。
+# inspect_media / resolve_tool / run / plan.resolve_bgm / plan.build_plan are all mocked.
+# No real ffmpeg/ffprobe binaries are used.
 # ---------------------------------------------------------------------------
 
 
@@ -2113,14 +2116,14 @@ def _make_bgm_otio_file(
     bgm_duration: float,
     tmp_path: Path,
 ) -> Path:
-    """A1 本編 + A2 BGM クリップを持つ OTIO タイムラインを生成して書き出すヘルパー。
+    """Build and write an OTIO timeline with A1 main clips + A2 BGM clip.
 
-    A2 AudioTrack の BGM クリップに metadata["clipwright"]["kind"]=="bgm" を付与する。
-    bgm_directive は最小限（volume_db=-6.0, fade_in_sec=0.0, fade_out_sec=0.0）。
+    The BGM clip on the A2 AudioTrack carries metadata["clipwright"]["kind"]=="bgm".
+    bgm_directive is minimal (volume_db=-6.0, fade_in_sec=0.0, fade_out_sec=0.0).
     """
     import opentimelineio as otio
 
-    # Video トラック + A1 本編 Audio トラック
+    # Video track + A1 main Audio track
     v_track = otio.schema.Track(kind=otio.schema.TrackKind.Video)
     a1_track = otio.schema.Track(kind=otio.schema.TrackKind.Audio, name="A1")
     for src, start, dur in main_clips:
@@ -2133,7 +2136,7 @@ def _make_bgm_otio_file(
         a1_clip.source_range = _tr(start, dur)
         a1_track.append(a1_clip)
 
-    # A2 BGM Audio トラック
+    # A2 BGM Audio track
     a2_track = otio.schema.Track(kind=otio.schema.TrackKind.Audio, name="A2")
     bgm_clip = otio.schema.Clip()
     bgm_clip.media_reference = otio.schema.ExternalReference(target_url=bgm_source)
@@ -2160,19 +2163,19 @@ def _make_bgm_otio_file(
 
 
 class TestBgmResolveBgmCalled:
-    """観点1: BGM クリップありの timeline で resolve_bgm が呼ばれ build_plan に bgm= が渡る。
+    """Aspect 1: resolve_bgm is called for a BGM-containing timeline; bgm= forwarded to build_plan.
 
-    ADR-B4-r2: _render_inner は resolve_bgm(tl) を呼び BgmClip を取得する。
-    ADR-B5-r2: build_plan に bgm=BgmClip を渡す。
+    ADR-B4-r2: _render_inner calls resolve_bgm(tl) to obtain BgmClip.
+    ADR-B5-r2: build_plan receives bgm=BgmClip.
     """
 
     def test_resolve_bgm_called_and_bgm_passed_to_build_plan(
         self, tmp_path: Path
     ) -> None:
-        """BGM クリップありの timeline で resolve_bgm が1回呼ばれ、
-        build_plan の bgm 引数に BgmClip が渡ること（ADR-B4-r2/B5-r2）。
+        """BGM-containing timeline -> resolve_bgm called once, bgm=BgmClip passed to
+        build_plan (ADR-B4-r2/B5-r2).
 
-        未実装のため render.resolve_bgm が AttributeError で失敗すること（Red）。
+        Red: render.resolve_bgm does not yet exist -> AttributeError expected.
         """
         from clipwright_render.render import render_timeline
 
@@ -2189,7 +2192,7 @@ class TestBgmResolveBgmCalled:
         resolve_bgm_calls: list[Any] = []
         build_plan_bgm_args: list[Any] = []
 
-        fake_bgm_clip_sentinel = object()  # BgmClip 代替センチネル
+        fake_bgm_clip_sentinel = object()  # sentinel standing in for BgmClip
 
         def _fake_resolve_bgm(tl: Any) -> Any:
             resolve_bgm_calls.append(tl)
@@ -2230,28 +2233,27 @@ class TestBgmResolveBgmCalled:
                 dry_run=True,
             )
 
-        # resolve_bgm が1回呼ばれること
+        # resolve_bgm must be called once
         assert len(resolve_bgm_calls) == 1
-        # build_plan に bgm= が渡ること
+        # bgm= must be forwarded to build_plan
         assert len(build_plan_bgm_args) == 1
         assert build_plan_bgm_args[0] is fake_bgm_clip_sentinel
 
 
 class TestBgmFfmpegInputOrder:
-    """観点2: ffmpeg -i 並びが [*input_sources, -stream_loop, -1, -i, bgm_source] の順。
+    """Aspect 2: ffmpeg -i ordering is [*input_sources, -stream_loop, -1, -i, bgm_source].
 
-    ADR-B6-r2/DC-AS-005/B5-r2: BGM は末尾・-stream_loop が BGM -i の直前。
-    単一ソース＋BGM → -i が2つ・-stream_loop 1つ。
+    ADR-B6-r2/DC-AS-005/B5-r2: BGM appended last; -stream_loop immediately before BGM -i.
+    Single source + BGM -> 2 -i flags, 1 -stream_loop.
     """
 
     def test_bgm_input_appended_after_main_sources_with_stream_loop(
         self, tmp_path: Path
     ) -> None:
-        """単一ソース＋BGM の ffmpeg コマンドで -i が2つ、
-        2番目 -i の直前に -stream_loop -1 がある（ADR-B6-r2）。
+        """Single source + BGM ffmpeg command: 2 -i flags, -stream_loop -1 before
+        the second -i (ADR-B6-r2).
 
-        未実装のため RenderPlan.bgm_source 属性が存在せず TypeError で
-        失敗すること（Red）。
+        Red: RenderPlan.bgm_source attribute not yet defined -> TypeError expected.
         """
         from clipwright_render.plan import RenderPlan
         from clipwright_render.render import render_timeline
@@ -2267,8 +2269,8 @@ class TestBgmFfmpegInputOrder:
         )
         output = str(tmp_path / "out.mp4")
 
-        # build_plan が bgm_source を含む RenderPlan を返すようにモック
-        # bgm_source フィールドは未実装のため type: ignore[call-arg] を付ける
+        # Mock build_plan to return a RenderPlan with bgm_source
+        # bgm_source field not yet implemented -> type: ignore[call-arg]
         fake_plan = RenderPlan(
             filter_complex=(
                 "[0:v]trim=0:5,setpts=PTS-STARTPTS[v0];"
@@ -2304,7 +2306,7 @@ class TestBgmFfmpegInputOrder:
             ),
             patch(
                 "clipwright_render.render.resolve_bgm",
-                return_value=object(),  # BgmClip センチネル
+                return_value=object(),  # BgmClip sentinel
             ),
             patch(
                 "clipwright_render.render.resolve_tool",
@@ -2319,48 +2321,47 @@ class TestBgmFfmpegInputOrder:
                 options=RenderOptions(overwrite=True),
             )
 
-        assert result["ok"] is True, f"失敗: {result.get('error')}"
+        assert result["ok"] is True, f"failed: {result.get('error')}"
 
-        # -i の出現インデックスを列挙
+        # Enumerate -i occurrence indices
         i_indices = [i for i, v in enumerate(captured_cmd) if v == "-i"]
-        assert len(i_indices) == 2, f"-i は2つ期待: {captured_cmd}"
+        assert len(i_indices) == 2, f"expected 2 -i flags: {captured_cmd}"
 
-        # 1番目 -i は src（本編ソース）
+        # First -i is src (main source)
         assert captured_cmd[i_indices[0] + 1] == src
 
-        # 2番目 -i は bgm、その直前に "-stream_loop" "-1" が並ぶ（ADR-B6-r2）
+        # Second -i is bgm; immediately before it: "-stream_loop" "-1" (ADR-B6-r2)
         bgm_i_pos = i_indices[1]
         assert captured_cmd[bgm_i_pos + 1] == bgm, (
-            "2番目 -i の次は bgm_source でなければならない"
+            "The token after the second -i must be bgm_source"
         )
-        assert bgm_i_pos >= 2, "-stream_loop -1 の前置スペースが足りない"
+        assert bgm_i_pos >= 2, "Not enough space for -stream_loop -1 before BGM -i"
         assert captured_cmd[bgm_i_pos - 2] == "-stream_loop", (
-            f"-stream_loop が BGM -i の2つ前にない: {captured_cmd}"
+            f"-stream_loop must appear 2 positions before BGM -i: {captured_cmd}"
         )
         assert captured_cmd[bgm_i_pos - 1] == "-1", (
-            f"-1 が BGM -i の1つ前にない: {captured_cmd}"
+            f"-1 must appear 1 position before BGM -i: {captured_cmd}"
         )
 
-        # BGM index = len(input_sources) = 1（DC-AS-005 不変条件）
+        # BGM index = len(input_sources) = 1 (DC-AS-005 invariant)
         bgm_index = len(fake_plan.input_sources)
-        assert bgm_index == 1  # 単一ソース → BGM は index 1
+        assert bgm_index == 1  # single source -> BGM at index 1
 
 
 class TestBgmSourceBoundaryCheck:
-    """観点3/4: BGM ソースの境界検証（ADR-B8）。
+    """Aspects 3/4: BGM source boundary validation (ADR-B8).
 
-    観点3: BGM ソースが timeline ディレクトリ外 → PATH_NOT_ALLOWED
-    観点4: output == BGM ソース → PATH_NOT_ALLOWED（全ソース _check_path_not_allowed）
+    Aspect 3: BGM source outside timeline directory -> PATH_NOT_ALLOWED
+    Aspect 4: output == BGM source -> PATH_NOT_ALLOWED (_check_path_not_allowed for all sources)
     """
 
     def test_bgm_source_outside_timeline_dir_raises_path_not_allowed(
         self, tmp_path: Path
     ) -> None:
-        """BGM ソースが timeline ディレクトリ外 → PATH_NOT_ALLOWED（ADR-B8）。
+        """BGM source outside timeline directory -> PATH_NOT_ALLOWED (ADR-B8).
 
-        _check_source_within_timeline_dir が BGM ソースにも適用されること。
-        未実装のため render_timeline が PATH_NOT_ALLOWED を返さず ok=True または
-        別エラーとなること（Red）。
+        _check_source_within_timeline_dir must also apply to the BGM source.
+        Red: render_timeline does not yet return PATH_NOT_ALLOWED -> ok=True or other error.
         """
         from clipwright_render.render import render_timeline
 
@@ -2370,7 +2371,7 @@ class TestBgmSourceBoundaryCheck:
         outside_dir.mkdir()
 
         src = str(project_dir / "main.mp4")
-        bgm_outside = str(outside_dir / "bgm.mp3")  # 境界外
+        bgm_outside = str(outside_dir / "bgm.mp3")  # outside boundary
         Path(src).touch()
         Path(bgm_outside).touch()
 
@@ -2398,11 +2399,10 @@ class TestBgmSourceBoundaryCheck:
     def test_output_equals_bgm_source_raises_path_not_allowed(
         self, tmp_path: Path
     ) -> None:
-        """output == BGM ソース → PATH_NOT_ALLOWED（ADR-B8・非破壊）。
+        """output == BGM source -> PATH_NOT_ALLOWED (ADR-B8, non-destructive).
 
-        _check_path_not_allowed が BGM ソースにも適用されること。
-        未実装のため render_timeline が PATH_NOT_ALLOWED を返さず ok=True または
-        別エラーとなること（Red）。
+        _check_path_not_allowed must also apply to the BGM source.
+        Red: render_timeline does not yet return PATH_NOT_ALLOWED -> ok=True or other error.
         """
         from clipwright_render.render import render_timeline
 
@@ -2414,7 +2414,7 @@ class TestBgmSourceBoundaryCheck:
         tl_path = _make_bgm_otio_file(
             [(src, 0.0, 5.0)], bgm_source=bgm, bgm_duration=30.0, tmp_path=tmp_path
         )
-        # output == bgm（BGM ソースと同じパス → 非破壊違反）
+        # output == bgm (same path as BGM source -> violates non-destructive principle)
         output = bgm
 
         with patch(
@@ -2432,22 +2432,22 @@ class TestBgmSourceBoundaryCheck:
 
 
 class TestBgmSourceNotFound:
-    """観点5: BGM ソース不在 → FILE_NOT_FOUND・basename のみ・絶対パス非露出（CWE-209）。
+    """Aspect 5: Missing BGM source -> FILE_NOT_FOUND, basename only, no absolute path (CWE-209).
 
-    ADR-B8: BGM ソースにも存在確認を適用する。
+    ADR-B8: existence check must also apply to BGM source.
     """
 
     def test_bgm_source_not_found_returns_file_not_found(self, tmp_path: Path) -> None:
-        """BGM ソースが存在しない → FILE_NOT_FOUND（ADR-B8）。
+        """BGM source does not exist -> FILE_NOT_FOUND (ADR-B8).
 
-        未実装のため render_timeline が FILE_NOT_FOUND を返さないことで失敗する（Red）。
+        Red: render_timeline does not yet return FILE_NOT_FOUND -> test fails.
         """
         from clipwright_render.render import render_timeline
 
         src = str(tmp_path / "main.mp4")
-        bgm_missing = str(tmp_path / "missing_bgm.mp3")  # 存在しない
+        bgm_missing = str(tmp_path / "missing_bgm.mp3")  # does not exist
         Path(src).touch()
-        # bgm_missing は作成しない
+        # bgm_missing is intentionally not created
 
         tl_path = _make_bgm_otio_file(
             [(src, 0.0, 5.0)],
@@ -2473,9 +2473,9 @@ class TestBgmSourceNotFound:
     def test_bgm_source_not_found_basename_only_in_message(
         self, tmp_path: Path
     ) -> None:
-        """BGM ソース不在エラーのメッセージに絶対パスが露出せず basename のみ（CWE-209）。
+        """Missing BGM source error message exposes only basename, not absolute path (CWE-209).
 
-        未実装のため basename のみの検証が通らないことで失敗する（Red）。
+        Red: basename-only verification not yet satisfied -> test fails.
         """
         from clipwright_render.render import render_timeline
 
@@ -2504,34 +2504,33 @@ class TestBgmSourceNotFound:
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
         error_message: str = result["error"]["message"]
-        # 絶対パス（ディレクトリ部分）が露出していない
+        # Absolute path (directory part) must not be exposed
         assert str(tmp_path) not in error_message
-        # basename は含まれる
+        # Basename must be present
         assert "missing_bgm.mp3" in error_message
 
 
 class TestBgmBackwardCompat:
-    """観点6: BGM クリップ無し（resolve_bgm->None）-> 後方互換確認。
+    """Aspect 6: No BGM clip (resolve_bgm->None) -> backward compatibility verification.
 
-    ADR-B7: BGM 段はクリップ有無で分岐し、なければ既存挙動を完全維持する。
-    - build_plan に bgm=None が渡る
-    - -i は input_sources のみ（bgm_source は None）
-    - -stream_loop なし
-    - dry_run summary が既存フォーマットと同じ
+    ADR-B7: BGM path branches on clip presence; without BGM, existing behaviour is fully preserved.
+    - build_plan receives bgm=None
+    - -i is input_sources only (bgm_source is None)
+    - no -stream_loop
+    - dry_run summary matches existing format
     """
 
     def test_no_bgm_build_plan_receives_bgm_none(self, tmp_path: Path) -> None:
-        """BGM クリップなし timeline では build_plan の bgm 引数が None（ADR-B7）。
+        """No-BGM timeline -> build_plan receives bgm=None (ADR-B7).
 
-        未実装のため bgm=None が渡らないか、resolve_bgm 自体が ImportError で
-        失敗することで Red になること。
+        Red: bgm=None not forwarded, or resolve_bgm not yet importable -> ImportError.
         """
         from clipwright_render.render import render_timeline
 
         src = str(tmp_path / "main.mp4")
         Path(src).touch()
 
-        # BGM なし timeline（通常の単一ソース）
+        # No-BGM timeline (normal single-source)
         tl_path = tmp_path / "tl.otio"
         _write_timeline(tl_path, [_make_clip(src, 0.0, 5.0)])
         output = str(tmp_path / "out.mp4")
@@ -2577,10 +2576,9 @@ class TestBgmBackwardCompat:
         assert build_plan_bgm_args[0] is None
 
     def test_no_bgm_ffmpeg_has_no_stream_loop(self, tmp_path: Path) -> None:
-        """BGM クリップなし -> ffmpeg コマンドに -stream_loop が含まれない（ADR-B7）。
+        """No BGM clip -> ffmpeg command must not contain -stream_loop (ADR-B7).
 
-        未実装のため -stream_loop が除外されていないか、resolve_bgm が ImportError で
-        失敗することで Red になること。
+        Red: -stream_loop not excluded, or resolve_bgm not yet importable -> ImportError.
         """
         from clipwright_render.plan import RenderPlan
         from clipwright_render.render import render_timeline
@@ -2593,7 +2591,7 @@ class TestBgmBackwardCompat:
         _write_timeline(tl_path, [_make_clip(src, 0.0, 5.0)])
         output = str(tmp_path / "out.mp4")
 
-        # bgm_source フィールドなし（既存 RenderPlan）
+        # No bgm_source field (existing RenderPlan)
         fake_plan = RenderPlan(
             filter_complex=(
                 "[0:v]trim=0:5,setpts=PTS-STARTPTS[v0];[v0]concat=n=1:v=1:a=0[outv]"
@@ -2632,22 +2630,22 @@ class TestBgmBackwardCompat:
                 options=RenderOptions(overwrite=True),
             )
 
-        assert result["ok"] is True, f"失敗: {result.get('error')}"
-        # -stream_loop が含まれない（BGM なし -> ADR-B7）
+        assert result["ok"] is True, f"failed: {result.get('error')}"
+        # -stream_loop must not be present (no BGM -> ADR-B7)
         assert "-stream_loop" not in captured_cmd, (
-            f"-stream_loop が含まれるべきでないコマンドに含まれた: {captured_cmd}"
+            f"-stream_loop unexpectedly present in command: {captured_cmd}"
         )
-        # -i は src のみ
+        # -i for src only
         i_indices = [i for i, v in enumerate(captured_cmd) if v == "-i"]
         assert len(i_indices) == 1
         assert captured_cmd[i_indices[0] + 1] == src
 
     def test_no_bgm_dry_run_summary_unchanged(self, tmp_path: Path) -> None:
-        """BGM クリップなし -> dry_run summary が BGM 拡張前と同じフォーマット（ADR-B7）。
+        """No BGM clip -> dry_run summary format unchanged from pre-BGM-extension (ADR-B7).
 
-        既存テスト test_dry_run_summary_contains_segment_count_and_duration と
-        同じ検証を BGM 拡張後も確認する後方互換テスト。
-        未実装のため resolve_bgm が ImportError で失敗することで Red になること。
+        Backward compatibility test: repeats the same assertions as
+        test_dry_run_summary_contains_segment_count_and_duration after BGM extension.
+        Red: resolve_bgm not yet importable -> ImportError.
         """
         from clipwright_render.render import render_timeline
 
@@ -2677,25 +2675,24 @@ class TestBgmBackwardCompat:
 
         assert result["ok"] is True
         assert "summary" in result
-        # segment_count が含まれること
+        # segment_count must be present
         assert "1" in result["summary"]
-        # data に segment_count と total_duration_seconds が含まれること
+        # data must contain segment_count and total_duration_seconds
         assert result["data"]["segment_count"] == 1
         assert abs(result["data"]["total_duration_seconds"] - 5.0) < 0.01
 
 
 class TestBgmDryRun:
-    """観点7: dry_run（BGM あり）-> ok_result に filter_complex が返り run 非呼び出し。
+    """Aspect 7: dry_run (with BGM) -> ok_result contains filter_complex, run not called.
 
-    ADR-B5-r2: dry_run 時は filter_complex（BGM 段含む）を data に返す。
-    run は呼ばれない。
+    ADR-B5-r2: dry_run returns filter_complex (including BGM stage) in data.
+    run must not be called.
     """
 
     def test_bgm_dry_run_returns_ok_and_no_run(self, tmp_path: Path) -> None:
-        """BGM ありの dry_run=True で ok=True が返り ffmpeg run が呼ばれない。
+        """BGM-present dry_run=True -> ok=True returned, ffmpeg run not called.
 
-        未実装のため resolve_bgm または RenderPlan.bgm_source が存在せず
-        AttributeError で失敗することで Red になること。
+        Red: resolve_bgm or RenderPlan.bgm_source does not yet exist -> AttributeError.
         """
         from clipwright_render.plan import RenderPlan
         from clipwright_render.render import render_timeline
@@ -2750,7 +2747,7 @@ class TestBgmDryRun:
             ),
             patch(
                 "clipwright_render.render.resolve_bgm",
-                return_value=object(),  # BgmClip センチネル
+                return_value=object(),  # BgmClip sentinel
             ),
             patch(
                 "clipwright_render.render.resolve_tool",
@@ -2766,26 +2763,27 @@ class TestBgmDryRun:
                 dry_run=True,
             )
 
-        assert result["ok"] is True, f"失敗: {result.get('error')}"
-        # run が呼ばれていない
+        assert result["ok"] is True, f"failed: {result.get('error')}"
+        # run must not have been called
         assert run_called is False
-        # data に filter_complex が含まれる
+        # data must contain filter_complex
         assert "filter_complex" in result["data"]
-        # filter_complex に BGM 段（amix または alimiter または bgm ラベル）が含まれる
+        # filter_complex must contain a BGM stage (amix, alimiter, or bgm label)
         fc = result["data"]["filter_complex"]
         assert "amix" in fc or "alimiter" in fc or "bgm" in fc.lower(), (
-            f"filter_complex に BGM 段が見当たらない: {fc}"
+            f"No BGM stage found in filter_complex: {fc}"
         )
 
 
 # ---------------------------------------------------------------------------
-# 字幕焼き込みオーケストレーションテスト（§7 v2 ADR-S4-r2/S5-r2/S7/S10）
+# Subtitle burn-in orchestration tests (§7 v2 ADR-S4-r2/S5-r2/S7/S10)
 # ---------------------------------------------------------------------------
-# - options.subtitle があるとき境界検証・絶対パス化・拡張子 WL を _render_inner で適用。
-# - 字幕は -filter_complex 内 filename= 直読のため -i は増えない（ADR-S10）。
-# - subtitle=None は後方互換（字幕検証スキップ・既存挙動不変・ADR-S8）。
-# inspect_media / resolve_tool / run / build_plan はすべてモック。
-# 実 ffmpeg/ffprobe バイナリは一切呼ばない。
+# - When options.subtitle is present, _render_inner applies boundary validation,
+#   absolute-path conversion, and extension whitelist.
+# - Subtitles are read directly via filename= inside -filter_complex, so no extra -i (ADR-S10).
+# - subtitle=None is backward compatible (skips subtitle validation, ADR-S8).
+# inspect_media / resolve_tool / run / build_plan are all mocked.
+# No real ffmpeg/ffprobe binaries are used.
 # ---------------------------------------------------------------------------
 
 
@@ -2795,13 +2793,13 @@ def _make_subtitle_render_setup(
     subtitle_filename: str = "subs.srt",
     inside_timeline_dir: bool = True,
 ) -> tuple[str, str, str, Path]:
-    """字幕テスト用セットアップヘルパー。
+    """Setup helper for subtitle tests.
 
-    inside_timeline_dir=True  : timeline を tmp_path/project/ に置き、
-                                 字幕も project/ 直下に配置（境界内）。
-    inside_timeline_dir=False : timeline を tmp_path/project/ に置き、
-                                 字幕を tmp_path/elsewhere/ に配置（真の境界外）。
-    ソース/BGM 境界テストと同一の「project vs outside」パターンで統一する。
+    inside_timeline_dir=True  : timeline placed in tmp_path/project/;
+                                 subtitle also placed directly under project/ (within boundary).
+    inside_timeline_dir=False : timeline placed in tmp_path/project/;
+                                 subtitle placed in tmp_path/elsewhere/ (truly outside boundary).
+    Uses the same "project vs outside" pattern as source/BGM boundary tests.
 
     Returns:
         (source_path, subtitle_path, output_path, tl_path)
@@ -2813,12 +2811,12 @@ def _make_subtitle_render_setup(
     Path(src).touch()
 
     if inside_timeline_dir:
-        # timeline と同じ project ディレクトリに字幕ファイルを配置
+        # Place subtitle in the same project directory as the timeline
         sub_path = project_dir / subtitle_filename
         sub_path.touch()
         subtitle = str(sub_path)
     else:
-        # timeline の外（tmp_path/elsewhere/）に配置 → 真の境界外
+        # Place outside the timeline (tmp_path/elsewhere/) -> truly outside boundary
         elsewhere = tmp_path / "elsewhere"
         elsewhere.mkdir(parents=True, exist_ok=True)
         sub_path = elsewhere / subtitle_filename
@@ -2832,34 +2830,35 @@ def _make_subtitle_render_setup(
 
 
 class TestSubtitleBoundaryAndValidation:
-    """観点1〜5: 字幕パス境界検証・拡張子 WL・fonts_dir 検証（ADR-S7/S4-r2/S5-r2）。
+    """Aspects 1-5: subtitle path boundary validation, extension whitelist, fonts_dir
+    validation (ADR-S7/S4-r2/S5-r2).
 
-    _render_inner が options.subtitle を受け取ったとき：
-    - timeline dir 配下強制（_check_source_within_timeline_dir）
-    - 存在確認（FILE_NOT_FOUND・basename のみ・CWE-209）
-    - 拡張子 WL（srt/vtt/ass・許可外 INVALID_INPUT）
-    - fonts_dir 不在 → INVALID_INPUT
-    - 絶対パス化して build_plan に渡す（DC-AS-005）
+    When _render_inner receives options.subtitle:
+    - timeline dir confinement enforced (_check_source_within_timeline_dir)
+    - existence check (FILE_NOT_FOUND, basename only, CWE-209)
+    - extension whitelist (srt/vtt/ass; others -> INVALID_INPUT)
+    - fonts_dir missing -> INVALID_INPUT
+    - absolutised and forwarded to build_plan (DC-AS-005)
 
-    SubtitleOptions・RenderOptions.subtitle は未実装のため
-    すべてのテストが ImportError / AttributeError で Red になること。
+    SubtitleOptions / RenderOptions.subtitle not yet implemented, so all tests
+    are expected to fail Red with ImportError / AttributeError.
     """
 
     def test_subtitle_within_timeline_dir_builds_plan_with_absolute_path(
         self, tmp_path: Path
     ) -> None:
-        """観点1: 字幕パスが timeline dir 内 → 境界検証を通過し、
-        絶対パス化された字幕パスで build_plan に options が渡ること（ADR-S7/S5-r2）。
+        """Aspect 1: subtitle path inside timeline dir -> passes boundary validation;
+        options forwarded to build_plan with absolutised subtitle.path (ADR-S7/S5-r2).
 
-        build_plan に渡された options の subtitle.path が絶対パスであることを
-        厳密検証する（filename= が cwd 非依存・DC-AS-005）。
-        未実装のため SubtitleOptions が存在せず ImportError で失敗すること（Red）。
+        Strictly verifies that options.subtitle.path passed to build_plan is absolute
+        (filename= is cwd-independent, DC-AS-005).
+        Red: SubtitleOptions not yet importable -> ImportError.
         """
         from clipwright_render.render import render_timeline
 
         src, subtitle, output, tl_path = _make_subtitle_render_setup(tmp_path)
 
-        # SubtitleOptions と RenderOptions.subtitle は未実装 → type: ignore で書く
+        # SubtitleOptions and RenderOptions.subtitle not yet implemented -> type: ignore
         from clipwright_render.schemas import (  # type: ignore[attr-defined]
             RenderOptions,
             SubtitleOptions,
@@ -2874,7 +2873,7 @@ class TestSubtitleBoundaryAndValidation:
         from clipwright_render.plan import RenderPlan
 
         def _fake_build_plan(*args: Any, **kwargs: Any) -> RenderPlan:
-            # options は第3引数または keyword
+            # options is the 3rd positional arg or a keyword
             if len(args) >= 3:
                 build_plan_options_received.append(args[2])
             else:
@@ -2908,26 +2907,27 @@ class TestSubtitleBoundaryAndValidation:
                 dry_run=True,
             )
 
-        assert result["ok"] is True, f"境界内字幕で失敗: {result.get('error')}"
+        assert result["ok"] is True, (
+            f"subtitle within boundary failed: {result.get('error')}"
+        )
         assert len(build_plan_options_received) == 1
         received_options = build_plan_options_received[0]
-        # subtitle.path が絶対パスであること（DC-AS-005・filename= が cwd 非依存）
+        # subtitle.path must be absolute (DC-AS-005, filename= is cwd-independent)
         assert received_options.subtitle is not None
         received_path = received_options.subtitle.path
         assert Path(received_path).is_absolute(), (
-            f"subtitle.path が絶対パスでない: {received_path}"
+            f"subtitle.path is not absolute: {received_path}"
         )
-        # 絶対パスが期待する字幕ファイルを指すこと
+        # Absolute path must point to the expected subtitle file
         assert Path(received_path).name == "subs.srt"
 
     def test_subtitle_outside_timeline_dir_raises_path_not_allowed(
         self, tmp_path: Path
     ) -> None:
-        """観点2: 字幕パスが timeline dir 外 → PATH_NOT_ALLOWED（ADR-S7）。
+        """Aspect 2: subtitle path outside timeline dir -> PATH_NOT_ALLOWED (ADR-S7).
 
-        _check_source_within_timeline_dir が字幕パスにも適用されること。
-        未実装のため render_timeline が PATH_NOT_ALLOWED を返さず ok=True または
-        別エラーとなること（Red）。
+        _check_source_within_timeline_dir must also apply to subtitle path.
+        Red: render_timeline does not yet return PATH_NOT_ALLOWED -> ok=True or other error.
         """
         from clipwright_render.render import render_timeline
 
@@ -2960,11 +2960,11 @@ class TestSubtitleBoundaryAndValidation:
     def test_subtitle_in_subdir_of_timeline_dir_is_allowed(
         self, tmp_path: Path
     ) -> None:
-        """観点2b: 字幕が timeline dir のサブディレクトリ内 → 境界検証を通過（ADR-S7 再帰配下許可）。
+        """Aspect 2b: subtitle in a subdirectory of timeline dir -> passes boundary (ADR-S7 recursive allow).
 
-        _check_source_within_timeline_dir と同一の「再帰配下許可」ロジックにより、
-        timeline_dir/subs/foo.srt のような配置は PATH_NOT_ALLOWED にならないこと。
-        ソース/BGM の境界テストと同じ許可条件。
+        Same "recursive subdirectory allow" logic as _check_source_within_timeline_dir:
+        timeline_dir/subs/foo.srt must not trigger PATH_NOT_ALLOWED.
+        Same allow condition as source/BGM boundary tests.
         """
         from clipwright_render.render import render_timeline
         from clipwright_render.schemas import (  # type: ignore[attr-defined]
@@ -3019,25 +3019,25 @@ class TestSubtitleBoundaryAndValidation:
                 dry_run=True,
             )
 
-        # サブディレクトリ内字幕は境界検証を通過して ok=True になること（S-M-3 / CR-T-004）
-        # 「PATH_NOT_ALLOWED でないこと」ではなく「ok=True であること」を確定的に assert する
+        # Subtitle in subdirectory passes boundary validation -> ok=True (S-M-3 / CR-T-004)
+        # Assert ok=True definitively rather than merely "not PATH_NOT_ALLOWED"
         assert result["ok"] is True, (
-            f"サブディレクトリ内字幕が誤って失敗した: {result.get('error')}"
+            f"Subtitle in subdirectory unexpectedly failed: {result.get('error')}"
         )
 
     def test_subtitle_not_found_returns_file_not_found_basename_only(
         self, tmp_path: Path
     ) -> None:
-        """観点3: 字幕パスが存在しない → FILE_NOT_FOUND・basename のみ・絶対パス非露出（CWE-209）。
+        """Aspect 3: missing subtitle path -> FILE_NOT_FOUND, basename only, no absolute path (CWE-209).
 
-        error.message に絶対パス（ディレクトリ部分）が含まれず basename のみを含むこと。
-        未実装のため render_timeline が FILE_NOT_FOUND を返さないことで失敗する（Red）。
+        error.message must not contain the absolute path (directory part), only the basename.
+        Red: render_timeline does not yet return FILE_NOT_FOUND -> test fails.
         """
         from clipwright_render.render import render_timeline
 
         src = str(tmp_path / "source.mp4")
         Path(src).touch()
-        # 字幕ファイルは作成しない（存在しないパス）
+        # Subtitle file intentionally not created (missing path)
         missing_sub = str(tmp_path / "missing_subs.srt")
 
         tl_path = tmp_path / "tl.otio"
@@ -3066,24 +3066,24 @@ class TestSubtitleBoundaryAndValidation:
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
         error_message: str = result["error"]["message"]
-        # 絶対パス（ディレクトリ部分）が露出していない（CWE-209）
+        # Absolute path (directory part) must not be exposed (CWE-209)
         assert str(tmp_path) not in error_message
-        # basename は含まれる
+        # Basename must be present
         assert "missing_subs.srt" in error_message
 
     @pytest.mark.parametrize("bad_ext", [".txt", ".pdf", ".subs", ".xml", ""])
     def test_invalid_subtitle_extension_raises_invalid_input(
         self, tmp_path: Path, bad_ext: str
     ) -> None:
-        """観点4: 許可外拡張子（.srt/.vtt/.ass 以外）→ INVALID_INPUT（ADR-S3）。
+        """Aspect 4: extension not on whitelist (.srt/.vtt/.ass) -> INVALID_INPUT (ADR-S3).
 
-        未実装のため render_timeline が INVALID_INPUT を返さないことで失敗する（Red）。
+        Red: render_timeline does not yet return INVALID_INPUT -> test fails.
         """
         from clipwright_render.render import render_timeline
 
         src = str(tmp_path / "source.mp4")
         Path(src).touch()
-        # 拡張子違反のファイルを作成（存在はするが拡張子が WL 外）
+        # Create the file with an invalid extension (exists, but extension not on whitelist)
         bad_sub = tmp_path / f"subs{bad_ext}"
         bad_sub.touch()
 
@@ -3114,10 +3114,10 @@ class TestSubtitleBoundaryAndValidation:
         assert result["error"]["code"] == ErrorCode.INVALID_INPUT
 
     def test_fonts_dir_not_found_raises_invalid_input(self, tmp_path: Path) -> None:
-        """観点5: fonts_dir が存在しないディレクトリ → INVALID_INPUT（ADR-S7）。
+        """Aspect 5: fonts_dir points to non-existent directory -> INVALID_INPUT (ADR-S7).
 
-        fonts_dir は境界強制なしだが存在するディレクトリの検証は行う。
-        未実装のため render_timeline が INVALID_INPUT を返さないことで失敗する（Red）。
+        fonts_dir has no boundary enforcement, but existence as a directory is validated.
+        Red: render_timeline does not yet return INVALID_INPUT -> test fails.
         """
         from clipwright_render.render import render_timeline
 
@@ -3148,38 +3148,37 @@ class TestSubtitleBoundaryAndValidation:
 
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.INVALID_INPUT
-        # fonts_dir の絶対パスがエラーメッセージに露出しないこと（SR-R-001 / CWE-209）
+        # fonts_dir absolute path must not be exposed in error message (SR-R-001 / CWE-209)
         error_message: str = result["error"]["message"]
         assert str(tmp_path) not in error_message, (
-            f"fonts_dir の親パス（tmp_path）がエラーメッセージに露出している: {error_message}"
+            f"fonts_dir parent path (tmp_path) exposed in error message: {error_message}"
         )
         assert missing_fonts_dir not in error_message, (
-            f"fonts_dir の絶対パスがエラーメッセージに露出している: {error_message}"
+            f"fonts_dir absolute path exposed in error message: {error_message}"
         )
 
     def test_relative_fonts_dir_is_absolutized_before_build_plan(
         self, tmp_path: Path
     ) -> None:
-        """観点SR-M-2: 相対パスの fonts_dir → 絶対パス化されて build_plan に渡ること（SR-INJ-002）。
+        """Aspect SR-M-2: relative fonts_dir -> absolutised before forwarding to build_plan (SR-INJ-002).
 
-        ADR-S5-r2 の適用範囲が fonts_dir にも拡張されており、
-        render.py が fonts_dir を resolve() して絶対パスにしてから build_plan に渡す
-        ことを確認する（SR-INJ-002）。
+        ADR-S5-r2 scope extended to fonts_dir: render.py resolves fonts_dir to absolute
+        path before passing it to build_plan (SR-INJ-002).
         """
         from clipwright_render.plan import RenderPlan
         from clipwright_render.render import render_timeline
 
         src, subtitle, output, tl_path = _make_subtitle_render_setup(tmp_path)
-        # fonts_dir を実在するディレクトリ（tmp_path 自体）として相対パスで指定する
+        # Specify an existing directory (tmp_path itself) as a relative path
         fonts_dir_abs = tmp_path
-        # os.getcwd() が tmp_path の親の場合を想定して、相対パスを計算する
+        # Compute relative path assuming os.getcwd() is the parent of tmp_path
         import os
 
         try:
             fonts_dir_rel = os.path.relpath(str(fonts_dir_abs))
         except ValueError:
-            # Windows でドライブが異なる場合は skip
-            pytest.skip("相対パス変換ができない環境（異なるドライブ）")
+            # Skip on Windows when drives differ
+            pytest.skip("Cannot compute relative path (different drives on Windows)")
 
         from clipwright_render.schemas import (  # type: ignore[attr-defined]
             RenderOptions,
@@ -3189,7 +3188,7 @@ class TestSubtitleBoundaryAndValidation:
         options = RenderOptions(
             subtitle=SubtitleOptions(  # type: ignore[call-arg]
                 path=subtitle,
-                fonts_dir=fonts_dir_rel,  # 相対パスで指定
+                fonts_dir=fonts_dir_rel,  # relative path specified
             )
         )
 
@@ -3229,36 +3228,36 @@ class TestSubtitleBoundaryAndValidation:
                 dry_run=True,
             )
 
-        assert result["ok"] is True, f"相対 fonts_dir で失敗: {result.get('error')}"
+        assert result["ok"] is True, f"relative fonts_dir failed: {result.get('error')}"
         assert len(build_plan_options_received) == 1
         received_options = build_plan_options_received[0]
         assert received_options.subtitle is not None
         received_fonts_dir = received_options.subtitle.fonts_dir
         assert received_fonts_dir is not None
-        # fonts_dir が絶対パスに変換されていること（SR-INJ-002・ADR-S5-r2 拡張）
+        # fonts_dir must be converted to absolute path (SR-INJ-002, ADR-S5-r2 extended)
         assert Path(received_fonts_dir).is_absolute(), (
-            f"fonts_dir が絶対パスに変換されていない: {received_fonts_dir}"
+            f"fonts_dir not converted to absolute path: {received_fonts_dir}"
         )
-        # 絶対パスが正しい場所を指すこと
+        # Absolute path must point to the correct location
         assert Path(received_fonts_dir).resolve() == fonts_dir_abs.resolve(), (
-            f"fonts_dir の絶対パスが期待値と異なる: {received_fonts_dir}"
+            f"fonts_dir absolute path differs from expected: {received_fonts_dir}"
         )
 
 
 class TestSubtitleNoAdditionalInputFlag:
-    """観点6: 字幕あり時も -i は input_sources のみ（ADR-S10）。
+    """Aspect 6: with subtitle, -i is still input_sources only (ADR-S10).
 
-    字幕は -filter_complex 内 filename= で直読みのため -i は増えない。
-    BGM と異なり追加 -i なし。
-    未実装のため -i が増えるか AttributeError で失敗すること（Red）。
+    Subtitles are read directly via filename= inside -filter_complex, so no extra -i.
+    Unlike BGM, no additional -i flag.
+    Red: -i count increases, or AttributeError -> test fails.
     """
 
     def test_subtitle_present_i_flag_count_equals_source_count(
         self, tmp_path: Path
     ) -> None:
-        """字幕あり・単一ソース → ffmpeg コマンドの -i は1個（input_sources のみ・ADR-S10）。
+        """Subtitle present, single source -> ffmpeg command has exactly 1 -i (input_sources only, ADR-S10).
 
-        字幕 -i が追加されないこと（BGM と異なる・ADR-S10）。
+        Subtitle -i must not be added (unlike BGM, ADR-S10).
         """
         from clipwright_render.plan import RenderPlan
         from clipwright_render.render import render_timeline
@@ -3276,7 +3275,7 @@ class TestSubtitleNoAdditionalInputFlag:
             overwrite=True,
         )
 
-        # build_plan に字幕あり options で呼ばれた RenderPlan（input_sources 不変）
+        # RenderPlan returned by build_plan with subtitle options (input_sources unchanged)
         fake_plan = RenderPlan(
             filter_complex=(
                 "[0:v]trim=0:5,setpts=PTS-STARTPTS[v0];"
@@ -3286,7 +3285,7 @@ class TestSubtitleNoAdditionalInputFlag:
             ffmpeg_args=["-filter_complex", "...", "-map", "[outv]"],
             segment_count=1,
             total_duration_seconds=5.0,
-            input_sources=[src],  # 字幕は input_sources に含まれない
+            input_sources=[src],  # subtitle is not included in input_sources
         )
 
         captured_cmd: list[str] = []
@@ -3317,26 +3316,26 @@ class TestSubtitleNoAdditionalInputFlag:
                 options=options,
             )
 
-        assert result["ok"] is True, f"失敗: {result.get('error')}"
-        # -i の出現数は input_sources の件数のみ（字幕 -i は追加されない・ADR-S10）
+        assert result["ok"] is True, f"failed: {result.get('error')}"
+        # -i count must equal input_sources count (no subtitle -i added, ADR-S10)
         i_indices = [i for i, v in enumerate(captured_cmd) if v == "-i"]
         assert len(i_indices) == 1, (
-            f"字幕があるのに -i が {len(i_indices)} 個: {captured_cmd}"
+            f"subtitle present but {len(i_indices)} -i flags found: {captured_cmd}"
         )
         assert captured_cmd[i_indices[0] + 1] == src
 
 
 class TestSubtitleBackwardCompat:
-    """観点7: subtitle=None → 字幕検証スキップ・既存 -i/summary 不変（ADR-S8）。
+    """Aspect 7: subtitle=None -> subtitle validation skipped, existing -i/summary unchanged (ADR-S8).
 
-    後方互換: subtitle フィールドを追加しても None のときは挙動が完全に同一。
-    SubtitleOptions が未実装でも None 指定は既存 RenderOptions で動くこと。
+    Backward compatibility: adding subtitle field must not change behaviour when None.
+    None must work even when SubtitleOptions is not yet implemented.
     """
 
     def test_subtitle_none_skips_subtitle_validation(self, tmp_path: Path) -> None:
-        """subtitle=None → 字幕パス検証が呼ばれず既存経路と同一の結果（ADR-S8）。
+        """subtitle=None -> subtitle path validation not called; result same as existing path (ADR-S8).
 
-        subtitle=None のとき ok=True が返り -i は1個（input_sources のみ）。
+        subtitle=None returns ok=True and 1 -i flag (input_sources only).
         """
         from clipwright_render.render import render_timeline
 
@@ -3359,19 +3358,19 @@ class TestSubtitleBackwardCompat:
             result = render_timeline(
                 timeline=str(tl_path),
                 output=output,
-                options=RenderOptions(),  # subtitle=None（デフォルト）
+                options=RenderOptions(),  # subtitle=None (default)
                 dry_run=True,
             )
 
-        assert result["ok"] is True, f"subtitle=None で失敗: {result.get('error')}"
-        # data に segment_count が含まれること（既存仕様維持）
+        assert result["ok"] is True, f"subtitle=None failed: {result.get('error')}"
+        # data must contain segment_count (existing spec maintained)
         assert result["data"]["segment_count"] == 1
         assert abs(result["data"]["total_duration_seconds"] - 5.0) < 0.01
 
     def test_subtitle_none_ffmpeg_i_count_unchanged(self, tmp_path: Path) -> None:
-        """subtitle=None → ffmpeg -i の数は input_sources のみ（後方互換・ADR-S8）。
+        """subtitle=None -> ffmpeg -i count is input_sources only (backward compat, ADR-S8).
 
-        subtitle 追加前と同じ -i 1個が維持されること。
+        Same 1 -i flag as before the subtitle field was added.
         """
         from clipwright_render.plan import RenderPlan
         from clipwright_render.render import render_timeline
@@ -3416,31 +3415,31 @@ class TestSubtitleBackwardCompat:
             result = render_timeline(
                 timeline=str(tl_path),
                 output=output,
-                options=RenderOptions(overwrite=True),  # subtitle=None
+                options=RenderOptions(overwrite=True),  # subtitle=None (default)
             )
 
-        assert result["ok"] is True, f"失敗: {result.get('error')}"
+        assert result["ok"] is True, f"failed: {result.get('error')}"
         i_indices = [i for i, v in enumerate(captured_cmd) if v == "-i"]
         assert len(i_indices) == 1
         assert captured_cmd[i_indices[0] + 1] == src
 
 
 class TestSubtitleDryRun:
-    """観点8: dry_run（subtitle あり）→ filter_complex に字幕段が含まれ run 非呼び出し（ADR-S10）。
+    """Aspect 8: dry_run (with subtitle) -> filter_complex contains subtitle stage, run not called (ADR-S10).
 
-    build_plan が返した filter_complex が data に含まれ、
-    字幕 filename= 段が入っていること。run は呼ばれない。
-    未実装のため AttributeError または字幕段不在で失敗すること（Red）。
+    filter_complex returned by build_plan must be present in data, including the
+    subtitle filename= stage. run must not be called.
+    Red: AttributeError or subtitle stage absent -> test fails.
     """
 
     def test_subtitle_dry_run_filter_complex_contains_subtitle_segment(
         self, tmp_path: Path
     ) -> None:
-        """dry_run（subtitle あり）→ data.filter_complex に字幕 filename= 段が含まれ
-        run が呼ばれないこと（ADR-S10）。
+        """dry_run (with subtitle) -> data.filter_complex contains subtitle filename= stage,
+        run not called (ADR-S10).
 
-        build_plan をモックして字幕段を含む filter_complex を返し、
-        render_timeline が data にそれを反映することを確認する。
+        Mocks build_plan to return a filter_complex with a subtitle stage, and verifies
+        that render_timeline reflects it in data.
         """
         from clipwright_render.plan import RenderPlan
         from clipwright_render.render import render_timeline
@@ -3458,7 +3457,7 @@ class TestSubtitleDryRun:
 
         subtitle_abs = str(Path(subtitle).resolve())
 
-        # build_plan が字幕段を含む filter_complex を返す（_append_subtitle_filter 相当）
+        # build_plan returns a filter_complex containing the subtitle stage (equivalent to _append_subtitle_filter)
         subtitle_filter = (
             f"[0:v]trim=0:5,setpts=PTS-STARTPTS[v0];"
             f"[v0]subtitles=filename='{subtitle_abs}'[outvsub];"
@@ -3502,11 +3501,11 @@ class TestSubtitleDryRun:
                 dry_run=True,
             )
 
-        assert result["ok"] is True, f"失敗: {result.get('error')}"
-        # run が呼ばれていない（dry_run）
+        assert result["ok"] is True, f"failed: {result.get('error')}"
+        # run must not have been called (dry_run)
         assert run_called is False
-        # filter_complex に字幕段（subtitles=filename= または [outvsub]）が含まれる
+        # filter_complex must contain a subtitle stage (subtitles=filename= or [outvsub])
         fc = result["data"]["filter_complex"]
         assert "subtitles" in fc or "outvsub" in fc, (
-            f"filter_complex に字幕段が見当たらない: {fc}"
+            f"No subtitle stage found in filter_complex: {fc}"
         )

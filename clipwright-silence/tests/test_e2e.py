@@ -1,22 +1,22 @@
-"""test_e2e.py — clipwright-silence 実バイナリ end-to-end ドッグフーディングテスト。
+"""test_e2e.py — clipwright-silence real-binary end-to-end dogfooding tests.
 
-本テストはモックを一切使わず、実 ffmpeg/ffprobe バイナリを使って
-detect_silence → render_timeline の連携パイプラインを検証する。
+This test uses no mocks and validates the detect_silence -> render_timeline
+integration pipeline using real ffmpeg/ffprobe binaries.
 
-検証フロー（architecture-report-20260610-141050.md / DC-AS-001/002/005）:
-  ① ffmpeg lavfi で映像＋音声素材（有音区間＋無音区間＋有音区間）を生成
-  ② detect_silence で KEEP clip 列の timeline.otio を生成（V1・target_url 絶対パス）
-  ③ render_timeline で timeline.otio を実体化し出力 mp4 の尺が元素材より短いことを確認
-  ④ 出力音声の尺も短縮されていることを確認（DC-AS-005: 音声も同座標 trim）
-  ⑤ silence→render が規約・OTIO・ファイルパスのみで成立（ドッグフーディング成功）
+Verification flow (architecture-report-20260610-141050.md / DC-AS-001/002/005):
+  (1) Generate a video+audio source (speech + silence + speech) via ffmpeg lavfi
+  (2) Run detect_silence to produce a KEEP-clip timeline.otio (V1, absolute target_url)
+  (3) Run render_timeline to materialize the timeline; confirm output mp4 is shorter than source
+  (4) Confirm audio duration is also shortened (DC-AS-005: audio trimmed at the same coordinates)
+  (5) Confirm silence->render succeeds via contract, OTIO, and file paths only (dogfooding)
 
-実行条件:
-  - CLIPWRIGHT_FFMPEG / CLIPWRIGHT_FFPROBE が設定済み、または PATH に
-    ffmpeg/ffprobe があること。未設定時は pytest.skip する（モックは使わない）。
+Prerequisites:
+  - CLIPWRIGHT_FFMPEG / CLIPWRIGHT_FFPROBE set, or ffmpeg/ffprobe on PATH.
+    Tests are skipped (no mocks) when neither is found.
 
-注意: e2e テストは実バイナリ（ffmpeg/ffprobe/flite TTS 等）を直接呼び出すため、
-  subprocess を直接使用している。これはプロダクションコードの process.run 規約
-  の意図的な例外であり、e2e テストインフラとして許容される（CR-R-003）。
+Note: e2e tests call real binaries (ffmpeg/ffprobe/flite TTS etc.) directly via subprocess.
+  Direct subprocess use is an intentional exception to the process.run convention
+  used in production code; it is permitted here as e2e test infrastructure (CR-R-003).
 """
 
 from __future__ import annotations
@@ -35,12 +35,12 @@ from clipwright_silence.detect import detect_silence
 from clipwright_silence.schemas import DetectSilenceOptions
 
 # ===========================================================================
-# ヘルパー
+# Helpers
 # ===========================================================================
 
-# 無音検出閾値: lavfi anullsrc（完全無音）を確実に検出するため緩めに設定
+# Silence detection threshold: set loosely to reliably detect lavfi anullsrc (complete silence)
 _SILENCE_DB = -40.0
-# 最小無音継続長: 生成する無音区間（2 秒）より短く設定して確実に検出
+# Minimum silence duration: shorter than the generated silence interval (2s) so it is detected
 _MIN_SILENCE_DURATION = 0.5
 
 
@@ -48,7 +48,7 @@ def _probe_info(
     ffprobe: str,
     path: Path,
 ) -> dict[str, Any]:
-    """ffprobe で動画の format/stream 情報を取得して返す。"""
+    """Fetch format/stream info for a video via ffprobe and return it."""
     cmd = [
         ffprobe,
         "-v",
@@ -65,17 +65,17 @@ def _probe_info(
 
 
 def _probe_duration(ffprobe: str, path: Path) -> float:
-    """ffprobe で動画の duration（秒）を取得する。"""
+    """Return the duration (seconds) of a video via ffprobe."""
     data = _probe_info(ffprobe, path)
     return float(data["format"]["duration"])
 
 
 def _probe_audio_duration(ffprobe: str, path: Path) -> float:
-    """ffprobe で動画の音声ストリーム duration（秒）を取得する。
+    """Return the audio stream duration (seconds) of a video via ffprobe.
 
-    フォーマットの duration が動画全体を表すため、音声ストリームの
-    duration を別途取得して DC-AS-005（音声 trim）を確認する。
-    音声ストリームが無い場合は 0.0 を返す。
+    The format duration represents the overall container duration.
+    The audio stream duration is fetched separately to confirm DC-AS-005 (audio trim).
+    Returns 0.0 if no audio stream is present.
     """
     data = _probe_info(ffprobe, path)
     for stream in data.get("streams", []):
@@ -91,50 +91,50 @@ def _make_silent_segment_video(
     silence_sec: float = 2.0,
     audio2_sec: float = 3.0,
 ) -> float:
-    """有音→無音→有音の 3 区間を持つ映像＋音声素材を生成する。
+    """Generate a video+audio source with three segments: speech -> silence -> speech.
 
-    构成:
-      [0, audio_sec)           : testsrc + sine 440Hz（有音）
-      [audio_sec, audio_sec + silence_sec) : testsrc + anullsrc（完全無音）
-      [audio_sec + silence_sec, total)     : testsrc + sine 440Hz（有音）
+    Composition:
+      [0, audio_sec)                          : testsrc + sine 440Hz (speech)
+      [audio_sec, audio_sec + silence_sec)    : testsrc + anullsrc (complete silence)
+      [audio_sec + silence_sec, total)        : testsrc + sine 440Hz (speech)
 
-    ffmpeg filter_complex で 3 区間を concat して 1 本の mp4 に多重化する。
-    映像: testsrc（320x240 @ 25fps・libx264）
-    音声: sine/anullsrc（aac）
+    Three segments are concatenated into one mp4 via ffmpeg filter_complex.
+    Video: testsrc (320x240 @ 25fps, libx264)
+    Audio: sine/anullsrc (aac)
 
     Returns:
-        生成した素材の総尺（秒）。
+        Total duration (seconds) of the generated source.
     """
     total = audio_sec + silence_sec + audio2_sec
-    # filter_complex で 3 セグメントを組み立てる
-    # 映像: testsrc を3区間分生成して concat
-    # 音声: 区間1/3=sine、区間2=anullsrc（完全無音）
+    # Assemble 3 segments via filter_complex
+    # Video: generate 3 intervals from testsrc using trim
+    # Audio: interval 1/3 = sine, interval 2 = anullsrc (complete silence)
     fc = (
-        # 映像ソース（共通 testsrc を trim で切り出す）
+        # Video sources (trim from a single shared testsrc)
         f"[0:v]trim=start=0:end={audio_sec:.3f},setpts=PTS-STARTPTS[va];"
         f"[0:v]trim=start=0:end={silence_sec:.3f},setpts=PTS-STARTPTS[vb];"
         f"[0:v]trim=start=0:end={audio2_sec:.3f},setpts=PTS-STARTPTS[vc];"
-        # 音声ソース（sine は [1:a]、anullsrc は [2:a]）
+        # Audio sources (sine from [1:a], anullsrc from [2:a])
         f"[1:a]atrim=start=0:end={audio_sec:.3f},asetpts=PTS-STARTPTS[aa];"
         f"[2:a]atrim=start=0:end={silence_sec:.3f},asetpts=PTS-STARTPTS[ab];"
         f"[1:a]atrim=start=0:end={audio2_sec:.3f},asetpts=PTS-STARTPTS[ac];"
-        # concat: 3 区間を連結（n=3 セグメント、v=1 映像、a=1 音声）
+        # concat: join 3 intervals (n=3 segments, v=1 video, a=1 audio)
         "[va][aa][vb][ab][vc][ac]concat=n=3:v=1:a=1[outv][outa]"
     )
     cmd = [
         ffmpeg,
         "-y",
-        # 入力0: testsrc 映像（total 秒分を生成して trim で切り出す）
+        # input 0: testsrc video (generate total seconds; trim as needed)
         "-f",
         "lavfi",
         "-i",
         f"testsrc=size=320x240:rate=25:duration={total:.3f}",
-        # 入力1: sine 音声（total 秒分を生成して atrim で切り出す）
+        # input 1: sine audio (generate total seconds; atrim as needed)
         "-f",
         "lavfi",
         "-i",
         f"sine=frequency=440:duration={total:.3f}",
-        # 入力2: anullsrc（完全無音・silence_sec 秒分）
+        # input 2: anullsrc (complete silence for silence_sec seconds)
         "-f",
         "lavfi",
         "-i",
@@ -155,13 +155,13 @@ def _make_silent_segment_video(
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, (
-        f"テスト素材の生成に失敗しました: {result.stderr[:300]}"
+        f"Failed to generate test source: {result.stderr[:300]}"
     )
     return total
 
 
 # ===========================================================================
-# テスト
+# Tests
 # ===========================================================================
 
 
@@ -171,21 +171,21 @@ def test_silence_detect_to_render_e2e(
     require_ffmpeg: str,
     require_ffprobe: str,
 ) -> None:
-    """ドッグフーディング: detect_silence → render_timeline の完全 e2e 検証。
+    """Dogfooding: full e2e validation of detect_silence -> render_timeline.
 
-    DC-AS-001/002/005 の受入基準を実バイナリで確認する。
+    Validates acceptance criteria for DC-AS-001/002/005 using real binaries.
 
-    検証観点:
-      - ① detect_silence が ok=True を返し timeline.otio が生成される
-      - ② V1 トラックに KEEP clip 列が含まれる（keep-clip 列・metadata.kind=keep）
-      - ③ clip の target_url が media の絶対パスである（DC-AS-001）
-      - ④ render_timeline が ok=True を返し出力 mp4 が生成される
-      - ⑤ 出力の映像尺が元素材より短い（無音区間がカットされた）
-      - ⑥ 出力の音声尺も短縮されている（DC-AS-005: 音声も同座標 trim）
-      - ⑦ 元素材・OTIO が非破壊（不変）
-      - ⑧ silence→render が規約・OTIO・ファイルパスのみで成立（ドッグフーディング）
+    Verification points:
+      - (1) detect_silence returns ok=True and timeline.otio is generated
+      - (2) V1 track contains a KEEP clip list (keep-clip list, metadata.kind=keep)
+      - (3) clip.target_url is an absolute path to the media (DC-AS-001)
+      - (4) render_timeline returns ok=True and the output mp4 is generated
+      - (5) Output video duration is shorter than the source (silence interval was cut)
+      - (6) Output audio duration is also shortened (DC-AS-005: audio trimmed at same coordinates)
+      - (7) Source media and OTIO are non-destructive (unchanged)
+      - (8) silence->render succeeds via contract, OTIO, and file paths only (dogfooding)
     """
-    # --- ① 映像＋音声（有音→無音→有音）テスト素材の生成（DC-AS-002） ---
+    # --- (1) Generate video+audio (speech->silence->speech) test source (DC-AS-002) ---
     source = tmp_path / "source.mp4"
     audio_sec = 3.0
     silence_sec = 2.0
@@ -197,11 +197,11 @@ def test_silence_detect_to_render_e2e(
         silence_sec=silence_sec,
         audio2_sec=audio2_sec,
     )
-    assert source.exists(), "テスト素材が生成されていません"
+    assert source.exists(), "Test source was not generated"
     source_size_before = source.stat().st_size
 
-    # --- ② detect_silence で KEEP clip 列の timeline.otio を生成 ---
-    # DC-AS-001: output timeline は media と同一ディレクトリ（tmp_path）に配置
+    # --- (2) Generate KEEP clip timeline.otio via detect_silence ---
+    # DC-AS-001: output timeline is placed in the same directory as media (tmp_path)
     otio_path = tmp_path / "cut.otio"
     options = DetectSilenceOptions(
         silence_threshold_db=_SILENCE_DB,
@@ -215,49 +215,47 @@ def test_silence_detect_to_render_e2e(
         options=options,
     )
 
-    assert detect_result["ok"] is True, (
-        f"detect_silence が失敗しました: {detect_result}"
-    )
-    assert otio_path.exists(), "timeline.otio が生成されていません"
+    assert detect_result["ok"] is True, f"detect_silence failed: {detect_result}"
+    assert otio_path.exists(), "timeline.otio was not generated"
 
-    # エンベロープ形式の確認
+    # Validate envelope format
     assert "summary" in detect_result
     assert "data" in detect_result
     data = detect_result["data"]
     assert "keep_count" in data
     assert "silence_count" in data
     assert data["keep_count"] >= 1, (
-        f"KEEP 区間が 0 です: data={data}。"
-        "silencedetect が無音を検出できていない可能性があります。"
+        f"KEEP interval count is 0: data={data}. "
+        "silencedetect may not have detected any silence."
     )
-    # artifacts に timeline パスが記録されている
+    # timeline path is recorded in artifacts
     artifacts = detect_result.get("artifacts", [])
     assert len(artifacts) == 1
     assert Path(artifacts[0]["path"]).resolve() == otio_path.resolve()
     assert artifacts[0]["format"] == "otio"
 
-    # --- ③ OTIO の内容確認: V1 に keep-clip 列・target_url 絶対パス ---
+    # --- (3) Validate OTIO content: V1 has keep-clip list and absolute target_url ---
     timeline = otio.adapters.read_from_file(str(otio_path))
     v1 = timeline.tracks[0]
-    assert v1.kind == otio.schema.TrackKind.Video, "V1 トラックが Video でありません"
+    assert v1.kind == otio.schema.TrackKind.Video, "V1 track is not Video"
     clips = [c for c in v1 if isinstance(c, otio.schema.Clip)]
-    assert len(clips) >= 1, "V1 トラックに clip が含まれていません"
+    assert len(clips) >= 1, "V1 track contains no clips"
 
-    # target_url が絶対パスであること（DC-AS-001）
+    # target_url must be an absolute path (DC-AS-001)
     for clip in clips:
         ref = clip.media_reference
         assert isinstance(ref, otio.schema.ExternalReference)
         target_url = ref.target_url
         assert Path(target_url).is_absolute(), (
-            f"target_url が絶対パスではありません: {target_url!r}"
+            f"target_url is not an absolute path: {target_url!r}"
         )
         # metadata.clipwright.kind = "keep"
         meta = clip.metadata.get("clipwright", {})
         assert meta.get("kind") == "keep", (
-            f"clip.metadata.clipwright.kind が 'keep' でありません: {meta!r}"
+            f"clip.metadata.clipwright.kind is not 'keep': {meta!r}"
         )
 
-    # --- ④ render_timeline で実体化 ---
+    # --- (4) Materialize via render_timeline ---
     output_mp4 = tmp_path / "out.mp4"
     render_result = render_timeline(
         timeline=str(otio_path),
@@ -265,52 +263,51 @@ def test_silence_detect_to_render_e2e(
         options=RenderOptions(),
         dry_run=False,
     )
-    assert render_result["ok"] is True, (
-        f"render_timeline が失敗しました: {render_result}"
-    )
-    assert output_mp4.exists(), "出力 mp4 が生成されていません"
-    assert output_mp4.stat().st_size > 0, "出力 mp4 のサイズが 0 です"
+    assert render_result["ok"] is True, f"render_timeline failed: {render_result}"
+    assert output_mp4.exists(), "Output mp4 was not generated"
+    assert output_mp4.stat().st_size > 0, "Output mp4 size is 0"
 
-    # --- ⑤ 出力の映像尺が元素材より短い（無音カット確認） ---
+    # --- (5) Output video duration is shorter than the source (silence was cut) ---
     source_duration = _probe_duration(require_ffprobe, source)
     output_duration = _probe_duration(require_ffprobe, output_mp4)
     assert output_duration < source_duration, (
-        f"出力尺が元素材以上です: output={output_duration:.3f}s,"
-        f" source={source_duration:.3f}s。"
-        "無音区間がカットされていません。"
+        f"Output duration is not shorter than the source: "
+        f"output={output_duration:.3f}s, source={source_duration:.3f}s. "
+        "Silence interval was not cut."
     )
-    # 無音区間（2 秒）がカットされているので、出力は元素材より短いはず
-    # 許容誤差: エンコーダー GOP 境界による ±1.5 秒
+    # The silence interval (2s) is cut so output should be shorter than source
+    # Tolerance: ±1.5s for encoder GOP boundary
     expected_max = total_sec - silence_sec + 1.5
     assert output_duration <= expected_max, (
-        f"出力尺が期待より長すぎます: output={output_duration:.3f}s,"
+        f"Output duration is too long: output={output_duration:.3f}s,"
         f" expected<={expected_max:.3f}s"
     )
 
-    # --- ⑥ 出力音声の尺も短縮されている（DC-AS-005） ---
+    # --- (6) Output audio duration is also shortened (DC-AS-005) ---
     output_audio_duration = _probe_audio_duration(require_ffprobe, output_mp4)
     source_audio_duration = _probe_audio_duration(require_ffprobe, source)
-    assert output_audio_duration > 0.0, "出力に音声ストリームがありません"
+    assert output_audio_duration > 0.0, "Output has no audio stream"
     assert output_audio_duration < source_audio_duration, (
-        f"出力音声尺が元素材以上です: output_audio={output_audio_duration:.3f}s,"
-        f" source_audio={source_audio_duration:.3f}s。"
-        "音声の無音区間がカットされていません（DC-AS-005）。"
+        f"Output audio duration is not shorter than the source: "
+        f"output_audio={output_audio_duration:.3f}s, "
+        f"source_audio={source_audio_duration:.3f}s. "
+        "Audio silence interval was not cut (DC-AS-005)."
     )
 
-    # --- ⑦ 元素材・OTIO が非破壊 ---
-    assert source.stat().st_size == source_size_before, "元素材のサイズが変化しました"
+    # --- (7) Source media and OTIO are non-destructive ---
+    assert source.stat().st_size == source_size_before, "Source media size changed"
 
-    # --- ⑧ ドッグフーディング成功の確認 ---
-    # silence→render が規約・OTIO・ファイルパスのみで成立したことを確認。
-    # render は silence が生成した timeline.otio を無変更で消費し、
-    # V1 keep-clip 列を読んで同座標の映像・音声 trim を実施した。
+    # --- (8) Dogfooding success confirmation ---
+    # Confirms that silence->render succeeded via contract, OTIO, and file paths only.
+    # render consumed the timeline.otio generated by silence without modification,
+    # read the V1 keep-clip list, and applied video+audio trim at the same coordinates.
 
 
 # ===========================================================================
-# VAD backend e2e テスト（DC-AS-007 / §7.8 / task_id: e2e-vad）
+# VAD backend e2e tests (DC-AS-007 / §7.8 / task_id: e2e-vad)
 # ===========================================================================
 
-# VAD extra 未インストール時のスキップフラグ
+# Skip flag when VAD extra is not installed
 _VAD_AVAILABLE = True
 try:
     import onnxruntime as _onnxruntime  # noqa: F401
@@ -319,8 +316,8 @@ except ImportError:
     _VAD_AVAILABLE = False
 
 _SKIP_VAD_REASON = (
-    "silero-vad または onnxruntime が import できません。"
-    "'pip install clipwright-silence[vad]' で VAD 依存を導入してください。"
+    "silero-vad or onnxruntime cannot be imported. "
+    "Install VAD dependencies with 'pip install clipwright-silence[vad]'."
 )
 
 
@@ -328,48 +325,49 @@ def _make_vad_test_video(
     ffmpeg: str,
     output: Path,
 ) -> dict[str, float]:
-    """VAD e2e 用テスト素材（flite TTS 発話 + 咳払いノイズバースト）を生成する。
+    """Generate a VAD e2e test source (flite TTS speech + cough noise burst).
 
-    構成:
-      [0, pre_sil)                          : 無音
-      [pre_sil, pre_sil+speech_a)           : flite TTS 発話 A（VAD が speech 判定）
-      [pre_sil+speech_a, +gap_sil)          : 無音（発話間の間隔）
-      [pre_sil+speech_a+gap_sil, +cough)    : 咳払い相当ノイズバースト（大音量・非発話）
-      [+cough, +gap_sil2)                   : 無音（咳払い後の間隔）
-      [+gap_sil2, +speech_b)                : flite TTS 発話 B（VAD が speech 判定）
-      [+speech_b, total)                    : 無音
+    Composition:
+      [0, pre_sil)                          : silence
+      [pre_sil, pre_sil+speech_a)           : flite TTS speech A (VAD judges as speech)
+      [pre_sil+speech_a, +gap_sil)          : silence (gap between speech segments)
+      [pre_sil+speech_a+gap_sil, +cough)    : cough-equivalent noise burst (loud, non-speech)
+      [+cough, +gap_sil2)                   : silence (gap after cough)
+      [+gap_sil2, +speech_b)                : flite TTS speech B (VAD judges as speech)
+      [+speech_b, total)                    : silence
 
-    音声生成に ffmpeg の libflite TTS エンジン（lavfi:flite）を使用する。
-    libflite は権利フリーの音声合成エンジンで、Silero VAD が発話と判定する
-    実音声に近い特性を持つ。
+    Audio is generated via ffmpeg's libflite TTS engine (lavfi:flite).
+    libflite is a royalty-free speech synthesis engine with characteristics
+    close enough to real speech that Silero VAD classifies it as speech.
 
-    映像は testsrc。音声は flite TTS（発話区間）と anullsrc（無音区間）、
-    sine burst（咳払い相当・大音量ノイズ）を filter_complex で結合する。
+    Video is testsrc. Audio is composed of flite TTS (speech intervals),
+    anullsrc (silence intervals), and sine burst (cough-equivalent loud noise)
+    assembled via filter_complex.
 
     Returns:
-        各区間の秒数位置を格納した dict。
+        dict with timing positions in seconds.
         keys: pre_sil, speech_a_dur, gap_sil, cough_dur, gap_sil2, speech_b_dur,
               total, cough_start, cough_end
     """
-    # 各区間の長さ（秒）
+    # Duration of each interval (seconds)
     pre_sil = 0.3
-    gap_sil = 0.8  # 発話-咳払い間の無音（VAD が咳払いを発話と判定しないよう間隔を確保）
-    cough_dur = 0.2  # 咳払い相当ノイズバースト
-    gap_sil2 = 0.8  # 咳払い-発話間の無音
+    gap_sil = 0.8  # silence between speech and cough (gap ensures VAD does not classify cough as speech)
+    cough_dur = 0.2  # cough-equivalent noise burst
+    gap_sil2 = 0.8  # silence between cough and speech
     post_sil = 0.3
 
-    # flite TTS で発話音声の長さを事前に計測
-    # 発話テキスト（単語数を絞り、flite が ~1-1.5 秒に収まるよう設定）
+    # Measure speech audio duration in advance using flite TTS
+    # Speech text (limited word count; flite should produce ~1-1.5s)
     speech_text_a = "hello world"
     speech_text_b = "goodbye world"
 
-    # 発話尺を計測するため一時生成
+    # Generate temporarily to measure speech duration
     def _probe_flite_dur(text: str) -> float:
-        """flite TTS の音声尺を計測する。
+        """Measure the audio duration of flite TTS output.
 
-        ffmpeg の libflite が利用できない環境（returncode != 0 または
-        time= パターン非マッチ）の場合は pytest.skip を呼び出す。
-        フォールバック値での継続は避ける（CR-E-002）。
+        Calls pytest.skip if ffmpeg's libflite is unavailable (returncode != 0
+        or no time= pattern in stderr).
+        Falling back with a guessed value is avoided (CR-E-002).
         """
         import re  # noqa: PLC0415
 
@@ -395,22 +393,22 @@ def _make_vad_test_video(
             text=True,
             timeout=30,
         )
-        # ffmpeg 自体が失敗した場合（libflite 非サポートのビルド等）はスキップ
+        # Skip if ffmpeg itself fails (e.g. build without libflite support)
         if result.returncode != 0:
             pytest.skip(
-                f"ffmpeg libflite が利用できません（returncode={result.returncode}）。"
-                f"libflite サポート付きの ffmpeg ビルドが必要です。"
+                f"ffmpeg libflite is not available (returncode={result.returncode}). "
+                f"An ffmpeg build with libflite support is required. "
                 f"stderr: {result.stderr[-200:]}"
             )
-        # stderr から duration を取得
+        # Obtain duration from stderr
         m = re.search(r"time=(\d+):(\d+):([0-9.]+)", result.stderr)
         if m:
             h, mi, s = int(m.group(1)), int(m.group(2)), float(m.group(3))
             return h * 3600 + mi * 60 + s
-        # time= パターン非マッチ = flite TTS が実際に動作していない
+        # No time= pattern = flite TTS did not actually run
         pytest.skip(
-            "ffmpeg stderr に time= パターンが見つかりません。"
-            "libflite TTS が正常に動作していない可能性があります。"
+            "No time= pattern found in ffmpeg stderr. "
+            "libflite TTS may not be functioning correctly. "
             f"text={text!r}, stderr={result.stderr[-200:]}"
         )
 
@@ -429,43 +427,43 @@ def _make_vad_test_video(
     cough_start = pre_sil + speech_a_dur + gap_sil
     cough_end = cough_start + cough_dur
 
-    # filter_complex で全区間を組み立てる
-    # 映像: testsrc（total 秒）
-    # 音声: 各区間を anullsrc/flite/sine で生成して concat
+    # Assemble all intervals via filter_complex
+    # Video: testsrc (total seconds)
+    # Audio: each interval generated by anullsrc/flite/sine, then concatenated
     #
-    # 区間構成:
-    #   [A] pre_sil   秒: anullsrc（無音）
-    #   [B] speech_a  秒: flite TTS A
-    #   [C] gap_sil   秒: anullsrc（無音）
-    #   [D] cough_dur 秒: sine burst 大音量（咳払い相当）
-    #   [E] gap_sil2  秒: anullsrc（無音）
-    #   [F] speech_b  秒: flite TTS B
-    #   [G] post_sil  秒: anullsrc（無音）
+    # Interval composition:
+    #   [A] pre_sil   s: anullsrc (silence)
+    #   [B] speech_a  s: flite TTS A
+    #   [C] gap_sil   s: anullsrc (silence)
+    #   [D] cough_dur s: sine burst at high volume (cough-equivalent)
+    #   [E] gap_sil2  s: anullsrc (silence)
+    #   [F] speech_b  s: flite TTS B
+    #   [G] post_sil  s: anullsrc (silence)
     #
-    # sine の周波数を 1000Hz・振幅大（volume=10）にして silencedetect が
-    # 有音として検出できるようにする（-40dB を超えるレベル）。
+    # sine frequency 1000Hz at high amplitude (volume=10) so that
+    # silencedetect classifies it as non-silence (above -40dB).
 
     srate = 16000
 
     fc = (
-        # --- 音声ソース ---
-        # [A] 無音 pre_sil
+        # --- Audio sources ---
+        # [A] silence pre_sil
         f"anullsrc=r={srate}:cl=mono:d={pre_sil:.4f}[aud_a];"
-        # [B] flite 発話 A
+        # [B] flite speech A
         f"flite=text='{speech_text_a}':voice=kal16,atrim=start=0:end={speech_a_dur:.4f},"
         f"asetpts=PTS-STARTPTS,aresample={srate}[aud_b];"
-        # [C] 無音 gap_sil
+        # [C] silence gap_sil
         f"anullsrc=r={srate}:cl=mono:d={gap_sil:.4f}[aud_c];"
-        # [D] 咳払い相当: 大音量 sine burst（1kHz, amplitude 高）
+        # [D] cough-equivalent: loud sine burst (1kHz, high amplitude)
         f"sine=frequency=1000:beep_factor=1:duration={cough_dur:.4f},"
         f"volume=volume=10,aresample={srate},"
         f"atrim=start=0:end={cough_dur:.4f},asetpts=PTS-STARTPTS[aud_d];"
-        # [E] 無音 gap_sil2
+        # [E] silence gap_sil2
         f"anullsrc=r={srate}:cl=mono:d={gap_sil2:.4f}[aud_e];"
-        # [F] flite 発話 B
+        # [F] flite speech B
         f"flite=text='{speech_text_b}':voice=kal16,atrim=start=0:end={speech_b_dur:.4f},"
         f"asetpts=PTS-STARTPTS,aresample={srate}[aud_f];"
-        # [G] 無音 post_sil
+        # [G] silence post_sil
         f"anullsrc=r={srate}:cl=mono:d={post_sil:.4f}[aud_g];"
         # --- concat ---
         "[aud_a][aud_b][aud_c][aud_d][aud_e][aud_f][aud_g]"
@@ -475,7 +473,7 @@ def _make_vad_test_video(
     cmd = [
         ffmpeg,
         "-y",
-        # 映像ソース
+        # video source
         "-f",
         "lavfi",
         "-i",
@@ -497,7 +495,7 @@ def _make_vad_test_video(
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, (
-        f"VAD テスト素材の生成に失敗しました: {result.stderr[-400:]}"
+        f"Failed to generate VAD test source: {result.stderr[-400:]}"
     )
 
     return {
@@ -514,7 +512,7 @@ def _make_vad_test_video(
 
 
 def _collect_keep_intervals(otio_path: Path) -> list[tuple[float, float]]:
-    """OTIO ファイルから V1 トラックの keep clip 区間（秒）を返す。"""
+    """Return the keep clip intervals (seconds) from V1 track of an OTIO file."""
     timeline = otio.adapters.read_from_file(str(otio_path))
     v1 = timeline.tracks[0]
     result = []
@@ -526,7 +524,7 @@ def _collect_keep_intervals(otio_path: Path) -> list[tuple[float, float]]:
                 start_sec = sr_otio.start_time.value / sr_otio.start_time.rate
                 dur_sec = sr_otio.duration.value / sr_otio.duration.rate
                 result.append((start_sec, start_sec + dur_sec))
-        time_cursor += 0.0  # 絶対座標で返す
+        time_cursor += 0.0  # return in absolute coordinates
     return result
 
 
@@ -537,34 +535,34 @@ def test_vad_backend_e2e(
     require_ffmpeg: str,
     require_ffprobe: str,
 ) -> None:
-    """VAD backend e2e: 咳払いノイズが VAD では除去・silencedetect では残ることを実証。
+    """VAD backend e2e: demonstrate cough noise is excluded by VAD but kept by silencedetect.
 
-    検証フロー（architecture-report §7.8 / DC-AS-007）:
-      ① VAD が speech 判定する素材を ffmpeg flite TTS で生成（先行確立）
-      ② 発話区間外に咳払い相当ノイズバースト（0.2s）を挿入した mp4 を生成
-      ③ backend="vad" で detect → 咳払い区間が KEEP から除かれていることを確認
-      ④ backend="silencedetect" で detect → 咳払い区間が KEEP に残ることを対比確認
-      ⑤ VAD timeline を render_timeline で実体化 → 出力 mp4 生成・尺短縮を確認
-      ⑥ silencedetect backend の非回帰: backend metadata が追加されても
-         既存 silencedetect e2e と同様に render まで通ること（DC-GP-002）
+    Verification flow (architecture-report §7.8 / DC-AS-007):
+      (1) Generate material where VAD classifies speech using ffmpeg flite TTS (pre-establish)
+      (2) Insert a cough-equivalent noise burst (0.2s) outside speech intervals
+      (3) detect with backend="vad" -> confirm cough interval is not in KEEP
+      (4) detect with backend="silencedetect" -> confirm cough interval remains in KEEP
+      (5) Materialize VAD timeline via render_timeline -> confirm output mp4 and shortened duration
+      (6) silencedetect backend regression: even after adding backend metadata,
+          render still succeeds as with the existing silencedetect e2e (DC-GP-002)
 
-    skip 条件（DC-AS-007）:
-      - CLIPWRIGHT_FFMPEG / CLIPWRIGHT_FFPROBE 不在
-      - silero-vad / onnxruntime が import 不可
+    Skip conditions (DC-AS-007):
+      - CLIPWRIGHT_FFMPEG / CLIPWRIGHT_FFPROBE not found
+      - silero-vad / onnxruntime cannot be imported
     """
     # ==================================================================
-    # ① 先行確立: VAD が speech 判定する素材の生成
+    # (1) Pre-establish: generate source material that VAD classifies as speech
     # ==================================================================
     source = tmp_path / "vad_source.mp4"
     timing = _make_vad_test_video(require_ffmpeg, source)
-    assert source.exists(), "VAD テスト素材が生成されていません"
+    assert source.exists(), "VAD test source was not generated"
 
     cough_start = timing["cough_start"]
     cough_end = timing["cough_end"]
 
-    # flite TTS 音声が実際に VAD で speech 判定されることを先行確認
-    # （§7.8: 素材確立の先行ステップ）
-    # vad_cli を別プロセス起動して speech_segments が非空であることを確認
+    # Pre-confirm that the flite TTS audio is classified as speech by VAD
+    # (§7.8: pre-establishment step for source validation)
+    # Launch vad_cli in a subprocess and confirm speech_segments is non-empty
     import sys
 
     vad_check_result = subprocess.run(
@@ -583,23 +581,23 @@ def test_vad_backend_e2e(
         cwd=str(tmp_path),
     )
     assert vad_check_result.returncode == 0, (
-        f"vad_cli 起動に失敗しました: returncode={vad_check_result.returncode}, "
+        f"vad_cli launch failed: returncode={vad_check_result.returncode}, "
         f"stderr={vad_check_result.stderr[-200:]}"
     )
     vad_payload = json.loads(vad_check_result.stdout)
     assert "error" not in vad_payload, (
-        f"vad_cli がエラーを返しました: {vad_payload['error']}"
+        f"vad_cli returned an error: {vad_payload['error']}"
     )
     speech_segments = vad_payload.get("speech_segments", [])
     assert len(speech_segments) > 0, (
-        "vad_cli が speech_segments=0 を返しました。"
-        "素材確立に失敗しています。"
-        "flite TTS で生成した音声が VAD に発話と判定されませんでした。"
+        "vad_cli returned speech_segments=0. "
+        "Source pre-establishment failed. "
+        "Audio generated by flite TTS was not classified as speech by VAD. "
         f"vad_payload={vad_payload}"
     )
 
     # ==================================================================
-    # ③ backend="vad" で detect → 咳払い区間が KEEP から除かれる
+    # (3) detect with backend="vad" -> cough interval is excluded from KEEP
     # ==================================================================
     otio_vad = tmp_path / "timeline_vad.otio"
     vad_options = DetectSilenceOptions(
@@ -616,39 +614,37 @@ def test_vad_backend_e2e(
         options=vad_options,
     )
 
-    assert vad_result["ok"] is True, (
-        f"VAD backend detect_silence が失敗しました: {vad_result}"
-    )
-    assert otio_vad.exists(), "VAD backend の timeline.otio が生成されていません"
+    assert vad_result["ok"] is True, f"VAD backend detect_silence failed: {vad_result}"
+    assert otio_vad.exists(), "VAD backend timeline.otio was not generated"
 
     vad_keep_intervals = _collect_keep_intervals(otio_vad)
     assert len(vad_keep_intervals) > 0, (
-        f"VAD backend の KEEP 区間が 0 です。vad_result={vad_result}"
+        f"VAD backend KEEP interval count is 0. vad_result={vad_result}"
     )
 
-    # 咳払い区間（cough_start〜cough_end）が VAD の KEEP 区間に含まれていないことを確認
-    # （VAD は非発話と判定して除去する）
+    # Confirm the cough interval (cough_start~cough_end) is not in VAD KEEP intervals
+    # (VAD classifies it as non-speech and excludes it)
     cough_center = (cough_start + cough_end) / 2
     vad_cough_covered = any(s <= cough_center <= e for s, e in vad_keep_intervals)
     assert not vad_cough_covered, (
-        f"VAD backend が咳払い中心点({cough_center:.3f}s)を KEEP に含めています。"
-        f"咳払い区間: [{cough_start:.3f}s - {cough_end:.3f}s]。"
-        f"VAD KEEP 区間: {[(round(s, 3), round(e, 3)) for s, e in vad_keep_intervals]}。"  # noqa: E501
-        "VAD が咳払い相当のノイズを非発話として除去できていません。"
+        f"VAD backend included the cough center ({cough_center:.3f}s) in KEEP. "
+        f"Cough interval: [{cough_start:.3f}s - {cough_end:.3f}s]. "
+        f"VAD KEEP intervals: {[(round(s, 3), round(e, 3)) for s, e in vad_keep_intervals]}. "  # noqa: E501
+        "VAD failed to exclude the cough-equivalent noise as non-speech."
     )
 
-    # VAD metadata に backend="vad" が記録されている（VAD-AD-07）
+    # VAD metadata has backend="vad" recorded (VAD-AD-07)
     timeline_vad = otio.adapters.read_from_file(str(otio_vad))
     for clip in timeline_vad.tracks[0]:
         if isinstance(clip, otio.schema.Clip):
             meta = clip.metadata.get("clipwright", {})
             assert meta.get("backend") == "vad", (
-                f"VAD backend clip の metadata.backend が 'vad' でありません: {meta!r}"
+                f"VAD backend clip metadata.backend is not 'vad': {meta!r}"
             )
             break
 
     # ==================================================================
-    # ④ backend="silencedetect" で detect → 咳払い区間が KEEP に残る
+    # (4) detect with backend="silencedetect" -> cough interval remains in KEEP
     # ==================================================================
     otio_sd = tmp_path / "timeline_sd.otio"
     sd_options = DetectSilenceOptions(
@@ -665,39 +661,37 @@ def test_vad_backend_e2e(
     )
 
     assert sd_result["ok"] is True, (
-        f"silencedetect backend detect_silence が失敗しました: {sd_result}"
+        f"silencedetect backend detect_silence failed: {sd_result}"
     )
-    assert otio_sd.exists(), (
-        "silencedetect backend の timeline.otio が生成されていません"
-    )  # noqa: E501
+    assert otio_sd.exists(), "silencedetect backend timeline.otio was not generated"
 
     sd_keep_intervals = _collect_keep_intervals(otio_sd)
     assert len(sd_keep_intervals) > 0, (
-        f"silencedetect backend の KEEP 区間が 0 です。sd_result={sd_result}"
+        f"silencedetect backend KEEP interval count is 0. sd_result={sd_result}"
     )
 
-    # 咳払い区間（cough_start〜cough_end）が silencedetect の KEEP 区間に含まれることを確認  # noqa: E501
-    # （silencedetect は音量で非無音 → KEEP として残す）
+    # Confirm the cough interval (cough_start~cough_end) is in silencedetect KEEP intervals
+    # (silencedetect treats high volume as non-silence -> keeps it)
     sd_cough_covered = any(s <= cough_center <= e for s, e in sd_keep_intervals)
     assert sd_cough_covered, (
-        f"silencedetect backend が咳払い中心点({cough_center:.3f}s)を KEEP に含めていません。"  # noqa: E501
-        f"咳払い区間: [{cough_start:.3f}s - {cough_end:.3f}s]。"
-        f"silencedetect KEEP 区間: {[(round(s, 3), round(e, 3)) for s, e in sd_keep_intervals]}。"  # noqa: E501
-        "咳払い（大音量ノイズ）が有音として KEEP に残ることを確認できていません。"
+        f"silencedetect backend did not include the cough center ({cough_center:.3f}s) in KEEP. "  # noqa: E501
+        f"Cough interval: [{cough_start:.3f}s - {cough_end:.3f}s]. "
+        f"silencedetect KEEP intervals: {[(round(s, 3), round(e, 3)) for s, e in sd_keep_intervals]}. "  # noqa: E501
+        "Could not confirm that the cough (loud noise) remains as KEEP in silencedetect."
     )
 
-    # silencedetect metadata に backend="silencedetect" が記録されている（VAD-AD-07）
+    # silencedetect metadata has backend="silencedetect" recorded (VAD-AD-07)
     timeline_sd = otio.adapters.read_from_file(str(otio_sd))
     for clip in timeline_sd.tracks[0]:
         if isinstance(clip, otio.schema.Clip):
             meta = clip.metadata.get("clipwright", {})
             assert meta.get("backend") == "silencedetect", (
-                f"silencedetect clip の metadata.backend が 'silencedetect' でありません: {meta!r}"  # noqa: E501
+                f"silencedetect clip metadata.backend is not 'silencedetect': {meta!r}"  # noqa: E501
             )
             break
 
     # ==================================================================
-    # ⑤ VAD timeline を render_timeline で実体化（成功条件3）
+    # (5) Materialize VAD timeline via render_timeline (success condition 3)
     # ==================================================================
     output_mp4 = tmp_path / "vad_render_out.mp4"
     render_result = render_timeline(
@@ -707,23 +701,23 @@ def test_vad_backend_e2e(
         dry_run=False,
     )
     assert render_result["ok"] is True, (
-        f"VAD timeline の render_timeline が失敗しました: {render_result}"
+        f"render_timeline for VAD timeline failed: {render_result}"
     )
-    assert output_mp4.exists(), "VAD render の出力 mp4 が生成されていません"
-    assert output_mp4.stat().st_size > 0, "VAD render の出力 mp4 サイズが 0 です"
+    assert output_mp4.exists(), "VAD render output mp4 was not generated"
+    assert output_mp4.stat().st_size > 0, "VAD render output mp4 size is 0"
 
-    # 出力 mp4 の尺が元素材より短い（非発話区間がカットされた）
+    # Output mp4 duration is shorter than the source (non-speech intervals were cut)
     source_duration = _probe_duration(require_ffprobe, source)
     output_duration = _probe_duration(require_ffprobe, output_mp4)
     assert output_duration < source_duration, (
-        f"VAD render 出力尺が元素材以上です: output={output_duration:.3f}s,"
-        f" source={source_duration:.3f}s。"
-        "非発話区間がカットされていません。"
+        f"VAD render output duration is not shorter than the source: "
+        f"output={output_duration:.3f}s, source={source_duration:.3f}s. "
+        "Non-speech intervals were not cut."
     )
 
     # ==================================================================
-    # ⑥ silencedetect 経路の非回帰（DC-GP-002）
-    # backend metadata 追加後も render まで通ること
+    # (6) silencedetect path regression (DC-GP-002)
+    # render must succeed even after adding backend metadata
     # ==================================================================
     sd_render_out = tmp_path / "sd_render_out.mp4"
     sd_render_result = render_timeline(
@@ -733,13 +727,13 @@ def test_vad_backend_e2e(
         dry_run=False,
     )
     assert sd_render_result["ok"] is True, (
-        f"silencedetect timeline の render_timeline が失敗しました: {sd_render_result}"
+        f"render_timeline for silencedetect timeline failed: {sd_render_result}"
     )
     assert sd_render_out.exists(), (
-        "silencedetect 非回帰: render 出力 mp4 が生成されていません"
+        "silencedetect regression: render output mp4 was not generated"
     )
     sd_output_duration = _probe_duration(require_ffprobe, sd_render_out)
     assert sd_output_duration < source_duration, (
-        f"silencedetect 非回帰: render 出力尺が元素材以上です:"
-        f" output={sd_output_duration:.3f}s, source={source_duration:.3f}s。"
+        f"silencedetect regression: render output duration is not shorter than the source: "
+        f"output={sd_output_duration:.3f}s, source={source_duration:.3f}s."
     )

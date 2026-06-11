@@ -1,20 +1,27 @@
-"""render.py — clipwright-render のオーケストレーション層。
+"""render.py — orchestration layer for clipwright-render.
 
-ffprobe による probe と ffmpeg による再エンコードを統合し、
-入力検証 → OTIO 解析 → probe → 計画構築 → 実行 の一連フローを担う。
+Integrates ffprobe-based probing and ffmpeg-based re-encoding, handling the
+full flow: input validation → OTIO analysis → probe → plan construction →
+execution.
 
-設計判断:
-- _probe() は core inspect_media を呼び出し MediaInfo → ProbeInfo に変換する（AD-3）。
-  独自 ffprobe 呼び出しを廃止し重複を解消する（DC-AS-001/ADR-6 暫定対応を解消）。
-- ffmpeg timeout = max(300, ceil(出力総尺秒 × 10)) 秒（ADR-4/DC-AM-006）。
-  再エンコードの最悪ケース (~10x 実時間) を見込んだ安全マージン。
-- PROBE_FAILED 等のエラーは inspect_media が送出するものをそのまま伝播する。
-- ffmpeg stderr 生文字列・内部パスは summary/data/error に露出しない。
-  core の process.run が先頭 200 文字要約のみ message に含めることで実現する。
-- 全ユニークソースの境界検証・存在確認・probe を行う（ADR-C8）。
-- ffmpeg コマンドの -i 並びは RenderPlan.input_sources をそのまま使う（ADR-C9-r2）。
-- _probe は fps = 「第1 video StreamInfo あり AND duration not None」のときのみ設定し
-  音声のみソースの rate=1000.0 センチネルを fps に誤採用しない（ADR-C2-r2）。
+Design decisions:
+- _probe() calls core inspect_media and converts MediaInfo → ProbeInfo (AD-3).
+  Removes the previous custom ffprobe call to eliminate duplication
+  (DC-AS-001/ADR-6 interim workaround resolved).
+- ffmpeg timeout = max(300, ceil(output duration seconds × 10)) seconds
+  (ADR-4/DC-AM-006). Safety margin based on worst-case re-encode time
+  (~10× real time).
+- PROBE_FAILED and similar errors propagated as-is from inspect_media.
+- ffmpeg stderr raw strings and internal paths are not exposed in summary/data/
+  error. core's process.run includes only a 200-character summary in the
+  message.
+- Boundary validation, existence checks, and probing are applied to all unique
+  sources (ADR-C8).
+- ffmpeg command -i list is taken directly from RenderPlan.input_sources
+  (ADR-C9-r2).
+- _probe sets fps only when "first video StreamInfo present AND duration not
+  None", so it does not mis-adopt the rate=1000.0 sentinel from audio-only
+  sources (ADR-C2-r2).
 """
 
 from __future__ import annotations
@@ -39,36 +46,36 @@ from clipwright_render.plan import (
 )
 from clipwright_render.schemas import RenderOptions
 
-# 出力拡張子ホワイトリスト（DC-AM-003）
+# Output extension whitelist (DC-AM-003)
 _ALLOWED_EXTENSIONS = frozenset({".mp4", ".mkv", ".mov", ".webm"})
 
-# 字幕ファイル拡張子ホワイトリスト（ADR-S3）
+# Subtitle file extension whitelist (ADR-S3)
 _ALLOWED_SUBTITLE_EXTENSIONS = frozenset({".srt", ".vtt", ".ass"})
 
 
 def _probe(source: str) -> ProbeInfo:
-    """inspect_media を呼び出して ProbeInfo を返す（AD-3 / ADR-C2-r2）。
+    """Call inspect_media and return ProbeInfo (AD-3 / ADR-C2-r2).
 
-    core の inspect_media に ffprobe 実行を委譲し、返された MediaInfo を
-    plan.py が必要とする ProbeInfo 形式に変換する純粋なアダプタ。
-    FILE_NOT_FOUND 時は message を basename のみに差し替えて再送出し、
-    OTIO target_url の絶対パスを露出しない（Sec M-1）。
-    PROBE_FAILED 等、FILE_NOT_FOUND 以外のエラーはそのまま伝播する。
+    Pure adapter that delegates ffprobe execution to core's inspect_media
+    and converts the returned MediaInfo to the ProbeInfo format required by
+    plan.py. On FILE_NOT_FOUND, replaces the message with basename only and
+    re-raises to avoid exposing the absolute path from the OTIO target_url
+    (Sec M-1). Other errors (PROBE_FAILED, etc.) are propagated as-is.
 
-    fps は「第1 video StreamInfo あり AND MediaInfo.duration not None」の
-    ときのみ MediaInfo.duration.rate を採用する。
-    音声のみソースは duration.rate=1000.0 センチネルを fps に誤採用しないため、
-    video stream なしのときは fps=None を返す（ADR-C2-r2）。
+    fps is adopted from MediaInfo.duration.rate only when "first video StreamInfo
+    is present AND MediaInfo.duration is not None". For audio-only sources,
+    duration.rate=1000.0 is a sentinel and must not be used as fps, so fps=None
+    is returned when there is no video stream (ADR-C2-r2).
 
     Args:
-        source: probe 対象のメディアファイルパス。
+        source: path to the media file to probe.
 
     Returns:
-        ProbeInfo(has_video, audio_count, bit_rate, width, height, fps)。
+        ProbeInfo(has_video, audio_count, bit_rate, width, height, fps).
 
     Raises:
-        ClipwrightError: PROBE_FAILED / DEPENDENCY_MISSING / SUBPROCESS_FAILED /
-            SUBPROCESS_TIMEOUT / FILE_NOT_FOUND（inspect_media が送出）。
+        ClipwrightError: PROBE_FAILED / DEPENDENCY_MISSING / SUBPROCESS_FAILED
+            / SUBPROCESS_TIMEOUT / FILE_NOT_FOUND (raised by inspect_media).
     """
     try:
         info = inspect_media(source)
@@ -76,29 +83,28 @@ def _probe(source: str) -> ProbeInfo:
         if exc.code == ErrorCode.FILE_NOT_FOUND:
             raise ClipwrightError(
                 code=ErrorCode.FILE_NOT_FOUND,
-                message=(
-                    f"ソースメディアファイルが見つかりません: {Path(source).name}"
-                ),
+                message=(f"Source media file not found: {Path(source).name}"),
                 hint=exc.hint,
             ) from exc
         raise
     has_video = any(s.codec_type == "video" for s in info.streams)
     audio_count = sum(1 for s in info.streams if s.codec_type == "audio")
 
-    # 解像度・fps は第1 video StreamInfo から取得（ADR-C2-r2）
+    # Resolution and fps are taken from the first video StreamInfo (ADR-C2-r2)
     width: int | None = None
     height: int | None = None
     fps: float | None = None
 
     if has_video:
-        # 第1 video StreamInfo を取得
+        # Retrieve the first video StreamInfo
         first_video = next((s for s in info.streams if s.codec_type == "video"), None)
         if first_video is not None:
             width = first_video.width
             height = first_video.height
 
-        # fps: video stream あり AND duration not None のときのみ採用（ADR-C2-r2）
-        # 音声のみソースは rate=1000.0 センチネルのため、video stream なしは fps=None。
+        # fps: adopted only when video stream present AND duration not None
+        # (ADR-C2-r2). Audio-only sources use rate=1000.0 as a sentinel; never
+        # adopt as fps when there is no video stream.
         if info.duration is not None:
             fps = float(info.duration.rate)
 
@@ -118,30 +124,32 @@ def _check_within_timeline_dir(
     kind: str,
     hint_detail: str,
 ) -> None:
-    """指定パスが timeline 親ディレクトリ配下にあることを検証する共通ヘルパー。
+    """Common helper to verify that the given path is within the timeline's
+    parent directory.
 
-    _check_source_within_timeline_dir・_check_subtitle_within_timeline_dir の
-    共通ロジックを一本化する（DRY 原則・CR-M-001）。
-    再帰配下を許可し、timeline dir のツリー外を指す場合のみ
-    PATH_NOT_ALLOWED を送出する。
-    resolve() 失敗時は absolute() ベースの best-effort 比較に
-    フォールバックする（SR L-1）。
+    Consolidates the shared logic of _check_source_within_timeline_dir and
+    _check_subtitle_within_timeline_dir (DRY; CR-M-001).
+    Allows recursive subdirectories; raises PATH_NOT_ALLOWED only when the path
+    points outside the timeline directory tree.
+    Falls back to absolute()-based best-effort comparison when resolve() fails
+    (SR L-1).
 
     Args:
-        timeline_path: OTIO タイムラインファイルのパス。
-        path_to_check: 境界検証対象のパス文字列。
-        kind: エラーメッセージ用の種別ラベル
-            （例: "source ファイル" / "字幕ファイル"）。
-        hint_detail: エラーヒントに使う具体的なファイル種別説明
-            （例: "ソースファイル"）。
+        timeline_path: path to the OTIO timeline file.
+        path_to_check: path string to validate against the boundary.
+        kind: type label for the error message
+            (e.g. "source file" / "subtitle file").
+        hint_detail: specific file type description for the error hint
+            (e.g. "source file").
 
     Raises:
-        ClipwrightError: PATH_NOT_ALLOWED（パスがプロジェクト境界外を指す場合）。
+        ClipwrightError: PATH_NOT_ALLOWED when the path points outside the
+            project boundary.
     """
     try:
         allowed_base = timeline_path.parent.resolve()
         target_resolved = Path(path_to_check).resolve()
-        # パス区切り文字を含めて比較し、ディレクトリ名の前方一致誤検知を防ぐ
+        # Compare with path separator to avoid false prefix matches on directory names
         target_str = str(target_resolved)
         base_str = str(allowed_base)
         if not (
@@ -151,21 +159,22 @@ def _check_within_timeline_dir(
         ):
             raise ClipwrightError(
                 code=ErrorCode.PATH_NOT_ALLOWED,
-                message=f"{kind}がプロジェクト境界外を指しています。",
+                message=f"{kind} points outside the project boundary.",
                 hint=(
-                    "OTIO タイムラインと同じディレクトリ配下の"
-                    f"{hint_detail}を使用してください。"
+                    f"Use a {hint_detail} located under the same directory"
+                    " as the OTIO timeline."
                 ),
             )
     except ClipwrightError:
         raise
     except OSError:
-        # resolve() 失敗（ネットワークパス・超長パス・シンボリックリンクループ等）は
-        # absolute() ベースの best-effort 比較にフォールバックする（SR L-1）。
-        # これにより境界検証が完全にスキップされるリスクを低減し、
-        # resolve() 失敗のような極端なケースでも境界外 probe を防ぐ。
-        # absolute() も失敗した場合のみスキップし、後続の存在確認に委ねる
-        # （_check_path_not_allowed の既存フォールバック作法に倣う）。
+        # resolve() failure (network paths, extremely long paths, symlink loops,
+        # etc.): fall back to absolute()-based best-effort comparison (SR L-1).
+        # This reduces the risk of completely skipping boundary validation
+        # and guards against out-of-boundary probing even in extreme cases.
+        # Only skips the check when absolute() also fails, and defers to
+        # subsequent existence checks (follows the existing
+        # _check_path_not_allowed fallback pattern).
         try:
             allowed_base_abs = str(timeline_path.parent.absolute())
             target_abs = str(Path(path_to_check).absolute())
@@ -176,96 +185,105 @@ def _check_within_timeline_dir(
             ):
                 raise ClipwrightError(
                     code=ErrorCode.PATH_NOT_ALLOWED,
-                    message=f"{kind}がプロジェクト境界外を指しています。",
+                    message=f"{kind} points outside the project boundary.",
                     hint=(
-                        "OTIO タイムラインと同じディレクトリ配下の"
-                        f"{hint_detail}を使用してください。"
+                        f"Use a {hint_detail} located under the same directory"
+                        " as the OTIO timeline."
                     ),
                 )
         except ClipwrightError:
             raise
         except OSError:
-            # absolute() も失敗した場合のみスキップ（本当に解決不能なパスのみ）
+            # Skip only when absolute() also fails (truly unresolvable path)
             pass
 
 
 def _check_source_within_timeline_dir(timeline_path: Path, source: str) -> None:
-    """source パスが timeline 親ディレクトリ配下にあることを検証する（Sec M-2）。
+    """Verify that the source path is within the timeline's parent directory
+    (Sec M-2).
 
-    OTIO target_url に任意パスが埋め込まれた悪意ある OTIO への対策。
-    単一 source は OTIO と同一ディレクトリ配下に配置することを前提とする。
+    Guards against malicious OTIO files with arbitrary paths embedded as
+    target_url. Assumes a single source is co-located under the same directory
+    as the OTIO file.
 
     Args:
-        timeline_path: OTIO タイムラインファイルのパス。
-        source: OTIO target_url から取得したメディアソースパス。
+        timeline_path: path to the OTIO timeline file.
+        source: media source path obtained from the OTIO target_url.
 
     Raises:
-        ClipwrightError: PATH_NOT_ALLOWED（source がプロジェクト境界外を指す場合）。
+        ClipwrightError: PATH_NOT_ALLOWED when source points outside the
+            project boundary.
     """
     _check_within_timeline_dir(
         timeline_path,
         source,
-        kind="source ファイル",
-        hint_detail="ソースファイル",
+        kind="source file",
+        hint_detail="source file",
     )
 
 
 def _check_subtitle_within_timeline_dir(timeline_path: Path, subtitle: str) -> None:
-    """字幕パスが timeline 親ディレクトリ配下にあることを検証する（ADR-S7）。
+    """Verify that the subtitle path is within the timeline's parent directory
+    (ADR-S7).
 
-    timeline dir のツリー外を指す場合のみ PATH_NOT_ALLOWED を送出し、
-    サブディレクトリ内の字幕ファイルは許可する。
+    Raises PATH_NOT_ALLOWED only when the path points outside the timeline
+    directory tree; subtitle files in subdirectories are allowed.
 
     Args:
-        timeline_path: OTIO タイムラインファイルのパス。
-        subtitle: 字幕ファイルパス。
+        timeline_path: path to the OTIO timeline file.
+        subtitle: subtitle file path.
 
     Raises:
-        ClipwrightError: PATH_NOT_ALLOWED（字幕がプロジェクト境界外を指す場合）。
+        ClipwrightError: PATH_NOT_ALLOWED when the subtitle points outside the
+            project boundary.
     """
     _check_within_timeline_dir(
         timeline_path,
         subtitle,
-        kind="字幕ファイル",
-        hint_detail="字幕ファイル",
+        kind="subtitle file",
+        hint_detail="subtitle file",
     )
 
 
 def _check_path_not_allowed(output_path: Path, source: str) -> None:
-    """output と source が同一パスを指していないか確認する（DC-AM-002）。
+    """Verify that output and source do not point to the same path
+    (DC-AM-002).
 
-    resolve() を用いてシンボリックリンク等を考慮した比較を行う。
-    resolve() が失敗する場合（パスが存在しない等）は absolute() 比較に、
-    それも失敗した場合のみ文字列比較にフォールバックする（Sec L-1）。
+    Uses resolve() for comparison that accounts for symbolic links.
+    Falls back to absolute() when resolve() fails (path does not exist etc.),
+    and to string comparison only when absolute() also fails (Sec L-1).
     """
     try:
         if output_path.resolve() == Path(source).resolve():
             raise ClipwrightError(
                 code=ErrorCode.PATH_NOT_ALLOWED,
-                message="出力パスと入力ソースパスが同一です。",
+                message="Output path and input source path are the same.",
                 hint=(
-                    "出力ファイルパスを入力ソースファイルとは別のパスに変更してください。"
+                    "Change the output file path to be different from the"
+                    " input source file."
                 ),
             )
     except OSError as exc:
-        # resolve() 失敗時（ネットワークパス・極端に長いパス等）は
-        # absolute() 比較を試み、それも失敗した場合のみ文字列比較にフォールバック。
+        # resolve() failure (network paths, extremely long paths, etc.):
+        # try absolute() first, then fall back to string comparison.
         try:
             if Path(output_path).absolute() == Path(source).absolute():
                 raise ClipwrightError(
                     code=ErrorCode.PATH_NOT_ALLOWED,
-                    message="出力パスと入力ソースパスが同一です。",
+                    message="Output path and input source path are the same.",
                     hint=(
-                        "出力ファイルパスを入力ソースファイルとは別のパスに変更してください。"
+                        "Change the output file path to be different from the"
+                        " input source file."
                     ),
                 ) from exc
         except OSError as exc2:
             if str(output_path) == source:
                 raise ClipwrightError(
                     code=ErrorCode.PATH_NOT_ALLOWED,
-                    message="出力パスと入力ソースパスが同一です。",
+                    message="Output path and input source path are the same.",
                     hint=(
-                        "出力ファイルパスを入力ソースファイルとは別のパスに変更してください。"
+                        "Change the output file path to be different from the"
+                        " input source file."
                     ),
                 ) from exc2
 
@@ -276,29 +294,31 @@ def render_timeline(
     options: RenderOptions,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """OTIO タイムラインを FFmpeg で実体化する（§3 データフロー）。
+    """Materialise an OTIO timeline with FFmpeg (§3 data flow).
 
-    非破壊: 入力 timeline ファイル・元素材メディアは一切書き換えない。
-    出力は新規生成した動画ファイルのパスを artifacts に返す。
+    Non-destructive: the input timeline file and source media are never
+    modified. The output is a newly generated video file whose path is returned
+    in artifacts.
 
-    フロー:
-      1. 入力検証（timeline/output の存在・拡張子・上書き・パス衝突）
-      2. load_timeline → resolve_kept_ranges → 全ユニークソースの検証・probe
+    Flow:
+      1. Input validation (timeline/output existence, extension, overwrite, path
+         collision)
+      2. load_timeline → resolve_kept_ranges → validate/probe all unique sources
       3. build_plan(ranges, probe_info, options, source_probes=source_probes)
-      4a. dry_run=True  → 計画要約を ok_result（ffmpeg は呼ばない）
-      4b. dry_run=False → ffmpeg を1回 run → output 存在確認 → ok_result
+      4a. dry_run=True  → return plan summary as ok_result (ffmpeg not called)
+      4b. dry_run=False → run ffmpeg once → verify output exists → ok_result
 
     Args:
-        timeline: 入力 OTIO タイムラインファイルパス。
-        output: 出力動画ファイルパス。
-        options: RenderOptions（コーデック/解像度/fps/crf/overwrite）。
-        dry_run: True のとき ffmpeg を呼ばず計画のみを返す。
+        timeline: input OTIO timeline file path.
+        output: output video file path.
+        options: RenderOptions (codec/resolution/fps/crf/overwrite).
+        dry_run: when True, returns the plan only without calling ffmpeg.
 
     Returns:
-        ok_result または error_result のエンベロープ dict。
+        ok_result or error_result envelope dict.
 
     Raises:
-        なし（すべての ClipwrightError を error_result に変換して返す）。
+        None (all ClipwrightErrors are converted to error_result and returned).
     """
     try:
         return _render_inner(timeline, output, options, dry_run)
@@ -312,205 +332,211 @@ def _render_inner(
     options: RenderOptions,
     dry_run: bool,
 ) -> dict[str, Any]:
-    """render の内部実装。ClipwrightError をそのまま送出する。
+    """Internal implementation of render. Raises ClipwrightError directly.
 
-    BGM オーケストレーション拡張（§7 ADR-B4-r2/B5-r2/B6-r2/B8）:
-    - resolve_bgm(tl) で A2 Audio トラックの BGM クリップを検出する。
-    - BGM クリップがある場合、BGM ソースにも全ソース境界検証を適用する（ADR-B8）。
-    - build_plan に bgm=BgmClip を渡す（None でも従来同一・後方互換・ADR-B7）。
-    - plan.bgm_source がある場合、-i 並びに -stream_loop -1 を前置して
-      BGM を末尾に追加する（ADR-B6-r2/DC-AS-005）。
+    BGM orchestration extension (§7 ADR-B4-r2/B5-r2/B6-r2/B8):
+    - Detects BGM clips from the A2 Audio track using resolve_bgm(tl).
+    - When a BGM clip is present, applies all-source boundary validation to the
+      BGM source as well (ADR-B8).
+    - Passes bgm=BgmClip to build_plan (None also works identically; backward
+      compatible; ADR-B7).
+    - When plan.bgm_source is set, prepends -stream_loop -1 and appends BGM as
+      the last -i (ADR-B6-r2/DC-AS-005).
     """
     timeline_path = Path(timeline)
     output_path = Path(output)
 
-    # --- 1. 入力検証（timeline 存在確認）---
+    # --- 1. Input validation (timeline existence check) ---
 
-    # timeline ファイル存在確認
+    # Verify timeline file exists
     if not timeline_path.exists():
         raise ClipwrightError(
             code=ErrorCode.FILE_NOT_FOUND,
-            message=f"タイムラインファイルが見つかりません: {timeline_path.name}",
-            hint="有効な .otio ファイルパスを指定してください。",
+            message=f"Timeline file not found: {timeline_path.name}",
+            hint="Specify a valid .otio file path.",
         )
 
-    # --- 2. OTIO 解析（先行）---
-    # BGM ソースと output の比較を出力拡張子チェックより先に行うため、
-    # OTIO 解析を前倒しにする（ADR-B8・output==BGM で PATH_NOT_ALLOWED 優先）。
+    # --- 2. OTIO analysis (upfront) ---
+    # OTIO analysis is done early so that the BGM source / output comparison can
+    # be performed before the output extension check (ADR-B8: PATH_NOT_ALLOWED
+    # for output==BGM takes precedence).
     tl = load_timeline(timeline)
     ranges = resolve_kept_ranges(tl)
 
-    # 全ユニークソースを出現順で取得する（ADR-C9-r2）
-    # unique_sources_in_order は plan.py の単一情報源（ADR-C9-r2）
+    # Obtain all unique sources in order of appearance (ADR-C9-r2).
+    # unique_sources_in_order is the single source of truth in plan.py
+    # (ADR-C9-r2)
     unique_sources = unique_sources_in_order(ranges)
 
-    # --- 2b. BGM クリップ検出（ADR-B4-r2）---
-    # A2 Audio トラックの kind=="bgm" クリップを検出する。
-    # 複数 BGM クリップは UNSUPPORTED_OPERATION（resolve_bgm が送出）。
+    # --- 2b. Detect BGM clip (ADR-B4-r2) ---
+    # Detects kind=="bgm" clips from A2 Audio tracks. Multiple BGM clips raise
+    # UNSUPPORTED_OPERATION (resolve_bgm).
     bgm_clip: BgmClip | None = resolve_bgm(tl)
 
-    # BGM ソースと output の早期パス衝突確認（ADR-B8・PATH_NOT_ALLOWED 優先）
-    # output == BGM ソース は拡張子チェックより前に検出する（非破壊保証）。
+    # Early path collision check for BGM source vs output (ADR-B8;
+    # PATH_NOT_ALLOWED priority). output == BGM source is detected before the
+    # extension check (non-destructive guarantee).
     if isinstance(bgm_clip, BgmClip):
         _check_path_not_allowed(output_path, bgm_clip.source)
 
-    # --- 3. 出力の入力検証 ---
+    # --- 3. Output input validation ---
 
-    # 出力拡張子ホワイトリスト確認（DC-AM-003）
+    # Verify output extension whitelist (DC-AM-003)
     output_ext = output_path.suffix.lower()
     if output_ext not in _ALLOWED_EXTENSIONS:
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
             message=(
-                f"出力ファイルの拡張子が不正です: {output_ext!r}。"
-                f"許可されている拡張子: {sorted(_ALLOWED_EXTENSIONS)}"
+                f"Output file extension is invalid: {output_ext!r}."
+                f" Allowed extensions: {sorted(_ALLOWED_EXTENSIONS)}"
             ),
             hint=(
-                "出力ファイルパスの拡張子を .mp4 / .mkv / .mov / .webm"
-                " のいずれかにしてください。"
+                "Set the output file path extension to one of"
+                " .mp4 / .mkv / .mov / .webm."
             ),
         )
 
-    # 出力親ディレクトリ存在確認（自動作成しない・DC-GP-005）
-    # フルパスを error.message に含めない（Sec M-1）
+    # Verify output parent directory exists (not auto-created; DC-GP-005)
+    # Full path is not included in error.message (Sec M-1)
     if not output_path.parent.exists():
         raise ClipwrightError(
             code=ErrorCode.FILE_NOT_FOUND,
             message=(
-                "出力先ディレクトリが存在しません。"
-                "指定 output の親ディレクトリを確認してください。"
+                "Output directory does not exist."
+                " Check the parent directory of the specified output."
             ),
-            hint="出力先ディレクトリを先に作成してから再実行してください。",
+            hint="Create the output directory first, then re-run.",
         )
 
-    # --- 4. 全ユニークソースに境界検証・存在確認・パス衝突確認を適用する（ADR-C8）---
+    # --- 4. Apply boundary validation, existence check, and path collision check
+    #        to all unique sources (ADR-C8) ---
     for src in unique_sources:
-        # source がタイムラインと同一ディレクトリ配下にあることを検証する（Sec M-2）
+        # Verify source is within the same directory as the timeline (Sec M-2)
         _check_source_within_timeline_dir(timeline_path, src)
 
-        # output == source チェック（PATH_NOT_ALLOWED・DC-AM-002）
+        # output == source check (PATH_NOT_ALLOWED; DC-AM-002)
         _check_path_not_allowed(output_path, src)
 
-        # source ファイル存在確認（DC-GP-005）
+        # Verify source file exists (DC-GP-005)
         if not Path(src).exists():
             raise ClipwrightError(
                 code=ErrorCode.FILE_NOT_FOUND,
-                message=f"ソースメディアファイルが見つかりません: {Path(src).name}",
+                message=f"Source media file not found: {Path(src).name}",
                 hint=(
-                    "OTIO タイムラインに記録されているソースファイルを配置してください。"  # noqa: E501
+                    "Place the source file recorded in the OTIO timeline in the"
+                    " expected location."
                 ),
             )
 
-    # --- 4b. BGM ソースの詳細境界検証（ADR-B8）---
-    # BGM ソースにも既存の全ソース境界検証を適用する。
-    # 早期パス衝突確認（ステップ2b）で output == BGM は既にチェック済み。
+    # --- 4b. Detailed boundary validation for BGM source (ADR-B8) ---
+    # Apply the same all-source boundary validation to the BGM source.
+    # Early path collision check (step 2b) already verified output == BGM.
     if isinstance(bgm_clip, BgmClip):
         bgm_src = bgm_clip.source
         _check_source_within_timeline_dir(timeline_path, bgm_src)
-        # output == bgm_src は早期チェック済みだが、ここでも適用する（二重保護）
+        # output == bgm_src was already checked early, but re-applied here for
+        # defence-in-depth
         _check_path_not_allowed(output_path, bgm_src)
         if not Path(bgm_src).exists():
             raise ClipwrightError(
                 code=ErrorCode.FILE_NOT_FOUND,
-                message=f"BGM ソースファイルが見つかりません: {Path(bgm_src).name}",
+                message=f"BGM source file not found: {Path(bgm_src).name}",
                 hint=(
-                    "OTIO タイムラインに記録されている"
-                    " BGM ソースファイルを配置してください。"
+                    "Place the BGM source file recorded in the OTIO timeline"
+                    " in the expected location."
                 ),
             )
 
-    # --- 4c. 字幕オプションの境界検証・存在確認・拡張子 WL・fonts_dir 検証 ---
-    # options.subtitle が非 None のとき一本化して検証し、絶対パス化する
-    # （ADR-S4-r2/S5-r2）。subtitle=None は完全スキップ（後方互換・ADR-S8）。
+    # --- 4c. Boundary validation, existence check, extension WL, and fonts_dir
+    #         validation for subtitle options ---
+    # When options.subtitle is non-None, validates and resolves to absolute path
+    # (ADR-S4-r2/S5-r2). subtitle=None is completely skipped (backward
+    # compatible; ADR-S8).
     if options.subtitle is not None:
         sub_path_raw = options.subtitle.path
 
-        # 字幕パスが timeline ファイルと同じディレクトリにあることを検証する（ADR-S7）
+        # Verify subtitle is in the same directory as the timeline file (ADR-S7)
         _check_subtitle_within_timeline_dir(timeline_path, sub_path_raw)
 
-        # 字幕ファイル存在確認（FILE_NOT_FOUND・basename のみ・CWE-209）
+        # Verify subtitle file exists (FILE_NOT_FOUND; basename only; CWE-209)
         sub_path_obj = Path(sub_path_raw)
         if not sub_path_obj.exists():
             raise ClipwrightError(
                 code=ErrorCode.FILE_NOT_FOUND,
-                message=f"字幕ファイルが見つかりません: {sub_path_obj.name}",
-                hint=(
-                    "有効な字幕ファイルパスを指定してください（.srt / .vtt / .ass）。"
-                ),
+                message=f"Subtitle file not found: {sub_path_obj.name}",
+                hint=("Specify a valid subtitle file path (.srt / .vtt / .ass)."),
             )
 
-        # 拡張子ホワイトリスト検証（INVALID_INPUT・ADR-S3）
+        # Extension whitelist validation (INVALID_INPUT; ADR-S3)
         sub_ext = sub_path_obj.suffix.lower()
         if sub_ext not in _ALLOWED_SUBTITLE_EXTENSIONS:
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
                 message=(
-                    f"字幕ファイルの拡張子が不正です: {sub_ext!r}。"
-                    f"許可: {sorted(_ALLOWED_SUBTITLE_EXTENSIONS)}"
+                    f"Subtitle file extension is invalid: {sub_ext!r}."
+                    f" Allowed: {sorted(_ALLOWED_SUBTITLE_EXTENSIONS)}"
                 ),
-                hint=(
-                    "字幕ファイルの拡張子を"
-                    " .srt / .vtt / .ass のいずれかにしてください。"
-                ),
+                hint="Set the subtitle file extension to one of .srt / .vtt / .ass.",
             )
 
-        # fonts_dir 指定時: 存在するディレクトリかを検証する（ADR-S7）
-        # 境界強制はしない（システム/同梱フォント置き場を指すのが自然）
+        # When fonts_dir is specified: validate that it is an existing directory
+        # (ADR-S7). Boundary is not enforced (it is natural to point to a
+        # system/bundled font location)
         if options.subtitle.fonts_dir is not None:
             fonts_dir_path = Path(options.subtitle.fonts_dir)
             if not fonts_dir_path.is_dir():
                 raise ClipwrightError(
                     code=ErrorCode.INVALID_INPUT,
                     message=(
-                        "指定された fonts_dir が存在しないか、"
-                        "ディレクトリではありません。"
+                        "The specified fonts_dir does not exist or is not a directory."
                     ),
-                    hint=(
-                        "有効なフォントディレクトリのパスを"
-                        " fonts_dir に指定してください。"
-                    ),
+                    hint="Specify a valid font directory path in fonts_dir.",
                 )
 
-        # 字幕パス・fonts_dir を絶対パス化して options に反映する（ADR-S5-r2）
-        # filename=/fontsdir= が cwd 非依存に開けるよう resolve() を適用する。
-        # Pydantic モデルのため model_copy で新規インスタンスを生成する。
+        # Resolve subtitle path and fonts_dir to absolute paths and update
+        # options (ADR-S5-r2). resolve() is applied so filename=/fontsdir= can be
+        # opened without depending on cwd. A new instance is created via
+        # model_copy (Pydantic model is immutable).
         subtitle_abs = str(sub_path_obj.resolve())
         update_dict: dict[str, Any] = {"path": subtitle_abs}
         if options.subtitle.fonts_dir is not None:
-            # fonts_dir も絶対パス化する（SR-INJ-002・ADR-S5-r2 適用範囲拡張）
+            # Also resolve fonts_dir to absolute (SR-INJ-002; ADR-S5-r2 scope extension)
             update_dict["fonts_dir"] = str(Path(options.subtitle.fonts_dir).resolve())
         updated_subtitle = options.subtitle.model_copy(update=update_dict)
         options = options.model_copy(update={"subtitle": updated_subtitle})
 
-    # output 既存 + overwrite=False → INVALID_INPUT（DC-AM-002）
+    # output exists + overwrite=False → INVALID_INPUT (DC-AM-002)
     if output_path.exists() and not options.overwrite:
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message=f"出力ファイルが既に存在します: {output_path.name}",
-            hint=("既存ファイルを上書きする場合は overwrite=True を指定してください。"),
+            message=f"Output file already exists: {output_path.name}",
+            hint="Specify overwrite=True to overwrite the existing file.",
         )
 
-    # --- 3. 全ユニークソースを probe して source_probes を構築（ADR-C8 / ADR-C2-r2）---
+    # --- 3. Probe all unique sources and build source_probes (ADR-C8 /
+    #         ADR-C2-r2) ---
     source_probes: dict[str, ProbeInfo] = {}
     for src in unique_sources:
         source_probes[src] = _probe(src)
 
-    # 先頭ソースの ProbeInfo を probe_info として渡す（単一ソース経路の後方互換）
+    # Pass the first source's ProbeInfo as probe_info (backward compatible for
+    # single-source path)
     first_source = unique_sources[0]
     probe_info = source_probes[first_source]
 
-    # --- 4. denoise / loudness メタデータ読み出し ---
-    # timeline-level metadata["clipwright"] から denoise / loudness を読み出す。
-    # None のときは後方互換でそれぞれなし（既存テスト非回帰・ADR-L6）。
-    # 存在するときは build_plan 内で各 Directive 検証を行い、
-    # 不正なら INVALID_INPUT が送出される。
+    # --- 4. Read denoise / loudness metadata ---
+    # Read denoise / loudness from timeline-level metadata["clipwright"].
+    # When None, each is absent (backward compatible; ADR-L6). When present,
+    # each Directive is validated inside build_plan; invalid values raise
+    # INVALID_INPUT.
     clipwright_meta = get_clipwright_metadata(tl)
     raw_denoise = clipwright_meta.get("denoise")
     raw_loudness = clipwright_meta.get("loudness")
 
     # --- 5. build_plan ---
-    # source_probes を渡して複数ソース経路を有効にする（ADR-C2-r2 / ADR-C9-r2）
-    # bgm_clip を渡して BGM 音声チェーンを組み込む（ADR-B5-r2・bgm=None で後方互換）
+    # Pass source_probes to enable multi-source path (ADR-C2-r2 / ADR-C9-r2).
+    # Pass bgm_clip for BGM audio chain integration (ADR-B5-r2; bgm=None for
+    # backward compat)
     plan = build_plan(
         ranges,
         probe_info,
@@ -524,14 +550,14 @@ def _render_inner(
     # --- 6a. dry_run ---
     if dry_run:
         size_info = (
-            f"、概算サイズ {plan.estimated_size_bytes / 1024 / 1024:.1f} MB"
+            f", estimated size {plan.estimated_size_bytes / 1024 / 1024:.1f} MB"
             if plan.estimated_size_bytes is not None
-            else "、概算サイズ算出不可"
+            else ", estimated size unavailable"
         )
         summary = (
-            f"[dry_run] {plan.segment_count} 区間・"
-            f"総尺 {plan.total_duration_seconds:.2f} 秒{size_info}。"
-            f"ffmpeg を実行すると {output_path.name} を生成します。"
+            f"[dry_run] {plan.segment_count} segment(s),"
+            f" total duration {plan.total_duration_seconds:.2f}s{size_info}."
+            f" Running ffmpeg would generate {output_path.name}."
         )
         return ok_result(
             summary,
@@ -545,22 +571,23 @@ def _render_inner(
             warnings=plan.warnings,
         )
 
-    # --- 6b. 実行 ---
+    # --- 6b. Execute ---
     ffmpeg = resolve_tool("ffmpeg", "CLIPWRIGHT_FFMPEG")
     timeout = max(300, math.ceil(plan.total_duration_seconds * 10))
 
-    # overwrite フラグ（-y / -n）
+    # Overwrite flag (-y / -n)
     overwrite_flag = ["-y"] if options.overwrite else ["-n"]
 
-    # -i 並びは plan.input_sources をそのまま使う（ADR-C9-r2）
-    # render.py で順序を再計算しない（二重実装排除）
+    # -i list taken directly from plan.input_sources (ADR-C9-r2).
+    # Order is not recalculated in render.py (eliminates duplicate logic)
     inputs: list[str] = []
     for src in plan.input_sources:
         inputs += ["-i", src]
 
-    # BGM がある場合、-stream_loop -1 を前置して BGM を末尾 -i として追加する
-    # （ADR-B6-r2/DC-AS-005）。-stream_loop は入力オプションのため -i の直前に置く。
-    # BGM index == len(plan.input_sources) の不変条件を維持する（DC-AS-005）。
+    # When BGM is present, prepend -stream_loop -1 and append BGM as the last
+    # -i (ADR-B6-r2/DC-AS-005). -stream_loop is an input option; it must
+    # immediately precede -i. The invariant BGM index == len(plan.input_sources)
+    # is maintained (DC-AS-005).
     if plan.bgm_source is not None:
         inputs += ["-stream_loop", "-1", "-i", plan.bgm_source]
 
@@ -568,19 +595,19 @@ def _render_inner(
 
     run(cmd, timeout=float(timeout))
 
-    # output ファイル存在確認
+    # Verify output file exists
     if not output_path.exists():
         raise ClipwrightError(
             code=ErrorCode.SUBPROCESS_FAILED,
-            message="ffmpeg が正常終了しましたが出力ファイルが生成されませんでした。",
-            hint="ffmpeg のコマンド引数・出力パスを確認してください。",
+            message="ffmpeg exited successfully but the output file was not generated.",
+            hint="Check the ffmpeg command arguments and output path.",
         )
 
     output_size = output_path.stat().st_size
     summary = (
-        f"{plan.segment_count} クリップを連結し"
-        f"総尺 {plan.total_duration_seconds:.2f} 秒の動画を生成しました"
-        f"（{output_size / 1024 / 1024:.1f} MB）。"
+        f"Concatenated {plan.segment_count} clip(s) and generated a video of"
+        f" {plan.total_duration_seconds:.2f}s"
+        f" ({output_size / 1024 / 1024:.1f} MB)."
     )
     return ok_result(
         summary,

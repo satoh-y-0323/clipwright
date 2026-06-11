@@ -1,26 +1,28 @@
-"""test_e2e_loudness.py — loudnorm/peak の実 e2e テスト（task_id: e2e-loudnorm）。
+"""test_e2e_loudness.py — Real e2e tests for loudnorm/peak (task_id: e2e-loudnorm).
 
-設計根拠:
-  - architecture-report-20260611-114314 §4・§9
-  - ADR-L1: loudnorm linear 二段適用（detect が measured_* を取得 → render が linear=true で適用）
-  - ADR-L2: peak は volumedetect で max_volume を取り volume フィルタで差分ゲインを当てる
-  - DC-GP-001: フィクスチャはピンクノイズ（sine は LRA が極端値になり assert 不安定）
-  - DC-AM-002: peak + denoise 併用の厳密 e2e はスコープ外（denoise なし peak のみ）
-  - B-3（noise の教訓）: ネガティブ対照 — loudness 指示なしでは目標へ寄らないことを assert
+Design rationale:
+  - architecture-report-20260611-114314 §4, §9
+  - ADR-L1: loudnorm two-pass linear apply (detect obtains measured_* -> render applies
+    linear=true)
+  - ADR-L2: peak uses volumedetect max_volume and applies differential gain via volume filter
+  - DC-GP-001: fixtures use pink noise (sine has extreme LRA values making asserts unstable)
+  - DC-AM-002: strict e2e for peak + denoise combination is out of scope (peak only, no denoise)
+  - B-3 (noise lesson): negative control — assert that output does not converge to target
+    without a loudness directive
 
-テスト構成:
-  1. フィクスチャ生成 (ピンクノイズ動画、約 -35 LUFS / max -21 dB)
-  2. loudnorm e2e: detect_loudness → render_timeline → 出力を ebur128/loudnorm で再測定
-     - assert: 出力ラウドネスが目標 I=-14 LUFS の ±2 LU 以内
-  3. ネガティブ対照: loudness 指示なし render の出力が目標から外れることを assert
-  4. peak e2e: detect_loudness(mode=peak) → render_timeline → volumedetect で再測定
-     - assert: 出力 max_volume が目標 peak_db=-1.0 dBの ±1.5 dB 以内
-  5. render 拡張反映の最小 assert: loudness 指示 timeline で render が ok=True を返す
+Test layout:
+  1. Fixture generation (pink noise video, approx -35 LUFS / max -21 dB)
+  2. loudnorm e2e: detect_loudness -> render_timeline -> remeasure with ebur128/loudnorm
+     - assert: output loudness within ±2 LU of target I=-14 LUFS
+  3. Negative control: assert that loudness-directive-free render does not reach target
+  4. peak e2e: detect_loudness(mode=peak) -> render_timeline -> remeasure with volumedetect
+     - assert: output max_volume within ±1.5 dB of target peak_db=-1.0 dB
+  5. Minimum assert for render extension: loudness-annotated timeline returns ok=True
 
-実行方法（ffmpeg 不在時は skip）:
+How to run (skipped when ffmpeg is absent):
   uv run --package clipwright-render pytest -k e2e_loudness
 
-ffmpeg を PATH に通すか CLIPWRIGHT_FFMPEG 環境変数で指定すること。
+Set ffmpeg on PATH or specify via CLIPWRIGHT_FFMPEG env var.
 """
 
 from __future__ import annotations
@@ -41,12 +43,12 @@ from clipwright_render.render import render_timeline
 from clipwright_render.schemas import RenderOptions
 
 # ===========================================================================
-# ffmpeg / ffprobe パス解決（conftest.py の require_ffmpeg と同パターン）
+# ffmpeg / ffprobe binary resolution (same pattern as conftest.py require_ffmpeg)
 # ===========================================================================
 
 
 def _find_binary(name: str, env_var: str) -> str | None:
-    """バイナリを PATH → env_var の順で探す。"""
+    """Search for a binary in PATH first, then fall back to env_var."""
     found = shutil.which(name)
     if found:
         return found
@@ -64,35 +66,38 @@ pytestmark = pytest.mark.e2e
 requires_ffmpeg = pytest.mark.skipif(
     _FFMPEG is None,
     reason=(
-        "ffmpeg が見つかりません。"
-        "PATH に ffmpeg を追加するか "
-        "CLIPWRIGHT_FFMPEG 環境変数にフルパスを設定してください。"
+        "ffmpeg not found. "
+        "Add ffmpeg to PATH or "
+        "set the CLIPWRIGHT_FFMPEG environment variable to its full path."
     ),
 )
 
 # ===========================================================================
-# ヘルパー: ピンクノイズフィクスチャ生成
+# Helpers: pink noise fixture generation
 # ===========================================================================
 
 _DURATION_SEC = 5.0
 _RATE = 25.0
-_PINK_AMPLITUDE = 0.1  # 約 -35 LUFS になるよう調整済み（実機確認済み）
-# e2e テスト全体の subprocess タイムアウト秒数（CR-T-001 定数化）。
-# CI 環境変数 E2E_TIMEOUT_SEC で上書き可能にすることで CI チューニングの道筋を確保する。
+_PINK_AMPLITUDE = (
+    0.1  # Adjusted to produce approximately -35 LUFS (verified on real hardware)
+)
+# Subprocess timeout in seconds for all e2e tests (CR-T-001 constant).
+# Overridable via CI env var E2E_TIMEOUT_SEC to allow CI tuning.
 _E2E_TIMEOUT: int = int(os.environ.get("E2E_TIMEOUT_SEC", "120"))
-# ネガティブ対照の前提条件: 入力 LUFS がこれより低いこと（L-5 pre-condition）。
-# フィクスチャの振幅 0.1 が想定通り約 -35 LUFS 付近に収まることを保証する。
+# Pre-condition for negative control: input LUFS must be lower than this (L-5 pre-condition).
+# Ensures fixture amplitude 0.1 falls around -35 LUFS as expected.
 _PRE_CONDITION_MAX_LUFS = -25.0
 
 
 def _make_pink_noise_video(
     ffmpeg: str, output: Path, duration: float = _DURATION_SEC
 ) -> None:
-    """ピンクノイズ＋testsrc の動画を生成する（DC-GP-001）。
+    """Generate a pink-noise + testsrc video (DC-GP-001).
 
-    ピンクノイズは LRA が安定しており loudnorm の収束 assert に適している。
-    sine 単音は LRA が極端値（0.00 または inf）になり assert が不安定になるため不可。
-    振幅 0.1 で約 -35 LUFS / max_volume 約 -21 dB になる（実機確認済み）。
+    Pink noise has stable LRA and is suitable for loudnorm convergence asserts.
+    Sine tones produce extreme LRA values (0.00 or inf) that make asserts unstable.
+    Amplitude 0.1 produces approximately -35 LUFS / max_volume approximately -21 dB
+    (verified on real hardware).
     """
     cmd = [
         ffmpeg,
@@ -116,7 +121,8 @@ def _make_pink_noise_video(
         "yuv420p",
         str(output),
     ]
-    # e2e フィクスチャ/測定用ヘルパー専用: process.run の代わりに直接呼び出しを許容（MEMORY.md 承認済み例外）
+    # Dedicated to e2e fixture/measurement helpers: direct subprocess call allowed
+    # instead of process.run (approved exception in MEMORY.md)
     result = subprocess.run(
         cmd,
         capture_output=True,
@@ -124,13 +130,11 @@ def _make_pink_noise_video(
         errors="replace",
         timeout=_E2E_TIMEOUT,
     )
-    assert result.returncode == 0, (
-        f"フィクスチャ生成に失敗しました: {result.stderr[:400]}"
-    )
+    assert result.returncode == 0, f"Fixture generation failed: {result.stderr[:400]}"
 
 
 def _measure_integrated_loudness(ffmpeg: str, media: Path) -> float:
-    """loudnorm print_format=json で統合ラウドネス（input_i）を測定して返す（LUFS）。"""
+    """Measure and return integrated loudness (input_i) via loudnorm print_format=json (LUFS)."""
     cmd = [
         ffmpeg,
         "-i",
@@ -148,16 +152,14 @@ def _measure_integrated_loudness(ffmpeg: str, media: Path) -> float:
         errors="replace",
         timeout=_E2E_TIMEOUT,
     )
-    assert result.returncode == 0, f"loudnorm 測定に失敗しました: {result.stderr[:400]}"
+    assert result.returncode == 0, f"loudnorm measurement failed: {result.stderr[:400]}"
     m = re.search(r'"input_i"\s*:\s*"([-0-9.]+)"', result.stderr)
-    assert m is not None, (
-        f"loudnorm JSON の input_i が見つかりません:\n{result.stderr[-600:]}"
-    )
+    assert m is not None, f"loudnorm JSON input_i not found:\n{result.stderr[-600:]}"
     return float(m.group(1))
 
 
 def _measure_max_volume(ffmpeg: str, media: Path) -> float:
-    """volumedetect で max_volume を測定して返す（dB）。"""
+    """Measure and return max_volume via volumedetect (dB)."""
     cmd = [
         ffmpeg,
         "-i",
@@ -176,20 +178,20 @@ def _measure_max_volume(ffmpeg: str, media: Path) -> float:
         timeout=_E2E_TIMEOUT,
     )
     assert result.returncode == 0, (
-        f"volumedetect 測定に失敗しました: {result.stderr[:400]}"
+        f"volumedetect measurement failed: {result.stderr[:400]}"
     )
     m = re.search(r"max_volume:\s*([-0-9.]+)\s*dB", result.stderr)
-    assert m is not None, f"max_volume が見つかりません:\n{result.stderr[-400:]}"
+    assert m is not None, f"max_volume not found:\n{result.stderr[-400:]}"
     return float(m.group(1))
 
 
 def _measure_loudnorm_all(ffmpeg: str, media: Path) -> dict[str, float]:
-    """loudnorm print_format=json の数値フィールドを返す。
+    """Return numeric fields from loudnorm print_format=json.
 
-    loudnorm JSON には 'normalization_type' のような文字列フィールドが混在するため、
-    float 変換可能なフィールドのみ抽出する（-inf/inf は ValidationError 相当で除外）。
-    必要な 5 フィールド（input_i/input_tp/input_lra/input_thresh/target_offset）が
-    すべて存在することも確認する。
+    The loudnorm JSON contains string fields such as 'normalization_type', so only
+    fields convertible to float are extracted (-inf/inf are excluded as a
+    ValidationError equivalent). Also verifies that all 5 required fields
+    (input_i/input_tp/input_lra/input_thresh/target_offset) are present.
     """
     cmd = [
         ffmpeg,
@@ -208,10 +210,11 @@ def _measure_loudnorm_all(ffmpeg: str, media: Path) -> dict[str, float]:
         errors="replace",
         timeout=_E2E_TIMEOUT,
     )
-    assert result.returncode == 0, f"loudnorm 測定に失敗しました: {result.stderr[:400]}"
-    # analyze.py H-1 修正と同パターン: re.search は stderr 先頭の {} ブロックにマッチするリスクがある。
-    # re.findall で全候補を収集し、末尾から required_keys を持つブロックを採用する。
-    # ffmpeg は loudnorm JSON を stderr 末尾に出力するが、バージョンによって先行する {} が混在しうる。
+    assert result.returncode == 0, f"loudnorm measurement failed: {result.stderr[:400]}"
+    # Same pattern as analyze.py H-1 fix: re.search risks matching an early {} block in stderr.
+    # Collect all candidates with re.findall and select the last block containing required_keys.
+    # ffmpeg outputs loudnorm JSON at the end of stderr, but preceding {} blocks may appear
+    # depending on the ffmpeg version.
     required_keys = [
         "input_i",
         "input_tp",
@@ -229,20 +232,20 @@ def _measure_loudnorm_all(ffmpeg: str, media: Path) -> dict[str, float]:
         if all(k in parsed for k in required_keys):
             raw = parsed
             break
-    assert raw is not None, f"loudnorm JSON が見つかりません:\n{result.stderr[-600:]}"
+    assert raw is not None, f"loudnorm JSON not found:\n{result.stderr[-600:]}"
     out: dict[str, float] = {}
     for k, v in raw.items():
         try:  # noqa: SIM105
             out[k] = float(v)
         except (ValueError, TypeError):
-            pass  # "dynamic" などの文字列フィールドは無視
+            pass  # ignore string fields such as "dynamic"
     for key in required_keys:
-        assert key in out, f"loudnorm JSON に必須フィールド '{key}' がありません: {raw}"
+        assert key in out, f"loudnorm JSON missing required field '{key}': {raw}"
     return out
 
 
 # ===========================================================================
-# ヘルパー: OTIO タイムライン構築
+# Helpers: OTIO timeline construction
 # ===========================================================================
 
 
@@ -251,7 +254,7 @@ def _make_single_clip_timeline(
     duration_sec: float = _DURATION_SEC,
     rate: float = _RATE,
 ) -> otio.schema.Timeline:
-    """単一クリップ（ソース全体）の OTIO タイムラインを生成する。"""
+    """Generate a single-clip (full source) OTIO timeline."""
     ref = otio.schema.ExternalReference(target_url=str(source_path))
     clip = otio.schema.Clip(
         name=source_path.name,
@@ -271,39 +274,39 @@ def _make_single_clip_timeline(
 def _set_loudness_directive(
     timeline: otio.schema.Timeline, directive: dict[str, Any]
 ) -> None:
-    """timeline-level metadata に loudness 指示を書き込む。"""
+    """Write a loudness directive into timeline-level metadata."""
     meta = get_clipwright_metadata(timeline)
     meta["loudness"] = directive
     set_clipwright_metadata(timeline, meta)
 
 
 # ===========================================================================
-# テスト
+# Tests
 # ===========================================================================
 
 
 @requires_ffmpeg
 class TestLoudnormE2E:
-    """loudnorm モードの実 e2e テスト（フィクスチャ → detect → render → 再測定）。"""
+    """Real e2e tests for loudnorm mode (fixture -> detect -> render -> remeasure)."""
 
     def test_loudnorm_converges_to_target_i(self, tmp_path: Path) -> None:
-        """loudnorm 適用後の統合ラウドネスが目標 I=-14 LUFS の ±2 LU 以内に収束する（ADR-L1）。
+        """Integrated loudness after loudnorm converges within ±2 LU of target I=-14 LUFS (ADR-L1).
 
-        前提: ピンクノイズフィクスチャは約 -35 LUFS（目標から約 21 LU 離れた素材）。
-        loudnorm linear=true による二段適用で目標へ寄ることを実測で確認する。
-        許容幅 ±2 LU は実機確認から確定（実測差 ~0.66 LU）。
+        Precondition: pink noise fixture is approximately -35 LUFS (about 21 LU from target).
+        Verify on real hardware that two-pass loudnorm linear=true brings it to target.
+        Tolerance ±2 LU confirmed from real hardware (measured diff ~0.66 LU).
         """
-        assert _FFMPEG is not None  # skipif で保証済みだが型チェック用
+        assert _FFMPEG is not None  # guaranteed by skipif, but needed for type checker
         source = tmp_path / "source.mp4"
         _make_pink_noise_video(_FFMPEG, source)
 
-        # 入力ラウドネスを測定
+        # Measure input loudness
         input_i = _measure_integrated_loudness(_FFMPEG, source)
 
-        # loudnorm 測定（detect フェーズ）
+        # loudnorm measurement (detect phase)
         measured_raw = _measure_loudnorm_all(_FFMPEG, source)
 
-        # LoudnessDirective を構築して timeline に書き込む
+        # Build LoudnessDirective and write it to the timeline
         directive: dict[str, Any] = {
             "tool": "clipwright-loudness",
             "version": "0.1.0",
@@ -325,31 +328,31 @@ class TestLoudnormE2E:
         timeline_path = tmp_path / "timeline.otio"
         otio.adapters.write_to_file(timeline, str(timeline_path))
 
-        # render（同一 dir 制約: source / timeline.otio / out.mp4 すべて tmp_path 直下）
+        # render (same-dir constraint: source / timeline.otio / out.mp4 all under tmp_path)
         out_path = tmp_path / "out.mp4"
         result = render_timeline(
             str(timeline_path), str(out_path), RenderOptions(), dry_run=False
         )
-        assert result["ok"] is True, f"render が失敗しました: {result}"
-        assert out_path.exists(), "出力ファイルが生成されていません"
+        assert result["ok"] is True, f"render failed: {result}"
+        assert out_path.exists(), "Output file was not created"
 
-        # 出力ラウドネスを再測定
+        # Remeasure output loudness
         output_i = _measure_integrated_loudness(_FFMPEG, out_path)
 
         target_i = -14.0
-        tolerance = 2.0  # ±2 LU（実機確認: 差 ~0.66 LU）
+        tolerance = 2.0  # ±2 LU (real hardware: diff ~0.66 LU)
         diff = abs(output_i - target_i)
 
         assert diff <= tolerance, (
-            f"loudnorm 収束が許容幅を超えています:\n"
-            f"  入力ラウドネス: {input_i:.2f} LUFS\n"
-            f"  出力ラウドネス: {output_i:.2f} LUFS\n"
-            f"  目標: {target_i} LUFS\n"
-            f"  差分: {diff:.2f} LU（許容: ±{tolerance} LU）"
+            f"loudnorm convergence exceeds tolerance:\n"
+            f"  input loudness:  {input_i:.2f} LUFS\n"
+            f"  output loudness: {output_i:.2f} LUFS\n"
+            f"  target: {target_i} LUFS\n"
+            f"  diff: {diff:.2f} LU (allowed: ±{tolerance} LU)"
         )
 
     def test_render_with_loudnorm_returns_ok(self, tmp_path: Path) -> None:
-        """loudness 指示付き timeline で render が UNSUPPORTED にならず ok=True を返す（最小 assert）。"""
+        """Loudness-annotated timeline render returns ok=True without UNSUPPORTED (minimum assert)."""
         assert _FFMPEG is not None
         source = tmp_path / "source.mp4"
         _make_pink_noise_video(_FFMPEG, source)
@@ -382,47 +385,48 @@ class TestLoudnormE2E:
         )
 
         assert result["ok"] is True, (
-            f"loudness 指示付き timeline の render が失敗しました: {result.get('error')}"
+            f"Loudness-annotated timeline render failed: {result.get('error')}"
         )
-        assert out_path.exists(), "出力ファイルが生成されていません"
-        assert out_path.stat().st_size > 0, "出力ファイルのサイズが 0 です"
+        assert out_path.exists(), "Output file was not created"
+        assert out_path.stat().st_size > 0, "Output file size is 0"
 
 
 @requires_ffmpeg
 class TestLoudnormNegativeControl:
-    """ネガティブ対照: loudness 指示なし render の出力は目標ラウドネスへ寄らない（B-3 教訓）。
+    """Negative control: render without loudness directive does not converge to target (B-3 lesson).
 
-    loudnorm 効果が loudness 指示によるものであることを切り分けるために必要。
-    loudness なし → render しても入力ラウドネスのまま（目標から大きく外れる）。
+    Required to confirm that loudnorm effect is caused by the loudness directive.
+    No loudness -> render leaves input loudness unchanged (far from target).
     """
 
     def test_no_loudness_directive_does_not_converge_to_target(
         self, tmp_path: Path
     ) -> None:
-        """loudness 指示なし render では出力ラウドネスが目標 I=-14 から外れたまま（対照実験）。
+        """Render without loudness directive leaves output loudness far from target I=-14 (control).
 
-        入力が -35 LUFS 程度のときは出力も同程度（±5 LU 以上は外れている）ことを確認。
-        これにより test_loudnorm_converges_to_target_i の効果が loudnorm 指示によるものと確認できる。
+        When input is approximately -35 LUFS, output should remain around the same level
+        (more than ±5 LU from target). This confirms that the effect in
+        test_loudnorm_converges_to_target_i is caused by the loudnorm directive.
         """
         assert _FFMPEG is not None
         source = tmp_path / "source.mp4"
         _make_pink_noise_video(_FFMPEG, source)
 
-        # 入力ラウドネスを確認（-35 LUFS 程度のはず）
+        # Verify input loudness (should be approximately -35 LUFS)
         input_i = _measure_integrated_loudness(_FFMPEG, source)
 
-        # pre-condition: フィクスチャが十分に低い LUFS であることを確認する（L-5）。
-        # _PINK_AMPLITUDE=0.1 が意図通り約 -35 LUFS に収まっているかを早期検出する。
-        # ffmpeg バージョン変更等でフィクスチャの LUFS が変わった場合にこの assert が失敗し
-        # ネガティブ対照の前提が崩れていることをすぐに検知できる。
+        # pre-condition: verify fixture LUFS is sufficiently low (L-5).
+        # Early-detect cases where _PINK_AMPLITUDE=0.1 drifts away from ~-35 LUFS.
+        # If fixture LUFS changes (e.g. due to an ffmpeg version update), this assert
+        # fires immediately to signal that the negative control precondition is broken.
         assert input_i <= _PRE_CONDITION_MAX_LUFS, (
-            f"フィクスチャの入力 LUFS が想定より高すぎます（pre-condition 失敗）:\n"
-            f"  入力 LUFS: {input_i:.2f} LUFS\n"
-            f"  期待: {_PRE_CONDITION_MAX_LUFS} LUFS 以下\n"
-            f"  _PINK_AMPLITUDE={_PINK_AMPLITUDE} を調整してください。"
+            f"Fixture input LUFS is higher than expected (pre-condition failure):\n"
+            f"  input LUFS: {input_i:.2f} LUFS\n"
+            f"  expected: <= {_PRE_CONDITION_MAX_LUFS} LUFS\n"
+            f"  Adjust _PINK_AMPLITUDE={_PINK_AMPLITUDE}."
         )
 
-        # loudness 指示なしで timeline を作成
+        # Build timeline without a loudness directive
         timeline = _make_single_clip_timeline(source)
         timeline_path = tmp_path / "timeline.otio"
         otio.adapters.write_to_file(timeline, str(timeline_path))
@@ -431,41 +435,41 @@ class TestLoudnormNegativeControl:
         result = render_timeline(
             str(timeline_path), str(out_path), RenderOptions(), dry_run=False
         )
-        assert result["ok"] is True, f"render が失敗しました: {result}"
+        assert result["ok"] is True, f"render failed: {result}"
 
-        # 出力ラウドネスを測定
+        # Measure output loudness
         output_i = _measure_integrated_loudness(_FFMPEG, out_path)
 
         target_i = -14.0
         diff = abs(output_i - target_i)
 
-        # 目標へ寄っていないこと（差が 5 LU 以上）を確認
-        # 入力 ~-35 LUFS なので loudnorm なし render では同程度になるはず（差 ~21 LU）
+        # Verify output has NOT converged to target (diff must be >= 5 LU)
+        # Input is ~-35 LUFS, so render without loudnorm should remain at similar level (diff ~21 LU)
         min_expected_diff = 5.0
         assert diff >= min_expected_diff, (
-            f"loudness 指示なし render が意図せず目標へ収束しています（ネガティブ対照失敗）:\n"
-            f"  入力ラウドネス: {input_i:.2f} LUFS\n"
-            f"  出力ラウドネス: {output_i:.2f} LUFS\n"
-            f"  目標: {target_i} LUFS\n"
-            f"  差分: {diff:.2f} LU（期待: >{min_expected_diff} LU）"
+            f"Render without loudness directive unexpectedly converged to target (negative control failure):\n"
+            f"  input loudness:  {input_i:.2f} LUFS\n"
+            f"  output loudness: {output_i:.2f} LUFS\n"
+            f"  target: {target_i} LUFS\n"
+            f"  diff: {diff:.2f} LU (expected: > {min_expected_diff} LU)"
         )
 
 
 @requires_ffmpeg
 class TestPeakE2E:
-    """peak モードの実 e2e テスト（denoise なし・DC-AM-002）。"""
+    """Real e2e tests for peak mode (no denoise, DC-AM-002)."""
 
     def test_peak_max_volume_converges_to_target(self, tmp_path: Path) -> None:
-        """peak 適用後の max_volume が目標 peak_db=-1.0 dB の ±1.5 dB 以内に収束する（ADR-L2）。
+        """max_volume after peak apply converges within ±1.5 dB of target peak_db=-1.0 dB (ADR-L2).
 
-        detect_loudness の代わりにここで volumedetect を直接実行して measured を得る（単一 e2e）。
-        denoise なし + peak の組み合わせのみ（DC-AM-002: peak + denoise 併用の厳密 assert はしない）。
+        volumedetect is run directly here instead of calling detect_loudness (single e2e).
+        Only peak without denoise (DC-AM-002: strict assert for peak + denoise is out of scope).
         """
         assert _FFMPEG is not None
         source = tmp_path / "source.mp4"
         _make_pink_noise_video(_FFMPEG, source)
 
-        # max_volume を測定（peak detect フェーズ）
+        # Measure max_volume (peak detect phase)
         max_volume_db_before = _measure_max_volume(_FFMPEG, source)
 
         target_peak_db = -1.0
@@ -488,25 +492,25 @@ class TestPeakE2E:
         result = render_timeline(
             str(timeline_path), str(out_path), RenderOptions(), dry_run=False
         )
-        assert result["ok"] is True, f"peak render が失敗しました: {result}"
-        assert out_path.exists(), "出力ファイルが生成されていません"
+        assert result["ok"] is True, f"peak render failed: {result}"
+        assert out_path.exists(), "Output file was not created"
 
-        # 出力の max_volume を再測定
+        # Remeasure output max_volume
         max_volume_db_after = _measure_max_volume(_FFMPEG, out_path)
 
-        tolerance = 1.5  # ±1.5 dB（実機確認: 差 ~0.3 dB）
+        tolerance = 1.5  # ±1.5 dB (real hardware: diff ~0.3 dB)
         diff = abs(max_volume_db_after - target_peak_db)
 
         assert diff <= tolerance, (
-            f"peak 収束が許容幅を超えています:\n"
-            f"  入力 max_volume: {max_volume_db_before:.1f} dB\n"
-            f"  出力 max_volume: {max_volume_db_after:.1f} dB\n"
-            f"  目標 peak_db: {target_peak_db} dB\n"
-            f"  差分: {diff:.2f} dB（許容: ±{tolerance} dB）"
+            f"peak convergence exceeds tolerance:\n"
+            f"  input max_volume:  {max_volume_db_before:.1f} dB\n"
+            f"  output max_volume: {max_volume_db_after:.1f} dB\n"
+            f"  target peak_db: {target_peak_db} dB\n"
+            f"  diff: {diff:.2f} dB (allowed: ±{tolerance} dB)"
         )
 
     def test_peak_render_returns_ok(self, tmp_path: Path) -> None:
-        """peak 指示付き timeline で render が ok=True を返す（最小 assert）。"""
+        """Peak-annotated timeline render returns ok=True (minimum assert)."""
         assert _FFMPEG is not None
         source = tmp_path / "source.mp4"
         _make_pink_noise_video(_FFMPEG, source)
@@ -534,5 +538,5 @@ class TestPeakE2E:
         )
 
         assert result["ok"] is True, (
-            f"peak 指示付き timeline の render が失敗しました: {result.get('error')}"
+            f"Peak-annotated timeline render failed: {result.get('error')}"
         )

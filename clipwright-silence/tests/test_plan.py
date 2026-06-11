@@ -1,17 +1,17 @@
-"""test_plan.py — plan.py（純ロジック）の Red テスト。
+"""test_plan.py — Red tests for plan.py (pure logic).
 
-対象関数:
+Target function:
   derive_keep_ranges(
       total_duration_sec: float,
       silence_intervals: list[tuple[float, float]],
       options: DetectSilenceOptions,
   ) -> list[tuple[float, float]]
 
-plan.py は ffmpeg を一切実行しない純ロジック。
-silence_threshold_db / min_silence_duration は silencedetect 側責務のため
-derive_keep_ranges には渡さない（padding / min_keep_duration のみ使用）。
+plan.py is pure logic that never runs ffmpeg.
+silence_threshold_db / min_silence_duration are the silencedetect layer's responsibility
+and are not passed to derive_keep_ranges (only padding / min_keep_duration are used).
 
-AD-3 / DC-AM-001 / DC-GP-001 の観点を網羅する。
+Covers the perspectives of AD-3 / DC-AM-001 / DC-GP-001.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from clipwright_silence.plan import _EPSILON, derive_keep_ranges
 from clipwright_silence.schemas import DetectSilenceOptions
 
 # ===========================================================================
-# ヘルパー
+# Helpers
 # ===========================================================================
 
 
@@ -30,7 +30,7 @@ def _opts(
     padding: float = 0.0,
     min_keep_duration: float = 0.0,
 ) -> DetectSilenceOptions:
-    """テスト用 DetectSilenceOptions を構築する（silence 系パラメータは既定値）。"""
+    """Build a DetectSilenceOptions for tests (silence-related parameters use defaults)."""
     return DetectSilenceOptions(
         silence_threshold_db=-30.0,
         min_silence_duration=0.5,
@@ -40,44 +40,44 @@ def _opts(
 
 
 # ===========================================================================
-# ① 無音ゼロ → 全尺 1 区間
+# (1) Zero silence -> full duration as 1 interval
 # ===========================================================================
 
 
 class TestNoSilence:
-    """無音区間が空の場合: 全尺を 1 KEEP として返す（AD-3 §2）。"""
+    """When silence intervals are empty: returns the full duration as 1 KEEP (AD-3 §2)."""
 
     def test_no_silence_returns_full_range(self) -> None:
-        """無音ゼロ → [(0.0, total_duration)] の 1 区間。"""
+        """Zero silence -> 1 interval [(0.0, total_duration)]."""
         keeps = derive_keep_ranges(10.0, [], _opts())
         assert keeps == [(0.0, 10.0)]
 
     def test_no_silence_returns_single_interval(self) -> None:
-        """無音ゼロ: 返却リストの長さは 1。"""
+        """Zero silence: returned list has length 1."""
         keeps = derive_keep_ranges(60.0, [], _opts())
         assert len(keeps) == 1
 
     def test_no_silence_with_padding_still_full_range(self) -> None:
-        """無音ゼロ・padding あり: [(0.0, total)] のまま（クランプで変化なし）。"""
+        """Zero silence with padding: remains [(0.0, total)] (no change after clamp)."""
         keeps = derive_keep_ranges(10.0, [], _opts(padding=1.0))
         assert keeps == [(0.0, 10.0)]
 
 
 # ===========================================================================
-# ② 先頭無音の反転
+# (2) Invert leading silence
 # ===========================================================================
 
 
 class TestLeadingSilence:
-    """先頭が無音の場合: KEEP は無音終了点から始まる（AD-3 §2）。"""
+    """When the start is silence: KEEP begins at the silence end (AD-3 §2)."""
 
     def test_leading_silence_keep_starts_at_silence_end(self) -> None:
-        """先頭 0〜3s が無音 → KEEP は (3.0, 10.0)。"""
+        """Leading 0~3s silence -> KEEP is (3.0, 10.0)."""
         keeps = derive_keep_ranges(10.0, [(0.0, 3.0)], _opts())
         assert keeps == [(3.0, 10.0)]
 
     def test_leading_silence_exact_boundary(self) -> None:
-        """先頭無音の境界: silence_end と keep_start が一致する。"""
+        """Leading silence boundary: silence_end and keep_start coincide."""
         keeps = derive_keep_ranges(5.0, [(0.0, 2.5)], _opts())
         assert len(keeps) == 1
         assert keeps[0][0] == pytest.approx(2.5)
@@ -85,21 +85,21 @@ class TestLeadingSilence:
 
 
 # ===========================================================================
-# ③ 末尾無音の反転 / 複数無音区間の反転
+# (3) Invert trailing silence / invert multiple silence intervals
 # ===========================================================================
 
 
 class TestTrailingAndMultipleSilence:
-    """末尾無音および複数無音区間の反転（AD-3 §2）。"""
+    """Inversion of trailing silence and multiple silence intervals (AD-3 §2)."""
 
     def test_trailing_silence_keep_ends_at_silence_start(self) -> None:
-        """末尾 7〜10s が無音 → KEEP は (0.0, 7.0)。"""
+        """Trailing 7~10s silence -> KEEP is (0.0, 7.0)."""
         keeps = derive_keep_ranges(10.0, [(7.0, 10.0)], _opts())
         assert keeps == [(0.0, 7.0)]
 
     def test_two_silences_three_keeps(self) -> None:
-        """中間無音 2 つ → KEEP 3 区間に反転される。"""
-        # 無音: 2〜3, 6〜7 → KEEP: (0,2), (3,6), (7,10)
+        """2 mid silences -> inverted into 3 KEEP intervals."""
+        # silence: 2~3, 6~7 -> KEEP: (0,2), (3,6), (7,10)
         keeps = derive_keep_ranges(10.0, [(2.0, 3.0), (6.0, 7.0)], _opts())
         assert len(keeps) == 3
         assert keeps[0] == pytest.approx((0.0, 2.0))
@@ -107,13 +107,13 @@ class TestTrailingAndMultipleSilence:
         assert keeps[2] == pytest.approx((7.0, 10.0))
 
     def test_leading_and_trailing_silence_one_keep(self) -> None:
-        """先頭・末尾に無音 → 中間 1 KEEP。"""
+        """Leading and trailing silence -> 1 mid KEEP."""
         keeps = derive_keep_ranges(10.0, [(0.0, 2.0), (8.0, 10.0)], _opts())
         assert keeps == [(2.0, 8.0)]
 
     def test_three_silences_four_keeps(self) -> None:
-        """無音 3 つ → KEEP 4 区間。"""
-        # 無音: 1〜2, 4〜5, 7〜8 → KEEP: (0,1),(2,4),(5,7),(8,10)
+        """3 silence intervals -> 4 KEEP intervals."""
+        # silence: 1~2, 4~5, 7~8 -> KEEP: (0,1),(2,4),(5,7),(8,10)
         keeps = derive_keep_ranges(10.0, [(1.0, 2.0), (4.0, 5.0), (7.0, 8.0)], _opts())
         assert len(keeps) == 4
         assert keeps[0] == pytest.approx((0.0, 1.0))
@@ -123,57 +123,57 @@ class TestTrailingAndMultipleSilence:
 
 
 # ===========================================================================
-# ④ padding 拡張と [0, total] クランプ
+# (4) padding expansion and [0, total] clamp
 # ===========================================================================
 
 
 class TestPaddingClamp:
-    """padding 拡張後に [0, total_duration] へクランプされること（AD-3 §3）。"""
+    """After padding expansion, values must be clamped to [0, total_duration] (AD-3 §3)."""
 
     def test_padding_expands_keep_range(self) -> None:
-        """padding=0.5s: KEEP が前後に 0.5s 拡張される。"""
-        # 無音: 3〜7 → 反転 KEEP: (0,3),(7,10)
-        # padding=0.5 → (0,3.5),(6.5,10) ← クランプ後
+        """padding=0.5s: KEEP is extended by 0.5s on each side."""
+        # silence: 3~7 -> inverted KEEP: (0,3),(7,10)
+        # padding=0.5 -> (0,3.5),(6.5,10) after clamp
         keeps = derive_keep_ranges(10.0, [(3.0, 7.0)], _opts(padding=0.5))
         assert len(keeps) == 2
         assert keeps[0][1] == pytest.approx(3.5)
         assert keeps[1][0] == pytest.approx(6.5)
 
     def test_padding_clamps_start_to_zero(self) -> None:
-        """先頭 KEEP の start が padding で 0 より小さくなる → 0 にクランプ。"""
-        # 無音: 2〜5 → KEEP: (0,2),(5,10)
-        # padding=1.0 → (0,3),(4,10) ← start クランプ
+        """Leading KEEP start goes below 0 due to padding -> clamped to 0."""
+        # silence: 2~5 -> KEEP: (0,2),(5,10)
+        # padding=1.0 -> (0,3),(4,10) after start clamp
         keeps = derive_keep_ranges(10.0, [(2.0, 5.0)], _opts(padding=1.0))
         assert keeps[0][0] == pytest.approx(0.0)
 
     def test_padding_clamps_end_to_total(self) -> None:
-        """末尾 KEEP の end が padding で total を超える → total にクランプ。"""
-        # 無音: 5〜8 → KEEP: (0,5),(8,10)
-        # padding=1.0 → end(10+1=11) → クランプで 10
+        """Trailing KEEP end exceeds total due to padding -> clamped to total."""
+        # silence: 5~8 -> KEEP: (0,5),(8,10)
+        # padding=1.0 -> end(10+1=11) -> clamped to 10
         keeps = derive_keep_ranges(10.0, [(5.0, 8.0)], _opts(padding=1.0))
         last_end = keeps[-1][1]
         assert last_end == pytest.approx(10.0)
 
     def test_padding_zero_no_expansion(self) -> None:
-        """padding=0.0: 拡張なし（反転のみ）。"""
+        """padding=0.0: no expansion (inversion only)."""
         keeps = derive_keep_ranges(10.0, [(3.0, 7.0)], _opts(padding=0.0))
         assert keeps[0] == pytest.approx((0.0, 3.0))
         assert keeps[1] == pytest.approx((7.0, 10.0))
 
 
 # ===========================================================================
-# ⑤ padding で隣接 KEEP がマージされる
+# (5) Adjacent KEEPs are merged by padding
 # ===========================================================================
 
 
 class TestPaddingMerge:
-    """padding 拡張で隣接 KEEP が重なったらマージされること（AD-3 §3）。"""
+    """Adjacent KEEPs that overlap after padding expansion must be merged (AD-3 §3)."""
 
     def test_padding_merges_adjacent_keeps(self) -> None:
-        """padding で 2 KEEP の端が重なる → 1 KEEP にマージ。
+        """padding causes 2 KEEP edges to overlap -> merged into 1 KEEP.
 
-        例: 無音 (3,4) → KEEP (0,3),(4,10)
-        padding=1.0 → (0,4),(3,10) → 重なり → (0,10)
+        Example: silence (3,4) -> KEEP (0,3),(4,10)
+        padding=1.0 -> (0,4),(3,10) -> overlap -> (0,10)
         """
         keeps = derive_keep_ranges(10.0, [(3.0, 4.0)], _opts(padding=1.0))
         assert len(keeps) == 1
@@ -181,72 +181,72 @@ class TestPaddingMerge:
         assert keeps[0][1] == pytest.approx(10.0)
 
     def test_padding_no_merge_when_gap_large_enough(self) -> None:
-        """padding が小さく KEEP 端が重ならない場合はマージしない。"""
-        # 無音 (3,7) → KEEP (0,3),(7,10)
-        # padding=0.1 → (0,3.1),(6.9,10) → 重ならない
+        """When padding is small and KEEP edges do not overlap, they are not merged."""
+        # silence (3,7) -> KEEP (0,3),(7,10)
+        # padding=0.1 -> (0,3.1),(6.9,10) -> no overlap
         keeps = derive_keep_ranges(10.0, [(3.0, 7.0)], _opts(padding=0.1))
         assert len(keeps) == 2
 
     def test_padding_merges_three_keeps_into_two(self) -> None:
-        """padding で 3 KEEP が全てマージされて 1 区間になる（CR L-4: 計算上確定）。"""
-        # 無音: (2,3),(5,6) → KEEP: (0,2),(3,5),(6,10)
-        # padding=0.6 → (0,2.6),(2.4,5.6),(5.4,10)
-        # (0,2.6) と (2.4,5.6) が重なる → merge (0, 5.6)
-        # (0,5.6) と (5.4,10) が重なる → merge (0, 10)
-        # → 全体が 1 区間に連結される（計算上確定）
+        """padding causes all 3 KEEPs to merge into 1 interval (CR L-4: deterministic)."""
+        # silence: (2,3),(5,6) -> KEEP: (0,2),(3,5),(6,10)
+        # padding=0.6 -> (0,2.6),(2.4,5.6),(5.4,10)
+        # (0,2.6) and (2.4,5.6) overlap -> merge (0, 5.6)
+        # (0,5.6) and (5.4,10) overlap -> merge (0, 10)
+        # -> entire range becomes 1 interval (deterministic)
         keeps = derive_keep_ranges(10.0, [(2.0, 3.0), (5.0, 6.0)], _opts(padding=0.6))
         assert len(keeps) == 1
 
 
 # ===========================================================================
-# ⑥ min_keep_duration: 既定 0.0 では破棄なし / 正値時のみ短 KEEP 破棄（DC-AM-001）
+# (6) min_keep_duration: no discard at default 0.0 / short KEEPs discarded when positive (DC-AM-001)
 # ===========================================================================
 
 
 class TestMinKeepDuration:
-    """min_keep_duration の挙動（DC-AM-001）。"""
+    """Behavior of min_keep_duration (DC-AM-001)."""
 
     def test_default_zero_keeps_all_intervals(self) -> None:
-        """min_keep_duration=0.0（既定）: 短い KEEP も破棄されない。"""
-        # 無音 (1,1.9) → KEEP (0,1),(1.9,10)
-        # (1.9,10) は長い・(0,1) は 1s → 0.0 なので破棄なし
+        """min_keep_duration=0.0 (default): short KEEPs are not discarded."""
+        # silence (1,1.9) -> KEEP (0,1),(1.9,10)
+        # (1.9,10) is long; (0,1) is 1s -> not discarded with 0.0
         keeps = derive_keep_ranges(10.0, [(1.0, 1.9)], _opts(min_keep_duration=0.0))
         assert len(keeps) == 2
 
     def test_min_keep_filters_short_keep(self) -> None:
-        """min_keep_duration > 0: それ未満の KEEP は破棄される。
+        """min_keep_duration > 0: KEEPs shorter than this value are discarded.
 
-        例: 無音 (0.5, 9.5) → KEEP (0,0.5),(9.5,10)
-        (0,0.5) は 0.5s, (9.5,10) は 0.5s
-        min_keep_duration=1.0 → 両方破棄
+        Example: silence (0.5, 9.5) -> KEEP (0,0.5),(9.5,10)
+        (0,0.5) is 0.5s, (9.5,10) is 0.5s
+        min_keep_duration=1.0 -> both discarded
         """
         keeps = derive_keep_ranges(10.0, [(0.5, 9.5)], _opts(min_keep_duration=1.0))
         for start, end in keeps:
             assert (end - start) >= 1.0 - _EPSILON
 
     def test_min_keep_keeps_long_interval(self) -> None:
-        """min_keep_duration 設定でも、長い KEEP は保持される。"""
-        # 無音 (2,3) → KEEP (0,2),(3,10)
-        # (0,2)=2s, (3,10)=7s → min_keep=1.5 → 両方保持
+        """With min_keep_duration set, long KEEPs are retained."""
+        # silence (2,3) -> KEEP (0,2),(3,10)
+        # (0,2)=2s, (3,10)=7s -> min_keep=1.5 -> both retained
         keeps = derive_keep_ranges(10.0, [(2.0, 3.0)], _opts(min_keep_duration=1.5))
         assert len(keeps) == 2
 
     def test_min_keep_exact_boundary_kept(self) -> None:
-        """min_keep と同値の KEEP は破棄されない（境界値=equal は保持）。"""
-        # 無音 (1,2) → KEEP (0,1),(2,10)
-        # (0,1)=1.0s → min_keep=1.0 → 保持
+        """A KEEP equal to min_keep is not discarded (boundary value equal is retained)."""
+        # silence (1,2) -> KEEP (0,1),(2,10)
+        # (0,1)=1.0s -> min_keep=1.0 -> retained
         keeps = derive_keep_ranges(10.0, [(1.0, 2.0)], _opts(min_keep_duration=1.0))
-        # 1.0s の KEEP が残っていること
+        # 1.0s KEEP must remain
         durations = [end - start for start, end in keeps]
         assert any(abs(d - 1.0) < _EPSILON for d in durations)
 
     def test_min_keep_applied_after_padding_merge(self) -> None:
-        """min_keep_duration はパディング・マージ後に適用される。
+        """min_keep_duration is applied after padding and merging.
 
-        padding でマージされた KEEP の長さで判定すること。
+        The judgment uses the length of the merged KEEP after padding.
         """
-        # 無音 (5,6) → KEEP (0,5),(6,10)
-        # padding=0 → 2 KEEP: 5s,4s → min_keep=3 → 両方残る
+        # silence (5,6) -> KEEP (0,5),(6,10)
+        # padding=0 -> 2 KEEPs: 5s,4s -> min_keep=3 -> both retained
         keeps = derive_keep_ranges(
             10.0, [(5.0, 6.0)], _opts(padding=0.0, min_keep_duration=3.0)
         )
@@ -254,26 +254,26 @@ class TestMinKeepDuration:
 
 
 # ===========================================================================
-# ⑦ 全無音 → KEEP 空リスト
+# (7) All silence -> empty KEEP list
 # ===========================================================================
 
 
 class TestAllSilence:
-    """全尺が無音の場合: KEEP 空リストを返す（AD-3 §2）。"""
+    """When the full duration is silence: returns an empty KEEP list (AD-3 §2)."""
 
     def test_full_silence_returns_empty_list(self) -> None:
-        """全尺が無音 → []。"""
+        """Full silence -> []."""
         keeps = derive_keep_ranges(10.0, [(0.0, 10.0)], _opts())
         assert keeps == []
 
     def test_full_silence_no_padding_effect(self) -> None:
-        """全尺無音 + padding: それでも空リストを返す。"""
+        """Full silence + padding: still returns an empty list."""
         keeps = derive_keep_ranges(10.0, [(0.0, 10.0)], _opts(padding=1.0))
         assert keeps == []
 
     def test_nearly_full_silence_only_tiny_keep(self) -> None:
-        """ほぼ全無音 → 微小 KEEP が 1 区間（min_keep_duration=0 では破棄しない）。"""
-        # 無音 (0,9.99) → KEEP (9.99, 10.0)
+        """Nearly all silence -> 1 tiny KEEP interval (not discarded with min_keep_duration=0)."""
+        # silence (0,9.99) -> KEEP (9.99, 10.0)
         keeps = derive_keep_ranges(10.0, [(0.0, 9.99)], _opts(min_keep_duration=0.0))
         assert len(keeps) == 1
         assert keeps[0][0] == pytest.approx(9.99)
@@ -281,22 +281,22 @@ class TestAllSilence:
 
 
 # ===========================================================================
-# ⑧ padding で 2 KEEP が短無音をまたいで重なる → 連結（DC-GP-001・単語切れ防止）
+# (8) padding bridges 2 KEEPs across short silence -> joined (DC-GP-001: word-break prevention)
 # ===========================================================================
 
 
 class TestShortSilenceBridging:
-    """短い無音を padding がまたぐ場合: 埋め戻し（連結）が起きること（DC-GP-001）。
+    """When padding spans a short silence: fill-in (joining) occurs (DC-GP-001).
 
-    設計意図: 短い無音（息継ぎ・ポーズ）を挟んで KEEP が隣接している場合に
-    padding が無音をまたいで連結することで単語切れを防ぐ。
+    Design intent: when KEEPs are adjacent across a short silence (breath / pause),
+    padding bridges the gap to prevent word breaks.
     """
 
     def test_short_silence_bridged_by_padding(self) -> None:
-        """短い無音 (4.8, 5.2) = 0.4s を padding=0.3 がまたぐ → 1 KEEP に連結。
+        """Short silence (4.8, 5.2) = 0.4s spanned by padding=0.3 -> joined into 1 KEEP.
 
         KEEP before padding: (0,4.8),(5.2,10)
-        KEEP after padding:  (0,5.1),(4.9,10)  ← 重なる
+        KEEP after padding:  (0,5.1),(4.9,10)  <- overlapping
         merged:              (0, 10)
         """
         keeps = derive_keep_ranges(10.0, [(4.8, 5.2)], _opts(padding=0.3))
@@ -305,24 +305,24 @@ class TestShortSilenceBridging:
         assert keeps[0][1] == pytest.approx(10.0)
 
     def test_long_silence_not_bridged(self) -> None:
-        """長い無音 (3,7) = 4s は padding=0.3 でまたがない → 2 KEEP のまま。"""
+        """Long silence (3,7) = 4s is not spanned by padding=0.3 -> stays as 2 KEEPs."""
         keeps = derive_keep_ranges(10.0, [(3.0, 7.0)], _opts(padding=0.3))
         assert len(keeps) == 2
 
     def test_bridging_preserves_outer_keeps(self) -> None:
-        """埋め戻し後の結合 KEEP が元の 2 KEEP を包含していること。"""
-        # 無音 (4.9, 5.1) → KEEP (0,4.9),(5.1,10) → padding=0.2 → bridge
+        """The joined KEEP after fill-in contains both original KEEPs."""
+        # silence (4.9, 5.1) -> KEEP (0,4.9),(5.1,10) -> padding=0.2 -> bridge
         keeps = derive_keep_ranges(10.0, [(4.9, 5.1)], _opts(padding=0.2))
         assert len(keeps) == 1
-        # 元の (0, 10) 全体が保持されている（クランプで端は 0.0 / 10.0）
+        # full (0, 10) is retained (edges clamped to 0.0 / 10.0)
         assert keeps[0][0] == pytest.approx(0.0)
         assert keeps[0][1] == pytest.approx(10.0)
 
     def test_multiple_short_silences_all_bridged(self) -> None:
-        """複数の短い無音が全て padding でまたがれる → 全体が 1 KEEP に連結。
+        """Multiple short silences all spanned by padding -> entire range becomes 1 KEEP.
 
-        無音: (2,2.3),(5,5.3),(8,8.3) → 各 0.3s の無音
-        padding=0.2 → 各無音をまたぐ → 全体 1 KEEP
+        Silence: (2,2.3),(5,5.3),(8,8.3) -> each 0.3s
+        padding=0.2 -> each silence spanned -> 1 KEEP total
         """
         keeps = derive_keep_ranges(
             10.0,
@@ -333,31 +333,32 @@ class TestShortSilenceBridging:
 
 
 # ===========================================================================
-# 境界値・その他
+# Boundary values and other edge cases
 # ===========================================================================
 
 
 class TestEdgeCases:
-    """境界値とその他のエッジケース。"""
+    """Boundary values and other edge cases."""
 
     def test_total_duration_zero_no_silence_returns_empty(self) -> None:
-        """total_duration=0.0, 無音なし → [] または [(0,0)]（空区間）。
+        """total_duration=0.0, no silence -> [] or [(0,0)] (zero-length interval).
 
-        実装依存だが長さ 0 の区間は実質無意味であるため空でもよい。
+        Implementation-dependent, but a zero-length interval is practically meaningless
+        so empty is also acceptable.
         """
         keeps = derive_keep_ranges(0.0, [], _opts())
-        # 空か (0,0) を許容（実装に依存する正確な動作は実装時に確定）
+        # accept empty or (0,0) (exact behavior determined at implementation time)
         assert isinstance(keeps, list)
 
     def test_silence_interval_at_exact_boundary(self) -> None:
-        """無音区間が total_duration の末尾にぴったりかかる場合の安全性。"""
-        # 無音 (9.0, 10.0) → KEEP (0.0, 9.0)
+        """Safety when a silence interval exactly covers the end of total_duration."""
+        # silence (9.0, 10.0) -> KEEP (0.0, 9.0)
         keeps = derive_keep_ranges(10.0, [(9.0, 10.0)], _opts())
         assert len(keeps) == 1
         assert keeps[0] == pytest.approx((0.0, 9.0))
 
     def test_return_type_is_list_of_tuples(self) -> None:
-        """戻り値が list[tuple[float, float]] 型であること。"""
+        """Return type must be list[tuple[float, float]]."""
         keeps = derive_keep_ranges(10.0, [(3.0, 7.0)], _opts())
         assert isinstance(keeps, list)
         for item in keeps:
@@ -367,7 +368,7 @@ class TestEdgeCases:
             assert isinstance(item[1], float)
 
     def test_keep_intervals_are_non_overlapping(self) -> None:
-        """返却される KEEP 区間が重複しないこと（マージ済み）。"""
+        """Returned KEEP intervals must not overlap (already merged)."""
         keeps = derive_keep_ranges(
             20.0,
             [(2.0, 3.0), (5.0, 6.0), (8.0, 9.0)],
@@ -375,15 +376,17 @@ class TestEdgeCases:
         )
         for i in range(len(keeps) - 1):
             assert keeps[i][1] <= keeps[i + 1][0] + _EPSILON, (
-                f"KEEP 区間が重複している: {keeps[i]} と {keeps[i + 1]}"
+                f"KEEP intervals overlap: {keeps[i]} and {keeps[i + 1]}"
             )
 
     def test_keep_intervals_are_ordered(self) -> None:
-        """返却される KEEP 区間が時間順に並んでいること。"""
+        """Returned KEEP intervals must be in chronological order."""
         keeps = derive_keep_ranges(
             20.0,
-            [(5.0, 6.0), (2.0, 3.0)],  # 逆順入力
+            [(5.0, 6.0), (2.0, 3.0)],  # reverse order input
             _opts(padding=0.0),
         )
         for i in range(len(keeps) - 1):
-            assert keeps[i][0] < keeps[i + 1][0], "KEEP 区間が時間順でない"
+            assert keeps[i][0] < keeps[i + 1][0], (
+                "KEEP intervals are not in chronological order"
+            )

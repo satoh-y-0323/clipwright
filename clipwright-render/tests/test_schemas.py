@@ -1,8 +1,8 @@
-"""test_schemas.py — RenderOptions の Red テスト（DC-AM-004）。
+"""test_schemas.py — Red tests for RenderOptions (DC-AM-004).
 
-architecture §6.1 の RenderOptions 確定仕様を観点として固定する。
-このファイルは schemas.py が存在しない / RenderOptions が未実装の段階で
-機能未実装により失敗することを意図した Red テスト群。
+Fixes the confirmed RenderOptions specification from architecture §6.1.
+This file is intended to fail when schemas.py does not exist or RenderOptions
+is not yet implemented.
 """
 
 from __future__ import annotations
@@ -13,12 +13,12 @@ from pydantic import ValidationError
 from clipwright_render.schemas import RenderOptions
 
 # ===========================================================================
-# デフォルト構築
+# Default construction
 # ===========================================================================
 
 
 class TestRenderOptionsDefaults:
-    """全フィールド省略でモデルが構築でき、各フィールドが既定値を持つこと。"""
+    """Verify that the model can be constructed with no arguments and each field has its default value."""
 
     def test_build_with_no_args(self) -> None:
         # Arrange / Act
@@ -35,7 +35,7 @@ class TestRenderOptionsDefaults:
 
 
 # ===========================================================================
-# 有効値の受理
+# Valid value acceptance
 # ===========================================================================
 
 
@@ -54,7 +54,7 @@ class TestRenderOptionsDefaults:
 def test_valid_codecs_accepted(
     video_codec: str | None, audio_codec: str | None
 ) -> None:
-    """有効なコーデック文字列（英数字・アンスコ・ハイフン）を受理する（Sec M-3）。"""
+    """Valid codec strings (alphanumeric, underscore, hyphen) are accepted (Sec M-3)."""
     # Arrange / Act
     opts = RenderOptions(video_codec=video_codec, audio_codec=audio_codec)
 
@@ -64,22 +64,22 @@ def test_valid_codecs_accepted(
 
 
 # ===========================================================================
-# codec 文字種・長さ制約（Sec M-3）
+# codec character/length constraints (Sec M-3)
 # ===========================================================================
 
 
 @pytest.mark.parametrize(
     "codec",
     [
-        "libx264 -preset slow",  # スペースを含む
-        "libx264; rm -rf /",  # セミコロン・スペースを含む
-        "codec|pipe",  # パイプを含む
-        "codec && other",  # && を含む
-        "a" * 65,  # 65 文字（最大64文字超過）
+        "libx264 -preset slow",  # contains a space
+        "libx264; rm -rf /",  # contains semicolon and space
+        "codec|pipe",  # contains pipe
+        "codec && other",  # contains &&
+        "a" * 65,  # 65 characters (exceeds max 64)
     ],
 )
 def test_invalid_video_codec_rejected(codec: str) -> None:
-    """不正 video_codec（スペース/記号含む・65文字超）→ ValidationError（Sec M-3）。"""
+    """Invalid video_codec (spaces/symbols or exceeds 64 chars) raises ValidationError (Sec M-3)."""
     with pytest.raises(ValidationError):
         RenderOptions(video_codec=codec)
 
@@ -87,13 +87,13 @@ def test_invalid_video_codec_rejected(codec: str) -> None:
 @pytest.mark.parametrize(
     "codec",
     [
-        "aac; rm -rf /",  # セミコロン・スペースを含む
-        "opus -vbr on",  # スペースを含む
-        "a" * 65,  # 65 文字（最大64文字超過）
+        "aac; rm -rf /",  # contains semicolon and space
+        "opus -vbr on",  # contains a space
+        "a" * 65,  # 65 characters (exceeds max 64)
     ],
 )
 def test_invalid_audio_codec_rejected(codec: str) -> None:
-    """不正 audio_codec（スペース/記号含む・65文字超）→ ValidationError（Sec M-3）。"""
+    """Invalid audio_codec (spaces/symbols or exceeds 64 chars) raises ValidationError (Sec M-3)."""
     with pytest.raises(ValidationError):
         RenderOptions(audio_codec=codec)
 
@@ -101,7 +101,7 @@ def test_invalid_audio_codec_rejected(codec: str) -> None:
 @pytest.mark.parametrize(
     "codec",
     [
-        "a" * 64,  # ちょうど64文字（境界値・受理）
+        "a" * 64,  # exactly 64 characters (boundary — accepted)
         "libx264",
         "copy",
         "libvpx-vp9",
@@ -109,7 +109,7 @@ def test_invalid_audio_codec_rejected(codec: str) -> None:
     ],
 )
 def test_valid_codec_boundary_accepted(codec: str) -> None:
-    """64文字以内・英数字/アンスコ/ハイフンのみのコーデックは受理される（Sec M-3）。"""
+    """Codec strings up to 64 chars with only alphanumeric/underscore/hyphen are accepted (Sec M-3)."""
     opts = RenderOptions(video_codec=codec)
     assert opts.video_codec == codec
 
@@ -124,7 +124,7 @@ def test_valid_codec_boundary_accepted(codec: str) -> None:
     ],
 )
 def test_valid_resolution_pair_accepted(width: int, height: int) -> None:
-    """正の整数ペア（width/height 両方指定）を受理すること。"""
+    """A pair of positive integers (both width and height specified) is accepted."""
     # Arrange / Act
     opts = RenderOptions(width=width, height=height)
 
@@ -134,7 +134,7 @@ def test_valid_resolution_pair_accepted(width: int, height: int) -> None:
 
 
 def test_both_resolution_none_accepted() -> None:
-    """width/height 両方 None が妥当であること（既定の None ペア）。"""
+    """width/height both None is valid (the default None pair)."""
     # Arrange / Act
     opts = RenderOptions(width=None, height=None)
 
@@ -148,7 +148,7 @@ def test_both_resolution_none_accepted() -> None:
     [24.0, 30.0, 60.0, 23.976, 0.001],
 )
 def test_valid_fps_accepted(fps: float) -> None:
-    """正の fps 値を受理すること。"""
+    """Positive fps values are accepted."""
     # Arrange / Act
     opts = RenderOptions(fps=fps)
 
@@ -161,7 +161,7 @@ def test_valid_fps_accepted(fps: float) -> None:
     [0, 1, 23, 50, 51],
 )
 def test_valid_crf_range_accepted(crf: int) -> None:
-    """crf が 0〜51 の範囲（境界値含む）を受理すること（DC-AM-004）。"""
+    """crf values in range 0-51 (including boundaries) are accepted (DC-AM-004)."""
     # Arrange / Act
     opts = RenderOptions(crf=crf)
 
@@ -170,7 +170,7 @@ def test_valid_crf_range_accepted(crf: int) -> None:
 
 
 # ===========================================================================
-# 解像度ペア制約（DC-AM-004）
+# Resolution pair constraint (DC-AM-004)
 # ===========================================================================
 
 
@@ -185,8 +185,8 @@ def test_valid_crf_range_accepted(crf: int) -> None:
 def test_resolution_pair_both_or_none_is_valid(
     width: int | None, height: int | None
 ) -> None:
-    """「両方指定」と「両方 None」はいずれも妥当であること。"""
-    # Arrange / Act / Assert（例外なし）
+    """Both specified or both None are valid."""
+    # Arrange / Act / Assert (no exception)
     opts = RenderOptions(width=width, height=height)
     assert opts.width == width
     assert opts.height == height
@@ -195,21 +195,21 @@ def test_resolution_pair_both_or_none_is_valid(
 @pytest.mark.parametrize(
     "width,height",
     [
-        (1920, None),  # width だけ指定
-        (None, 1080),  # height だけ指定
+        (1920, None),  # width only
+        (None, 1080),  # height only
     ],
 )
 def test_resolution_pair_only_one_raises_validation_error(
     width: int | None, height: int | None
 ) -> None:
-    """width/height の片方だけ指定 → ValidationError（INVALID_INPUT）。"""
+    """Specifying only one of width/height raises ValidationError (INVALID_INPUT)."""
     # Arrange / Act / Assert
     with pytest.raises(ValidationError):
         RenderOptions(width=width, height=height)
 
 
 # ===========================================================================
-# 不正値の拒否
+# Invalid value rejection
 # ===========================================================================
 
 
@@ -225,7 +225,7 @@ def test_resolution_pair_only_one_raises_validation_error(
     ],
 )
 def test_non_positive_resolution_rejected(width: int, height: int) -> None:
-    """負またはゼロの width/height → ValidationError。"""
+    """Negative or zero width/height raises ValidationError."""
     # Arrange / Act / Assert
     with pytest.raises(ValidationError):
         RenderOptions(width=width, height=height)
@@ -236,7 +236,7 @@ def test_non_positive_resolution_rejected(width: int, height: int) -> None:
     [-1.0, -0.001, 0.0],
 )
 def test_non_positive_fps_rejected(fps: float) -> None:
-    """負またはゼロの fps → ValidationError。"""
+    """Negative or zero fps raises ValidationError."""
     # Arrange / Act / Assert
     with pytest.raises(ValidationError):
         RenderOptions(fps=fps)
@@ -247,58 +247,60 @@ def test_non_positive_fps_rejected(fps: float) -> None:
     [-1, 52, -100, 100],
 )
 def test_out_of_range_crf_rejected(crf: int) -> None:
-    """crf が 0〜51 の範囲外 → ValidationError（DC-AM-004）。"""
+    """crf outside 0-51 raises ValidationError (DC-AM-004)."""
     # Arrange / Act / Assert
     with pytest.raises(ValidationError):
         RenderOptions(crf=crf)
 
 
 # ===========================================================================
-# 共通型の再定義なし確認
+# Verify core types are not redefined
 # ===========================================================================
 
 
 def test_render_options_does_not_redefine_core_types() -> None:
-    """RenderOptions が core 共通型（MediaRef/TimeRange/Artifact）を再定義しないこと。
+    """RenderOptions must not redefine core shared types (MediaRef/TimeRange/Artifact).
 
-    clipwright.schemas から import できることを確認し、
-    clipwright_render.schemas では同名クラスを定義していないことを検証する。
+    Confirms that they can be imported from clipwright.schemas, and that
+    clipwright_render.schemas does not define classes with the same names.
     """
-    # core の共通型が import できること
+    # Core shared types must be importable
     from clipwright.schemas import Artifact, MediaRef, ToolResult  # noqa: F401
 
-    # clipwright_render.schemas に同名クラスが存在しないこと
+    # clipwright_render.schemas must not define classes with the same names
     import clipwright_render.schemas as render_schemas
 
     assert not hasattr(render_schemas, "MediaRef"), (
-        "RenderOptions を定義する schemas.py が core の MediaRef を再定義している"
+        "schemas.py defining RenderOptions is redefining core MediaRef"
     )
     assert not hasattr(render_schemas, "Artifact"), (
-        "RenderOptions を定義する schemas.py が core の Artifact を再定義している"
+        "schemas.py defining RenderOptions is redefining core Artifact"
     )
     assert not hasattr(render_schemas, "ToolResult"), (
-        "RenderOptions を定義する schemas.py が core の ToolResult を再定義している"
+        "schemas.py defining RenderOptions is redefining core ToolResult"
     )
 
 
 # ===========================================================================
-# SubtitleOptions — Red テスト（字幕焼き込み・ADR-S2-r2 / ADR-S6-r2 / ADR-S6-r3）
+# SubtitleOptions — Red tests (subtitle burn-in / ADR-S2-r2 / ADR-S6-r2 / ADR-S6-r3)
 # ===========================================================================
-# 実機確認済み (M2 2026-06-11):
-#   - Windowsパスエスケープ: \ → \\ then : → \: が確定構文
-#   - VTT直読: 可能 (RC=0)
-#   - PrimaryColour: 6桁 &HBBGGRR も 8桁 &HAABBGGRR も受理可（不透明は AA=00）
-#   - force_style: FontName/FontSize/Outline/Alignment/MarginV 全て受理
-#   - fontsdir: :fontsdir='<path>' で受理
-#   - Alignment 1/2/5/7/9 全て受理 (ASS v4+ numpad)
-#   - ASS + force_style: 受理される（内蔵スタイル優先は libass の動作・エラーなし）
+# Verified on real hardware (M2 2026-06-11):
+#   - Windows path escaping: \ -> \\ then : -> \: is the confirmed syntax
+#   - VTT direct read: works (RC=0)
+#   - PrimaryColour: both 6-digit &HBBGGRR and 8-digit &HAABBGGRR accepted
+#     (opaque = AA=00)
+#   - force_style: FontName/FontSize/Outline/Alignment/MarginV all accepted
+#   - fontsdir: :fontsdir='<path>' accepted
+#   - Alignment 1/2/5/7/9 all accepted (ASS v4+ numpad)
+#   - ASS + force_style: accepted (built-in styles take precedence — libass behaviour,
+#     no error)
 
 
 class TestSubtitleOptionsDefaults:
-    """SubtitleOptions のデフォルト構築とスタイル系 None を検証する（ADR-S2-r2）。"""
+    """Verify SubtitleOptions default construction and None style fields (ADR-S2-r2)."""
 
     def test_subtitle_options_path_only(self) -> None:
-        """path のみ指定でモデルが構築でき、スタイル系フィールドが None になること。"""
+        """Model constructed with path only; all style fields default to None."""
         # Arrange / Act
         from clipwright_render.schemas import SubtitleOptions
 
@@ -315,7 +317,7 @@ class TestSubtitleOptionsDefaults:
         assert sub.margin_v is None
 
     def test_subtitle_options_path_empty_raises_validation_error(self) -> None:
-        """path が空文字 → ValidationError（DC-AM-005・min_length=1）。"""
+        """Empty path raises ValidationError (DC-AM-005 / min_length=1)."""
         # Arrange / Act / Assert
         from clipwright_render.schemas import SubtitleOptions
 
@@ -323,7 +325,7 @@ class TestSubtitleOptionsDefaults:
             SubtitleOptions(path="")
 
     def test_subtitle_options_path_required(self) -> None:
-        """path を省略すると ValidationError（必須フィールド）。"""
+        """Omitting path raises ValidationError (required field)."""
         # Arrange / Act / Assert
         from clipwright_render.schemas import SubtitleOptions
 
@@ -331,7 +333,7 @@ class TestSubtitleOptionsDefaults:
             SubtitleOptions()  # type: ignore[call-arg]
 
     def test_subtitle_options_extra_field_forbidden(self) -> None:
-        """未知フィールドは extra='forbid' で ValidationError（ADR-S2-r2）。"""
+        """Unknown fields raise ValidationError due to extra='forbid' (ADR-S2-r2)."""
         # Arrange / Act / Assert
         from clipwright_render.schemas import SubtitleOptions
 
@@ -339,11 +341,11 @@ class TestSubtitleOptionsDefaults:
             SubtitleOptions(path="/sub.srt", unknown_key="evil")  # type: ignore[call-arg]
 
     def test_path_with_single_quote_raises_validation_error(self) -> None:
-        """path に ''' を含む → ValidationError（S-H-1 / CR-E-001）。
+        """A path containing a single quote (') raises ValidationError (S-H-1 / CR-E-001).
 
-        ffmpeg filtergraph は filename='{path}' のシングルクォート囲みを使うため、
-        パスにシングルクォートが含まれると ffmpeg の filtergraph パーサーが構文エラーになる。
-        これを防ぐため Pydantic バリデーション層でシングルクォートを禁止する（CR-E-001）。
+        ffmpeg filtergraph uses filename='{path}' with single-quote wrapping, so
+        a single quote in the path breaks the filtergraph parser syntax.
+        Single quotes are therefore forbidden at the Pydantic validation layer (CR-E-001).
         """
         # Arrange / Act / Assert
         from clipwright_render.schemas import SubtitleOptions
@@ -352,10 +354,10 @@ class TestSubtitleOptionsDefaults:
             SubtitleOptions(path="/proj/sub's.srt")
 
     def test_fonts_dir_with_single_quote_raises_validation_error(self) -> None:
-        """fonts_dir に ''' を含む → ValidationError（S-H-1 / CR-E-001）。
+        """A fonts_dir containing a single quote (') raises ValidationError (S-H-1 / CR-E-001).
 
-        fontsdir='{dir}' 形式のシングルクォート囲みで構文破綻が起きるため
-        path と同様にシングルクォートを禁止する（CR-E-001）。
+        The fontsdir='{dir}' single-quote wrapping would break the filtergraph syntax,
+        so single quotes are forbidden in fonts_dir for the same reason as path (CR-E-001).
         """
         # Arrange / Act / Assert
         from clipwright_render.schemas import SubtitleOptions
@@ -365,76 +367,76 @@ class TestSubtitleOptionsDefaults:
 
 
 class TestSubtitleOptionsFontName:
-    """font_name の許可文字・禁止文字を検証する（DC-AM-004・ADR-S2-r2）。"""
+    """Verify allowed and forbidden characters in font_name (DC-AM-004 / ADR-S2-r2)."""
 
     def test_font_name_ascii_accepted(self) -> None:
-        """英数字・スペース・ハイフンのフォント名は有効（DC-AM-004）。"""
+        """Alphanumeric, space, and hyphen font names are valid (DC-AM-004)."""
         from clipwright_render.schemas import SubtitleOptions
 
         sub = SubtitleOptions(path="/sub.srt", font_name="Noto Sans CJK JP")
         assert sub.font_name == "Noto Sans CJK JP"
 
     def test_font_name_japanese_accepted(self) -> None:
-        """日本語フォント名（CJK 文字列）は許可される（ADR-S2-r2）。"""
+        """Japanese font names (CJK characters) are allowed (ADR-S2-r2)."""
         from clipwright_render.schemas import SubtitleOptions
 
         sub = SubtitleOptions(path="/sub.srt", font_name="游ゴシック")
         assert sub.font_name == "游ゴシック"
 
     def test_font_name_with_comma_raises_validation_error(self) -> None:
-        """font_name に ',' (force_style 区切り) を含む → ValidationError（DC-AM-004）。"""
+        """font_name containing ',' (force_style separator) raises ValidationError (DC-AM-004)."""
         from clipwright_render.schemas import SubtitleOptions
 
         with pytest.raises(ValidationError):
             SubtitleOptions(path="/sub.srt", font_name="Font,Name")
 
     def test_font_name_with_colon_raises_validation_error(self) -> None:
-        """font_name に ':' (filtergraph 区切り) を含む → ValidationError（DC-AM-004）。"""
+        """font_name containing ':' (filtergraph separator) raises ValidationError (DC-AM-004)."""
         from clipwright_render.schemas import SubtitleOptions
 
         with pytest.raises(ValidationError):
             SubtitleOptions(path="/sub.srt", font_name="Font:Name")
 
     def test_font_name_with_single_quote_raises_validation_error(self) -> None:
-        """font_name に ''' (フィルタ引数区切り) を含む → ValidationError（DC-AM-004）。"""
+        """font_name containing ''' (filter argument separator) raises ValidationError (DC-AM-004)."""
         from clipwright_render.schemas import SubtitleOptions
 
         with pytest.raises(ValidationError):
             SubtitleOptions(path="/sub.srt", font_name="Font'Name")
 
     def test_font_name_with_backslash_raises_validation_error(self) -> None:
-        """font_name に '\\' (エスケープ文字) を含む → ValidationError（DC-AM-004）。"""
+        """font_name containing '\\' (escape character) raises ValidationError (DC-AM-004)."""
         from clipwright_render.schemas import SubtitleOptions
 
         with pytest.raises(ValidationError):
             SubtitleOptions(path="/sub.srt", font_name="Font\\Name")
 
     def test_font_name_with_bracket_raises_validation_error(self) -> None:
-        """font_name に '[' を含む → ValidationError（filtergraph ラベル区切り）。"""
+        """font_name containing '[' raises ValidationError (filtergraph label separator)."""
         from clipwright_render.schemas import SubtitleOptions
 
         with pytest.raises(ValidationError):
             SubtitleOptions(path="/sub.srt", font_name="Font[Name]")
 
     def test_font_name_with_semicolon_raises_validation_error(self) -> None:
-        """font_name に ';' を含む → ValidationError（filtergraph 区切り）。"""
+        """font_name containing ';' raises ValidationError (filtergraph separator)."""
         from clipwright_render.schemas import SubtitleOptions
 
         with pytest.raises(ValidationError):
             SubtitleOptions(path="/sub.srt", font_name="Font;Name")
 
     def test_font_name_with_equals_raises_validation_error(self) -> None:
-        """font_name に '=' を含む → ValidationError（filtergraph キー/値区切り）。"""
+        """font_name containing '=' raises ValidationError (filtergraph key/value separator)."""
         from clipwright_render.schemas import SubtitleOptions
 
         with pytest.raises(ValidationError):
             SubtitleOptions(path="/sub.srt", font_name="Font=Name")
 
     def test_font_name_with_hash_raises_validation_error(self) -> None:
-        """font_name に '#' を含む → ValidationError（libass 色表記誤解釈リスク・SR-L-2）。
+        """font_name containing '#' raises ValidationError (libass colour misparse risk / SR-L-2).
 
-        libass の一部バージョンで FontName 値の '#' が色表記と誤解釈されるリスクがあるため
-        防御的に禁止する（SR-NEW）。_FONT_NAME_FORBIDDEN_CHARS_RE に '#' を追加済み。
+        Some libass versions may misinterpret '#' in a FontName value as a colour specifier.
+        Defensively forbidden (SR-NEW). '#' added to _FONT_NAME_FORBIDDEN_CHARS_RE.
         """
         from clipwright_render.schemas import SubtitleOptions
 
@@ -442,7 +444,7 @@ class TestSubtitleOptionsFontName:
             SubtitleOptions(path="/sub.srt", font_name="Font#Name")
 
     def test_font_name_none_accepted(self) -> None:
-        """font_name=None はデフォルトとして有効。"""
+        """font_name=None is valid as the default."""
         from clipwright_render.schemas import SubtitleOptions
 
         sub = SubtitleOptions(path="/sub.srt", font_name=None)
@@ -450,69 +452,69 @@ class TestSubtitleOptionsFontName:
 
 
 class TestSubtitleOptionsNumericConstraints:
-    """font_size / outline / margin_v の範囲制約を検証する（ADR-S2-r2）。"""
+    """Verify range constraints on font_size / outline / margin_v (ADR-S2-r2)."""
 
     def test_font_size_positive_accepted(self) -> None:
-        """font_size=24（正の整数）は有効（gt=0）。"""
+        """font_size=24 (positive integer) is valid (gt=0)."""
         from clipwright_render.schemas import SubtitleOptions
 
         sub = SubtitleOptions(path="/sub.srt", font_size=24)
         assert sub.font_size == 24
 
     def test_font_size_zero_raises_validation_error(self) -> None:
-        """font_size=0 → ValidationError（gt=0 制約）。"""
+        """font_size=0 raises ValidationError (gt=0 constraint)."""
         from clipwright_render.schemas import SubtitleOptions
 
         with pytest.raises(ValidationError):
             SubtitleOptions(path="/sub.srt", font_size=0)
 
     def test_font_size_negative_raises_validation_error(self) -> None:
-        """font_size=-1 → ValidationError（gt=0 制約）。"""
+        """font_size=-1 raises ValidationError (gt=0 constraint)."""
         from clipwright_render.schemas import SubtitleOptions
 
         with pytest.raises(ValidationError):
             SubtitleOptions(path="/sub.srt", font_size=-1)
 
     def test_outline_zero_accepted(self) -> None:
-        """outline=0（境界値 ge=0）は有効。"""
+        """outline=0 (boundary value ge=0) is valid."""
         from clipwright_render.schemas import SubtitleOptions
 
         sub = SubtitleOptions(path="/sub.srt", outline=0.0)
         assert sub.outline == 0.0
 
     def test_outline_negative_raises_validation_error(self) -> None:
-        """outline=-0.1 → ValidationError（ge=0 制約）。"""
+        """outline=-0.1 raises ValidationError (ge=0 constraint)."""
         from clipwright_render.schemas import SubtitleOptions
 
         with pytest.raises(ValidationError):
             SubtitleOptions(path="/sub.srt", outline=-0.1)
 
     def test_margin_v_zero_accepted(self) -> None:
-        """margin_v=0（境界値 ge=0）は有効。"""
+        """margin_v=0 (boundary value ge=0) is valid."""
         from clipwright_render.schemas import SubtitleOptions
 
         sub = SubtitleOptions(path="/sub.srt", margin_v=0)
         assert sub.margin_v == 0
 
     def test_margin_v_negative_raises_validation_error(self) -> None:
-        """margin_v=-1 → ValidationError（ge=0 制約）。"""
+        """margin_v=-1 raises ValidationError (ge=0 constraint)."""
         from clipwright_render.schemas import SubtitleOptions
 
         with pytest.raises(ValidationError):
             SubtitleOptions(path="/sub.srt", margin_v=-1)
 
     def test_font_size_exceeds_max_raises_validation_error(self) -> None:
-        """font_size が上限（1_000_000_000）を超える → ValidationError（le=_FONT_SIZE_MAX）。"""
+        """font_size exceeding the upper limit (1_000_000_000) raises ValidationError."""
         from clipwright_render.schemas import SubtitleOptions
 
         with pytest.raises(ValidationError):
-            SubtitleOptions(path="/sub.srt", font_size=int(1e9 + 1))  # 上限超過
+            SubtitleOptions(path="/sub.srt", font_size=int(1e9 + 1))  # exceeds limit
 
     def test_outline_inf_raises_validation_error(self) -> None:
-        """outline=inf → ValidationError（allow_inf_nan=False・model_config + フィールドレベル）。
+        """outline=inf raises ValidationError (allow_inf_nan=False in model_config + field level).
 
-        SubtitleOptions.model_config に allow_inf_nan=False が設定されており、
-        float フィールドへの inf 混入を model_config レベルで防ぐ（SR-V-001）。
+        SubtitleOptions.model_config sets allow_inf_nan=False, preventing inf from
+        entering any float field at the model_config level (SR-V-001).
         """
         from clipwright_render.schemas import SubtitleOptions
 
@@ -520,7 +522,7 @@ class TestSubtitleOptionsNumericConstraints:
             SubtitleOptions(path="/sub.srt", outline=float("inf"))
 
     def test_outline_nan_raises_validation_error(self) -> None:
-        """outline=nan → ValidationError（allow_inf_nan=False）。"""
+        """outline=nan raises ValidationError (allow_inf_nan=False)."""
         import math
 
         from clipwright_render.schemas import SubtitleOptions
@@ -530,45 +532,45 @@ class TestSubtitleOptionsNumericConstraints:
 
 
 class TestSubtitleOptionsFontColor:
-    """font_color の #RRGGBB パターン制約を検証する（ADR-S2-r2）。"""
+    """Verify the #RRGGBB pattern constraint on font_color (ADR-S2-r2)."""
 
     def test_font_color_valid_hex_accepted(self) -> None:
-        """#RRGGBB 形式の有効な色文字列は受理される。"""
+        """A valid colour string in #RRGGBB format is accepted."""
         from clipwright_render.schemas import SubtitleOptions
 
         sub = SubtitleOptions(path="/sub.srt", font_color="#FFFFFF")
         assert sub.font_color == "#FFFFFF"
 
     def test_font_color_lowercase_hex_accepted(self) -> None:
-        """小文字 #ffffff も有効（大文字小文字不問）。"""
+        """Lowercase #ffffff is also valid (case-insensitive)."""
         from clipwright_render.schemas import SubtitleOptions
 
         sub = SubtitleOptions(path="/sub.srt", font_color="#ff0000")
         assert sub.font_color == "#ff0000"
 
     def test_font_color_invalid_format_raises_validation_error(self) -> None:
-        """#RRGGBB 形式でない文字列（例: 'red', 'rgb(255,0,0)'）→ ValidationError。"""
+        """Non-#RRGGBB strings (e.g. 'red', 'rgb(255,0,0)') raise ValidationError."""
         from clipwright_render.schemas import SubtitleOptions
 
         with pytest.raises(ValidationError):
             SubtitleOptions(path="/sub.srt", font_color="red")
 
     def test_font_color_short_hex_raises_validation_error(self) -> None:
-        """3桁の短縮 HEX (#RGB) → ValidationError（6桁必須）。"""
+        """3-digit shorthand hex (#RGB) raises ValidationError (6 digits required)."""
         from clipwright_render.schemas import SubtitleOptions
 
         with pytest.raises(ValidationError):
             SubtitleOptions(path="/sub.srt", font_color="#FFF")
 
     def test_font_color_without_hash_raises_validation_error(self) -> None:
-        """# なし ('FFFFFF') → ValidationError。"""
+        """'FFFFFF' without leading '#' raises ValidationError."""
         from clipwright_render.schemas import SubtitleOptions
 
         with pytest.raises(ValidationError):
             SubtitleOptions(path="/sub.srt", font_color="FFFFFF")
 
     def test_font_color_none_accepted(self) -> None:
-        """font_color=None はデフォルトとして有効（スタイル系全 Optional）。"""
+        """font_color=None is valid as the default (all style fields are Optional)."""
         from clipwright_render.schemas import SubtitleOptions
 
         sub = SubtitleOptions(path="/sub.srt", font_color=None)
@@ -576,32 +578,32 @@ class TestSubtitleOptionsFontColor:
 
 
 class TestSubtitleOptionsAlignment:
-    """alignment の 1〜9 範囲制約を検証する（ASS v4+ numpad・DC-AM-001）。"""
+    """Verify the 1-9 range constraint on alignment (ASS v4+ numpad / DC-AM-001)."""
 
     @pytest.mark.parametrize("alignment", [1, 2, 3, 4, 5, 6, 7, 8, 9])
     def test_alignment_valid_range_accepted(self, alignment: int) -> None:
-        """alignment 1〜9 の整数値はすべて受理される（ASS v4+ numpad 全体）。"""
+        """All integers 1-9 are accepted for alignment (full ASS v4+ numpad range)."""
         from clipwright_render.schemas import SubtitleOptions
 
         sub = SubtitleOptions(path="/sub.srt", alignment=alignment)
         assert sub.alignment == alignment
 
     def test_alignment_zero_raises_validation_error(self) -> None:
-        """alignment=0 → ValidationError（1〜9 の範囲外）。"""
+        """alignment=0 raises ValidationError (outside 1-9 range)."""
         from clipwright_render.schemas import SubtitleOptions
 
         with pytest.raises(ValidationError):
             SubtitleOptions(path="/sub.srt", alignment=0)
 
     def test_alignment_ten_raises_validation_error(self) -> None:
-        """alignment=10 → ValidationError（1〜9 の範囲外）。"""
+        """alignment=10 raises ValidationError (outside 1-9 range)."""
         from clipwright_render.schemas import SubtitleOptions
 
         with pytest.raises(ValidationError):
             SubtitleOptions(path="/sub.srt", alignment=10)
 
     def test_alignment_negative_raises_validation_error(self) -> None:
-        """alignment=-1 → ValidationError（1〜9 の範囲外）。"""
+        """alignment=-1 raises ValidationError (outside 1-9 range)."""
         from clipwright_render.schemas import SubtitleOptions
 
         with pytest.raises(ValidationError):
@@ -609,15 +611,15 @@ class TestSubtitleOptionsAlignment:
 
 
 class TestRenderOptionsSubtitleField:
-    """RenderOptions.subtitle フィールドの追加を検証する（ADR-S2-r2 / ADR-S8）。"""
+    """Verify the RenderOptions.subtitle field addition (ADR-S2-r2 / ADR-S8)."""
 
     def test_render_options_subtitle_default_none(self) -> None:
-        """RenderOptions() のデフォルトで subtitle が None（後方互換・ADR-S8）。"""
+        """RenderOptions() defaults subtitle to None (backward compatible / ADR-S8)."""
         opts = RenderOptions()
         assert opts.subtitle is None  # type: ignore[attr-defined]
 
     def test_render_options_subtitle_accepts_subtitle_options(self) -> None:
-        """RenderOptions(subtitle=SubtitleOptions(...)) が受理される（ADR-S2-r2）。"""
+        """RenderOptions(subtitle=SubtitleOptions(...)) is accepted (ADR-S2-r2)."""
         from clipwright_render.schemas import SubtitleOptions
 
         opts = RenderOptions(
@@ -628,10 +630,10 @@ class TestRenderOptionsSubtitleField:
         assert opts.subtitle.font_size == 24  # type: ignore[attr-defined]
 
     def test_render_options_subtitle_nested_validation(self) -> None:
-        """RenderOptions を通じて SubtitleOptions のネスト検証が効く（ADR-S2-r2）。
+        """Nested SubtitleOptions validation is enforced through RenderOptions (ADR-S2-r2).
 
-        font_size=0 は SubtitleOptions で ValidationError になる。
-        RenderOptions のネスト経由でも同様に ValidationError になることを確認する。
+        font_size=0 causes a ValidationError in SubtitleOptions.
+        The same ValidationError must be raised when passing through RenderOptions nesting.
         """
         from clipwright_render.schemas import SubtitleOptions
 

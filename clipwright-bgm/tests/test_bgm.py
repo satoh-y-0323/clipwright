@@ -1,27 +1,27 @@
-"""test_bgm.py — add_bgm オーケストレーション層の契約面テスト（Red フェーズ）。
+"""test_bgm.py — Contract tests for the add_bgm orchestration layer (Red phase).
 
-モック方針:
-  - clipwright_bgm.bgm.inspect_media を monkeypatch して MediaInfo を供給。
-    ffprobe を subprocess で直呼びしないことを間接的に検証（ADR-B2-r2）。
-  - add_bgm は ffmpeg を呼ばない（OTIO 操作のみ・ADR-B1）。
+Mocking policy:
+  - clipwright_bgm.bgm.inspect_media is monkeypatched to supply MediaInfo.
+    This indirectly verifies that ffprobe is not called via subprocess (ADR-B2-r2).
+  - add_bgm does not call ffmpeg (OTIO operations only, ADR-B1).
 
-検証観点:
-  5. 正常系: A2 Audio トラックが追加されBGMクリップが配置される。
-     source_range = BGM メディア全長（0〜bgm_duration）固定（DC-AS-003・ADR-B2-r2）。
-     出力 timeline 新規生成・入力 timeline 不変（非破壊・M5）。
-  6. BGM クリップ metadata["clipwright"] に writer BgmDirective 経由で注記が書かれる（ADR-B3/B9-r2）。
-  7. 再呼び出し検出（DC-AS-002/AM-005・ADR-B2-r3）:
-     kind=='bgm' クリップが既存 → INVALID_INPUT。
-     A1 本編音声トラックのみでは弾かれない（正常系を壊さない）。
-  8. BGM 尺取得は inspect_media をモックして使う（bgm.py が ffprobe を subprocess 直呼びしない）。
-     inspect_media 失敗（ClipwrightError）→ add_bgm が ToolResult エラーに整形（絶対パス非露出）。
-  9. BGM 入力拡張子ホワイトリスト（DC-AM-007・ADR-B2-r3）:
-     許可外拡張子 → INVALID_INPUT。
-     許可リスト = {mp3,wav,m4a,aac,flac,ogg,opus,mp4,mkv,mov,webm}。
-  10. bgm が timeline と同一 dir 配下でない → PATH_NOT_ALLOWED。
-      bgm 不在 → FILE_NOT_FOUND・basename のみ。
-  11. output == 入力 timeline / 既存 output 衝突 → 適切なエラー（非破壊）。
-  12. 返り値エンベロープ: ok=True・summary に BGM 配置要点・artifacts に出力 timeline。
+Test scope:
+  5. Success path: A2 Audio track is added and a BGM clip is placed.
+     source_range is fixed to full BGM media length (0–bgm_duration) (DC-AS-003, ADR-B2-r2).
+     New output timeline is created; input timeline is unchanged (non-destructive, M5).
+  6. BGM clip metadata["clipwright"] is annotated via writer BgmDirective (ADR-B3/B9-r2).
+  7. Re-invocation detection (DC-AS-002/AM-005, ADR-B2-r3):
+     Existing kind=='bgm' clip → INVALID_INPUT.
+     A1-only timeline must not be rejected (must not break the success path).
+  8. BGM duration is obtained via mocked inspect_media (bgm.py must not call ffprobe directly).
+     inspect_media failure (ClipwrightError) → add_bgm formats a ToolResult error (no absolute path).
+  9. BGM input extension whitelist (DC-AM-007, ADR-B2-r3):
+     Disallowed extension → INVALID_INPUT.
+     Allowed set = {mp3,wav,m4a,aac,flac,ogg,opus,mp4,mkv,mov,webm}.
+  10. bgm not under the same dir as timeline → PATH_NOT_ALLOWED.
+      bgm absent → FILE_NOT_FOUND, basename only.
+  11. output == input timeline / existing output collision → appropriate error (non-destructive).
+  12. Return value envelope: ok=True, summary contains BGM placement summary, artifacts has output timeline.
 """
 
 from __future__ import annotations
@@ -40,12 +40,12 @@ from clipwright_bgm.schemas import BgmDirective, BgmOptions
 from tests.conftest import BGM_DURATION_SEC, BGM_RATE
 
 # ===========================================================================
-# ヘルパー
+# Helpers
 # ===========================================================================
 
 
 def _make_simple_timeline() -> otio.schema.Timeline:
-    """V1(Video) + A1(Audio) の 2 トラック構成 Timeline を返す。"""
+    """Return a Timeline with two tracks: V1 (Video) and A1 (Audio)."""
     tl = otio.schema.Timeline(name="test_timeline")
     v1 = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
     a1 = otio.schema.Track(name="A1", kind=otio.schema.TrackKind.Audio)
@@ -55,12 +55,12 @@ def _make_simple_timeline() -> otio.schema.Timeline:
 
 
 def _save_timeline_to_file(tl: otio.schema.Timeline, path: Path) -> None:
-    """Timeline をファイルに保存するヘルパー。"""
+    """Helper to save a Timeline to a file."""
     save_timeline(tl, str(path))
 
 
 def _get_bgm_clips(tl: otio.schema.Timeline) -> list[otio.schema.Clip]:
-    """timeline から kind=='bgm' の Clip を収集して返す。"""
+    """Collect and return all Clips with kind=='bgm' from the timeline."""
     bgm_clips = []
     for track in tl.tracks:
         if track.kind == otio.schema.TrackKind.Audio:
@@ -73,12 +73,12 @@ def _get_bgm_clips(tl: otio.schema.Timeline) -> list[otio.schema.Clip]:
 
 
 # ===========================================================================
-# テスト観点 5: 正常系 - A2 トラック追加・BGM クリップ配置・非破壊
+# Test scope 5: Success path - A2 track addition, BGM clip placement, non-destructive
 # ===========================================================================
 
 
 class TestAddBgmNormalCase:
-    """add_bgm 正常系: A2 トラック追加・BGM クリップ配置・入力 timeline 不変。"""
+    """add_bgm success path: A2 track added, BGM clip placed, input timeline unchanged."""
 
     def test_a2_audio_track_is_added(
         self,
@@ -86,7 +86,7 @@ class TestAddBgmNormalCase:
         bgm_audio_file: Path,
         media_info_bgm: Any,
     ) -> None:
-        """add_bgm 後に A2 Audio トラックが timeline に追加されていること。"""
+        """After add_bgm, an A2 Audio track must be present in the timeline."""
         tl = _make_simple_timeline()
         timeline_path = tmp_timeline_dir / "timeline.otio"
         output_path = tmp_timeline_dir / "output.otio"
@@ -105,9 +105,11 @@ class TestAddBgmNormalCase:
         audio_tracks = [
             t for t in out_tl.tracks if t.kind == otio.schema.TrackKind.Audio
         ]
-        assert len(audio_tracks) >= 2, "A2 を含む少なくとも 2 本の Audio トラックが必要"
+        assert len(audio_tracks) >= 2, (
+            "At least 2 Audio tracks including A2 are required"
+        )
         track_names = [t.name for t in audio_tracks]
-        assert "A2" in track_names, "A2 Audio トラックが存在すること"
+        assert "A2" in track_names, "A2 Audio track must exist"
 
     def test_bgm_clip_is_placed_in_a2_track(
         self,
@@ -115,7 +117,7 @@ class TestAddBgmNormalCase:
         bgm_audio_file: Path,
         media_info_bgm: Any,
     ) -> None:
-        """A2 トラックに BGM クリップが 1 本配置されていること。"""
+        """Exactly one BGM clip must be placed in the A2 track."""
         tl = _make_simple_timeline()
         timeline_path = tmp_timeline_dir / "timeline.otio"
         output_path = tmp_timeline_dir / "output.otio"
@@ -132,7 +134,9 @@ class TestAddBgmNormalCase:
         assert result["ok"] is True
         out_tl = load_timeline(str(output_path))
         bgm_clips = _get_bgm_clips(out_tl)
-        assert len(bgm_clips) == 1, "BGM クリップが A2 トラックに 1 本あること"
+        assert len(bgm_clips) == 1, (
+            "Exactly one BGM clip must be present in the A2 track"
+        )
 
     def test_source_range_equals_bgm_full_duration(
         self,
@@ -140,7 +144,7 @@ class TestAddBgmNormalCase:
         bgm_audio_file: Path,
         media_info_bgm: Any,
     ) -> None:
-        """BGM クリップの source_range が BGM メディア全長（0〜bgm_duration）であること（DC-AS-003・ADR-B2-r2）。"""
+        """BGM clip source_range must equal the full BGM media length (0–bgm_duration) (DC-AS-003, ADR-B2-r2)."""
         tl = _make_simple_timeline()
         timeline_path = tmp_timeline_dir / "timeline.otio"
         output_path = tmp_timeline_dir / "output.otio"
@@ -161,9 +165,9 @@ class TestAddBgmNormalCase:
         assert clip.source_range is not None
         start_sec = otio.opentime.to_seconds(clip.source_range.start_time)
         duration_sec = otio.opentime.to_seconds(clip.source_range.duration)
-        assert start_sec == pytest.approx(0.0), "source_range の開始は 0 秒であること"
+        assert start_sec == pytest.approx(0.0), "source_range start must be 0 seconds"
         assert duration_sec == pytest.approx(BGM_DURATION_SEC), (
-            f"source_range の尺は BGM 全長 {BGM_DURATION_SEC}s であること"
+            f"source_range duration must equal the full BGM length {BGM_DURATION_SEC}s"
         )
 
     def test_input_timeline_is_unchanged(
@@ -172,7 +176,7 @@ class TestAddBgmNormalCase:
         bgm_audio_file: Path,
         media_info_bgm: Any,
     ) -> None:
-        """add_bgm は入力 timeline ファイルを書き換えない（非破壊・M5）。"""
+        """add_bgm must not modify the input timeline file (non-destructive, M5)."""
         tl = _make_simple_timeline()
         timeline_path = tmp_timeline_dir / "timeline.otio"
         output_path = tmp_timeline_dir / "output.otio"
@@ -188,7 +192,7 @@ class TestAddBgmNormalCase:
             )
 
         assert timeline_path.read_bytes() == original_content, (
-            "入力 timeline ファイルのバイト列が変化している（非破壊違反）"
+            "Input timeline file bytes have changed (non-destructive violation)"
         )
 
     def test_output_timeline_is_a_new_file(
@@ -197,7 +201,7 @@ class TestAddBgmNormalCase:
         bgm_audio_file: Path,
         media_info_bgm: Any,
     ) -> None:
-        """add_bgm は入力 timeline とは別の新規出力ファイルを生成すること。"""
+        """add_bgm must create a new output file distinct from the input timeline."""
         tl = _make_simple_timeline()
         timeline_path = tmp_timeline_dir / "timeline.otio"
         output_path = tmp_timeline_dir / "output.otio"
@@ -211,17 +215,17 @@ class TestAddBgmNormalCase:
                 options=BgmOptions(volume_db=-6.0),
             )
 
-        assert output_path.exists(), "出力 timeline ファイルが生成されること"
-        assert timeline_path != output_path, "入力と出力は別ファイルであること"
+        assert output_path.exists(), "Output timeline file must be created"
+        assert timeline_path != output_path, "Input and output must be different files"
 
 
 # ===========================================================================
-# テスト観点 6: BGM クリップ metadata に writer BgmDirective 経由で注記が書かれること
+# Test scope 6: BGM clip metadata must be annotated via writer BgmDirective
 # ===========================================================================
 
 
 class TestAddBgmMetadata:
-    """BGM クリップ metadata["clipwright"] に BgmDirective 形式の注記が書かれること（ADR-B3/B9-r2）。"""
+    """BGM clip metadata["clipwright"] must contain a BgmDirective-format annotation (ADR-B3/B9-r2)."""
 
     def test_clipwright_metadata_exists_on_bgm_clip(
         self,
@@ -229,7 +233,7 @@ class TestAddBgmMetadata:
         bgm_audio_file: Path,
         media_info_bgm: Any,
     ) -> None:
-        """BGM クリップの metadata に "clipwright" キーが存在すること。"""
+        """BGM clip metadata must contain the "clipwright" key."""
         tl = _make_simple_timeline()
         timeline_path = tmp_timeline_dir / "timeline.otio"
         output_path = tmp_timeline_dir / "output.otio"
@@ -247,7 +251,7 @@ class TestAddBgmMetadata:
         bgm_clips = _get_bgm_clips(out_tl)
         assert len(bgm_clips) == 1
         meta = bgm_clips[0].metadata.get("clipwright")
-        assert meta is not None, 'BGM クリップに metadata["clipwright"] が存在すること'
+        assert meta is not None, 'BGM clip must have metadata["clipwright"]'
 
     def test_bgm_metadata_tool_field(
         self,
@@ -255,7 +259,7 @@ class TestAddBgmMetadata:
         bgm_audio_file: Path,
         media_info_bgm: Any,
     ) -> None:
-        """BGM クリップ metadata の tool フィールドが "clipwright-bgm" であること。"""
+        """BGM clip metadata tool field must be "clipwright-bgm"."""
         tl = _make_simple_timeline()
         timeline_path = tmp_timeline_dir / "timeline.otio"
         output_path = tmp_timeline_dir / "output.otio"
@@ -280,7 +284,7 @@ class TestAddBgmMetadata:
         bgm_audio_file: Path,
         media_info_bgm: Any,
     ) -> None:
-        """BGM クリップ metadata の kind フィールドが "bgm" であること。"""
+        """BGM clip metadata kind field must be "bgm"."""
         tl = _make_simple_timeline()
         timeline_path = tmp_timeline_dir / "timeline.otio"
         output_path = tmp_timeline_dir / "output.otio"
@@ -305,7 +309,7 @@ class TestAddBgmMetadata:
         bgm_audio_file: Path,
         media_info_bgm: Any,
     ) -> None:
-        """BGM クリップ metadata の volume_db が options の値と一致すること。"""
+        """BGM clip metadata volume_db must match the options value."""
         tl = _make_simple_timeline()
         timeline_path = tmp_timeline_dir / "timeline.otio"
         output_path = tmp_timeline_dir / "output.otio"
@@ -330,7 +334,7 @@ class TestAddBgmMetadata:
         bgm_audio_file: Path,
         media_info_bgm: Any,
     ) -> None:
-        """BGM クリップ metadata の fade_in/out_sec が options の値と一致すること。"""
+        """BGM clip metadata fade_in/out_sec must match the options values."""
         tl = _make_simple_timeline()
         timeline_path = tmp_timeline_dir / "timeline.otio"
         output_path = tmp_timeline_dir / "output.otio"
@@ -356,7 +360,7 @@ class TestAddBgmMetadata:
         bgm_audio_file: Path,
         media_info_bgm: Any,
     ) -> None:
-        """BGM クリップ metadata の ducking フィールドが options の値と一致すること。"""
+        """BGM clip metadata ducking fields must match the options values."""
         from clipwright_bgm.schemas import DuckingOptions
 
         tl = _make_simple_timeline()
@@ -389,7 +393,7 @@ class TestAddBgmMetadata:
         bgm_audio_file: Path,
         media_info_bgm: Any,
     ) -> None:
-        """BGM クリップ metadata["clipwright"] が BgmDirective として再構築できること（DC-AS-001）。"""
+        """BGM clip metadata["clipwright"] must be reconstructible as a BgmDirective (DC-AS-001)."""
         tl = _make_simple_timeline()
         timeline_path = tmp_timeline_dir / "timeline.otio"
         output_path = tmp_timeline_dir / "output.otio"
@@ -406,24 +410,24 @@ class TestAddBgmMetadata:
         out_tl = load_timeline(str(output_path))
         bgm_clips = _get_bgm_clips(out_tl)
         meta = bgm_clips[0].metadata["clipwright"]
-        # BgmDirective として再構築できることを確認
+        # Verify that the metadata can be reconstructed as a BgmDirective
         directive = BgmDirective(**meta)
         assert directive.kind == "bgm"
         assert directive.tool == "clipwright-bgm"
 
 
 # ===========================================================================
-# テスト観点 7: 再呼び出し検出（kind=='bgm' クリップ存在 → INVALID_INPUT）
+# Test scope 7: Re-invocation detection (existing kind=='bgm' clip → INVALID_INPUT)
 # ===========================================================================
 
 
 class TestAddBgmDuplicateDetection:
-    """再呼び出し検出: kind=='bgm' クリップが既存 → INVALID_INPUT（DC-AS-002/AM-005・ADR-B2-r3）。"""
+    """Re-invocation detection: existing kind=='bgm' clip → INVALID_INPUT (DC-AS-002/AM-005, ADR-B2-r3)."""
 
     def _add_bgm_clip_to_timeline(
         self, tl: otio.schema.Timeline, bgm_path: Path
     ) -> None:
-        """timeline に手動で kind=='bgm' クリップを追加するヘルパー（add_bgm 既呼び出し相当）。"""
+        """Helper to manually add a kind=='bgm' clip to a timeline (simulates a prior add_bgm call)."""
         a2 = otio.schema.Track(name="A2", kind=otio.schema.TrackKind.Audio)
         ref = otio.schema.ExternalReference(target_url=str(bgm_path))
         source_range = otio.opentime.TimeRange(
@@ -445,7 +449,7 @@ class TestAddBgmDuplicateDetection:
         bgm_audio_file: Path,
         media_info_bgm: Any,
     ) -> None:
-        """既に kind=='bgm' クリップが存在する timeline → INVALID_INPUT（ADR-B2-r3）。"""
+        """Timeline that already has a kind=='bgm' clip → INVALID_INPUT (ADR-B2-r3)."""
         tl = _make_simple_timeline()
         self._add_bgm_clip_to_timeline(tl, bgm_audio_file)
         timeline_path = tmp_timeline_dir / "timeline.otio"
@@ -469,9 +473,9 @@ class TestAddBgmDuplicateDetection:
         bgm_audio_file: Path,
         media_info_bgm: Any,
     ) -> None:
-        """A1 のみ（kind=='bgm' クリップなし）の timeline は再呼び出しエラーにならないこと（正常系を壊さない・ADR-B4-r2）。"""
-        # new_timeline が常に A1 を持つため、A1 だけで弾かれてはいけない
-        tl = _make_simple_timeline()  # V1 + A1（BGM クリップなし）
+        """A1-only timeline (no kind=='bgm' clip) must not trigger a re-invocation error (must not break success path, ADR-B4-r2)."""
+        # new_timeline always has A1, so A1 alone must not be rejected
+        tl = _make_simple_timeline()  # V1 + A1 (no BGM clip)
         timeline_path = tmp_timeline_dir / "timeline.otio"
         output_path = tmp_timeline_dir / "output.otio"
         _save_timeline_to_file(tl, timeline_path)
@@ -485,7 +489,7 @@ class TestAddBgmDuplicateDetection:
             )
 
         assert result["ok"] is True, (
-            "A1 のみの timeline は BGM なしと判定し正常に処理されること"
+            "A1-only timeline must be treated as having no BGM and processed successfully"
         )
 
     def test_duplicate_error_message_does_not_contain_clip_name(
@@ -494,9 +498,9 @@ class TestAddBgmDuplicateDetection:
         bgm_audio_file: Path,
         media_info_bgm: Any,
     ) -> None:
-        """再呼び出しエラーの message/hint に既存クリップ名が含まれないこと（SR L-2・固定文言化）。"""
+        """Re-invocation error message/hint must not contain the existing clip name (SR L-2, fixed text)."""
         tl = _make_simple_timeline()
-        # name を特徴的な文字列にしてエラーメッセージへの混入を検出できるようにする
+        # Use a distinctive name so that any leakage into the error message is detectable
         a2 = otio.schema.Track(name="A2", kind=otio.schema.TrackKind.Audio)
         ref = otio.schema.ExternalReference(target_url=str(bgm_audio_file))
         source_range = otio.opentime.TimeRange(
@@ -504,7 +508,7 @@ class TestAddBgmDuplicateDetection:
             duration=otio.opentime.RationalTime(BGM_DURATION_SEC * BGM_RATE, BGM_RATE),
         )
         bgm_clip = otio.schema.Clip(
-            name="EXISTING_CLIP_SENTINEL_NAME",  # エラーメッセージへの混入を確認するための値
+            name="EXISTING_CLIP_SENTINEL_NAME",  # distinctive value to detect leakage into error messages
             media_reference=ref,
             source_range=source_range,
             metadata={"clipwright": {"kind": "bgm", "tool": "clipwright-bgm"}},
@@ -527,12 +531,12 @@ class TestAddBgmDuplicateDetection:
         assert result["error"]["code"] == "INVALID_INPUT"
         error_message = result["error"]["message"]
         error_hint = result["error"]["hint"]
-        # 既存クリップ名が message/hint に含まれないこと（SR L-2・固定文言化）
+        # Existing clip name must not appear in message/hint (SR L-2, fixed text)
         assert "EXISTING_CLIP_SENTINEL_NAME" not in error_message, (
-            "再呼び出しエラーの message に既存クリップ名が混入している（SR L-2）"
+            "Re-invocation error message contains the existing clip name (SR L-2)"
         )
         assert "EXISTING_CLIP_SENTINEL_NAME" not in error_hint, (
-            "再呼び出しエラーの hint に既存クリップ名が混入している（SR L-2）"
+            "Re-invocation error hint contains the existing clip name (SR L-2)"
         )
 
     def test_duplicate_detection_is_based_on_kind_not_track_name(
@@ -541,12 +545,12 @@ class TestAddBgmDuplicateDetection:
         bgm_audio_file: Path,
         media_info_bgm: Any,
     ) -> None:
-        """再呼び出し検出はトラック名 'A2' ではなく kind=='bgm' クリップの存在で判定すること（ADR-B2-r3）。
+        """Re-invocation detection must be based on kind=='bgm' clip presence, not track name 'A2' (ADR-B2-r3).
 
-        トラック名が 'A2' 以外でも kind=='bgm' クリップがあれば INVALID_INPUT になること。
+        A kind=='bgm' clip on a track with a name other than 'A2' must also trigger INVALID_INPUT.
         """
         tl = _make_simple_timeline()
-        # トラック名を "BGM_CUSTOM" にして kind=='bgm' クリップを追加
+        # Add a kind=='bgm' clip on a track named "BGM_CUSTOM" instead of "A2"
         bgm_track = otio.schema.Track(
             name="BGM_CUSTOM", kind=otio.schema.TrackKind.Audio
         )
@@ -577,17 +581,17 @@ class TestAddBgmDuplicateDetection:
 
         assert result["ok"] is False
         assert result["error"]["code"] == "INVALID_INPUT", (
-            "kind=='bgm' クリップが存在すればトラック名によらず INVALID_INPUT になること"
+            "INVALID_INPUT must be returned regardless of track name when a kind=='bgm' clip exists"
         )
 
 
 # ===========================================================================
-# テスト観点 8: BGM 尺取得は inspect_media 経由・失敗時はエラーに整形
+# Test scope 8: BGM duration via inspect_media; error formatting on failure
 # ===========================================================================
 
 
 class TestAddBgmInspectMedia:
-    """BGM 尺取得は inspect_media 経由であること・失敗時のエラー整形（ADR-B2-r2）。"""
+    """BGM duration must be obtained via inspect_media; failures must be formatted as errors (ADR-B2-r2)."""
 
     def test_inspect_media_is_called_for_bgm_duration(
         self,
@@ -595,7 +599,7 @@ class TestAddBgmInspectMedia:
         bgm_audio_file: Path,
         media_info_bgm: Any,
     ) -> None:
-        """add_bgm が BGM 尺取得のために inspect_media を呼び出すこと。"""
+        """add_bgm must call inspect_media to obtain the BGM duration."""
         tl = _make_simple_timeline()
         timeline_path = tmp_timeline_dir / "timeline.otio"
         output_path = tmp_timeline_dir / "output.otio"
@@ -613,7 +617,7 @@ class TestAddBgmInspectMedia:
 
         mock_inspect.assert_called_once()
         call_args = mock_inspect.call_args
-        # inspect_media に渡されたパスが BGM ファイルのパスであること
+        # The path passed to inspect_media must be the BGM file path
         called_path = call_args[0][0] if call_args[0] else call_args[1].get("media", "")
         assert (
             str(bgm_audio_file.name) in called_path
@@ -625,7 +629,7 @@ class TestAddBgmInspectMedia:
         tmp_timeline_dir: Path,
         bgm_audio_file: Path,
     ) -> None:
-        """inspect_media が ClipwrightError を送出したとき add_bgm が ToolResult エラーを返すこと。"""
+        """When inspect_media raises ClipwrightError, add_bgm must return a ToolResult error envelope."""
         tl = _make_simple_timeline()
         timeline_path = tmp_timeline_dir / "timeline.otio"
         output_path = tmp_timeline_dir / "output.otio"
@@ -634,8 +638,8 @@ class TestAddBgmInspectMedia:
         def _raise_inspect_error(*args: Any, **kwargs: Any) -> None:
             raise ClipwrightError(
                 code=ErrorCode.DEPENDENCY_MISSING,
-                message="ffprobe が PATH 上に見つかりません",
-                hint="ffprobe をインストールしてください。",
+                message="ffprobe not found on PATH",
+                hint="Install ffprobe.",
             )
 
         with patch(
@@ -660,7 +664,7 @@ class TestAddBgmInspectMedia:
         tmp_timeline_dir: Path,
         bgm_audio_file: Path,
     ) -> None:
-        """inspect_media 失敗時のエラーメッセージに絶対パスが含まれないこと（CWE-209・ADR-B2-r2）。"""
+        """Error message on inspect_media failure must not expose the absolute path (CWE-209, ADR-B2-r2)."""
         tl = _make_simple_timeline()
         timeline_path = tmp_timeline_dir / "timeline.otio"
         output_path = tmp_timeline_dir / "output.otio"
@@ -669,8 +673,8 @@ class TestAddBgmInspectMedia:
         def _raise_inspect_error(*args: Any, **kwargs: Any) -> None:
             raise ClipwrightError(
                 code=ErrorCode.DEPENDENCY_MISSING,
-                message=f"ffprobe が見つかりません: {bgm_audio_file}",
-                hint="ffprobe をインストールしてください。",
+                message=f"ffprobe not found: {bgm_audio_file}",
+                hint="Install ffprobe.",
             )
 
         with patch(
@@ -685,19 +689,19 @@ class TestAddBgmInspectMedia:
 
         assert result["ok"] is False
         error_message = result["error"]["message"]
-        # 絶対パス（tmp_timeline_dir の絶対パス）が含まれていないこと
+        # Absolute path (tmp_timeline_dir) must not appear in the error message
         assert str(tmp_timeline_dir) not in error_message, (
-            "エラーメッセージに絶対パスが露出している（CWE-209）"
+            "Error message exposes an absolute path (CWE-209)"
         )
 
 
 # ===========================================================================
-# テスト観点 9: BGM 入力拡張子ホワイトリスト（DC-AM-007・ADR-B2-r3）
+# Test scope 9: BGM input extension whitelist (DC-AM-007, ADR-B2-r3)
 # ===========================================================================
 
 
 class TestAddBgmExtensionWhitelist:
-    """BGM 入力拡張子ホワイトリスト検証（DC-AM-007・ADR-B2-r3）。"""
+    """BGM input extension whitelist validation (DC-AM-007, ADR-B2-r3)."""
 
     @pytest.mark.parametrize(
         "ext",
@@ -721,7 +725,7 @@ class TestAddBgmExtensionWhitelist:
         media_info_bgm: Any,
         ext: str,
     ) -> None:
-        """許可拡張子 .{ext} の BGM ファイルは受理されること。"""
+        """BGM file with allowed extension .{ext} must be accepted."""
         bgm_file = tmp_timeline_dir / f"bgm.{ext}"
         bgm_file.write_bytes(b"dummy bgm")
         tl = _make_simple_timeline()
@@ -737,7 +741,7 @@ class TestAddBgmExtensionWhitelist:
                 options=BgmOptions(volume_db=-6.0),
             )
 
-        assert result["ok"] is True, f".{ext} は許可拡張子であること"
+        assert result["ok"] is True, f".{ext} is an allowed extension"
 
     @pytest.mark.parametrize(
         "ext",
@@ -749,7 +753,7 @@ class TestAddBgmExtensionWhitelist:
         media_info_bgm: Any,
         ext: str,
     ) -> None:
-        """許可外拡張子の BGM ファイルは INVALID_INPUT になること。"""
+        """BGM file with a disallowed extension must return INVALID_INPUT."""
         bgm_file = tmp_timeline_dir / f"bgm.{ext}"
         bgm_file.write_bytes(b"not bgm")
         tl = _make_simple_timeline()
@@ -769,12 +773,12 @@ class TestAddBgmExtensionWhitelist:
 
 
 # ===========================================================================
-# テスト観点 10: 境界検証・FILE_NOT_FOUND
+# Test scope 10: Boundary validation and FILE_NOT_FOUND
 # ===========================================================================
 
 
 class TestAddBgmPathValidation:
-    """bgm パス境界検証・ファイル不在検証（ADR-B8・ADR-B10）。"""
+    """BGM path boundary validation and file-not-found checks (ADR-B8, ADR-B10)."""
 
     def test_bgm_outside_timeline_dir_returns_path_not_allowed(
         self,
@@ -782,8 +786,8 @@ class TestAddBgmPathValidation:
         media_info_bgm: Any,
         tmp_path: Path,
     ) -> None:
-        """bgm が timeline と同一 dir 配下でないとき PATH_NOT_ALLOWED を返すこと（ADR-B8）。"""
-        # tmp_path は tmp_timeline_dir の親の tmp_path（別 dir）
+        """When bgm is not under the same directory as timeline, PATH_NOT_ALLOWED must be returned (ADR-B8)."""
+        # tmp_path is a different dir (parent of tmp_timeline_dir)
         outside_bgm = tmp_path / "outside_bgm.mp3"
         outside_bgm.write_bytes(b"outside bgm")
         tl = _make_simple_timeline()
@@ -806,7 +810,7 @@ class TestAddBgmPathValidation:
         tmp_timeline_dir: Path,
         media_info_bgm: Any,
     ) -> None:
-        """bgm ファイルが存在しないとき FILE_NOT_FOUND を返すこと（ADR-B10）。"""
+        """When the bgm file does not exist, FILE_NOT_FOUND must be returned (ADR-B10)."""
         tl = _make_simple_timeline()
         timeline_path = tmp_timeline_dir / "timeline.otio"
         output_path = tmp_timeline_dir / "output.otio"
@@ -827,7 +831,7 @@ class TestAddBgmPathValidation:
         self,
         tmp_timeline_dir: Path,
     ) -> None:
-        """FILE_NOT_FOUND のメッセージに絶対パスが含まれないこと（basename のみ・ADR-B10/CWE-209）。"""
+        """FILE_NOT_FOUND error message must not contain the absolute path — basename only (ADR-B10, CWE-209)."""
         tl = _make_simple_timeline()
         timeline_path = tmp_timeline_dir / "timeline.otio"
         output_path = tmp_timeline_dir / "output.otio"
@@ -844,10 +848,10 @@ class TestAddBgmPathValidation:
         assert result["ok"] is False
         error_message = result["error"]["message"]
         assert str(tmp_timeline_dir) not in error_message, (
-            "エラーメッセージに絶対パスが含まれている（CWE-209）"
+            "Error message contains an absolute path (CWE-209)"
         )
         assert "missing_bgm.mp3" in error_message, (
-            "エラーメッセージに basename が含まれていること"
+            "Error message must contain the basename"
         )
 
     def test_timeline_file_not_found_returns_error(
@@ -855,7 +859,7 @@ class TestAddBgmPathValidation:
         tmp_timeline_dir: Path,
         bgm_audio_file: Path,
     ) -> None:
-        """入力 timeline ファイルが存在しないとき エラーを返すこと。"""
+        """When the input timeline file does not exist, an error must be returned."""
         nonexistent_timeline = tmp_timeline_dir / "nonexistent_timeline.otio"
         output_path = tmp_timeline_dir / "output.otio"
 
@@ -870,12 +874,12 @@ class TestAddBgmPathValidation:
 
 
 # ===========================================================================
-# テスト観点 10b: output パス境界検証（timeline ディレクトリ外）
+# Test scope 10b: output path boundary validation (outside timeline directory)
 # ===========================================================================
 
 
 class TestAddBgmOutputPathBoundary:
-    """output パスの境界検証: timeline ディレクトリ外への書き出しを禁止（SR L-3）。"""
+    """Output path boundary validation: writing outside the timeline directory is forbidden (SR L-3)."""
 
     def test_output_outside_timeline_dir_returns_path_not_allowed(
         self,
@@ -884,11 +888,11 @@ class TestAddBgmOutputPathBoundary:
         media_info_bgm: Any,
         tmp_path: Path,
     ) -> None:
-        """output が timeline ディレクトリ外を指すとき PATH_NOT_ALLOWED を返すこと（SR L-3）。"""
+        """When output points outside the timeline directory, PATH_NOT_ALLOWED must be returned (SR L-3)."""
         tl = _make_simple_timeline()
         timeline_path = tmp_timeline_dir / "timeline.otio"
         _save_timeline_to_file(tl, timeline_path)
-        # tmp_path は tmp_timeline_dir の外（親ディレクトリ直下）
+        # tmp_path is outside tmp_timeline_dir (directly under the parent directory)
         outside_output = tmp_path / "outside_output.otio"
 
         result = add_bgm(
@@ -900,30 +904,30 @@ class TestAddBgmOutputPathBoundary:
 
         assert result["ok"] is False
         assert result["error"]["code"] == "PATH_NOT_ALLOWED", (
-            "output が timeline ディレクトリ外のとき PATH_NOT_ALLOWED が返ること（SR L-3）"
+            "PATH_NOT_ALLOWED must be returned when output is outside the timeline directory (SR L-3)"
         )
 
 
 # ===========================================================================
-# テスト観点 10c: inspect_media が duration=None を返すケース
+# Test scope 10c: inspect_media returns duration=None
 # ===========================================================================
 
 
 class TestAddBgmDurationNone:
-    """inspect_media が duration=None の MediaInfo を返すとき INVALID_INPUT になること（CR M-2）。"""
+    """When inspect_media returns a MediaInfo with duration=None, INVALID_INPUT must be returned (CR M-2)."""
 
     def test_duration_none_returns_invalid_input(
         self,
         tmp_timeline_dir: Path,
         bgm_audio_file: Path,
     ) -> None:
-        """inspect_media が duration=None → INVALID_INPUT（AttributeError 非漏洩・CR M-2）。"""
+        """inspect_media returns duration=None → INVALID_INPUT (no AttributeError leakage, CR M-2)."""
         from clipwright.schemas import MediaInfo, StreamInfo
 
         media_info_no_duration = MediaInfo(
             path=str(bgm_audio_file),
             container="mp4",
-            duration=None,  # 音声ストリームなし等で duration が取得できない場合
+            duration=None,  # e.g., when there is no audio stream and duration cannot be obtained
             streams=[
                 StreamInfo(
                     index=0,
@@ -950,20 +954,20 @@ class TestAddBgmDurationNone:
 
         assert result["ok"] is False
         assert result["error"]["code"] == "INVALID_INPUT", (
-            "duration=None のとき INVALID_INPUT が返ること（CR M-2・AttributeError 非漏洩）"
+            "INVALID_INPUT must be returned when duration=None (CR M-2, no AttributeError leakage)"
         )
-        # AttributeError が漏洩していないこと（ok=False エンベロープに収まっていること）
+        # Verify that AttributeError does not leak (result is contained in the ok=False envelope)
         assert "error" in result
 
 
 # ===========================================================================
-# テスト観点 10d: Path.resolve が OSError を送出するケース（フォールバック確認）
+# Test scope 10d: Path.resolve raises OSError (fallback verification)
 # ===========================================================================
 
 
 class TestAddBgmOsErrorFallback:
-    """Path.resolve が OSError を送出するとき absolute() でフォールバックし
-    PATH_NOT_ALLOWED が正しく発動することを確認する（CR M-3）。"""
+    """Verify that when Path.resolve raises OSError, absolute() is used as fallback
+    and PATH_NOT_ALLOWED is still triggered correctly (CR M-3)."""
 
     def test_check_bgm_within_timeline_dir_oserror_fallback_path_not_allowed(
         self,
@@ -971,9 +975,9 @@ class TestAddBgmOsErrorFallback:
         media_info_bgm: Any,
         tmp_path: Path,
     ) -> None:
-        """_check_bgm_within_timeline_dir の OSError フォールバック時に
-        bgm が境界外ならば PATH_NOT_ALLOWED を返すこと（CR M-3）。"""
-        # timeline ディレクトリ外の BGM ファイルを用意する
+        """On OSError fallback in _check_bgm_within_timeline_dir,
+        bgm outside the boundary must return PATH_NOT_ALLOWED (CR M-3)."""
+        # Prepare a BGM file outside the timeline directory
         outside_bgm = tmp_path / "outside_bgm.mp3"
         outside_bgm.write_bytes(b"outside bgm")
         tl = _make_simple_timeline()
@@ -981,7 +985,7 @@ class TestAddBgmOsErrorFallback:
         output_path = tmp_timeline_dir / "output.otio"
         _save_timeline_to_file(tl, timeline_path)
 
-        # Path.resolve を monkeypatch して OSError を発生させる
+        # Monkeypatch Path.resolve to raise OSError
 
         def mock_resolve(self: Path, strict: bool = False) -> Path:  # type: ignore[override]
             raise OSError("mock resolve failure")
@@ -996,17 +1000,17 @@ class TestAddBgmOsErrorFallback:
 
         assert result["ok"] is False
         assert result["error"]["code"] == "PATH_NOT_ALLOWED", (
-            "OSError フォールバック時も境界外 bgm は PATH_NOT_ALLOWED になること（CR M-3）"
+            "bgm outside boundary must return PATH_NOT_ALLOWED even on OSError fallback (CR M-3)"
         )
 
 
 # ===========================================================================
-# テスト観点 11: output == 入力 timeline / 既存 output 衝突
+# Test scope 11: output == input timeline / existing output collision
 # ===========================================================================
 
 
 class TestAddBgmOutputCollision:
-    """output == 入力 timeline / 既存 output 衝突でエラーになること（非破壊・ADR-B10）。"""
+    """output == input timeline / existing output collision must return errors (non-destructive, ADR-B10)."""
 
     def test_output_same_as_input_timeline_returns_error(
         self,
@@ -1014,7 +1018,7 @@ class TestAddBgmOutputCollision:
         bgm_audio_file: Path,
         media_info_bgm: Any,
     ) -> None:
-        """output == 入力 timeline パスのとき INVALID_INPUT を返すこと（上書き禁止・M5）。"""
+        """When output == input timeline path, INVALID_INPUT must be returned (overwrite forbidden, M5)."""
         tl = _make_simple_timeline()
         timeline_path = tmp_timeline_dir / "timeline.otio"
         _save_timeline_to_file(tl, timeline_path)
@@ -1035,12 +1039,12 @@ class TestAddBgmOutputCollision:
         bgm_audio_file: Path,
         media_info_bgm: Any,
     ) -> None:
-        """output に既存ファイルが存在するとき INVALID_INPUT を返すこと（上書き禁止）。"""
+        """When an existing file is at the output path, INVALID_INPUT must be returned (overwrite forbidden)."""
         tl = _make_simple_timeline()
         timeline_path = tmp_timeline_dir / "timeline.otio"
         output_path = tmp_timeline_dir / "output.otio"
         _save_timeline_to_file(tl, timeline_path)
-        # output に先にファイルを作成しておく（衝突状態）
+        # Pre-create the output file to simulate a collision
         output_path.write_bytes(b"existing output content")
 
         result = add_bgm(
@@ -1055,12 +1059,12 @@ class TestAddBgmOutputCollision:
 
 
 # ===========================================================================
-# テスト観点 12: 返り値エンベロープ
+# Test scope 12: Return value envelope
 # ===========================================================================
 
 
 class TestAddBgmResultEnvelope:
-    """add_bgm 返り値エンベロープの契約確認（ok・summary・artifacts）。"""
+    """Contract check for add_bgm return value envelope (ok, summary, artifacts)."""
 
     def test_result_ok_is_true(
         self,
@@ -1068,7 +1072,7 @@ class TestAddBgmResultEnvelope:
         bgm_audio_file: Path,
         media_info_bgm: Any,
     ) -> None:
-        """正常系で ok=True が返ること。"""
+        """ok=True must be returned on the success path."""
         tl = _make_simple_timeline()
         timeline_path = tmp_timeline_dir / "timeline.otio"
         output_path = tmp_timeline_dir / "output.otio"
@@ -1090,7 +1094,7 @@ class TestAddBgmResultEnvelope:
         bgm_audio_file: Path,
         media_info_bgm: Any,
     ) -> None:
-        """正常系で summary が空でないこと（AI が次の一手を判断できる要点を含む）。"""
+        """summary must be non-empty on the success path (must contain key points for AI decision-making)."""
         tl = _make_simple_timeline()
         timeline_path = tmp_timeline_dir / "timeline.otio"
         output_path = tmp_timeline_dir / "output.otio"
@@ -1113,7 +1117,7 @@ class TestAddBgmResultEnvelope:
         bgm_audio_file: Path,
         media_info_bgm: Any,
     ) -> None:
-        """正常系で artifacts に出力 timeline のパスが含まれること。"""
+        """artifacts must contain the output timeline path on the success path."""
         tl = _make_simple_timeline()
         timeline_path = tmp_timeline_dir / "timeline.otio"
         output_path = tmp_timeline_dir / "output.otio"
@@ -1128,13 +1132,13 @@ class TestAddBgmResultEnvelope:
             )
 
         artifacts = result.get("artifacts", [])
-        assert len(artifacts) >= 1, "artifacts に少なくとも 1 件のエントリがあること"
+        assert len(artifacts) >= 1, "artifacts must have at least one entry"
         artifact_paths = [
             a["path"] if isinstance(a, dict) else a.path for a in artifacts
         ]
         assert any(
             str(output_path) in p or p.endswith("output.otio") for p in artifact_paths
-        ), "artifacts に出力 timeline のパスが含まれること"
+        ), "artifacts must contain the output timeline path"
 
     def test_result_has_required_envelope_keys(
         self,
@@ -1142,7 +1146,7 @@ class TestAddBgmResultEnvelope:
         bgm_audio_file: Path,
         media_info_bgm: Any,
     ) -> None:
-        """正常系で ok/summary/data/artifacts/warnings のキーが存在すること（§6.3）。"""
+        """ok/summary/data/artifacts/warnings keys must exist on the success path (§6.3)."""
         tl = _make_simple_timeline()
         timeline_path = tmp_timeline_dir / "timeline.otio"
         output_path = tmp_timeline_dir / "output.otio"
@@ -1157,4 +1161,4 @@ class TestAddBgmResultEnvelope:
             )
 
         for key in ("ok", "summary", "data", "artifacts", "warnings"):
-            assert key in result, f"エンベロープに {key!r} キーがないこと"
+            assert key in result, f"Envelope is missing key {key!r}"

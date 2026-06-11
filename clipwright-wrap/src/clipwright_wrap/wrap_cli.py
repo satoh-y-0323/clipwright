@@ -1,14 +1,15 @@
-"""wrap_cli.py — BudouX 文節分割の別プロセス小 CLI。
+"""wrap_cli.py — Small CLI for BudouX phrase-boundary segmentation (separate process).
 
-MCP サーバープロセスから import されない（§2.4 subprocess 疎結合）。
-wrap.py が sys.executable -m clipwright_wrap.wrap_cli として別プロセス起動する。
+Not imported by the MCP server process (§2.4 subprocess loose coupling).
+wrap.py launches this as sys.executable -m clipwright_wrap.wrap_cli in a subprocess.
 
-CLI 契約（WR-AD-02）:
+CLI contract (WR-AD-02):
   - stdin: JSON {"language": "ja", "texts": ["cue1", ...]}
-  - stdout: JSON {"segments": [["文節1", "文節2", ...], ...]}
-  - エラー時 stdout: {"error": {"code": str, "message": str, "hint": str}}
-  - main() は全例外をトップレベルで捕捉し、必ず stdout JSON を出して return 0。
-  - stdout は JSON のみ。ログ・進捗は stderr へ。
+  - stdout: JSON {"segments": [["segment1", "segment2", ...], ...]}
+  - On error stdout: {"error": {"code": str, "message": str, "hint": str}}
+  - main() catches all exceptions at the top level, always outputs JSON to stdout,
+    and returns 0.
+  - stdout contains JSON only. Logs and progress go to stderr.
 """
 
 from __future__ import annotations
@@ -20,16 +21,14 @@ from typing import Any
 
 from clipwright.errors import ErrorCode
 
-# pip install ヒント文字列
-_WRAP_INSTALL_HINT = (
-    "`pip install clipwright-wrap` で clipwright-wrap を導入してください。"
-)
+# pip install hint string
+_WRAP_INSTALL_HINT = "Install clipwright-wrap with `pip install clipwright-wrap`."
 
-# language → parser ロード関数のマッピング（DC-AS-002: テスト monkeypatch のターゲット）
-# budoux はモジュールトップレベルで import する。本 CLI は別プロセスで起動されるため
-# サーバープロセスへの漏洩リスクはなく、_PARSER_LOADERS をモジュール定数として
-# expose する必要がある（テストが直接参照する）。
-# budoux が未インストールの場合は空辞書のまま（main() で DEPENDENCY_MISSING を返す）。
+# Mapping of language → parser load function (DC-AS-002: target for test monkeypatching)
+# budoux is imported at module top level. Because this CLI runs in a separate process,
+# there is no risk of leaking into the server process, and _PARSER_LOADERS must be
+# exposed as a module constant (tests reference it directly).
+# If budoux is not installed, the dict stays empty (main() returns DEPENDENCY_MISSING).
 try:
     import budoux as _budoux
 
@@ -44,9 +43,9 @@ except ImportError:
 
 
 def _error_output(code: str, message: str, hint: str) -> None:
-    """エラー JSON を stdout に出力する。
+    """Output an error JSON to stdout.
 
-    呼び出し元でパス情報をサニタイズしてから渡すこと。
+    The caller must sanitise any path information before passing it here.
     """
     result: dict[str, Any] = {
         "error": {
@@ -59,43 +58,44 @@ def _error_output(code: str, message: str, hint: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:  # noqa: ARG001
-    """wrap_cli エントリポイント。
+    """Entry point for wrap_cli.
 
-    全例外をトップレベルで捕捉し、stdout に JSON を出力して return 0（WR-AD-02）。
+    Catches all exceptions at the top level, outputs JSON to stdout,
+    and returns 0 (WR-AD-02).
 
     Args:
-        argv: コマンドライン引数リスト（現バージョンでは未使用）。
+        argv: Command-line argument list (unused in the current version).
 
     Returns:
-        終了コード（常に 0）。
+        Exit code (always 0).
     """
     try:
-        # --- stdin から JSON を読み込む ---
+        # --- Read JSON from stdin ---
         try:
             raw = sys.stdin.read()
             payload: dict[str, Any] = json.loads(raw)
         except (json.JSONDecodeError, ValueError):
             _error_output(
                 code=str(ErrorCode.INVALID_INPUT),
-                message="stdin の JSON パースに失敗しました",
-                hint="stdin に有効な JSON オブジェクトを渡してください。",
+                message="Failed to parse JSON from stdin",
+                hint="Pass a valid JSON object to stdin.",
             )
             return 0
 
-        # --- 入力バリデーション ---
+        # --- Input validation ---
         if "language" not in payload:
             _error_output(
                 code=str(ErrorCode.INVALID_INPUT),
-                message="'language' キーがありません",
-                hint="stdin JSON に 'language' キーを含めてください。",
+                message="Missing 'language' key",
+                hint="Include a 'language' key in the stdin JSON.",
             )
             return 0
 
         if "texts" not in payload:
             _error_output(
                 code=str(ErrorCode.INVALID_INPUT),
-                message="'texts' キーがありません",
-                hint="stdin JSON に 'texts' キーを含めてください。",
+                message="Missing 'texts' key",
+                hint="Include a 'texts' key in the stdin JSON.",
             )
             return 0
 
@@ -105,26 +105,26 @@ def main(argv: list[str] | None = None) -> int:  # noqa: ARG001
         if not isinstance(texts, list):
             _error_output(
                 code=str(ErrorCode.INVALID_INPUT),
-                message="'texts' はリストである必要があります",
-                hint="stdin JSON の 'texts' を文字列のリストにしてください。",
+                message="'texts' must be a list",
+                hint="Set 'texts' in the stdin JSON to a list of strings.",
             )
             return 0
 
         if not all(isinstance(t, str) for t in texts):
             _error_output(
                 code=str(ErrorCode.INVALID_INPUT),
-                message="'texts' の各要素は文字列である必要があります",
-                hint="stdin JSON の 'texts' を文字列のリストにしてください。",
+                message="Each element of 'texts' must be a string",
+                hint="Set 'texts' in the stdin JSON to a list of strings.",
             )
             return 0
 
-        # --- parser ロード関数を取得（DC-AS-002: texts ループの外で 1 回のみ）---
-        # budoux 未インストール時（_PARSER_LOADERS が空）は DEPENDENCY_MISSING を返す
-        # CR L-2 対応: INVALID_INPUT ではなく DEPENDENCY_MISSING + install hint
+        # --- Get the parser loader (DC-AS-002: loaded once, outside the texts loop) ---
+        # If budoux is missing (_PARSER_LOADERS empty), return DEPENDENCY_MISSING
+        # CR L-2: return DEPENDENCY_MISSING + install hint instead of INVALID_INPUT
         if not _PARSER_LOADERS:
             _error_output(
                 code=str(ErrorCode.DEPENDENCY_MISSING),
-                message="budoux がインストールされていません",
+                message="budoux is not installed",
                 hint=_WRAP_INSTALL_HINT,
             )
             return 0
@@ -132,28 +132,28 @@ def main(argv: list[str] | None = None) -> int:  # noqa: ARG001
         if language not in _PARSER_LOADERS:
             _error_output(
                 code=str(ErrorCode.INVALID_INPUT),
-                message="対応していない language が指定されました",
+                message="Unsupported language specified",
                 hint=(
-                    "language は ja / zh-hans / zh-hant / th"
-                    " のいずれかを指定してください。"
+                    "Specify one of the following for language:"
+                    " ja / zh-hans / zh-hant / th."
                 ),
             )
             return 0
 
-        # parser は texts ループの外で 1 回だけロードする（DC-AS-002）
-        # ローダー呼び出し時の ImportError は DEPENDENCY_MISSING として返す
+        # Load the parser once outside the texts loop (DC-AS-002)
+        # ImportError when calling the loader is returned as DEPENDENCY_MISSING
         try:
             parser = _PARSER_LOADERS[language]()
         except ImportError:
-            # SR L-2: str(exc) には内部パスが含まれうるため固定文言を使用する
+            # SR L-2: str(exc) may contain internal paths; use a fixed message instead
             _error_output(
                 code=str(ErrorCode.DEPENDENCY_MISSING),
-                message="budoux のインポートに失敗しました",
+                message="Failed to import budoux",
                 hint=_WRAP_INSTALL_HINT,
             )
             return 0
 
-        # --- 各 cue テキストを文節分割する ---
+        # --- Segment each cue text into phrase-boundary tokens ---
         segments: list[list[str]] = []
         for text in texts:
             seg: list[str] = parser.parse(text)
@@ -164,14 +164,14 @@ def main(argv: list[str] | None = None) -> int:  # noqa: ARG001
         return 0
 
     except Exception:
-        # 想定外の例外もすべて捕捉して error JSON を返す（WR-AD-02）
-        # SR NF-L-1: str(exc) に内部パスが含まれうるため固定文言を使用する。
-        # デバッグ詳細は stderr 限定・stdout JSON には漏洩させない。
+        # Catch all unexpected exceptions and return an error JSON (WR-AD-02)
+        # SR NF-L-1: str(exc) may contain internal paths; use a fixed message instead.
+        # Debug details go to stderr only; must not leak into stdout JSON.
         traceback.print_exc(file=sys.stderr)
         _error_output(
             code=str(ErrorCode.INTERNAL),
-            message="wrap_cli で予期しないエラーが発生しました",
-            hint="再現条件を添えて報告してください。",
+            message="An unexpected error occurred in wrap_cli",
+            hint="Please report with reproduction steps.",
         )
         return 0
 

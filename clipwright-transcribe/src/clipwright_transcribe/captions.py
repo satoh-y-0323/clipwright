@@ -1,14 +1,16 @@
-"""captions.py — clipwright-transcribe 純ロジック層（plan.py 同型）。
+"""captions.py — clipwright-transcribe pure logic layer (mirrors plan.py structure).
 
-whisper.cpp の `-oj` JSON（transcription[].offsets.from/to ミリ秒・text）を
-正規化 segments に変換し、SRT/VTT 文字列を生成する。
+Converts whisper.cpp `-oj` JSON (transcription[].offsets.from/to in ms, text) into
+normalised segments and generates SRT/VTT strings.
 
-設計判断:
-- 外部プロセスを一切実行しない純関数群（契約面 100% 目標）。
-- SRT/VTT のタイムコードは同一の秒値から導出し一貫性を保証する（DC-AS-005）。
-  区切り文字のみが異なる（SRT="HH:MM:SS,mmm" / VTT="HH:MM:SS.mmm"）。
-- セグメント0件時は to_srt が空文字列・to_vtt は "WEBVTT" ヘッダのみ（DC-GP-002）。
-- whisper 出力の防御: 空 text・退化区間（start>=end）・欠落キーを除去する。
+Design decisions:
+- Pure functions; no external processes are executed (target: 100% contract coverage).
+- SRT/VTT timecodes are derived from the same second value to guarantee consistency
+  (DC-AS-005). Only the separator differs (SRT="HH:MM:SS,mmm" / VTT="HH:MM:SS.mmm").
+- When segments is empty, to_srt returns an empty string and to_vtt returns only the
+  "WEBVTT" header (DC-GP-002).
+- Defensive handling of whisper output: removes entries with empty text, degenerate
+  intervals (start>=end), or missing keys.
 """
 
 from __future__ import annotations
@@ -17,9 +19,10 @@ from typing import Any, TypedDict
 
 
 class Segment(TypedDict):
-    """正規化済み字幕セグメント。
+    """Normalised caption segment.
 
-    start_sec / end_sec は秒（float）、text は前後空白を除去した本文。
+    start_sec / end_sec are in seconds (float); text has leading/trailing whitespace
+    stripped.
     """
 
     start_sec: float
@@ -28,21 +31,22 @@ class Segment(TypedDict):
 
 
 def normalize_segments(whisper_json: dict[str, Any]) -> list[Segment]:
-    """whisper `-oj` JSON を正規化 segments に変換する。
+    """Convert a whisper `-oj` JSON dict into normalised segments.
 
-    transcription[].offsets.from/to（ミリ秒）を秒換算し、text を strip する。
-    防御（DC-GP-002 補完）として以下を除去する:
-      - offsets / from / to / text のいずれかのキーが欠落した要素
-      - text が空または空白のみの要素
-      - 退化区間（start_sec >= end_sec）の要素
+    Converts transcription[].offsets.from/to (milliseconds) to seconds and strips
+    text whitespace.
+    Defensive cleanup (DC-GP-002 supplement) removes entries where:
+      - offsets / from / to / text keys are missing
+      - text is empty or whitespace-only
+      - the interval is degenerate (start_sec >= end_sec)
 
-    transcription キーが欠落・空の場合は空リストを返す。
+    Returns an empty list when the transcription key is absent or not a list.
 
     Args:
-        whisper_json: whisper.cpp の `-oj` JSON を読み込んだ dict。
+        whisper_json: dict loaded from a whisper.cpp `-oj` JSON file.
 
     Returns:
-        正規化済み Segment のリスト。
+        List of normalised Segment objects.
     """
     transcription = whisper_json.get("transcription")
     if not isinstance(transcription, list):
@@ -73,7 +77,7 @@ def normalize_segments(whisper_json: dict[str, Any]) -> list[Segment]:
 
         start_sec = start_ms / 1000.0
         end_sec = end_ms / 1000.0
-        # 退化区間（start >= end）を除去する
+        # Remove degenerate intervals (start >= end).
         if start_sec >= end_sec:
             continue
 
@@ -83,18 +87,19 @@ def normalize_segments(whisper_json: dict[str, Any]) -> list[Segment]:
 
 
 def _format_timecode(total_seconds: float, *, ms_separator: str) -> str:
-    """秒を "HH:MM:SS{sep}mmm" 形式のタイムコードに整形する。
+    """Format seconds as "HH:MM:SS{sep}mmm" timecode.
 
-    ms_separator で SRT（","）と VTT（"."）を切り替える。
-    SRT/VTT で同一の秒値・ミリ秒値を共有させ一貫性を保つ（DC-AS-005）。
-    ミリ秒は四捨五入（round → int 変換）で算出する。
+    The ms_separator switches between SRT (",") and VTT (".").
+    Both formats share the same second and millisecond values for consistency
+    (DC-AS-005).
+    Milliseconds are computed with round-half-up (round → int conversion).
 
     Args:
-        total_seconds: 秒数。
-        ms_separator: 秒とミリ秒の区切り文字（"," または "."）。
+        total_seconds: Duration in seconds.
+        ms_separator: Separator between seconds and milliseconds ("," or ".").
 
     Returns:
-        整形済みタイムコード文字列。
+        Formatted timecode string.
     """
     total_ms = int(round(total_seconds * 1000.0))
     hours, rem_ms = divmod(total_ms, 3_600_000)
@@ -104,16 +109,16 @@ def _format_timecode(total_seconds: float, *, ms_separator: str) -> str:
 
 
 def to_srt(segments: list[Segment]) -> str:
-    """正規化 segments を SRT 文字列に変換する。
+    """Convert normalised segments to an SRT string.
 
-    1 始まりインデックス・"HH:MM:SS,mmm" タイムコード・空行区切り。
-    セグメント0件時は空文字列を返す（DC-GP-002）。
+    1-based index, "HH:MM:SS,mmm" timecodes, blank-line separator.
+    Returns an empty string when segments is empty (DC-GP-002).
 
     Args:
-        segments: 正規化済み Segment のリスト。
+        segments: List of normalised Segment objects.
 
     Returns:
-        SRT 形式の文字列。
+        SRT-formatted string.
     """
     if not segments:
         return ""
@@ -128,16 +133,16 @@ def to_srt(segments: list[Segment]) -> str:
 
 
 def to_vtt(segments: list[Segment]) -> str:
-    """正規化 segments を WebVTT 文字列に変換する。
+    """Convert normalised segments to a WebVTT string.
 
-    "WEBVTT" ヘッダ・"HH:MM:SS.mmm" タイムコード（ドット区切り）。
-    セグメント0件時は "WEBVTT" ヘッダのみを返す（DC-GP-002）。
+    "WEBVTT" header, "HH:MM:SS.mmm" timecodes (dot separator).
+    Returns only the "WEBVTT" header when segments is empty (DC-GP-002).
 
     Args:
-        segments: 正規化済み Segment のリスト。
+        segments: List of normalised Segment objects.
 
     Returns:
-        WebVTT 形式の文字列。
+        WebVTT-formatted string.
     """
     if not segments:
         return "WEBVTT\n"
