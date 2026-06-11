@@ -10,7 +10,7 @@ authors = [
 requires-python = ">=3.11"
 dependencies = [
     "budoux",
-    "clipwright",
+    "clipwright>=0.1.0",
     "mcp[cli]>=1.27.2",
     "pydantic>=2",
 ]
