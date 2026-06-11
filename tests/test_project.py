@@ -1,22 +1,22 @@
-"""test_project.py — project.py のテスト。
+"""test_project.py — Tests for project.py.
 
-対象（§7 / §13.2 DC-AM-007）:
+Target (§7 / §13.2 DC-AM-007):
 - init_project(project_dir, name, force=False):
-    - dir / sources / artifacts / outputs を作成
-    - clipwright.json マニフェストを生成
-    - V1/A1 トラック付き空 timeline.otio を生成（§13.1 DC-AS-003）
-    - 既存なら ClipwrightError(PROJECT_EXISTS)
-    - force=True は非破壊:
-        - マニフェスト再生成とディレクトリ存在保証のみ
-        - 既存 sources/artifacts/outputs/timeline.otio を削除・上書きしない
-        - timeline.otio 欠落時のみ空 timeline を生成
-- find_project(start_dir): 上位ディレクトリへ遡って clipwright.json を探索
-- load_manifest(project_dir) / save_manifest(project_dir, manifest): 往復シリアライズ
+    - Creates dir / sources / artifacts / outputs
+    - Generates clipwright.json manifest
+    - Generates empty timeline.otio with V1/A1 tracks (§13.1 DC-AS-003)
+    - Raises ClipwrightError(PROJECT_EXISTS) if project already exists
+    - force=True is non-destructive:
+        - Only regenerates manifest and ensures directory existence
+        - Does not delete or overwrite existing sources/artifacts/outputs/timeline.otio
+        - Generates empty timeline only when timeline.otio is missing
+- find_project(start_dir): Walks up ancestor directories looking for clipwright.json
+- load_manifest / save_manifest(project_dir, manifest): round-trip serialization
 
-追加 Red テスト（レビュー対応 M-3 / F-03 / L-4=F-08）:
-- [M-3] save_manifest はアトミック書き込み（temp → os.replace）を使う
-- [F-03] find_project はディレクトリでない start_dir を渡したときにエラーにする
-- [L-4/F-08] find_project 未検出時の hint に start_dir フルパスを重複掲載しない
+Additional Red tests (review M-3 / F-03 / L-4=F-08):
+- [M-3] save_manifest uses atomic write (temp → os.replace)
+- [F-03] find_project raises an error when start_dir is not a directory
+- [L-4/F-08] The hint on find_project not-found does not duplicate the full start_dir
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pytest
 
-# --- Import（project.py 未実装のため ImportError が発生する → Red） ---
+# --- Import (project.py not yet implemented → ImportError expected → Red) ---
 from clipwright.project import (
     find_project,
     init_project,
@@ -37,21 +37,21 @@ from clipwright.project import (
 )
 
 # ===========================================================================
-# init_project — 正常系
+# init_project — success path
 # ===========================================================================
 
 
 class TestInitProjectSuccess:
-    """init_project の正常系（ディレクトリ・ファイル生成）。"""
+    """init_project success path (directory and file creation)."""
 
     def test_creates_project_dir(self, tmp_project: Path) -> None:
-        """project_dir が存在しない場合に作成される。"""
+        """project_dir is created when it does not exist."""
         proj = tmp_project / "myproject"
         init_project(str(proj), name="myproject")
         assert proj.is_dir()
 
     def test_creates_subdirs(self, tmp_project: Path) -> None:
-        """sources / artifacts / outputs サブディレクトリが作成される。"""
+        """sources / artifacts / outputs sub-directories are created."""
         proj = tmp_project / "myproject"
         init_project(str(proj), name="myproject")
         assert (proj / "sources").is_dir()
@@ -59,48 +59,47 @@ class TestInitProjectSuccess:
         assert (proj / "outputs").is_dir()
 
     def test_creates_manifest(self, tmp_project: Path) -> None:
-        """clipwright.json マニフェストが生成される。"""
+        """clipwright.json manifest is generated."""
         proj = tmp_project / "myproject"
         init_project(str(proj), name="myproject")
         assert (proj / "clipwright.json").is_file()
 
     def test_manifest_schema_version(self, tmp_project: Path) -> None:
-        """マニフェストに schema_version が含まれる。"""
+        """Manifest contains schema_version."""
         proj = tmp_project / "myproject"
         init_project(str(proj), name="myproject")
         manifest = json.loads((proj / "clipwright.json").read_text(encoding="utf-8"))
         assert "schema_version" in manifest
 
     def test_manifest_name(self, tmp_project: Path) -> None:
-        """マニフェストの name フィールドが引数と一致する。"""
+        """Manifest name field matches the argument."""
         proj = tmp_project / "myproject"
         init_project(str(proj), name="myproject")
         manifest = json.loads((proj / "clipwright.json").read_text(encoding="utf-8"))
         assert manifest["name"] == "myproject"
 
     def test_manifest_has_clipwright_version(self, tmp_project: Path) -> None:
-        """マニフェストに clipwright_version が含まれる。"""
+        """Manifest contains clipwright_version."""
         proj = tmp_project / "myproject"
         init_project(str(proj), name="myproject")
         manifest = json.loads((proj / "clipwright.json").read_text(encoding="utf-8"))
         assert "clipwright_version" in manifest
 
     def test_manifest_has_created_at(self, tmp_project: Path) -> None:
-        """マニフェストに created_at タイムスタンプが含まれる。"""
+        """Manifest contains a created_at timestamp."""
         proj = tmp_project / "myproject"
         init_project(str(proj), name="myproject")
         manifest = json.loads((proj / "clipwright.json").read_text(encoding="utf-8"))
         assert "created_at" in manifest
 
     def test_creates_timeline_otio(self, tmp_project: Path) -> None:
-        """timeline.otio が生成される。"""
+        """timeline.otio is generated."""
         proj = tmp_project / "myproject"
         init_project(str(proj), name="myproject")
         assert (proj / "timeline.otio").is_file()
 
     def test_timeline_has_v1_track(self, tmp_project: Path) -> None:
-        """timeline.otio に V1（Video）トラックが含まれる
-        （§13.1 DC-AS-003 / §13.5）。"""
+        """timeline.otio contains a V1 (Video) track (§13.1 DC-AS-003 / §13.5)."""
         import opentimelineio as otio
 
         proj = tmp_project / "myproject"
@@ -111,8 +110,7 @@ class TestInitProjectSuccess:
         assert video_tracks[0].name == "V1"
 
     def test_timeline_has_a1_track(self, tmp_project: Path) -> None:
-        """timeline.otio に A1（Audio）トラックが含まれる
-        （§13.1 DC-AS-003 / §13.5）。"""
+        """timeline.otio contains an A1 (Audio) track (§13.1 DC-AS-003 / §13.5)."""
         import opentimelineio as otio
 
         proj = tmp_project / "myproject"
@@ -123,7 +121,7 @@ class TestInitProjectSuccess:
         assert audio_tracks[0].name == "A1"
 
     def test_timeline_track_order(self, tmp_project: Path) -> None:
-        """トラック順序は [V1(Video), A1(Audio)]（§13.5 DC-AS-001 再）。"""
+        """Track order is [V1(Video), A1(Audio)] (§13.5 DC-AS-001 re)."""
         import opentimelineio as otio
 
         proj = tmp_project / "myproject"
@@ -135,7 +133,7 @@ class TestInitProjectSuccess:
         assert tracks[1].kind == otio.schema.TrackKind.Audio
 
     def test_timeline_is_empty(self, tmp_project: Path) -> None:
-        """初期 timeline.otio はクリップ・マーカーを持たない空の状態。"""
+        """Initial timeline.otio contains no clips or markers."""
         import opentimelineio as otio
 
         proj = tmp_project / "myproject"
@@ -146,15 +144,15 @@ class TestInitProjectSuccess:
 
 
 # ===========================================================================
-# init_project — PROJECT_EXISTS エラー
+# init_project — PROJECT_EXISTS error
 # ===========================================================================
 
 
 class TestInitProjectExists:
-    """既存プロジェクトへの init は PROJECT_EXISTS を発生させる。"""
+    """init to an existing project raises PROJECT_EXISTS."""
 
     def test_raises_project_exists(self, tmp_project: Path) -> None:
-        """既存プロジェクトに force なしで init すると PROJECT_EXISTS。"""
+        """Calling init on an existing project without force raises PROJECT_EXISTS."""
         from clipwright.errors import ClipwrightError, ErrorCode
 
         proj = tmp_project / "myproject"
@@ -164,7 +162,7 @@ class TestInitProjectExists:
         assert exc_info.value.code == ErrorCode.PROJECT_EXISTS
 
     def test_error_has_hint(self, tmp_project: Path) -> None:
-        """PROJECT_EXISTS エラーの hint が空でない。"""
+        """PROJECT_EXISTS error hint is non-empty."""
         from clipwright.errors import ClipwrightError
 
         proj = tmp_project / "myproject"
@@ -175,31 +173,31 @@ class TestInitProjectExists:
 
 
 # ===========================================================================
-# init_project — force=True（非破壊セマンティクス）DC-AM-007
+# init_project — force=True (non-destructive semantics) DC-AM-007
 # ===========================================================================
 
 
 class TestInitProjectForce:
-    """force=True は非破壊（§13.2 DC-AM-007）。"""
+    """force=True is non-destructive (§13.2 DC-AM-007)."""
 
     def test_force_does_not_raise(self, tmp_project: Path) -> None:
-        """force=True では既存プロジェクトに対しても例外が出ない。"""
+        """force=True does not raise an exception on an existing project."""
         proj = tmp_project / "myproject"
         init_project(str(proj), name="myproject")
-        # 例外なく完了するはず
+        # Should complete without exception
         init_project(str(proj), name="myproject", force=True)
 
     def test_force_regenerates_manifest(self, tmp_project: Path) -> None:
-        """force=True はマニフェストを再生成する（設定変更の反映）。"""
+        """force=True regenerates the manifest (reflects configuration changes)."""
         proj = tmp_project / "myproject"
         init_project(str(proj), name="myproject")
-        # name を変えて force=True で再生成
+        # Regenerate with a different name via force=True
         init_project(str(proj), name="renamed", force=True)
         manifest = json.loads((proj / "clipwright.json").read_text(encoding="utf-8"))
         assert manifest["name"] == "renamed"
 
     def test_force_preserves_sources_content(self, tmp_project: Path) -> None:
-        """force=True でも sources/ 内のファイルは削除されない（非破壊）。"""
+        """force=True does not delete files inside sources/ (non-destructive)."""
         proj = tmp_project / "myproject"
         init_project(str(proj), name="myproject")
         sentinel = proj / "sources" / "keep.txt"
@@ -209,7 +207,7 @@ class TestInitProjectForce:
         assert sentinel.read_text(encoding="utf-8") == "preserve me"
 
     def test_force_preserves_artifacts_content(self, tmp_project: Path) -> None:
-        """force=True でも artifacts/ 内のファイルは削除されない（非破壊）。"""
+        """force=True does not delete files inside artifacts/ (non-destructive)."""
         proj = tmp_project / "myproject"
         init_project(str(proj), name="myproject")
         sentinel = proj / "artifacts" / "keep.json"
@@ -218,7 +216,7 @@ class TestInitProjectForce:
         assert sentinel.is_file()
 
     def test_force_preserves_outputs_content(self, tmp_project: Path) -> None:
-        """force=True でも outputs/ 内のファイルは削除されない（非破壊）。"""
+        """force=True does not delete files inside outputs/ (non-destructive)."""
         proj = tmp_project / "myproject"
         init_project(str(proj), name="myproject")
         sentinel = proj / "outputs" / "keep.mp4"
@@ -227,31 +225,31 @@ class TestInitProjectForce:
         assert sentinel.is_file()
 
     def test_force_preserves_existing_timeline(self, tmp_project: Path) -> None:
-        """force=True でも既存の timeline.otio は上書き・削除しない（非破壊）。"""
+        """force=True does not overwrite or delete the existing timeline.otio."""
 
         proj = tmp_project / "myproject"
         init_project(str(proj), name="myproject")
 
-        # timeline.otio を変更してから mtime を記録
+        # Record mtime after modifying timeline.otio
         timeline_path = proj / "timeline.otio"
         original_mtime = timeline_path.stat().st_mtime
 
         import time
 
-        time.sleep(0.05)  # OS の mtime 分解能への対策
+        time.sleep(0.05)  # Workaround for OS mtime resolution
 
         init_project(str(proj), name="myproject", force=True)
 
-        # mtime が変わっていない = 上書きされていない
+        # mtime unchanged means the file was not overwritten
         new_mtime = timeline_path.stat().st_mtime
         assert new_mtime == original_mtime
 
     def test_force_creates_missing_timeline(self, tmp_project: Path) -> None:
-        """force=True で timeline.otio が欠落している場合のみ空 timeline を生成する。"""
+        """force=True generates an empty timeline only when timeline.otio is missing."""
         proj = tmp_project / "myproject"
         init_project(str(proj), name="myproject")
 
-        # timeline.otio を手動で削除
+        # Manually remove timeline.otio
         timeline_path = proj / "timeline.otio"
         timeline_path.unlink()
         assert not timeline_path.exists()
@@ -260,11 +258,11 @@ class TestInitProjectForce:
         assert timeline_path.is_file()
 
     def test_force_ensures_subdirs_exist(self, tmp_project: Path) -> None:
-        """force=True で消えたサブディレクトリを再作成する（ディレクトリ存在保証）。"""
+        """force=True re-creates deleted sub-directories (directory guarantee)."""
         proj = tmp_project / "myproject"
         init_project(str(proj), name="myproject")
 
-        # サブディレクトリを手動削除
+        # Manually remove a sub-directory
         import shutil
 
         shutil.rmtree(proj / "sources")
@@ -274,22 +272,22 @@ class TestInitProjectForce:
 
 
 # ===========================================================================
-# find_project — 上位ディレクトリ探索
+# find_project — ancestor directory search
 # ===========================================================================
 
 
 class TestFindProject:
-    """find_project: 上位ディレクトリへ遡って clipwright.json を探索する。"""
+    """find_project: walks up ancestor directories looking for clipwright.json."""
 
     def test_find_from_project_root(self, tmp_project: Path) -> None:
-        """プロジェクトルート自身から検索して見つかる。"""
+        """Returns the project root when searching from the root itself."""
         proj = tmp_project / "proj"
         init_project(str(proj), name="proj")
         found = find_project(str(proj))
         assert Path(found) == proj
 
     def test_find_from_subdir(self, tmp_project: Path) -> None:
-        """プロジェクト配下のサブディレクトリから上位に遡って見つかる。"""
+        """Walks up from a sub-directory inside the project and finds the root."""
         proj = tmp_project / "proj"
         init_project(str(proj), name="proj")
         subdir = proj / "sources" / "nested"
@@ -298,7 +296,7 @@ class TestFindProject:
         assert Path(found) == proj
 
     def test_raises_not_found(self, tmp_project: Path) -> None:
-        """プロジェクトが存在しないディレクトリからは PROJECT_NOT_FOUND。"""
+        """Raises PROJECT_NOT_FOUND from a directory with no project."""
         from clipwright.errors import ClipwrightError, ErrorCode
 
         empty_dir = tmp_project / "no_project"
@@ -308,7 +306,7 @@ class TestFindProject:
         assert exc_info.value.code == ErrorCode.PROJECT_NOT_FOUND
 
     def test_returns_str(self, tmp_project: Path) -> None:
-        """戻り値は str 型（ToolResult に詰めやすくするため）。"""
+        """Return type is str (easy to embed in ToolResult)."""
         proj = tmp_project / "proj"
         init_project(str(proj), name="proj")
         found = find_project(str(proj))
@@ -316,29 +314,29 @@ class TestFindProject:
 
 
 # ===========================================================================
-# load_manifest / save_manifest — 往復シリアライズ
+# load_manifest / save_manifest — round-trip serialisation
 # ===========================================================================
 
 
 class TestManifestRoundtrip:
-    """load_manifest / save_manifest の往復シリアライズ。"""
+    """load_manifest / save_manifest round-trip serialisation."""
 
     def test_load_returns_dict(self, tmp_project: Path) -> None:
-        """load_manifest は dict を返す。"""
+        """load_manifest returns a dict."""
         proj = tmp_project / "proj"
         init_project(str(proj), name="proj")
         manifest = load_manifest(str(proj))
         assert isinstance(manifest, dict)
 
     def test_load_contains_name(self, tmp_project: Path) -> None:
-        """load_manifest の戻り値に name が含まれる。"""
+        """load_manifest return value contains name."""
         proj = tmp_project / "proj"
         init_project(str(proj), name="proj")
         manifest = load_manifest(str(proj))
         assert manifest["name"] == "proj"
 
     def test_save_and_load_roundtrip(self, tmp_project: Path) -> None:
-        """save_manifest → load_manifest で値が往復する。"""
+        """Values survive a save_manifest → load_manifest round-trip."""
         proj = tmp_project / "proj"
         init_project(str(proj), name="proj")
         original = load_manifest(str(proj))
@@ -350,7 +348,7 @@ class TestManifestRoundtrip:
     def test_load_raises_not_found_for_missing_manifest(
         self, tmp_project: Path
     ) -> None:
-        """clipwright.json が存在しないディレクトリに対して PROJECT_NOT_FOUND。"""
+        """Raises PROJECT_NOT_FOUND for a directory that has no clipwright.json."""
         from clipwright.errors import ClipwrightError, ErrorCode
 
         empty_dir = tmp_project / "no_manifest"
@@ -360,7 +358,7 @@ class TestManifestRoundtrip:
         assert exc_info.value.code == ErrorCode.PROJECT_NOT_FOUND
 
     def test_save_writes_valid_json(self, tmp_project: Path) -> None:
-        """save_manifest が書き出すファイルは有効な JSON。"""
+        """The file written by save_manifest is valid JSON."""
         proj = tmp_project / "proj"
         init_project(str(proj), name="proj")
         manifest = load_manifest(str(proj))
@@ -372,23 +370,23 @@ class TestManifestRoundtrip:
 
 
 # ===========================================================================
-# [M-3] save_manifest — アトミック書き込み（temp → os.replace）
+# [M-3] save_manifest — atomic write (temp → os.replace)
 # ===========================================================================
 
 
 class TestSaveManifestAtomic:
-    """[M-3] save_manifest は temp ファイル経由のアトミック書き込みを使う。
+    """[M-3] save_manifest uses atomic write via temp → os.replace.
 
-    save_timeline と同一のパターン（temp → os.replace）に揃えることで
-    書き込み途中の中断による clipwright.json 破損を防ぐ。
+    Matches the same pattern as save_timeline to prevent clipwright.json
+    corruption from an interrupted write.
     """
 
     def test_save_manifest_uses_os_replace(self, tmp_project: Path) -> None:
-        """save_manifest が os.replace を呼ぶことを monkeypatch で確認する。
+        """Confirms save_manifest calls os.replace via monkeypatch.
 
-        現在の実装は write_text の直接上書きを使っているため、このテストは
-        os.replace が呼ばれないことを示す（Red: 機能未実装による失敗）。
-        実装後は clipwright.project モジュール内の os.replace が1回呼ばれる。
+        The current implementation uses a direct write_text overwrite,
+        so this test shows os.replace is NOT called (Red: feature not implemented).
+        After implementation, os.replace in clipwright.project must be called once.
         """
         proj = tmp_project / "proj"
         init_project(str(proj), name="proj")
@@ -402,22 +400,22 @@ class TestSaveManifestAtomic:
             replace_calls.append((src, dst))
             original_replace(src, dst)
 
-        # project.py は "import os" して os.replace を使う想定でパッチ
-        # mock.patch.object で os モジュールの replace を差し替える
+        # project.py is expected to use "import os" then call os.replace
+        # patch via mock.patch.object on the os module's replace
         with mock.patch.object(os, "replace", side_effect=recording_replace):
             save_manifest(str(proj), manifest)
 
-        # アトミック書き込みでは os.replace が必ず1回呼ばれる
+        # Atomic write must call os.replace at least once
         assert len(replace_calls) >= 1, (
-            "save_manifest が os.replace を呼んでいません。"
-            "temp → os.replace のアトミック書き込みになっていない（M-3 未実装）。"
+            "save_manifest did not call os.replace. "
+            "The temp → os.replace atomic write is not implemented (M-3)."
         )
 
     def test_save_manifest_temp_in_same_dir(self, tmp_project: Path) -> None:
-        """アトミック書き込みの temp ファイルが同一ディレクトリ内に作られる。
+        """The atomic write temp file is created in the same directory.
 
-        os.replace はファイルシステムをまたぐとアトミックにならないため、
-        temp ファイルは manifest_path と同一ディレクトリに置く必要がある。
+        os.replace is not atomic across file systems, so the temp file
+        must reside in the same directory as the manifest.
         """
         proj = tmp_project / "proj"
         init_project(str(proj), name="proj")
@@ -435,22 +433,22 @@ class TestSaveManifestAtomic:
             save_manifest(str(proj), manifest)
 
         assert len(replace_calls) >= 1, (
-            "save_manifest が os.replace を呼んでいません（M-3 未実装）。"
+            "save_manifest did not call os.replace (M-3 not implemented)."
         )
         src_path, dst_path = replace_calls[0]
-        # temp と dest は同一ディレクトリでなければならない
+        # temp and dest must be in the same directory
         assert Path(src_path).parent == Path(dst_path).parent, (
-            f"temp ({src_path}) と dest ({dst_path}) が異なるディレクトリ。"
-            "クロスデバイス atomic write になっている可能性がある。"
+            f"temp ({src_path}) and dest ({dst_path}) are in different directories. "
+            "This may result in a cross-device atomic write."
         )
 
     def test_save_manifest_result_is_valid_json_after_atomic_write(
         self, tmp_project: Path
     ) -> None:
-        """アトミック書き込み後に clipwright.json が有効な JSON であること。
+        """clipwright.json is valid JSON after the atomic write.
 
-        この正常系テストは既存の test_save_writes_valid_json と重複しているが、
-        M-3 実装後も回帰しないことを明示的に担保するために残す。
+        This success-path test overlaps with test_save_writes_valid_json but
+        is kept explicitly to pin the M-3 regression contract after implementation.
         """
         proj = tmp_project / "proj"
         init_project(str(proj), name="proj")
@@ -465,9 +463,9 @@ class TestSaveManifestAtomic:
     def test_save_manifest_overwrites_existing_without_corruption(
         self, tmp_project: Path
     ) -> None:
-        """既存 manifest を上書きしても内容が破損しない。
+        """Overwriting an existing manifest does not corrupt the file.
 
-        複数回 save_manifest を呼んだ場合、最後の呼び出し内容が正しく残る。
+        After multiple save_manifest calls the last call's content is intact.
         """
         proj = tmp_project / "proj"
         init_project(str(proj), name="proj")
@@ -478,35 +476,37 @@ class TestSaveManifestAtomic:
             save_manifest(str(proj), manifest)
 
         final = load_manifest(str(proj))
-        assert final["counter"] == 2  # 最後の値
-        # JSON として parse できること（破損チェック）
+        assert final["counter"] == 2  # last value
+        # Verify no corruption: parseable as JSON
         raw = (proj / "clipwright.json").read_text(encoding="utf-8")
         assert json.loads(raw) == final
 
 
 # ===========================================================================
-# [F-03] find_project — is_dir() チェック
+# [F-03] find_project — is_dir() check
 # ===========================================================================
 
 
 class TestFindProjectValidation:
-    """[F-03] find_project はディレクトリでない start_dir を検証してエラーにする。
+    """[F-03] find_project validates that start_dir is a directory.
 
-    セキュリティレビュー F-03 に対応。ファイルパスや存在しないパスを
-    start_dir として渡したとき、ファイルシステムを無意味に探索しない。
+    Addresses security review F-03. When a file path or non-existent path
+    is passed as start_dir, the file system must not be traversed pointlessly.
     """
 
     def test_raises_error_when_start_dir_is_file(self, tmp_project: Path) -> None:
-        """start_dir がファイルの場合にエラーを発生させる。
+        """Raises an error when start_dir is a file.
 
-        現在の実装は is_dir() チェックなしに Path(start_dir).resolve() を呼ぶため、
-        ファイルを指定するとその親ディレクトリから探索が始まり、意図しない動作になる。
-        このテストは適切なエラーコード（PROJECT_NOT_FOUND または INVALID_INPUT）が
-        返ることを期待する（Red: is_dir() チェック未実装のため失敗する）。
+        The current implementation calls Path(start_dir).resolve() without an
+        is_dir() check, so passing a file starts the search from its parent
+        directory — unintended behaviour.
+        This test expects the appropriate error code
+        (PROJECT_NOT_FOUND or INVALID_INPUT) to be returned
+        (Red: is_dir() check not yet implemented).
         """
         from clipwright.errors import ClipwrightError, ErrorCode
 
-        # ファイルを作成して start_dir として渡す
+        # Create a file and pass it as start_dir
         file_path = tmp_project / "not_a_dir.txt"
         file_path.write_text("I am a file", encoding="utf-8")
 
@@ -517,16 +517,17 @@ class TestFindProjectValidation:
             ErrorCode.PROJECT_NOT_FOUND,
             ErrorCode.INVALID_INPUT,
         ), (
-            f"start_dir がファイル時に PROJECT_NOT_FOUND/INVALID_INPUT 期待だが "
-            f"code={exc_info.value.code} が返りました。"
+            f"Expected PROJECT_NOT_FOUND/INVALID_INPUT when start_dir is a file, "
+            f"but got code={exc_info.value.code}."
         )
 
     def test_raises_invalid_input_when_start_dir_is_file(
         self, tmp_project: Path
     ) -> None:
-        """start_dir がファイルのとき INVALID_INPUT を返すことが望ましい。
+        """INVALID_INPUT is the preferred code when start_dir is a file.
 
-        F-03 修正方針に最も近いコード。実装で INVALID_INPUT が確定した場合の確認テスト。
+        This is the code closest to the F-03 fix intention.
+        Confirmed when the implementation chooses INVALID_INPUT.
         """
         from clipwright.errors import ClipwrightError, ErrorCode
 
@@ -536,29 +537,29 @@ class TestFindProjectValidation:
         with pytest.raises(ClipwrightError) as exc_info:
             find_project(str(file_path))
 
-        # is_dir() チェックが追加されれば INVALID_INPUT になる（実装選択による）
-        # 現状（チェックなし）では PROJECT_NOT_FOUND か例外なしで正しくない動作をする
+        # With an is_dir() check, INVALID_INPUT is returned (implementation dependent)
+        # Without the check, PROJECT_NOT_FOUND or no exception is raised (incorrect)
         assert exc_info.value.code == ErrorCode.INVALID_INPUT, (
-            "start_dir がファイルのとき INVALID_INPUT を期待します。"
-            "find_project に is_dir() チェックを追加してください（F-03 未実装）。"
+            "Expected INVALID_INPUT when start_dir is a file. "
+            "Add an is_dir() check to find_project (F-03 not implemented)."
         )
 
     def test_init_project_success_not_regressed(self, tmp_project: Path) -> None:
-        """F-03 対応後も init_project の正常系が回帰しないことを確認する。
+        """init_project success path does not regress after F-03 fix.
 
-        find_project に is_dir() チェックを追加しても、
-        正規のディレクトリパスで init_project が成功することを担保する。
+        Adding an is_dir() check to find_project must not break
+        init_project with a valid directory path.
         """
         proj = tmp_project / "valid_proj"
-        # 正常系: ディレクトリ → エラーなし
+        # Normal path: directory → no error
         init_project(str(proj), name="valid_proj")
         found = find_project(str(proj))
         assert Path(found) == proj
 
     def test_find_project_with_valid_dir_not_regressed(self, tmp_project: Path) -> None:
-        """F-03 対応後も find_project の既存動作が回帰しないことを確認する。
+        """The existing find_project behaviour does not regress after F-03 fix.
 
-        正常な既存ディレクトリからは変わらず PROJECT_NOT_FOUND が返る。
+        A valid existing directory still returns PROJECT_NOT_FOUND.
         """
         from clipwright.errors import ClipwrightError, ErrorCode
 
@@ -572,23 +573,23 @@ class TestFindProjectValidation:
 
 
 # ===========================================================================
-# [L-4 / F-08] find_project — hint のパス重複・長大パス対策
+# [L-4 / F-08] find_project — hint path duplication and oversized path mitigation
 # ===========================================================================
 
 
 class TestFindProjectHintQuality:
-    """[L-4/F-08] find_project 未検出時の hint にフルパスを重複掲載しない。
+    """[L-4/F-08] find_project not-found hint does not duplicate the full start_dir.
 
-    コードレビュー L-4 / セキュリティレビュー F-08 に対応。
-    hint は「次の一手」の説明のみとし、パス情報は message にのみ残す。
-    長大な start_dir を渡しても hint が肥大化しないことを固定する。
+    Addresses code review L-4 and security review F-08.
+    The hint contains only the "next step" guidance; path information belongs
+    in message only. Pins that hint does not grow with a long start_dir.
     """
 
     def test_hint_does_not_contain_full_start_dir(self, tmp_project: Path) -> None:
-        """PROJECT_NOT_FOUND の hint に start_dir フルパスが含まれないこと。
+        """PROJECT_NOT_FOUND hint does not contain the full start_dir path.
 
-        現在の実装は hint に start_dir を埋め込んでいるため、このテストは失敗する
-        （Red: L-4/F-08 未修正のため）。
+        The current implementation embeds start_dir in the hint, so this
+        test fails (Red: L-4/F-08 not yet fixed).
         """
         from clipwright.errors import ClipwrightError
 
@@ -600,16 +601,16 @@ class TestFindProjectHintQuality:
             find_project(start_dir_str)
 
         hint = exc_info.value.hint
-        # hint にフルパスが含まれていてはならない
+        # hint must not contain the full path
         assert start_dir_str not in hint, (
-            f"hint にフルパス '{start_dir_str}' が含まれています。"
-            "hint はパス情報を含めず次の一手のみ記述してください（L-4/F-08）。"
+            f"hint contains the full path '{start_dir_str}'. "
+            "hint must contain only the next-step guidance, not path info (L-4/F-08)."
         )
 
     def test_message_contains_start_dir(self, tmp_project: Path) -> None:
-        """PROJECT_NOT_FOUND の message には start_dir が含まれる。
+        """PROJECT_NOT_FOUND message contains start_dir.
 
-        hint からパスを除去した代わりに、message 側に残ることを確認する。
+        After removing the path from hint, the message side must still carry it.
         """
         from clipwright.errors import ClipwrightError
 
@@ -621,16 +622,16 @@ class TestFindProjectHintQuality:
 
         message = exc_info.value.message
         assert str(empty_dir) in message or empty_dir.name in message, (
-            "message にパス情報が含まれていません。"
-            "パスは hint ではなく message に記述してください。"
+            "message does not contain path information. "
+            "Path should be in message, not in hint."
         )
 
     def test_hint_and_message_do_not_both_contain_full_path(
         self, tmp_project: Path
     ) -> None:
-        """hint と message の両方に同一フルパスが入らないこと。
+        """The same full path does not appear in both hint and message.
 
-        L-4: 同じ情報を hint/message 双方に含めると summary として冗長。
+        L-4: Including identical information in both hint and message is redundant.
         """
         from clipwright.errors import ClipwrightError
 
@@ -648,43 +649,42 @@ class TestFindProjectHintQuality:
         message_has_full_path = start_dir_str in message
 
         assert not (hint_has_full_path and message_has_full_path), (
-            f"hint と message の両方にフルパス '{start_dir_str}' が含まれています。"
-            "フルパスは message のみに残し hint から除去してください（L-4/F-08）。"
+            f"Both hint and message contain the full path '{start_dir_str}'. "
+            "Keep the full path in message only and remove it from hint (L-4/F-08)."
         )
 
     def test_hint_length_bounded_with_long_path(self, tmp_project: Path) -> None:
-        """長大な start_dir を渡しても hint が一定長に収まる。
+        """hint does not grow when a very long start_dir is supplied.
 
-        F-08: 数千文字の悪意あるパスを渡した場合に hint が肥大化しないことを確認する。
-        hint は「次の一手」のみを含み、入力値をそのまま返すべきではない。
+        F-08: Confirms that a maliciously long path does not inflate the hint.
+        hint must contain only the next-step guidance, not echo the input.
 
-        Windows の MAX_PATH 制限を回避するため、ディレクトリ名は短くしつつ
-        start_dir 全体としては十分に長い文字列になるよう深いパスを使う。
+        Directory names are kept short to stay within Windows MAX_PATH,
+        while the total path is made long enough via deep nesting.
         """
         from clipwright.errors import ClipwrightError
 
-        # 深いネストで合計パス長を伸ばす（各ディレクトリ名は短く保つ）
-        # tmp_path 自体は既に長めのパスなので、少し深くするだけで十分
+        # Use a few levels of nesting; the existing tmp_path prefix is already long
         nested = tmp_project / "a" / "b" / "c" / "no_project_here"
         nested.mkdir(parents=True)
         start_dir_str = str(nested)
 
-        # start_dir_str（フルパス）が長い文字列であることを前提として
-        # hint にそのフルパスが含まれないことを確認する
+        # Confirm hint does not include the full input path
         with pytest.raises(ClipwrightError) as exc_info:
             find_project(start_dir_str)
 
         hint = exc_info.value.hint
-        # hint にフルパスが含まれていてはならない（F-08 未修正なら失敗する）
+        # hint must not contain the full path (F-08 fails if not fixed)
         assert start_dir_str not in hint, (
-            f"hint に入力フルパス '{start_dir_str}' が含まれています。"
-            "hint は末尾ディレクトリ名のみかパス情報を含めないでください（F-08）。"
+            f"hint contains the input full path '{start_dir_str}'. "
+            "hint should contain only the leaf directory name or no path at all (F-08)."
         )
 
     def test_hint_contains_actionable_guidance(self, tmp_project: Path) -> None:
-        """PROJECT_NOT_FOUND の hint は init_project への言及を含む。
+        """PROJECT_NOT_FOUND hint mentions init_project.
 
-        hint からパス除去後も「次の一手」として init_project 案内が残ることを確認。
+        Confirms that next-step guidance (init_project) remains in hint
+        after removing the path.
         """
         from clipwright.errors import ClipwrightError
 
@@ -696,6 +696,6 @@ class TestFindProjectHintQuality:
 
         hint = exc_info.value.hint
         assert "init_project" in hint, (
-            "hint に 'init_project' への案内が含まれていません。"
-            "パスを除去した後も、次の一手（init_project）を hint に残してください。"
+            "hint does not mention 'init_project'. "
+            "After removing the path, keep the next-step (init_project) in hint."
         )

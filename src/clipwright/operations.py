@@ -1,10 +1,10 @@
-"""operations.py — 宣言的編集オペレーション型と適用ロジック。
+"""operations.py — Declarative edit operation types and apply logic.
 
-Pydantic の判別共用体（discriminated union）で操作を型定義し、
-apply_operations が all-or-nothing でタイムラインに適用する。
+Operations are typed via a Pydantic discriminated union;
+apply_operations applies them to the timeline in an all-or-nothing transaction.
 
-この語彙が detect 系ツールの共通インターフェースになる。
-（スペック §4.2 ドッグフーディング前提）
+This vocabulary forms the common interface for detect-family tools.
+(Spec §4.2 dogfooding premise)
 """
 
 from __future__ import annotations
@@ -25,16 +25,16 @@ from clipwright.schemas import (
 )
 
 # ===========================================================================
-# オペレーション型（判別共用体メンバー）
+# Operation types (discriminated union members)
 # ===========================================================================
 
 
 class AddClipOp(BaseModel):
-    """クリップをトラックに追加するオペレーション。
+    """Operation to append a clip to a track.
 
-    track はフラット index（0=V1, 1=A1）。
-    metadata: OTIO メタデータは任意キー・任意値の辞書のため Any を使用。
-    将来的なサイズ・ネスト上限の検討は別タスクとする。
+    track is a flat index (0=V1, 1=A1).
+    metadata uses Any because OTIO metadata is an arbitrary key-value dict.
+    Size and nesting limits are left for a future task.
     """
 
     op: Literal["add_clip"]
@@ -46,9 +46,9 @@ class AddClipOp(BaseModel):
 
 
 class AddGapOp(BaseModel):
-    """ギャップをトラックに追加するオペレーション。
+    """Operation to append a gap to a track.
 
-    track はフラット index（0=V1, 1=A1）。
+    track is a flat index (0=V1, 1=A1).
     """
 
     op: Literal["add_gap"]
@@ -57,12 +57,12 @@ class AddGapOp(BaseModel):
 
 
 class AddMarkerOp(BaseModel):
-    """マーカーをトラック自体に付与するオペレーション（§13.5 DC-GP-001 再）。
+    """Operation to attach a marker to the track itself (§13.5 DC-GP-001 re).
 
-    track はフラット index（0=V1, 1=A1）。
-    clip の存在を要求しない（空トラックも成功）。
-    metadata: OTIO メタデータは任意キー・任意値の辞書のため Any を使用。
-    将来的なサイズ・ネスト上限の検討は別タスクとする。
+    track is a flat index (0=V1, 1=A1).
+    No clip needs to exist; an empty track is valid.
+    metadata uses Any because OTIO metadata is an arbitrary key-value dict.
+    Size and nesting limits are left for a future task.
     """
 
     op: Literal["add_marker"]
@@ -73,14 +73,14 @@ class AddMarkerOp(BaseModel):
     metadata: dict[str, Any] | None = None
 
 
-# 判別共用体（discriminator="op"）
+# Discriminated union (discriminator="op")
 Operation = Annotated[
     AddClipOp | AddGapOp | AddMarkerOp,
     Field(discriminator="op"),
 ]
 
 # ===========================================================================
-# apply_operations — all-or-nothing（§13.1 DC-AM-004）
+# apply_operations — all-or-nothing (§13.1 DC-AM-004)
 # ===========================================================================
 
 
@@ -90,20 +90,20 @@ def apply_operations(
     *,
     validate_only: bool,
 ) -> ValidationReport:
-    """ops を timeline に適用する（all-or-nothing）。
+    """Apply ops to timeline (all-or-nothing).
 
-    まず全 op を検証し、1件でも不正なら一切適用せず
-    ValidationReport(valid=False, applied_count=0, errors=[...]) を返す。
-    全件有効なときのみ全 op を適用し applied_count=len(ops) を返す。
+    Validates all operations first. If any are invalid, nothing is applied and
+    ValidationReport(valid=False, applied_count=0, errors=[...]) is returned.
+    All operations are applied only when every one is valid; applied_count=len(ops).
 
-    validate_only=True の場合は検証のみ（適用・保存しない、applied_count=0）。
-    track はフラット index（0始まり）で解決する。範囲外は TRACK_NOT_FOUND。
+    validate_only=True: validates only; does not apply or save (applied_count=0).
+    track is resolved by flat index (0-based). Out-of-range raises TRACK_NOT_FOUND.
     """
     operation_count = len(ops)
     errors: list[OperationError] = []
     track_count = len(timeline.tracks)
 
-    # --- 検証フェーズ ---
+    # --- Validation phase ---
     for i, op in enumerate(ops):
         if op.track < 0 or op.track >= track_count:
             errors.append(
@@ -111,9 +111,9 @@ def apply_operations(
                     index=i,
                     code=ErrorCode.TRACK_NOT_FOUND,
                     message=(
-                        f"track {op.track} が存在しません。"
-                        f"既存トラック数は {track_count} です。"
-                        f"track を 0..{track_count - 1} で指定してください"
+                        f"track {op.track} does not exist."
+                        f" The timeline has {track_count} track(s)."
+                        f" Specify track in the range 0..{track_count - 1}"
                     ),
                 )
             )
@@ -126,7 +126,7 @@ def apply_operations(
             errors=errors,
         )
 
-    # validate_only の場合は検証のみで返す
+    # Return early when validate_only is set
     if validate_only:
         return ValidationReport(
             valid=True,
@@ -135,7 +135,7 @@ def apply_operations(
             errors=[],
         )
 
-    # --- 適用フェーズ ---
+    # --- Apply phase ---
     for op in ops:
         track = timeline.tracks[op.track]
         if isinstance(op, AddClipOp):

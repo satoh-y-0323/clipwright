@@ -1,7 +1,7 @@
-"""schemas.py — Clipwright 共通 Pydantic 型・時間変換ヘルパー。
+"""schemas.py — Shared Pydantic types and time-conversion helpers for Clipwright.
 
-契約面として最初に固定する。全ツールの入出力型はこのモジュールの語彙を共有し、
-ツールごとに再定義しない。
+These form the contract surface and are locked in first.
+All tool input/output types share the vocabulary defined here; do not redefine per tool.
 """
 
 from __future__ import annotations
@@ -12,14 +12,14 @@ import opentimelineio as otio
 from pydantic import BaseModel
 
 # ===========================================================================
-# 時間モデル（OTIO の RationalTime / TimeRange と等価）
+# Time models (equivalent to OTIO RationalTime / TimeRange)
 # ===========================================================================
 
 
 class RationalTimeModel(BaseModel):
-    """opentime.RationalTime と等価の Pydantic 型。
+    """Pydantic type equivalent to opentime.RationalTime.
 
-    秒の float 単独で持たず rate を必ず保持する（規約 §4.4 時間表現）。
+    Always carries rate; never stores seconds as a bare float (§4.4).
     """
 
     value: float
@@ -27,21 +27,21 @@ class RationalTimeModel(BaseModel):
 
 
 class TimeRangeModel(BaseModel):
-    """opentime.TimeRange と等価の Pydantic 型。"""
+    """Pydantic type equivalent to opentime.TimeRange."""
 
     start_time: RationalTimeModel
     duration: RationalTimeModel
 
 
 # ===========================================================================
-# メディア参照・成果物
+# Media references and artifacts
 # ===========================================================================
 
 
 class MediaRef(BaseModel):
-    """ローカルメディアファイルへの参照。
+    """Reference to a local media file.
 
-    バイト列は持たずパスのみを扱う（規約 §6.6 ファイル入出力）。
+    Holds a path only; never stores raw bytes (§6.6 file I/O convention).
     """
 
     target_url: str
@@ -50,27 +50,27 @@ class MediaRef(BaseModel):
 
 
 class Artifact(BaseModel):
-    """ツール出力ファイルへの参照。
+    """Reference to a tool output file.
 
-    巨大な明細は data に詰めず artifacts のパスへ逃がす（規約 §6.3）。
+    Large detail data should be stored here as a path rather than in data (§6.3).
     """
 
     role: str
-    """ファイルの役割。"timeline" | "output" | "caption" | "analysis" 等。"""
+    """File role. E.g. "timeline" | "output" | "caption" | "analysis"."""
     path: str
     format: str
-    """ファイル形式。"otio" | "mp4" | "srt" | "json" 等。"""
+    """File format. E.g. "otio" | "mp4" | "srt" | "json"."""
 
 
 # ===========================================================================
-# 返り値エンベロープ型（§6.3 / §6.4）
+# Return value envelope types (§6.3 / §6.4)
 # ===========================================================================
 
 
 class ToolResult(BaseModel):
-    """成功エンベロープ（§6.3）。
+    """Success envelope (§6.3).
 
-    ok は常に True。summary には AI が次の一手を判断できる要点を必ず書く。
+    ok is always True. summary must contain the key points an AI needs to decide next.
     """
 
     ok: Literal[True] = True
@@ -81,7 +81,7 @@ class ToolResult(BaseModel):
 
 
 class ToolError(BaseModel):
-    """エラー詳細。code / message / hint の三点セット（§6.4）。"""
+    """Error detail. The three-part set: code / message / hint (§6.4)."""
 
     code: str
     message: str
@@ -89,9 +89,9 @@ class ToolError(BaseModel):
 
 
 class ToolErrorResult(BaseModel):
-    """失敗エンベロープ（§6.4）。
+    """Failure envelope (§6.4).
 
-    ok は常に False。error には何が起きたか（message）と次の一手（hint）を含める。
+    ok is always False. error must include what happened (message) and next step (hint).
     """
 
     ok: Literal[False] = False
@@ -99,12 +99,12 @@ class ToolErrorResult(BaseModel):
 
 
 # ===========================================================================
-# メディア probe 結果型
+# Media probe result types
 # ===========================================================================
 
 
 class StreamInfo(BaseModel):
-    """ffprobe が返す単一ストリームの情報。"""
+    """Information for a single stream returned by ffprobe."""
 
     index: int
     codec_type: str
@@ -116,7 +116,7 @@ class StreamInfo(BaseModel):
 
 
 class MediaInfo(BaseModel):
-    """ffprobe が返すメディアファイル全体の情報。"""
+    """Whole-file media information returned by ffprobe."""
 
     path: str
     container: str | None
@@ -126,54 +126,54 @@ class MediaInfo(BaseModel):
 
 
 # ===========================================================================
-# オペレーション検証結果型（§13.1 DC-AM-003）
+# Operation validation result types (§13.1 DC-AM-003)
 # ===========================================================================
 
 
 class OperationError(BaseModel):
-    """operations 列の単一エラー情報。
+    """Error information for a single entry in the operations list.
 
-    apply_operations の ValidationReport に格納され、
-    どの操作がなぜ失敗したかを示す。
+    Stored in the ValidationReport produced by apply_operations to indicate
+    which operation failed and why.
     """
 
     index: int
-    """operations 列中の位置（0 始まり）。"""
+    """Zero-based position in the operations list."""
     code: str
-    """ErrorCode 値の文字列表現。"""
+    """String representation of an ErrorCode value."""
     message: str
 
 
 class ValidationReport(BaseModel):
-    """apply_operations の検証・適用結果レポート（§13.1 DC-AM-003/DC-AM-004）。
+    """Validation/apply result report for apply_operations (§13.1 DC-AM-003/DC-AM-004).
 
-    all-or-nothing セマンティクス: 1 件でも不正なら applied_count=0 で
-    timeline への書き込みは一切行わない。
+    All-or-nothing semantics: if any operation is invalid, applied_count=0 and
+    nothing is written to the timeline.
     """
 
     valid: bool
     operation_count: int
     applied_count: int
-    """validate_only 時は 0。不正 op が1件でもある場合も 0。"""
+    """0 when validate_only=True or when any invalid operation is present."""
     errors: list[OperationError] = []
 
 
 # ===========================================================================
-# OTIO 時間変換ヘルパー（§13.1 DC-GP-005 で schemas.py に配置確定）
+# OTIO time conversion helpers (placed in schemas.py per §13.1 DC-GP-005)
 # ===========================================================================
 
 
 def to_otio_time(rt: RationalTimeModel) -> otio.opentime.RationalTime:
-    """RationalTimeModel を opentime.RationalTime に変換する。
+    """Convert a RationalTimeModel to opentime.RationalTime.
 
-    otio_utils は本関数を import して使い、変換器自体は重複実装しない。
+    otio_utils imports this function rather than reimplementing the conversion.
     """
     return otio.opentime.RationalTime(value=rt.value, rate=rt.rate)
 
 
 def from_otio_time(rt: otio.opentime.RationalTime) -> RationalTimeModel:
-    """opentime.RationalTime を RationalTimeModel に変換する。
+    """Convert opentime.RationalTime to a RationalTimeModel.
 
-    秒 float に正規化せず rate をそのまま保持する。
+    Preserves rate as-is without normalising to a seconds float.
     """
     return RationalTimeModel(value=rt.value, rate=rt.rate)

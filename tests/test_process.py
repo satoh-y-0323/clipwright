@@ -1,13 +1,12 @@
-"""test_process.py — process.py のサブプロセスランナー単体テスト（Red フェーズ）。
+"""test_process.py — Unit tests for the subprocess runner in process.py (Red phase).
 
-対象:
-- resolve_tool: PATH 優先（shutil.which）→ env フォールバック → 見つからなければ
-  ClipwrightError(DEPENDENCY_MISSING)
-- run(cmd, timeout): 成功 / 非ゼロ終了 → SUBPROCESS_FAILED /
+Covers:
+- resolve_tool: PATH (shutil.which) → env fallback → ClipwrightError(DEPENDENCY_MISSING)
+- run(cmd, timeout): success / non-zero exit → SUBPROCESS_FAILED /
   TimeoutExpired → SUBPROCESS_TIMEOUT
-- shell=False・引数配列で subprocess が呼ばれることを検証
+- Verify subprocess is called with shell=False and an argument list
 
-[RED] process.py は未実装のため ImportError で失敗する。
+[RED] process.py is not yet implemented; ImportError causes test failure.
 """
 
 from __future__ import annotations
@@ -19,20 +18,20 @@ from unittest.mock import MagicMock
 
 import pytest
 
-# --- Import（process.py 未実装のため ImportError が発生する → Red） ---
+# --- Import ---
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.process import resolve_tool, run
 
 # ===========================================================================
-# resolve_tool — PATH 優先 → env フォールバック → DEPENDENCY_MISSING
+# resolve_tool — PATH first → env fallback → DEPENDENCY_MISSING
 # ===========================================================================
 
 
 class TestResolveToolPathPriority:
-    """shutil.which で見つかれば env_var を無視して PATH のパスを返す。"""
+    """If shutil.which finds the tool, env_var is ignored and PATH result returned."""
 
     def test_returns_which_path_when_found(self, mocker: MagicMock) -> None:
-        """shutil.which が返すパスをそのまま返す（PATH 最優先）。"""
+        """Returns the path from shutil.which as-is (PATH takes highest priority)."""
         mocker.patch("shutil.which", return_value="/usr/bin/ffprobe")
         mocker.patch.dict("os.environ", {"CLIPWRIGHT_FFPROBE": "/env/ffprobe"})
 
@@ -41,7 +40,7 @@ class TestResolveToolPathPriority:
         assert result == "/usr/bin/ffprobe"
 
     def test_which_is_called_with_tool_name(self, mocker: MagicMock) -> None:
-        """shutil.which がツール名で呼ばれることを確認する。"""
+        """shutil.which is called with the tool name."""
         mock_which = mocker.patch("shutil.which", return_value="/usr/bin/ffprobe")
 
         resolve_tool("ffprobe")
@@ -49,9 +48,9 @@ class TestResolveToolPathPriority:
         mock_which.assert_called_once_with("ffprobe")
 
     def test_env_var_not_used_when_which_finds_tool(self, mocker: MagicMock) -> None:
-        """PATH で見つかった場合、env 変数のファイル存在確認は不要（呼ばれない）。"""
+        """When PATH finds the tool, os.path.isfile is not called for the env var."""
         mocker.patch("shutil.which", return_value="/usr/bin/ffprobe")
-        # os.path.isfile が呼ばれていないことを確認する
+        # Verify os.path.isfile is not called
         mock_isfile = mocker.patch("os.path.isfile")
 
         resolve_tool("ffprobe", env_var="CLIPWRIGHT_FFPROBE")
@@ -60,12 +59,12 @@ class TestResolveToolPathPriority:
 
 
 class TestResolveToolEnvFallback:
-    """shutil.which が None のとき、env_var のパスを使う。"""
+    """When shutil.which returns None, use the path from env_var."""
 
     def test_returns_env_var_path_when_which_returns_none(
         self, mocker: MagicMock
     ) -> None:
-        """env 変数に有効なパスがあれば、それを返す。"""
+        """Returns the env var path when it points to a valid executable."""
         mocker.patch("shutil.which", return_value=None)
         mocker.patch.dict("os.environ", {"CLIPWRIGHT_FFPROBE": "/env/ffprobe.exe"})
         mocker.patch("os.path.isfile", return_value=True)
@@ -76,7 +75,7 @@ class TestResolveToolEnvFallback:
         assert result == "/env/ffprobe.exe"
 
     def test_env_var_path_must_be_file(self, mocker: MagicMock) -> None:
-        """env 変数のパスが存在しないファイルの場合は DEPENDENCY_MISSING。"""
+        """Raises DEPENDENCY_MISSING when the env var path does not exist."""
         mocker.patch("shutil.which", return_value=None)
         mocker.patch.dict("os.environ", {"CLIPWRIGHT_FFPROBE": "/nonexistent/ffprobe"})
         mocker.patch("os.path.isfile", return_value=False)
@@ -87,7 +86,7 @@ class TestResolveToolEnvFallback:
         assert exc_info.value.code == ErrorCode.DEPENDENCY_MISSING
 
     def test_env_var_not_set_falls_through_to_missing(self, mocker: MagicMock) -> None:
-        """env 変数が未設定かつ which が None → DEPENDENCY_MISSING。"""
+        """Raises DEPENDENCY_MISSING when env var is not set and which returns None."""
         mocker.patch("shutil.which", return_value=None)
         mocker.patch.dict("os.environ", {}, clear=True)
 
@@ -97,7 +96,7 @@ class TestResolveToolEnvFallback:
         assert exc_info.value.code == ErrorCode.DEPENDENCY_MISSING
 
     def test_without_env_var_argument_uses_only_which(self, mocker: MagicMock) -> None:
-        """env_var 引数を省略した場合、which で見つからなければ DEPENDENCY_MISSING。"""
+        """Raises DEPENDENCY_MISSING when env_var is omitted and which returns None."""
         mocker.patch("shutil.which", return_value=None)
 
         with pytest.raises(ClipwrightError) as exc_info:
@@ -107,10 +106,10 @@ class TestResolveToolEnvFallback:
 
 
 class TestResolveToolDependencyMissingError:
-    """DEPENDENCY_MISSING 時のエラー内容を検証する。"""
+    """Verify the error content when DEPENDENCY_MISSING is raised."""
 
     def test_error_has_message_and_hint(self, mocker: MagicMock) -> None:
-        """ClipwrightError に message と hint が含まれる（§6.4 規約）。"""
+        """ClipwrightError includes message and hint (§6.4 contract)."""
         mocker.patch("shutil.which", return_value=None)
         mocker.patch.dict("os.environ", {}, clear=True)
 
@@ -122,7 +121,7 @@ class TestResolveToolDependencyMissingError:
         assert len(err.hint) > 0
 
     def test_error_message_contains_tool_name(self, mocker: MagicMock) -> None:
-        """message にツール名が含まれる（デバッグ容易性）。"""
+        """The message includes the tool name (for debuggability)."""
         mocker.patch("shutil.which", return_value=None)
         mocker.patch.dict("os.environ", {}, clear=True)
 
@@ -133,15 +132,15 @@ class TestResolveToolDependencyMissingError:
 
 
 # ===========================================================================
-# run — 成功 / 非ゼロ終了 / タイムアウト
+# run — success / non-zero exit / timeout
 # ===========================================================================
 
 
 class TestRunSuccess:
-    """subprocess.run が returncode=0 で終了した場合の正常系。"""
+    """Happy path when subprocess.run exits with returncode=0."""
 
     def test_returns_completed_process_on_success(self, mocker: MagicMock) -> None:
-        """成功時に CompletedProcess を返す。"""
+        """Returns CompletedProcess on success."""
         mock_cp = CompletedProcess(
             args=["ffprobe", "-version"],
             returncode=0,
@@ -156,7 +155,7 @@ class TestRunSuccess:
         assert result.stdout == "ffprobe version 6.0"
 
     def test_subprocess_called_with_shell_false(self, mocker: MagicMock) -> None:
-        """subprocess.run が shell=False で呼ばれることを検証する（規約6.5）。"""
+        """subprocess.run is called with shell=False (§6.5 contract)."""
         mock_cp = CompletedProcess(
             args=["ffprobe", "-version"], returncode=0, stdout="", stderr=""
         )
@@ -168,7 +167,7 @@ class TestRunSuccess:
         assert _call_kwargs.get("shell") is False
 
     def test_subprocess_called_with_list_cmd(self, mocker: MagicMock) -> None:
-        """subprocess.run の第1引数が list（引数配列）で渡されることを検証する。"""
+        """The first argument to subprocess.run is a list (argument array)."""
         mock_cp = CompletedProcess(
             args=["ffprobe", "-version"], returncode=0, stdout="", stderr=""
         )
@@ -182,7 +181,7 @@ class TestRunSuccess:
         assert positional_arg == cmd
 
     def test_subprocess_called_with_capture_output(self, mocker: MagicMock) -> None:
-        """capture_output=True で呼ばれる（stdout/stderr を捕捉）。"""
+        """Called with capture_output=True (captures stdout/stderr)."""
         mock_cp = CompletedProcess(args=["ffprobe"], returncode=0, stdout="", stderr="")
         mock_run = mocker.patch("subprocess.run", return_value=mock_cp)
 
@@ -192,7 +191,7 @@ class TestRunSuccess:
         assert _call_kwargs.get("capture_output") is True
 
     def test_subprocess_called_with_text_true(self, mocker: MagicMock) -> None:
-        """text=True で呼ばれる（stdout/stderr が str として返る）。"""
+        """Called with text=True (stdout/stderr returned as str)."""
         mock_cp = CompletedProcess(args=["ffprobe"], returncode=0, stdout="", stderr="")
         mock_run = mocker.patch("subprocess.run", return_value=mock_cp)
 
@@ -202,7 +201,7 @@ class TestRunSuccess:
         assert _call_kwargs.get("text") is True
 
     def test_timeout_is_passed_to_subprocess(self, mocker: MagicMock) -> None:
-        """timeout 引数が subprocess.run に渡される。"""
+        """The timeout argument is forwarded to subprocess.run."""
         mock_cp = CompletedProcess(args=["ffprobe"], returncode=0, stdout="", stderr="")
         mock_run = mocker.patch("subprocess.run", return_value=mock_cp)
 
@@ -212,8 +211,8 @@ class TestRunSuccess:
         assert _call_kwargs.get("timeout") == 30.0
 
     def test_default_timeout_is_set(self, mocker: MagicMock) -> None:
-        """timeout 引数を省略しても何らかのデフォルト timeout が
-        設定される（無制限禁止）。"""
+        """A default timeout is set even when the timeout argument is omitted
+        (unlimited timeout is prohibited)."""
         mock_cp = CompletedProcess(args=["ffprobe"], returncode=0, stdout="", stderr="")
         mock_run = mocker.patch("subprocess.run", return_value=mock_cp)
 
@@ -225,12 +224,12 @@ class TestRunSuccess:
 
 
 class TestRunSubprocessFailed:
-    """subprocess.run が returncode != 0 で終了した場合の異常系。"""
+    """Error path when subprocess.run exits with returncode != 0."""
 
     def test_raises_clipwright_error_on_nonzero_returncode(
         self, mocker: MagicMock
     ) -> None:
-        """非ゼロ終了時に ClipwrightError(SUBPROCESS_FAILED) を送出する。"""
+        """Raises ClipwrightError(SUBPROCESS_FAILED) on non-zero exit."""
         mock_cp = CompletedProcess(
             args=["ffprobe", "-i", "missing.mp4"],
             returncode=1,
@@ -245,7 +244,7 @@ class TestRunSubprocessFailed:
         assert exc_info.value.code == ErrorCode.SUBPROCESS_FAILED
 
     def test_error_message_contains_stderr(self, mocker: MagicMock) -> None:
-        """SUBPROCESS_FAILED の message に stderr 内容が含まれる（デバッグ容易性）。"""
+        """The SUBPROCESS_FAILED message includes stderr content (for debuggability)."""
         stderr_text = "ffprobe: error reading header"
         mock_cp = CompletedProcess(
             args=["ffprobe"],
@@ -261,7 +260,7 @@ class TestRunSubprocessFailed:
         assert stderr_text in exc_info.value.message
 
     def test_error_has_non_empty_hint(self, mocker: MagicMock) -> None:
-        """SUBPROCESS_FAILED のエラーは空でない hint を持つ（§6.4 規約）。"""
+        """SUBPROCESS_FAILED carries a non-empty hint (§6.4 contract)."""
         mock_cp = CompletedProcess(
             args=["ffprobe"], returncode=1, stdout="", stderr="error"
         )
@@ -276,7 +275,7 @@ class TestRunSubprocessFailed:
     def test_various_nonzero_returncodes_raise_subprocess_failed(
         self, mocker: MagicMock, returncode: int
     ) -> None:
-        """returncode=0 以外はすべて SUBPROCESS_FAILED。"""
+        """Any returncode other than 0 raises SUBPROCESS_FAILED."""
         mock_cp = CompletedProcess(
             args=["ffprobe"], returncode=returncode, stdout="", stderr="error"
         )
@@ -289,10 +288,10 @@ class TestRunSubprocessFailed:
 
 
 class TestRunSubprocessTimeout:
-    """subprocess.run が TimeoutExpired を送出した場合の異常系。"""
+    """Error path when subprocess.run raises TimeoutExpired."""
 
     def test_raises_clipwright_error_on_timeout(self, mocker: MagicMock) -> None:
-        """TimeoutExpired 時に ClipwrightError(SUBPROCESS_TIMEOUT) を送出する。"""
+        """Raises ClipwrightError(SUBPROCESS_TIMEOUT) on TimeoutExpired."""
         mocker.patch(
             "subprocess.run",
             side_effect=subprocess.TimeoutExpired(cmd=["ffprobe"], timeout=10.0),
@@ -304,7 +303,7 @@ class TestRunSubprocessTimeout:
         assert exc_info.value.code == ErrorCode.SUBPROCESS_TIMEOUT
 
     def test_timeout_error_has_message_and_hint(self, mocker: MagicMock) -> None:
-        """SUBPROCESS_TIMEOUT のエラーは message と hint を持つ（§6.4 規約）。"""
+        """SUBPROCESS_TIMEOUT carries message and hint (§6.4 contract)."""
         mocker.patch(
             "subprocess.run",
             side_effect=subprocess.TimeoutExpired(cmd=["ffprobe"], timeout=5.0),
@@ -318,8 +317,7 @@ class TestRunSubprocessTimeout:
         assert len(err.hint) > 0
 
     def test_timeout_not_wrapped_as_subprocess_failed(self, mocker: MagicMock) -> None:
-        """TimeoutExpired は SUBPROCESS_FAILED ではなく
-        SUBPROCESS_TIMEOUT として送出される。"""
+        """TimeoutExpired is raised as SUBPROCESS_TIMEOUT, not SUBPROCESS_FAILED."""
         mocker.patch(
             "subprocess.run",
             side_effect=subprocess.TimeoutExpired(cmd=["ffprobe"], timeout=10.0),
@@ -328,34 +326,34 @@ class TestRunSubprocessTimeout:
         with pytest.raises(ClipwrightError) as exc_info:
             run(["ffprobe"])
 
-        # SUBPROCESS_FAILED ではないことを明示的に確認
+        # Explicitly confirm it is not SUBPROCESS_FAILED
         assert exc_info.value.code != ErrorCode.SUBPROCESS_FAILED
         assert exc_info.value.code == ErrorCode.SUBPROCESS_TIMEOUT
 
 
 # ===========================================================================
-# F-05: resolve_tool — env_var パスの実行可能性検証（[SR-V-001]）
+# F-05: resolve_tool — executability check for env_var path ([SR-V-001])
 # ===========================================================================
 
 
 class TestResolveToolEnvVarExecutability:
-    """F-05 fix: env_var が指すファイルが存在しても実行不可なら採用しない。
+    """F-05 fix: a file pointed to by env_var that is not executable is rejected.
 
-    [SR-V-001] os.path.isfile() のみでは実行権限を確認できない。
-    実行不可ファイルは env フォールバックとして使用せず DEPENDENCY_MISSING へ。
+    [SR-V-001] os.path.isfile() alone cannot check execute permission.
+    A non-executable file is not used as the env fallback; DEPENDENCY_MISSING is raised.
 
-    Windows では X_OK の意味が薄いため、os.access を monkeypatch して
-    False を返すクロスプラットフォーム安全なテストで検証する。
+    On Windows, X_OK has limited meaning, so the test uses monkeypatch to return False
+    for a cross-platform-safe verification.
     """
 
     def test_non_executable_env_path_raises_dependency_missing(
         self, mocker: MagicMock
     ) -> None:
-        """[Red] env_var パスが存在するが実行不可 → DEPENDENCY_MISSING。
+        """[Red] env_var path exists but is not executable → DEPENDENCY_MISSING.
 
-        Arrange: which が None, isfile が True, os.access(X_OK) が False
+        Arrange: which=None, isfile=True, os.access(X_OK)=False
         Act: resolve_tool("ffprobe", env_var="CLIPWRIGHT_FFPROBE")
-        Assert: ClipwrightError(DEPENDENCY_MISSING) が送出される
+        Assert: ClipwrightError(DEPENDENCY_MISSING) is raised
         """
         # Arrange
         mocker.patch("shutil.which", return_value=None)
@@ -370,11 +368,11 @@ class TestResolveToolEnvVarExecutability:
         assert exc_info.value.code == ErrorCode.DEPENDENCY_MISSING
 
     def test_non_executable_env_path_is_not_returned(self, mocker: MagicMock) -> None:
-        """[Red] 実行不可パスは resolve_tool が返さない（例外が上がる）。
+        """[Red] A non-executable path is not returned (an exception is raised instead).
 
-        Arrange: which が None, isfile が True, os.access(X_OK) が False
+        Arrange: which=None, isfile=True, os.access(X_OK)=False
         Act: resolve_tool("ffprobe", env_var="CLIPWRIGHT_FFPROBE")
-        Assert: ClipwrightError が上がり "/env/ffprobe" は返されない
+        Assert: ClipwrightError is raised and "/env/ffprobe" is not returned
         """
         # Arrange
         mocker.patch("shutil.which", return_value=None)
@@ -382,16 +380,16 @@ class TestResolveToolEnvVarExecutability:
         mocker.patch("os.path.isfile", return_value=True)
         mocker.patch("os.access", return_value=False)
 
-        # Act & Assert: 例外が上がることで戻り値が env_path でないことを確認
+        # Act & Assert: env_path is not returned; an exception is raised instead
         with pytest.raises(ClipwrightError):
             resolve_tool("ffprobe", env_var="CLIPWRIGHT_FFPROBE")
 
     def test_executable_env_path_is_returned(self, mocker: MagicMock) -> None:
-        """[Green 維持] 実行可能なら env パスを返す（既存挙動のリグレッション防止）。
+        """[Green keep] An executable env path is returned (regression guard).
 
-        Arrange: which が None, isfile が True, os.access(X_OK) が True
+        Arrange: which=None, isfile=True, os.access(X_OK)=True
         Act: resolve_tool("ffprobe", env_var="CLIPWRIGHT_FFPROBE")
-        Assert: env パスが返される
+        Assert: env path is returned
         """
         # Arrange
         mocker.patch("shutil.which", return_value=None)
@@ -416,11 +414,11 @@ class TestResolveToolEnvVarExecutability:
     def test_non_executable_check_applies_to_various_paths(
         self, mocker: MagicMock, env_path: str
     ) -> None:
-        """[Red] パスに依存せず実行不可なら DEPENDENCY_MISSING（parametrize）。
+        """[Red] DEPENDENCY_MISSING is raised for any non-executable path (parametrize).
 
-        Arrange: which が None, isfile が True, os.access(X_OK) が False（各パス）
+        Arrange: which=None, isfile=True, os.access(X_OK)=False (each path)
         Act: resolve_tool("ffprobe", env_var="CLIPWRIGHT_FFPROBE")
-        Assert: ClipwrightError(DEPENDENCY_MISSING) が送出される
+        Assert: ClipwrightError(DEPENDENCY_MISSING) is raised
         """
         # Arrange
         mocker.patch("shutil.which", return_value=None)
@@ -435,11 +433,11 @@ class TestResolveToolEnvVarExecutability:
         assert exc_info.value.code == ErrorCode.DEPENDENCY_MISSING
 
     def test_os_access_called_with_x_ok_flag(self, mocker: MagicMock) -> None:
-        """[Red] 実行可能性確認に os.access(path, os.X_OK) が使われること。
+        """[Red] Executability is checked with os.access(path, os.X_OK).
 
-        Arrange: which が None, isfile が True, os.access が False
+        Arrange: which=None, isfile=True, os.access=False
         Act: resolve_tool("ffprobe", env_var="CLIPWRIGHT_FFPROBE")
-        Assert: os.access が X_OK フラグで呼ばれている
+        Assert: os.access is called with the X_OK flag
         """
         # Arrange
         mocker.patch("shutil.which", return_value=None)
@@ -451,15 +449,15 @@ class TestResolveToolEnvVarExecutability:
         with pytest.raises(ClipwrightError):
             resolve_tool("ffprobe", env_var="CLIPWRIGHT_FFPROBE")
 
-        # Assert: os.access が os.X_OK フラグで呼ばれていること
+        # Assert: os.access is called with the os.X_OK flag
         mock_access.assert_called_once_with("/env/ffprobe", os.X_OK)
 
     def test_which_found_skips_env_executability_check(self, mocker: MagicMock) -> None:
-        """[Green 維持] PATH で見つかれば env 実行可能性を確認しない（PATH 優先）。
+        """[Green keep] PATH takes priority; env executability is not checked.
 
-        Arrange: which が "/usr/bin/ffprobe" を返す
+        Arrange: which="/usr/bin/ffprobe"
         Act: resolve_tool("ffprobe", env_var="CLIPWRIGHT_FFPROBE")
-        Assert: which のパスが返り、os.access は呼ばれない
+        Assert: which path is returned and os.access is not called
         """
         # Arrange
         mocker.patch("shutil.which", return_value="/usr/bin/ffprobe")
@@ -475,13 +473,13 @@ class TestResolveToolEnvVarExecutability:
 
 
 class TestRunShellFalseInvariant:
-    """shell=False・引数配列実行の不変条件を追加シナリオで確認する。
+    """Verify shell=False and argument array invariant in additional scenarios.
 
-    コマンドインジェクション対策（CWE-78 / 規約6.5）の中核検証。
+    Core verification of command injection prevention (CWE-78 / §6.5).
     """
 
     def test_shell_is_false_regardless_of_cmd_content(self, mocker: MagicMock) -> None:
-        """スペース含みの引数でも shell=False が維持される。"""
+        """shell=False is maintained even with space-containing arguments."""
         mock_cp = CompletedProcess(
             args=["ffprobe", "-i", "path with spaces/video.mp4"],
             returncode=0,
@@ -495,7 +493,7 @@ class TestRunShellFalseInvariant:
         assert mock_run.call_args.kwargs.get("shell") is False
 
     def test_cmd_elements_are_not_joined_as_string(self, mocker: MagicMock) -> None:
-        """subprocess.run に渡るのは join された文字列ではなくリスト。"""
+        """subprocess.run receives a list, not a joined string."""
         mock_cp = CompletedProcess(
             args=["ffprobe", "-v", "quiet"],
             returncode=0,
@@ -507,6 +505,6 @@ class TestRunShellFalseInvariant:
         run(["ffprobe", "-v", "quiet"])
 
         first_arg = mock_run.call_args.args[0]
-        # 文字列に結合されていない（リストのまま）
+        # Must not be a joined string — must still be a list
         assert not isinstance(first_arg, str)
         assert isinstance(first_arg, list)

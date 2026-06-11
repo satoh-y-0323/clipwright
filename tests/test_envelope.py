@@ -1,17 +1,15 @@
-"""test_envelope.py — envelope.py の契約面テスト（Red フェーズ）。
+"""test_envelope.py — Contract tests for envelope.py (Red phase).
 
-対象:
-- ok_result: ToolResult 形 dict を返す（§4 返り値エンベロープ）
-- error_result: { ok: False, error: { code, message, hint } } 形 dict を返す（§4）
-
-このテストは envelope.py が未実装のため ImportError で失敗する（Red）。
+Covers:
+- ok_result: returns a ToolResult-form dict (§4 return value envelope)
+- error_result: returns { ok: False, error: { code, message, hint } } form dict (§4)
 """
 
 from __future__ import annotations
 
 import pytest
 
-# --- Import（envelope.py 未実装のため ImportError が発生する → Red） ---
+# --- Import ---
 from clipwright.envelope import error_result, ok_result
 
 # ===========================================================================
@@ -20,64 +18,64 @@ from clipwright.envelope import error_result, ok_result
 
 
 class TestOkResult:
-    """ok_result が ToolResult 形 dict を返すことを確認する。"""
+    """Verify that ok_result returns a ToolResult-form dict."""
 
     def test_returns_ok_true(self) -> None:
-        """ok キーが True。"""
-        result = ok_result("処理が完了しました")
+        """The ok key is True."""
+        result = ok_result("Processing complete")
         assert result["ok"] is True
 
     def test_summary_is_set(self) -> None:
-        """summary に渡した文字列が格納される。"""
-        result = ok_result("3 件のクリップを処理しました")
-        assert result["summary"] == "3 件のクリップを処理しました"
+        """The passed string is stored in summary."""
+        result = ok_result("Processed 3 clips")
+        assert result["summary"] == "Processed 3 clips"
 
     def test_defaults_are_empty(self) -> None:
-        """data / artifacts / warnings は未指定時に空のデフォルト値。"""
+        """data / artifacts / warnings default to empty values when not specified."""
         result = ok_result("ok")
         assert result["data"] == {} or result.get("data") is not None
         assert result["artifacts"] == [] or result.get("artifacts") is not None
         assert result["warnings"] == [] or result.get("warnings") is not None
 
     def test_data_is_included(self) -> None:
-        """data 引数を渡すと結果に含まれる。"""
+        """Passing a data argument includes it in the result."""
         result = ok_result("ok", data={"clip_count": 5, "duration": 30.0})
         assert result["data"]["clip_count"] == 5
         assert result["data"]["duration"] == 30.0
 
     def test_artifacts_is_included(self) -> None:
-        """artifacts 引数を渡すと結果に含まれる。"""
+        """Passing an artifacts argument includes it in the result."""
         art = {"role": "timeline", "path": "/out/t.otio", "format": "otio"}
         result = ok_result("ok", artifacts=[art])
         assert len(result["artifacts"]) == 1
         assert result["artifacts"][0]["role"] == "timeline"
 
     def test_warnings_is_included(self) -> None:
-        """warnings 引数を渡すと結果に含まれる。"""
+        """Passing a warnings argument includes it in the result."""
         result = ok_result("ok", warnings=["VFR 映像が含まれています"])
         assert "VFR 映像が含まれています" in result["warnings"]
 
     def test_all_fields_present(self) -> None:
-        """返り値に ok / summary / data / artifacts / warnings キーが全て含まれる。"""
-        result = ok_result("完了")
+        """The result contains required keys: ok, summary, data, artifacts, warnings."""
+        result = ok_result("Done")
         for key in ("ok", "summary", "data", "artifacts", "warnings"):
-            assert key in result, f"キー '{key}' が結果に含まれていません"
+            assert key in result, f"Key '{key}' is missing from the result"
 
     @pytest.mark.parametrize(
         "summary",
         [
-            "1 件のメディアをインスペクトしました",
-            "プロジェクトを初期化しました",
-            "timeline に 3 つのオペレーションを適用しました",
+            "Inspected 1 media file",
+            "Project initialised",
+            "Applied 3 operations to the timeline",
         ],
     )
     def test_summary_passthrough(self, summary: str) -> None:
-        """summary の値がそのまま返される。"""
+        """The summary value is returned as-is."""
         result = ok_result(summary)
         assert result["summary"] == summary
 
     def test_ok_field_is_boolean_true(self) -> None:
-        """ok の値は Python bool の True（1 ではない）。"""
+        """The ok value is Python bool True (not just 1)."""
         result = ok_result("ok")
         assert result["ok"] is True
         assert type(result["ok"]) is bool
@@ -89,76 +87,69 @@ class TestOkResult:
 
 
 class TestErrorResult:
-    """error_result が { ok: False, error: { code, message, hint } } 形 dict を
-    返すことを確認する。
-    """
+    """Verify error_result returns { ok: False, error: { code, message, hint } }."""
 
     def test_returns_ok_false(self) -> None:
-        """ok キーが False。"""
-        result = error_result(
-            "FILE_NOT_FOUND", "ファイルが見つかりません", "パスを確認してください"
-        )
+        """The ok key is False."""
+        result = error_result("FILE_NOT_FOUND", "File not found", "Check the path")
         assert result["ok"] is False
 
     def test_error_key_exists(self) -> None:
-        """error キーが存在する。"""
-        result = error_result("INVALID_INPUT", "不正入力", "修正してください")
+        """The error key exists."""
+        result = error_result("INVALID_INPUT", "Invalid input", "Fix it")
         assert "error" in result
 
     def test_error_has_code(self) -> None:
-        """error.code に渡した文字列が格納される。"""
+        """The passed string is stored in error.code."""
         result = error_result(
-            "PROBE_FAILED", "ffprobe 出力のパースに失敗", "ffprobe を確認"
+            "PROBE_FAILED", "Failed to parse ffprobe output", "Check ffprobe"
         )
         assert result["error"]["code"] == "PROBE_FAILED"
 
     def test_error_has_message(self) -> None:
-        """error.message に渡した文字列が格納される。"""
-        result = error_result(
-            "OTIO_ERROR", "OTIO ファイルのパースに失敗しました", "ヒント"
-        )
-        assert result["error"]["message"] == "OTIO ファイルのパースに失敗しました"
+        """The passed string is stored in error.message."""
+        result = error_result("OTIO_ERROR", "Failed to parse OTIO file", "hint")
+        assert result["error"]["message"] == "Failed to parse OTIO file"
 
     def test_error_has_hint(self) -> None:
-        """error.hint に渡した文字列が格納される。"""
+        """The passed string is stored in error.hint."""
         result = error_result(
             "DEPENDENCY_MISSING",
-            "ffprobe が見つかりません",
+            "ffprobe not found",
             "winget install Gyan.FFmpeg",
         )
         assert result["error"]["hint"] == "winget install Gyan.FFmpeg"
 
     def test_error_structure_keys(self) -> None:
-        """error オブジェクトに code / message / hint キーが全て含まれる。"""
+        """The error object contains all required keys: code / message / hint."""
         result = error_result(
-            "INTERNAL", "予期しないエラー", "再現条件を添えて報告してください"
+            "INTERNAL", "Unexpected error", "Please report with reproduction steps"
         )
         for key in ("code", "message", "hint"):
             assert key in result["error"], (
-                f"error オブジェクトにキー '{key}' がありません"
+                f"Key '{key}' is missing from the error object"
             )
 
     def test_top_level_keys(self) -> None:
-        """トップレベルに ok / error キーが存在する。"""
+        """The top level contains ok and error keys."""
         result = error_result(
-            "SUBPROCESS_FAILED", "プロセスが終了コード 1 で失敗", "コマンドを確認"
+            "SUBPROCESS_FAILED", "Process failed with exit code 1", "Check the command"
         )
         for key in ("ok", "error"):
-            assert key in result, f"トップレベルにキー '{key}' がありません"
+            assert key in result, f"Top-level key '{key}' is missing"
 
     def test_ok_field_is_boolean_false(self) -> None:
-        """ok の値は Python bool の False（0 ではない）。"""
+        """The ok value is Python bool False (not just 0)."""
         result = error_result("INVALID_INPUT", "x", "y")
         assert result["ok"] is False
         assert type(result["ok"]) is bool
 
     def test_no_extra_top_level_keys(self) -> None:
-        """トップレベルに余分なキーは基本的に含まれない（ok / error のみ）。
-        失敗エンベロープは ToolErrorResult 契約に従う。"""
+        """No unexpected top-level keys (ok / error only per ToolErrorResult spec)."""
         result = error_result("FILE_NOT_FOUND", "msg", "hint")
-        # ok と error 以外のキーは ToolErrorResult 仕様外
+        # Keys other than ok and error are outside the ToolErrorResult spec
         extra_keys = set(result.keys()) - {"ok", "error"}
-        assert not extra_keys, f"予期しないキーが含まれています: {extra_keys}"
+        assert not extra_keys, f"Unexpected keys found: {extra_keys}"
 
     @pytest.mark.parametrize(
         "code",
@@ -179,16 +170,16 @@ class TestErrorResult:
         ],
     )
     def test_all_error_codes(self, code: str) -> None:
-        """全 ErrorCode 値で error_result を構築できる。"""
-        result = error_result(code, "テストメッセージ", "テストヒント")
+        """error_result can be constructed with every ErrorCode value."""
+        result = error_result(code, "test message", "test hint")
         assert result["ok"] is False
         assert result["error"]["code"] == code
 
     def test_hint_is_actionable_pattern(self) -> None:
-        """hint が空でないこと（アクション可能 hint は必須・§6 規約）。"""
+        """hint must be non-empty (actionable hint required — §6 contract)."""
         result = error_result(
             "SUBPROCESS_TIMEOUT",
-            "タイムアウトしました",
-            "タイムアウト値を増やしてください",
+            "Command timed out",
+            "Increase the timeout value",
         )
         assert len(result["error"]["hint"]) > 0

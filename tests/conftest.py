@@ -1,11 +1,11 @@
-"""共有 pytest フィクスチャ。
+"""Shared pytest fixtures.
 
-ffmpeg/ffprobe の探索順序:
+ffmpeg/ffprobe lookup order:
   1. PATH (shutil.which)
-  2. 環境変数 CLIPWRIGHT_FFPROBE / CLIPWRIGHT_FFMPEG
+  2. Environment variables CLIPWRIGHT_FFPROBE / CLIPWRIGHT_FFMPEG
 
-いずれも見つからない場合のみ統合テストを skip する。[DC-AM-006]
-CLIPWRIGHT_FFMPEG はテスト専用。ランタイム (media.py) は ffprobe のみ使用。[DC-AM-008]
+Integration tests are skipped only when neither source is found. [DC-AM-006]
+CLIPWRIGHT_FFMPEG is for tests only; runtime (media.py) uses only ffprobe. [DC-AM-008]
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ import pytest
 
 
 def _find_binary(name: str, env_var: str) -> str | None:
-    """バイナリを PATH → env_var の順で探す。どちらも見つからなければ None。"""
+    """Locate a binary via PATH then env_var. Returns None if neither is found."""
     found = shutil.which(name)
     if found:
         return found
@@ -31,19 +31,22 @@ def _find_binary(name: str, env_var: str) -> str | None:
 
 @pytest.fixture(scope="session")
 def ffprobe_path() -> str | None:
-    """ffprobe 実行ファイルのパス。見つからなければ None。"""
+    """Path to the ffprobe executable. None if not found."""
     return _find_binary("ffprobe", "CLIPWRIGHT_FFPROBE")
 
 
 @pytest.fixture(scope="session")
 def ffmpeg_path() -> str | None:
-    """ffmpeg 実行ファイルのパス（テスト素材生成専用）。見つからなければ None。"""
+    """Path to the ffmpeg executable (for test media generation only).
+
+    Returns None if not found.
+    """
     return _find_binary("ffmpeg", "CLIPWRIGHT_FFMPEG")
 
 
 @pytest.fixture
 def tmp_project(tmp_path: Path) -> Path:
-    """一時ディレクトリを返すフィクスチャ。pytest の tmp_path で自動クリーンアップ。"""
+    """Return a temporary directory. Auto-cleaned up by pytest's tmp_path."""
     return tmp_path
 
 
@@ -52,15 +55,16 @@ def sample_media(
     ffmpeg_path: str | None,
     tmp_path_factory: pytest.TempPathFactory,
 ) -> str:
-    """ffmpeg lavfi (testsrc + sine) で 3 秒のテスト mp4 を生成して返す。
+    """Generate a 3-second test mp4 via ffmpeg lavfi (testsrc + sine).
 
-    ffmpeg が一切見つからない場合のみ pytest.skip する（[DC-AM-006]）。
+    Returns the path to the generated file.
+    Skips via pytest.skip only when ffmpeg is completely unavailable. [DC-AM-006]
     """
     if ffmpeg_path is None:
         pytest.skip(
-            "ffmpeg が見つかりません。"
-            "winget install Gyan.FFmpeg で導入するか "
-            "CLIPWRIGHT_FFMPEG 環境変数にフルパスを設定してください。"
+            "ffmpeg not found. "
+            "Install via winget install Gyan.FFmpeg or "
+            "set CLIPWRIGHT_FFMPEG to the full path."
         )
 
     out_dir = tmp_path_factory.mktemp("media")
@@ -93,6 +97,6 @@ def sample_media(
     )
     if result.returncode != 0:
         pytest.fail(
-            f"テスト素材の生成に失敗しました。\ncmd: {cmd}\nstderr: {result.stderr}"
+            f"Failed to generate test media.\ncmd: {cmd}\nstderr: {result.stderr}"
         )
     return out_path

@@ -1,27 +1,27 @@
-"""test_media.py — media.py (ffprobe ラッパー) のテスト。
+"""test_media.py — Tests for the ffprobe wrapper in media.py.
 
-対象: inspect_media(path: str) -> MediaInfo
+Target: inspect_media(path: str) -> MediaInfo
 
-単体テスト（process.run をモック）:
-- ffprobe JSON → MediaInfo 構造化
-- 不正 JSON → PROBE_FAILED
-- 入力ファイル不在 → FILE_NOT_FOUND
-- ffprobe 不在 → DEPENDENCY_MISSING
+Unit tests (process.run mocked):
+- ffprobe JSON → MediaInfo struct
+- Invalid JSON → PROBE_FAILED
+- Input file absent → FILE_NOT_FOUND
+- ffprobe absent → DEPENDENCY_MISSING
 
-rate 決定規則（§13.3 DC-AS-006）:
-- 映像ストリームがあれば第1映像の avg_frame_rate を rate とする
-- 音声のみ素材は rate = 1000.0
+Rate determination rules (§13.3 DC-AS-006):
+- If a video stream exists, use avg_frame_rate of the first video stream as rate
+- Audio-only sources use rate = 1000.0
 
-統合テスト（実 ffprobe 使用）:
-- sample_media / ffprobe_path フィクスチャ（conftest.py）を使用
-- ffmpeg/ffprobe がマシンに到達可能な場合は skip せず必須実行（§13.4 DC-AM-006）
-- 生成 mp4 を inspect し duration / streams を検証
+Integration tests (real ffprobe):
+- Use sample_media / ffprobe_path fixtures from conftest.py
+- Required (not skipped) when ffmpeg/ffprobe is reachable (§13.4 DC-AM-006)
+- Inspect generated mp4 and verify duration / streams
 
-セキュリティ・品質テスト:
-- F-04: _validate_existing_file がシンボリックリンクを拒否すること（SR-V-002）
-  Windows では symlink 作成に要権限のため、失敗時は pytest.skip でガード
-- L-2: _to_optional_int ヘルパーの変換ロジックを固定するユニットテスト（CR-Q-002）
-  None / int / float / 数値文字列 / 不正値の各入力パターンを parametrize で検証
+Security / quality tests:
+- F-04: _validate_existing_file must reject symbolic links (SR-V-002)
+  Symlink creation requires privileges on Windows; guard with pytest.skip on failure
+- L-2: Unit tests for _to_optional_int helper conversion logic (CR-Q-002)
+  Parametrize over None / int / float / numeric string / invalid values
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ from clipwright.media import (
 from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo
 
 # ===========================================================================
-# ヘルパー: ffprobe が返す JSON ペイロードを構築する
+# Helper: build ffprobe JSON payload
 # ===========================================================================
 
 
@@ -50,9 +50,9 @@ def _make_ffprobe_json(
     container_format: str = "mov,mp4,m4a,3gp,3g2,mj2",
     bit_rate: str | None = None,
 ) -> str:
-    """ffprobe -print_format json -show_format -show_streams の出力を模倣する。
+    """Simulate the output of ffprobe -print_format json -show_format -show_streams.
 
-    bit_rate: format.bit_rate に設定する値。None の場合はキーを含めない。
+    bit_rate: value to set in format.bit_rate. Key is omitted when None.
     """
     if streams is None:
         streams = [
@@ -96,15 +96,15 @@ def _make_completed_process(stdout: str, returncode: int = 0) -> CompletedProces
 
 
 # ===========================================================================
-# 単体テスト: ffprobe JSON → MediaInfo 構造化
+# Unit tests: ffprobe JSON → MediaInfo struct
 # ===========================================================================
 
 
 class TestInspectMediaSuccess:
-    """正常系: ffprobe の JSON 出力を MediaInfo へ構造化する。"""
+    """Happy path: structure ffprobe JSON output into MediaInfo."""
 
     def test_returns_media_info_instance(self, mocker: MagicMock, tmp_path) -> None:
-        """戻り値が MediaInfo インスタンスであること。"""
+        """Return value is a MediaInfo instance."""
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
@@ -119,7 +119,7 @@ class TestInspectMediaSuccess:
         assert isinstance(result, MediaInfo)
 
     def test_path_is_preserved_in_media_info(self, mocker: MagicMock, tmp_path) -> None:
-        """MediaInfo.path が入力パスと一致すること。"""
+        """MediaInfo.path matches the input path."""
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
@@ -134,7 +134,7 @@ class TestInspectMediaSuccess:
         assert result.path == str(media_file)
 
     def test_streams_are_parsed(self, mocker: MagicMock, tmp_path) -> None:
-        """streams リストがパースされ StreamInfo になること。"""
+        """The streams list is parsed into StreamInfo objects."""
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
@@ -150,7 +150,7 @@ class TestInspectMediaSuccess:
         assert all(isinstance(s, StreamInfo) for s in result.streams)
 
     def test_video_stream_fields(self, mocker: MagicMock, tmp_path) -> None:
-        """映像ストリームの codec_type / width / height が正しくマップされること。"""
+        """Video stream codec_type / width / height are mapped correctly."""
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
@@ -168,7 +168,7 @@ class TestInspectMediaSuccess:
         assert video.height == 240
 
     def test_audio_stream_fields(self, mocker: MagicMock, tmp_path) -> None:
-        """音声ストリームの sample_rate / channels が正しくマップされること。"""
+        """Audio stream sample_rate / channels are mapped correctly."""
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
@@ -185,7 +185,7 @@ class TestInspectMediaSuccess:
         assert audio.channels == 2
 
     def test_container_is_parsed(self, mocker: MagicMock, tmp_path) -> None:
-        """container フィールドが format_name から取得されること。"""
+        """The container field is populated from format_name."""
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
@@ -203,7 +203,7 @@ class TestInspectMediaSuccess:
         assert "mp4" in result.container
 
     def test_duration_is_rational_time_model(self, mocker: MagicMock, tmp_path) -> None:
-        """duration が RationalTimeModel として返されること（秒 float 単独NG）。"""
+        """duration is returned as RationalTimeModel (bare seconds float is not OK)."""
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
@@ -220,17 +220,17 @@ class TestInspectMediaSuccess:
 
 
 # ===========================================================================
-# rate 決定規則テスト（§13.3 DC-AS-006）
+# Rate determination rule tests (§13.3 DC-AS-006)
 # ===========================================================================
 
 
 class TestRateDecisionRule:
-    """duration の rate 決定規則（DC-AS-006）を検証する。"""
+    """Verify the duration rate determination rules (DC-AS-006)."""
 
     def test_video_stream_avg_frame_rate_used_as_rate(
         self, mocker: MagicMock, tmp_path
     ) -> None:
-        """映像ストリームがある場合、第1映像の avg_frame_rate が rate になること。
+        """avg_frame_rate of the first video stream becomes the rate.
 
         avg_frame_rate="30/1" → rate=30.0
         """
@@ -261,8 +261,7 @@ class TestRateDecisionRule:
     def test_fractional_avg_frame_rate_parsed_correctly(
         self, mocker: MagicMock, tmp_path
     ) -> None:
-        """avg_frame_rate が分数形式（例: "24000/1001"）でも
-        正しく rate に変換されること。
+        """Fractional avg_frame_rate (e.g. "24000/1001") is converted to rate correctly.
 
         24000/1001 ≈ 23.976 fps
         """
@@ -291,7 +290,7 @@ class TestRateDecisionRule:
         assert result.duration.rate == pytest.approx(24000 / 1001, rel=1e-4)
 
     def test_audio_only_uses_rate_1000(self, mocker: MagicMock, tmp_path) -> None:
-        """音声のみの素材は rate=1000.0 になること（DC-AS-006）。"""
+        """Audio-only sources use rate=1000.0 (DC-AS-006)."""
         media_file = tmp_path / "audio.mp4"
         media_file.write_bytes(b"dummy")
 
@@ -320,8 +319,7 @@ class TestRateDecisionRule:
     def test_first_video_stream_rate_used_when_multiple_video_streams(
         self, mocker: MagicMock, tmp_path
     ) -> None:
-        """複数映像ストリームがある場合、第1映像（index 最小）の
-        avg_frame_rate が採用されること。"""
+        """Multiple video streams: the first stream's avg_frame_rate is used."""
         media_file = tmp_path / "multi.mp4"
         media_file.write_bytes(b"dummy")
 
@@ -355,9 +353,9 @@ class TestRateDecisionRule:
     def test_duration_value_reflects_format_duration(
         self, mocker: MagicMock, tmp_path
     ) -> None:
-        """duration.value が format.duration（秒）を rate で変換した値になること。
+        """duration.value equals format.duration (seconds) converted by rate.
 
-        duration=3.0 秒、rate=30.0 fps → value=90.0
+        duration=3.0 s, rate=30.0 fps → value=90.0
         """
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
@@ -381,22 +379,22 @@ class TestRateDecisionRule:
         result = inspect_media(str(media_file))
 
         assert result.duration is not None
-        # 3.0 秒 × 30.0 fps = 90.0 フレーム
+        # 3.0 s × 30.0 fps = 90.0 frames
         assert result.duration.value == pytest.approx(90.0)
 
 
 # ===========================================================================
-# 単体テスト: エラー系
+# Unit tests: error paths
 # ===========================================================================
 
 
 class TestInspectMediaFileNotFound:
-    """入力ファイルが存在しない場合は FILE_NOT_FOUND を送出する。"""
+    """FILE_NOT_FOUND is raised when the input file does not exist."""
 
     def test_raises_file_not_found_for_nonexistent_path(
         self, mocker: MagicMock
     ) -> None:
-        """存在しないパスを渡すと FILE_NOT_FOUND になること。"""
+        """Passing a non-existent path raises FILE_NOT_FOUND."""
         mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
 
         with pytest.raises(ClipwrightError) as exc_info:
@@ -405,7 +403,7 @@ class TestInspectMediaFileNotFound:
         assert exc_info.value.code == ErrorCode.FILE_NOT_FOUND
 
     def test_file_not_found_has_message_and_hint(self, mocker: MagicMock) -> None:
-        """FILE_NOT_FOUND エラーは message と hint を持つ（§6.4 規約）。"""
+        """FILE_NOT_FOUND error carries message and hint (§6.4 contract)."""
         mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
 
         with pytest.raises(ClipwrightError) as exc_info:
@@ -418,11 +416,9 @@ class TestInspectMediaFileNotFound:
     def test_file_not_found_before_resolve_tool_is_called(
         self, mocker: MagicMock
     ) -> None:
-        """ファイル検証はパス検証の前に行われること
-        （resolve_tool より先に FILE_NOT_FOUND）。
+        """File validation happens before resolve_tool (FILE_NOT_FOUND comes first).
 
-        ファイル存在確認は ffprobe 探索より先に行うことで、
-        ユーザーへの feedback を早める。
+        Checking file existence before locating ffprobe gives faster feedback.
         """
         mock_resolve = mocker.patch(
             "clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe"
@@ -431,20 +427,18 @@ class TestInspectMediaFileNotFound:
         with pytest.raises(ClipwrightError) as exc_info:
             inspect_media("/nonexistent/video.mp4")
 
-        # ファイル検証は resolve_tool より先に行われるため、ファイル不在時は
-        # resolve_tool が呼ばれずに FILE_NOT_FOUND が送出される（NR3-L-1）
+        # File validation precedes resolve_tool; not called on absent file
         assert exc_info.value.code == ErrorCode.FILE_NOT_FOUND
         mock_resolve.assert_not_called()
 
 
 class TestInspectMediaDependencyMissing:
-    """ffprobe が見つからない場合は DEPENDENCY_MISSING を送出する。"""
+    """DEPENDENCY_MISSING is raised when ffprobe is not found."""
 
     def test_raises_dependency_missing_when_ffprobe_not_found(
         self, mocker: MagicMock, tmp_path
     ) -> None:
-        """ffprobe が見つからない場合（resolve_tool が DEPENDENCY_MISSING）を
-        inspect_media が正しく伝播させること。"""
+        """inspect_media propagates DEPENDENCY_MISSING from resolve_tool correctly."""
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
@@ -452,8 +446,8 @@ class TestInspectMediaDependencyMissing:
             "clipwright.process.resolve_tool",
             side_effect=ClipwrightError(
                 code=ErrorCode.DEPENDENCY_MISSING,
-                message="ffprobe が PATH 上に見つかりません",
-                hint="winget install Gyan.FFmpeg で導入してください",
+                message="ffprobe not found on PATH",
+                hint="Install via winget install Gyan.FFmpeg",
             ),
         )
 
@@ -465,7 +459,7 @@ class TestInspectMediaDependencyMissing:
     def test_dependency_missing_hint_mentions_ffprobe(
         self, mocker: MagicMock, tmp_path
     ) -> None:
-        """DEPENDENCY_MISSING エラーの hint に ffprobe へのアクションが含まれること。"""
+        """DEPENDENCY_MISSING error hint includes an actionable ffprobe instruction."""
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
@@ -473,8 +467,8 @@ class TestInspectMediaDependencyMissing:
             "clipwright.process.resolve_tool",
             side_effect=ClipwrightError(
                 code=ErrorCode.DEPENDENCY_MISSING,
-                message="ffprobe が PATH 上に見つかりません",
-                hint="winget install Gyan.FFmpeg で導入してください",
+                message="ffprobe not found on PATH",
+                hint="Install via winget install Gyan.FFmpeg",
             ),
         )
 
@@ -485,12 +479,12 @@ class TestInspectMediaDependencyMissing:
 
 
 class TestInspectMediaProbeFailed:
-    """ffprobe が不正な JSON を返した場合は PROBE_FAILED を送出する。"""
+    """PROBE_FAILED is raised when ffprobe returns invalid JSON."""
 
     def test_raises_probe_failed_on_invalid_json(
         self, mocker: MagicMock, tmp_path
     ) -> None:
-        """ffprobe の stdout が有効な JSON でない場合は PROBE_FAILED になること。"""
+        """Raises PROBE_FAILED when ffprobe stdout is not valid JSON."""
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
@@ -508,7 +502,7 @@ class TestInspectMediaProbeFailed:
     def test_raises_probe_failed_on_empty_stdout(
         self, mocker: MagicMock, tmp_path
     ) -> None:
-        """ffprobe の stdout が空文字列の場合も PROBE_FAILED になること。"""
+        """Raises PROBE_FAILED when ffprobe stdout is an empty string."""
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
@@ -526,8 +520,7 @@ class TestInspectMediaProbeFailed:
     def test_raises_probe_failed_on_json_missing_required_fields(
         self, mocker: MagicMock, tmp_path
     ) -> None:
-        """ffprobe の JSON に必須フィールド（streams / format）がない場合も
-        PROBE_FAILED になること。"""
+        """Raises PROBE_FAILED when required fields (streams / format) are absent."""
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
@@ -545,7 +538,7 @@ class TestInspectMediaProbeFailed:
     def test_probe_failed_has_message_and_hint(
         self, mocker: MagicMock, tmp_path
     ) -> None:
-        """PROBE_FAILED エラーは message と hint を持つ（§6.4 規約）。"""
+        """PROBE_FAILED error carries message and hint (§6.4 contract)."""
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
@@ -564,10 +557,10 @@ class TestInspectMediaProbeFailed:
 
 
 class TestInspectMediaRunInvocation:
-    """process.run の呼ばれ方を検証する（規約6.5 shell=False・引数配列）。"""
+    """Verify how process.run is called (§6.5 shell=False, argument array)."""
 
     def test_run_called_with_list_cmd(self, mocker: MagicMock, tmp_path) -> None:
-        """run に渡されるコマンドがリスト（引数配列）であること。"""
+        """The command passed to run is a list (argument array)."""
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
@@ -586,7 +579,7 @@ class TestInspectMediaRunInvocation:
     def test_run_called_with_show_format_and_show_streams(
         self, mocker: MagicMock, tmp_path
     ) -> None:
-        """run に渡すコマンドに -show_format と -show_streams が含まれること。"""
+        """The command includes -show_format and -show_streams."""
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
@@ -606,7 +599,7 @@ class TestInspectMediaRunInvocation:
     def test_run_called_with_json_print_format(
         self, mocker: MagicMock, tmp_path
     ) -> None:
-        """run に渡すコマンドに -print_format json が含まれること。"""
+        """The command includes -print_format json."""
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
@@ -627,7 +620,7 @@ class TestInspectMediaRunInvocation:
     def test_run_called_with_file_path_as_last_arg(
         self, mocker: MagicMock, tmp_path
     ) -> None:
-        """run に渡すコマンドの末尾に入力ファイルパスが含まれること。"""
+        """The input file path is included in the command."""
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
@@ -644,8 +637,7 @@ class TestInspectMediaRunInvocation:
         assert str(media_file) in cmd
 
     def test_ffprobe_resolved_with_env_var(self, mocker: MagicMock, tmp_path) -> None:
-        """resolve_tool が "ffprobe" と "CLIPWRIGHT_FFPROBE" で
-        呼ばれること（ADR-3）。"""
+        """resolve_tool is called with "ffprobe" and "CLIPWRIGHT_FFPROBE" (ADR-3)."""
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
 
@@ -663,15 +655,15 @@ class TestInspectMediaRunInvocation:
 
 
 # ===========================================================================
-# 統合テスト: 実 ffprobe で生成 mp4 を inspect する
+# Integration tests: inspect a real mp4 with ffprobe
 # ===========================================================================
 
 
 class TestInspectMediaIntegration:
-    """実 ffprobe を使用した統合テスト（§13.4 DC-AM-006）。
+    """Integration tests using real ffprobe (§13.4 DC-AM-006).
 
-    conftest の sample_media / ffprobe_path フィクスチャを使用する。
-    ffmpeg/ffprobe が到達可能な環境では skip せず必須実行する。
+    Uses sample_media / ffprobe_path fixtures from conftest.py.
+    Required (not skipped) when ffmpeg/ffprobe is reachable.
     """
 
     def test_integration_inspect_real_mp4_returns_media_info(
@@ -679,15 +671,14 @@ class TestInspectMediaIntegration:
         sample_media: str,
         ffprobe_path: str | None,
     ) -> None:
-        """実 ffprobe で生成 mp4 を inspect し MediaInfo が返ること。
+        """inspect_media returns MediaInfo for a real mp4 via ffprobe.
 
-        ffprobe_path が None の場合は ffprobe 単体が到達不可（ffmpeg はある）。
-        CLIPWRIGHT_FFPROBE env があれば到達可能。
+        Skips when ffprobe_path is None (ffprobe not reachable; ffmpeg may still exist).
+        CLIPWRIGHT_FFPROBE env var makes it reachable.
         """
         if ffprobe_path is None:
             pytest.skip(
-                "ffprobe が見つかりません"
-                "（CLIPWRIGHT_FFPROBE が未設定で PATH 上にもない）。"
+                "ffprobe not found (CLIPWRIGHT_FFPROBE not set and not on PATH)."
             )
 
         result = inspect_media(sample_media)
@@ -699,15 +690,14 @@ class TestInspectMediaIntegration:
         sample_media: str,
         ffprobe_path: str | None,
     ) -> None:
-        """生成 mp4（3 秒）の duration が約 3.0 秒になること。
+        """Generated mp4 (3 s) duration is approximately 3.0 seconds.
 
-        RationalTimeModel の value / rate から秒数を導出して検証する。
-        誤差は ±0.1 秒を許容する（lavfi 生成の精度）。
+        Derive seconds from RationalTimeModel value / rate.
+        Tolerance is ±0.1 s (lavfi generation precision).
         """
         if ffprobe_path is None:
             pytest.skip(
-                "ffprobe が見つかりません"
-                "（CLIPWRIGHT_FFPROBE が未設定で PATH 上にもない）。"
+                "ffprobe not found (CLIPWRIGHT_FFPROBE not set and not on PATH)."
             )
 
         result = inspect_media(sample_media)
@@ -721,11 +711,10 @@ class TestInspectMediaIntegration:
         sample_media: str,
         ffprobe_path: str | None,
     ) -> None:
-        """生成 mp4 に video / audio ストリームが含まれること。"""
+        """Generated mp4 contains both video and audio streams."""
         if ffprobe_path is None:
             pytest.skip(
-                "ffprobe が見つかりません"
-                "（CLIPWRIGHT_FFPROBE が未設定で PATH 上にもない）。"
+                "ffprobe not found (CLIPWRIGHT_FFPROBE not set and not on PATH)."
             )
 
         result = inspect_media(sample_media)
@@ -739,14 +728,13 @@ class TestInspectMediaIntegration:
         sample_media: str,
         ffprobe_path: str | None,
     ) -> None:
-        """生成 mp4（30fps）の duration.rate が 30.0 になること（DC-AS-006）。
+        """Generated mp4 (30 fps) has duration.rate == 30.0 (DC-AS-006).
 
-        conftest の sample_media は rate=30 で生成されている。
+        sample_media in conftest is generated at rate=30.
         """
         if ffprobe_path is None:
             pytest.skip(
-                "ffprobe が見つかりません"
-                "（CLIPWRIGHT_FFPROBE が未設定で PATH 上にもない）。"
+                "ffprobe not found (CLIPWRIGHT_FFPROBE not set and not on PATH)."
             )
 
         result = inspect_media(sample_media)
@@ -759,11 +747,10 @@ class TestInspectMediaIntegration:
         sample_media: str,
         ffprobe_path: str | None,
     ) -> None:
-        """MediaInfo.path が入力パスと一致すること（統合）。"""
+        """MediaInfo.path matches the input path (integration)."""
         if ffprobe_path is None:
             pytest.skip(
-                "ffprobe が見つかりません"
-                "（CLIPWRIGHT_FFPROBE が未設定で PATH 上にもない）。"
+                "ffprobe not found (CLIPWRIGHT_FFPROBE not set and not on PATH)."
             )
 
         result = inspect_media(sample_media)
@@ -772,28 +759,26 @@ class TestInspectMediaIntegration:
 
 
 # ===========================================================================
-# F-04: _validate_existing_file のシンボリックリンク挙動を固定する（SR-V-002）
+# F-04: Pin symbolic link behaviour in _validate_existing_file (SR-V-002)
 # ===========================================================================
 
 
 class TestValidateExistingFileSymlink:
-    """F-04: _validate_existing_file がシンボリックリンクを明示判定すること。
+    """F-04: _validate_existing_file must explicitly reject symbolic links.
 
-    セキュリティ finding F-04 (SR-V-002) の修正を固定するテスト。
-    `Path.is_symlink()` でシンボリックリンクを拒否するか、
-    `path.resolve() != path` で解決後パス不一致を検出することを期待する。
+    Pins the fix for security finding F-04 (SR-V-002).
+    Expects rejection via Path.is_symlink() or path.resolve() != path mismatch.
 
-    Windows での symlink 作成には管理者権限または Developer Mode が必要。
-    作成失敗時は pytest.skip でガードし、CI/他環境では実行される。
+    Symlink creation requires admin/Developer Mode on Windows.
+    Guard with pytest.skip on failure so CI and other environments still run.
     """
 
     def test_symlink_to_regular_file_is_rejected(self, tmp_path) -> None:
-        """通常ファイルへのシンボリックリンクを渡した場合に ClipwrightError が
-        発生すること（F-04 修正後に拒否すること）。
+        """A symlink to a regular file raises ClipwrightError (F-04 must reject it).
 
-        Arrange: 通常ファイル real.mp4 を作成し、symlink.mp4 → real.mp4 のリンクを作る
-        Act: _validate_existing_file(str(symlink_path)) を呼ぶ
-        Assert: ClipwrightError が送出されること（FILE_NOT_FOUND または専用コード）
+        Arrange: create real.mp4, then symlink.mp4 → real.mp4
+        Act: _validate_existing_file(str(symlink_path))
+        Assert: ClipwrightError is raised (FILE_NOT_FOUND or a dedicated code)
         """
         from clipwright.media import _validate_existing_file
 
@@ -801,31 +786,30 @@ class TestValidateExistingFileSymlink:
         real_file.write_bytes(b"dummy media content")
         symlink_path = tmp_path / "symlink.mp4"
 
-        # Windows では symlink 作成に権限が要るため失敗を skip でガード
+        # Guard against symlink creation failure on Windows (insufficient privileges)
         try:
             symlink_path.symlink_to(real_file)
         except (OSError, NotImplementedError) as exc:
             pytest.skip(
-                f"symlink の作成に失敗しました（権限不足または未対応環境）: {exc}"
+                f"Failed to create symlink (insufficient privileges or unsupported):"
+                f" {exc}"
             )
 
-        # Arrange: symlink は作成できた
-        assert symlink_path.is_symlink(), "symlink が正しく作成されていること"
-        assert symlink_path.is_file(), (
-            "symlink が is_file() で True を返すこと（追跡あり）"
-        )
+        # Arrange: symlink was created
+        assert symlink_path.is_symlink(), "symlink was created correctly"
+        assert symlink_path.is_file(), "symlink returns True for is_file() (followed)"
 
-        # Act & Assert: _validate_existing_file は symlink を拒否すること
+        # Act & Assert: _validate_existing_file must reject the symlink
         with pytest.raises(ClipwrightError):
             _validate_existing_file(str(symlink_path))
 
     def test_symlink_rejection_uses_appropriate_error_code(self, tmp_path) -> None:
-        """シンボリックリンク拒否時のエラーコードが ClipwrightError の
-        適切なコードであること（FILE_NOT_FOUND または専用コード）。
+        """Symlink rejection uses an appropriate ClipwrightError code
+        (FILE_NOT_FOUND or a dedicated code).
 
-        Arrange: symlink.mp4 → real.mp4 を作成
-        Act: _validate_existing_file を呼ぶ
-        Assert: ClipwrightError.code が ErrorCode の値であること
+        Arrange: create symlink.mp4 → real.mp4
+        Act: call _validate_existing_file
+        Assert: ClipwrightError.code is a valid ErrorCode value
         """
         from clipwright.media import _validate_existing_file
 
@@ -836,72 +820,72 @@ class TestValidateExistingFileSymlink:
         try:
             symlink_path.symlink_to(real_file)
         except (OSError, NotImplementedError) as exc:
-            pytest.skip(f"symlink 作成失敗: {exc}")
+            pytest.skip(f"Symlink creation failed: {exc}")
 
         with pytest.raises(ClipwrightError) as exc_info:
             _validate_existing_file(str(symlink_path))
 
-        # エラーコードが ErrorCode の有効な値であること
+        # Error code must be a valid ErrorCode value
         assert exc_info.value.code in list(ErrorCode)
 
     def test_regular_file_still_passes_validation(self, tmp_path) -> None:
-        """通常ファイル（symlink でない）は引き続き検証を通過すること。
+        """Regular files (non-symlink) continue to pass validation.
 
-        F-04 修正後も既存の正常系を壊さないことを確認するリグレッションテスト。
+        Regression test: F-04 fix must not break the existing happy path.
 
-        Arrange: 通常ファイル video.mp4 を作成
-        Act: _validate_existing_file を呼ぶ
-        Assert: 例外が送出されないこと
+        Arrange: create regular video.mp4
+        Act: call _validate_existing_file
+        Assert: no exception is raised
         """
         from clipwright.media import _validate_existing_file
 
         regular_file = tmp_path / "video.mp4"
         regular_file.write_bytes(b"dummy media content")
 
-        # 正常ファイルは例外なしで通過すること
-        _validate_existing_file(str(regular_file))  # 例外が出ないこと
+        # Regular file must pass without exception
+        _validate_existing_file(str(regular_file))  # must not raise
 
 
 # ===========================================================================
-# L-2: _to_optional_int ヘルパーの変換ロジックを固定する（CR-Q-002）
+# L-2: Pin _to_optional_int helper conversion logic (CR-Q-002)
 # ===========================================================================
 
 
 class TestToOptionalInt:
-    """L-2: _to_optional_int(val: object) -> int | None のユニットテスト。
+    """L-2: Unit tests for _to_optional_int(val: object) -> int | None.
 
-    コードレビュー finding L-2 (CR-Q-002) の修正を固定するテスト。
-    `int(str(x))` の二段変換を `_to_optional_int` ヘルパーに抽出した後の
-    変換契約を parametrize で固定する。
+    Pins the fix for code review finding L-2 (CR-Q-002).
+    After extracting the two-step int(str(x)) conversion into _to_optional_int,
+    pins the conversion contract with parametrize.
 
-    対象ヘルパー: `clipwright.media._to_optional_int`
+    Target: clipwright.media._to_optional_int
     """
 
     @pytest.mark.parametrize(
         "val, expected",
         [
-            # None 入力 → None を返す
+            # None input → return None
             (None, None),
-            # int 入力 → そのまま int を返す
+            # int input → return int as-is
             (0, 0),
             (320, 320),
             (-1, -1),
-            # float 入力 → int に変換する（SR-V-001）
+            # float input → convert to int (SR-V-001)
             (1.5, 1),
-            # inf/nan → OverflowError/ValueError を捕捉して None（SR-V-001）
+            # inf/nan → catch OverflowError/ValueError and return None (SR-V-001)
             (float("inf"), None),
             (float("nan"), None),
-            # bool → int サブクラスのため True→1 / False→0（CR-CT-002）
+            # bool → subclass of int: True→1 / False→0 (CR-CT-002)
             (True, 1),
             (False, 0),
-            # 数値文字列 → int に変換する
+            # numeric string → convert to int
             ("44100", 44100),
             ("0", 0),
             ("1920", 1920),
-            # int に変換できない不正値 → None を返す
+            # non-numeric values → return None
             ("not_a_number", None),
             ("", None),
-            ("1.5", None),  # float 文字列は int 変換できないので None
+            ("1.5", None),  # float string cannot be converted to int → None
             ({}, None),
             ([], None),
             (object(), None),
@@ -930,18 +914,18 @@ class TestToOptionalInt:
     def test_to_optional_int_conversion(
         self, val: object, expected: int | None
     ) -> None:
-        """_to_optional_int が各入力値に対して期待通りの値を返すこと。
+        """_to_optional_int returns the expected value for each input.
 
-        Arrange: val を入力値として用意する
-        Act: _to_optional_int(val) を呼ぶ
-        Assert: 戻り値が expected と一致すること
+        Arrange: prepare val as input
+        Act: call _to_optional_int(val)
+        Assert: return value equals expected
         """
         try:
             from clipwright.media import _to_optional_int  # type: ignore[attr-defined]
         except ImportError:
             pytest.fail(
-                "_to_optional_int が clipwright.media に存在しません。"
-                "L-2 修正（_to_optional_int ヘルパーの追加）が必要です。"
+                "_to_optional_int does not exist in clipwright.media. "
+                "L-2 fix (add _to_optional_int helper) is required."
             )
 
         # Act
@@ -951,18 +935,18 @@ class TestToOptionalInt:
         assert result == expected
 
     def test_to_optional_int_returns_int_type_for_valid_input(self) -> None:
-        """_to_optional_int が有効な入力に対して int 型を返すこと（型保証）。
+        """_to_optional_int returns an int type for valid input (type guarantee).
 
-        Arrange: 有効な数値文字列 "320"
-        Act: _to_optional_int("320") を呼ぶ
-        Assert: 戻り値が int 型であること
+        Arrange: valid numeric string "320"
+        Act: call _to_optional_int("320")
+        Assert: return value is of type int
         """
         try:
             from clipwright.media import _to_optional_int  # type: ignore[attr-defined]
         except ImportError:
             pytest.fail(
-                "_to_optional_int が clipwright.media に存在しません。"
-                "L-2 修正が必要です。"
+                "_to_optional_int does not exist in clipwright.media. "
+                "L-2 fix is required."
             )
 
         result = _to_optional_int("320")
@@ -970,18 +954,18 @@ class TestToOptionalInt:
         assert isinstance(result, int)
 
     def test_to_optional_int_returns_none_type_for_invalid_input(self) -> None:
-        """_to_optional_int が不正な入力に対して None を返すこと（型保証）。
+        """_to_optional_int returns None for invalid input (type guarantee).
 
-        Arrange: 変換不可能な値 "abc"
-        Act: _to_optional_int("abc") を呼ぶ
-        Assert: 戻り値が None であること
+        Arrange: non-convertible value "abc"
+        Act: call _to_optional_int("abc")
+        Assert: return value is None
         """
         try:
             from clipwright.media import _to_optional_int  # type: ignore[attr-defined]
         except ImportError:
             pytest.fail(
-                "_to_optional_int が clipwright.media に存在しません。"
-                "L-2 修正が必要です。"
+                "_to_optional_int does not exist in clipwright.media. "
+                "L-2 fix is required."
             )
 
         result = _to_optional_int("abc")
@@ -990,28 +974,27 @@ class TestToOptionalInt:
 
 
 # ===========================================================================
-# AD-1: MediaInfo.bit_rate パーステスト（schemas.py / media.py 契約面 100%）
+# AD-1: MediaInfo.bit_rate parse test (schemas.py / media.py contract 100%)
 # ===========================================================================
 
 
 class TestMediaInfoBitRate:
-    """AD-1: format.bit_rate → MediaInfo.bit_rate のパース契約を固定する。
+    """AD-1: Pin format.bit_rate → MediaInfo.bit_rate parse contract.
 
-    設計判断 AD-1（architecture-report-20260610-125203）:
-    - schemas.py の MediaInfo に `bit_rate: int | None = None` を追加する。
-    - _parse_ffprobe_json で
-      `_to_optional_int(raw_format.get("bit_rate"))` でパースする。
-    - "N/A" / キー欠落は None になる（既存 _to_optional_int の "N/A" 吸収を再利用）。
+    Design decision AD-1 (architecture-report-20260610-125203):
+    - Add `bit_rate: int | None = None` to MediaInfo in schemas.py.
+    - Parse via `_to_optional_int(raw_format.get("bit_rate"))` in _parse_ffprobe_json.
+    - "N/A" / missing key → None (reuses _to_optional_int "N/A" absorption).
     """
 
     @pytest.mark.parametrize(
         "bit_rate_value, include_in_json, expected",
         [
-            # ケース1: 数値文字列 → int に変換する
+            # Case 1: numeric string → convert to int
             ("128000", True, 128000),
-            # ケース2: "N/A" → None を返す（_to_optional_int の "N/A" 吸収）
+            # Case 2: "N/A" → None (_to_optional_int "N/A" absorption)
             ("N/A", True, None),
-            # ケース3: キー欠落 → None を返す（raw_format.get の デフォルト None）
+            # Case 3: missing key → None (raw_format.get default None)
             (None, False, None),
         ],
         ids=[
@@ -1028,10 +1011,10 @@ class TestMediaInfoBitRate:
         include_in_json: bool,
         expected: int | None,
     ) -> None:
-        """format.bit_rate の各入力パターンで MediaInfo.bit_rate が期待値になること。
+        """MediaInfo.bit_rate matches the expected value for each format.bit_rate input.
 
-        Arrange: bit_rate_value / include_in_json に応じた ffprobe JSON を用意する
-        Act: inspect_media を呼ぶ（process.run をモック）
+        Arrange: prepare ffprobe JSON according to bit_rate_value / include_in_json
+        Act: call inspect_media (process.run mocked)
         Assert: result.bit_rate == expected
         """
         media_file = tmp_path / "video.mp4"

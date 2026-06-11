@@ -1,7 +1,7 @@
-"""otio_utils.py — OTIO ヘルパー（clip/gap/marker/metadata/summary）。
+"""otio_utils.py — OTIO helpers (clip/gap/marker/metadata/summary).
 
-薄いラッパー層として OTIO オブジェクトの生成・I/O・メタデータ操作を担う。
-時間変換は schemas.py の to_otio_time / from_otio_time を import して使う。
+Thin wrapper layer responsible for creating OTIO objects, I/O, and metadata operations.
+Time conversions use to_otio_time / from_otio_time imported from schemas.py.
 """
 
 from __future__ import annotations
@@ -24,15 +24,15 @@ from clipwright.schemas import (
 )
 
 # ===========================================================================
-# Timeline 生成・I/O
+# Timeline creation and I/O
 # ===========================================================================
 
 
 def new_timeline(name: str) -> otio.schema.Timeline:
-    """新しい Timeline を生成する。
+    """Create a new Timeline.
 
-    §13.5 DC-AS-001 に従い [V1(Video), A1(Audio)] の順でトラックを生成する。
-    フラット index: 0=V1, 1=A1。
+    Tracks are created in [V1(Video), A1(Audio)] order per §13.5 DC-AS-001.
+    Flat index: 0=V1, 1=A1.
     """
     timeline = otio.schema.Timeline(name=name)
 
@@ -46,38 +46,38 @@ def new_timeline(name: str) -> otio.schema.Timeline:
 
 
 def load_timeline(path: str) -> otio.schema.Timeline:
-    """OTIO ファイルを読み込んで Timeline を返す。
+    """Load an OTIO file and return a Timeline.
 
-    読み込み失敗・型不整合は ClipwrightError(OTIO_ERROR) に変換して送出する（L-3）。
-    生の OTIO 例外は呼び出し元（server 層）に届かない設計にする（L-1 / F-07 / L-3）。
+    Load failures and type mismatches are wrapped as ClipwrightError(OTIO_ERROR) (L-3).
+    Raw OTIO exceptions must not reach the caller (L-1 / F-07).
     """
     try:
         result = otio.adapters.read_from_file(path)
     except otio.exceptions.OTIOError as exc:
         raise ClipwrightError(
             code=ErrorCode.OTIO_ERROR,
-            message=f"OTIO ファイルの読み込みに失敗しました: {Path(path).name}",
-            hint="有効な .otio タイムラインファイルを指定してください。",
+            message=f"Failed to load OTIO file: {Path(path).name}",
+            hint="Specify a valid .otio timeline file.",
         ) from exc
 
     if not isinstance(result, otio.schema.Timeline):
         result_type = type(result).__name__
         raise ClipwrightError(
             code=ErrorCode.OTIO_ERROR,
-            message=f"OTIO ファイルが Timeline 形式ではありません: {result_type}",
-            hint="有効な .otio タイムラインファイルを指定してください。",
+            message=f"OTIO file is not a Timeline: {result_type}",
+            hint="Specify a valid .otio timeline file.",
         )
     return result
 
 
 def save_timeline(timeline: otio.schema.Timeline, path: str) -> None:
-    """Timeline をアトミックに保存する（temp → os.replace）。
+    """Atomically save a Timeline (temp → os.replace).
 
-    書き込み途中で失敗しても既存ファイルを破損しない。
-    temp ファイルは同ディレクトリに .otio 拡張子で作成し、
-    完了後 os.replace で置換する。
+    Existing files are not corrupted even if the write is interrupted mid-way.
+    A temp file with the .otio extension is created in the same directory,
+    then replaced atomically with os.replace once writing completes.
 
-    OTIO は拡張子でアダプターを選ぶため、temp も .otio 拡張子を使う。
+    OTIO selects its adapter by file extension, so the temp file must also use .otio.
     """
     dir_name = os.path.dirname(os.path.abspath(path))
     fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".otio")
@@ -86,14 +86,14 @@ def save_timeline(timeline: otio.schema.Timeline, path: str) -> None:
         otio.adapters.write_to_file(timeline, tmp_path)
         os.replace(tmp_path, path)
     except Exception:
-        # temp 削除のための broad catch。例外は常に再送出し握りつぶさない（NL-2）
+        # Broad catch only to clean up the temp file; always re-raise (NL-2).
         with contextlib.suppress(OSError):
             os.unlink(tmp_path)
         raise
 
 
 # ===========================================================================
-# クリップ・ギャップ・マーカー追加
+# Adding clips, gaps, and markers
 # ===========================================================================
 
 
@@ -104,10 +104,10 @@ def add_clip(
     name: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> otio.schema.Clip:
-    """Track にクリップを追加する。
+    """Append a clip to a Track.
 
-    media の target_url を ExternalReference として設定する。
-    返り値は追加した Clip オブジェクト。
+    Sets the media target_url as an ExternalReference.
+    Returns the added Clip object.
     """
     ref = otio.schema.ExternalReference(target_url=media.target_url)
     sr = otio.opentime.TimeRange(
@@ -129,10 +129,10 @@ def add_gap(
     track: otio.schema.Track,
     duration: RationalTimeModel,
 ) -> otio.schema.Gap:
-    """Track にギャップを追加する。
+    """Append a gap to a Track.
 
-    duration から source_range を構成して Gap を生成する。
-    返り値は追加した Gap オブジェクト。
+    Constructs a source_range from the given duration and creates a Gap.
+    Returns the added Gap object.
     """
     sr = otio.opentime.TimeRange(
         start_time=otio.opentime.RationalTime(0.0, duration.rate),
@@ -150,11 +150,11 @@ def add_marker(
     color: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> otio.schema.Marker:
-    """item（Track / Clip 等）に Marker を付与する。
+    """Attach a Marker to an item (Track, Clip, etc.).
 
-    §13.5 DC-GP-001 再: AddMarkerOp は track 自体（item=Track）に付ける。
-    clip の存在を要求しない（空トラックも成功）。
-    返り値は追加した Marker オブジェクト。
+    Per §13.5 DC-GP-001: AddMarkerOp attaches to the track itself (item=Track).
+    No clip needs to exist; an empty track is valid.
+    Returns the added Marker object.
     """
     mr = otio.opentime.TimeRange(
         start_time=to_otio_time(marked_range.start_time),
@@ -171,17 +171,17 @@ def add_marker(
 
 
 # ===========================================================================
-# Clipwright メタデータ（metadata["clipwright"] 配下）
+# Clipwright metadata (under metadata["clipwright"])
 # ===========================================================================
 
 
 def set_clipwright_metadata(obj: Any, data: dict[str, Any]) -> None:
-    """OTIO オブジェクトの metadata["clipwright"] 配下にデータを設定する（規約 §4.3）。
+    """Set data under metadata["clipwright"] on an OTIO object (convention §4.3).
 
-    他キーを汚染しない。上書き時は clipwright キー全体を置換する。
+    Does not pollute other keys. On overwrite, the entire clipwright key is replaced.
 
-    部分更新が必要な場合は get_clipwright_metadata で取得した dict を更新してから
-    再設定する（L-5）。使用例:
+    For partial updates, retrieve the dict with get_clipwright_metadata, modify it,
+    then call set again (L-5). Example:
 
         existing = get_clipwright_metadata(obj)
         existing["confidence"] = 0.95
@@ -191,46 +191,47 @@ def set_clipwright_metadata(obj: Any, data: dict[str, Any]) -> None:
 
 
 def get_clipwright_metadata(obj: Any) -> dict[str, Any]:
-    """OTIO オブジェクトの metadata["clipwright"] 配下のデータを返す。
+    """Return data stored under metadata["clipwright"] on an OTIO object.
 
-    未設定の場合は空 dict を返す。
+    Returns an empty dict if no metadata has been set.
     """
     return dict(obj.metadata.get("clipwright", {}))
 
 
 # ===========================================================================
-# Timeline サマリ（§13.5 DC-AM-001 再: 全件返却・truncation なし）
+# Timeline summary (§13.5 DC-AM-001 re: return all items, no truncation)
 # ===========================================================================
 
 
 def summarize_timeline(timeline: otio.schema.Timeline) -> dict[str, Any]:
-    """Timeline の統計情報とマーカー一覧を返す。
+    """Return statistics and the full marker list for a Timeline.
 
-    §13.5 DC-AM-001 再: 常に全件を返す（truncation なし）。
-    閾値 50 の truncation は server.read_timeline の整形責務であり本関数は持たない。
+    §13.5 DC-AM-001 re: always returns all items (no truncation).
+    The threshold-50 truncation is the responsibility of server.read_timeline;
+    this function does not truncate.
 
-    返り値キー:
+    Return value keys:
       - clip_count: int
       - gap_count: int
       - marker_count: int
-      - total_duration: RationalTimeModel（§13.5 DC-AM-002 再）
-      - markers: list[dict] — [{name, time, kind}] 全件
-      - warnings: list[str] — duration 取得失敗等の非致命的警告（M-4）
+      - total_duration: RationalTimeModel (§13.5 DC-AM-002 re)
+      - markers: list[dict] — [{name, time, kind}] full list
+      - warnings: list[str] — non-fatal warnings (e.g. duration failures) (M-4)
 
-    total_duration の算出規則（§13.5 DC-AM-002 再）:
-      - 全トラック長の最大（合算ではない）
-      - rate = V1 トラック（kind=Video）にクリップが存在すればその rate、無ければ 1000.0
-      - クリップ 0 件なら RationalTime(0, グローバル rate)
+    total_duration computation rules (§13.5 DC-AM-002 re):
+      - Maximum of all track lengths (not the sum)
+      - rate = rate of the V1 track (kind=Video) if it has clips, otherwise 1000.0
+      - Returns RationalTime(0, global rate) when there are no clips
     """
     clip_count = 0
     gap_count = 0
     markers: list[dict[str, Any]] = []
     warnings: list[str] = []
 
-    # グローバル rate 決定: V1 の最初のクリップから rate を取得
+    # Determine global rate: read rate from the first clip in V1
     global_rate = _resolve_global_rate(timeline)
 
-    # 全トラックを走査してカウント・マーカー収集
+    # Iterate all tracks to count items and collect markers
     track_durations_sec: list[float] = []
     for track in timeline.tracks:
         for item in track:
@@ -239,33 +240,33 @@ def summarize_timeline(timeline: otio.schema.Timeline) -> dict[str, Any]:
             elif isinstance(item, otio.schema.Gap):
                 gap_count += 1
 
-        # トラックの duration（秒）を算出（OTIO 例外発生時は warnings に記録）
+        # Compute track duration in seconds (record to warnings on OTIO exception)
         track_dur, warn = _track_duration_sec(track)
         track_durations_sec.append(track_dur)
         if warn is not None:
             warnings.append(warn)
 
-        # トラック自身の markers を収集
+        # Collect markers attached to the track itself
         for marker in track.markers:
             markers.append(_marker_to_dict(marker))
 
-    # Clip に付いた markers も収集（Track は1ループ目で収集済みのため除外）
+    # Collect markers on clips (tracks already processed in the loop above)
     for track in timeline.tracks:
         for item in track:
             if isinstance(item, otio.schema.Clip):
                 for marker in item.markers:
                     markers.append(_marker_to_dict(marker))
 
-    # marker_count はマーカー総数（track + clip markers）
+    # marker_count is the total number of markers (track + clip markers)
     marker_count = len(markers)
 
-    # total_duration: 全トラック長の最大
+    # total_duration: maximum of all track lengths
     max_sec = max(track_durations_sec) if track_durations_sec else 0.0
 
     if max_sec == 0.0:
         total_duration = RationalTimeModel(value=0.0, rate=global_rate)
     else:
-        # max を global_rate で表現
+        # Express the maximum in global_rate units
         total_value = max_sec * global_rate
         total_duration = RationalTimeModel(value=total_value, rate=global_rate)
 
@@ -280,39 +281,39 @@ def summarize_timeline(timeline: otio.schema.Timeline) -> dict[str, Any]:
 
 
 def _resolve_global_rate(timeline: otio.schema.Timeline) -> float:
-    """グローバル rate を決定する。
+    """Determine the global rate.
 
-    V1（kind=Video）トラックに1件以上のクリップがある場合はその最初のクリップの rate。
-    それ以外（V1 が空・V1 が存在しない）は 1000.0。
+    If the V1 (kind=Video) track has at least one clip, use the rate of its first clip.
+    Otherwise (V1 is empty or absent), return 1000.0.
     """
     for track in timeline.tracks:
         if track.kind == otio.schema.TrackKind.Video:
             for item in track:
                 if isinstance(item, otio.schema.Clip) and item.source_range is not None:
                     return float(item.source_range.duration.rate)
-            # V1 は存在するがクリップなし
+            # V1 exists but has no clips
             break
     return 1000.0
 
 
 def _track_duration_sec(track: otio.schema.Track) -> tuple[float, str | None]:
-    """トラックの合計 duration を秒で返す。
+    """Return the total duration of a track in seconds.
 
-    OTIO Track の duration() を使う。クリップが0件なら 0.0。
-    OTIO 例外発生時は (0.0, 警告メッセージ) を返す（M-4）。
-    正常時は (秒数, None) を返す。
+    Uses OTIO Track.duration(). Returns 0.0 when the track has no clips.
+    On OTIO exception, returns (0.0, warning_message) (M-4).
+    On success, returns (seconds, None).
     """
     try:
         dur = track.duration()
         return float(dur.to_seconds()), None
     except otio.exceptions.OTIOError:
-        # OTIO エラー文字列は warnings 経由で露出するため含めない（NF-01）
-        warn_msg = f"トラック '{track.name}' の duration 取得に失敗しました。"
+        # Do not include the OTIO error string to avoid leaking internals (NF-01).
+        warn_msg = f"Failed to get duration for track '{track.name}'."
         return 0.0, warn_msg
 
 
 def _marker_to_dict(marker: otio.schema.Marker) -> dict[str, Any]:
-    """Marker オブジェクトを辞書に変換する。"""
+    """Convert a Marker object to a dictionary."""
     time_model = from_otio_time(marker.marked_range.start_time)
     cw_meta = marker.metadata.get("clipwright", {})
     kind = cw_meta.get("kind", "") if isinstance(cw_meta, dict) else ""

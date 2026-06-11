@@ -1,18 +1,18 @@
-"""test_operations.py — operations.py の Red フェーズテスト。
+"""test_operations.py — Red phase tests for operations.py.
 
-このテストは operations.py が未実装のため ImportError で失敗する（Red）。
-機能が未実装であることによる失敗が期待動作。
+This test file expects ImportError because operations.py is not yet implemented (Red).
+Failures due to unimplemented features are the expected behaviour.
 
-対象（§6 / §13.1 / §13.5）:
-- AddClipOp / AddGapOp / AddMarkerOp（Pydantic 判別共用体、discriminator="op"）
-- Operation 型エイリアス
+Target (§6 / §13.1 / §13.5):
+- AddClipOp / AddGapOp / AddMarkerOp (Pydantic discriminated union, discriminator="op")
+- Operation type alias
 - apply_operations(timeline, ops, validate_only):
-    - track はフラット index（0=V1, 1=A1）
-    - 範囲外 index → TRACK_NOT_FOUND（§13.1 DC-AS-003 / §13.5 DC-AS-001 再）
-    - AddMarkerOp は track 自体に marker を付与（clip 不要・§13.5 DC-GP-001 再）
-    - all-or-nothing（§13.1 DC-AM-004）
-    - validate_only=True は検証のみ（適用・保存しない、applied_count=0）
-    - 未知 op は Pydantic で弾く（UNSUPPORTED_OPERATION 相当）
+    - track uses flat index (0=V1, 1=A1)
+    - Out-of-range index → TRACK_NOT_FOUND (§13.1 DC-AS-003 / §13.5 DC-AS-001 re)
+    - AddMarkerOp attaches a marker to the track (no clip required; §13.5 DC-GP-001 re)
+    - all-or-nothing (§13.1 DC-AM-004)
+    - validate_only=True validates only (does not apply or save; applied_count=0)
+    - Unknown op is rejected by Pydantic (UNSUPPORTED_OPERATION equivalent)
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-# --- Import（operations.py 未実装のため ImportError が発生する → Red） ---
+# --- Import (operations.py not yet implemented → ImportError expected → Red) ---
 from clipwright.operations import (
     AddClipOp,
     AddGapOp,
@@ -31,15 +31,15 @@ from clipwright.operations import (
 )
 
 # ===========================================================================
-# AddClipOp（判別共用体メンバー）
+# AddClipOp (discriminated union member)
 # ===========================================================================
 
 
 class TestAddClipOp:
-    """AddClipOp の型契約。"""
+    """Type contract for AddClipOp."""
 
     def test_construct_minimal(self) -> None:
-        """必須フィールドで構築できる。"""
+        """Can be constructed with required fields only."""
         from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
 
         op = AddClipOp(
@@ -51,10 +51,10 @@ class TestAddClipOp:
             ),
         )
         assert op.op == "add_clip"
-        assert op.track == 0  # デフォルト
+        assert op.track == 0  # default
 
     def test_track_default_is_zero(self) -> None:
-        """track のデフォルトは 0（V1）。"""
+        """Default value of track is 0 (V1)."""
         from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
 
         op = AddClipOp(
@@ -68,7 +68,7 @@ class TestAddClipOp:
         assert op.track == 0
 
     def test_name_optional(self) -> None:
-        """name は省略可能でデフォルト None。"""
+        """name is optional and defaults to None."""
         from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
 
         op = AddClipOp(
@@ -82,7 +82,7 @@ class TestAddClipOp:
         assert op.name is None
 
     def test_metadata_optional(self) -> None:
-        """metadata は省略可能でデフォルト None。"""
+        """metadata is optional and defaults to None."""
         from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
 
         op = AddClipOp(
@@ -96,7 +96,7 @@ class TestAddClipOp:
         assert op.metadata is None
 
     def test_discriminator_field(self) -> None:
-        """op フィールドが 'add_clip' に固定されている（discriminator）。"""
+        """The op field is fixed to 'add_clip' (discriminator)."""
         from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
 
         op = AddClipOp(
@@ -111,15 +111,15 @@ class TestAddClipOp:
 
 
 # ===========================================================================
-# AddGapOp（判別共用体メンバー）
+# AddGapOp (discriminated union member)
 # ===========================================================================
 
 
 class TestAddGapOp:
-    """AddGapOp の型契約。"""
+    """Type contract for AddGapOp."""
 
     def test_construct(self) -> None:
-        """必須フィールドで構築できる。"""
+        """Can be constructed with required fields only."""
         from clipwright.schemas import RationalTimeModel
 
         op = AddGapOp(
@@ -130,7 +130,7 @@ class TestAddGapOp:
         assert op.track == 0
 
     def test_track_field(self) -> None:
-        """track を指定できる。"""
+        """track can be specified."""
         from clipwright.schemas import RationalTimeModel
 
         op = AddGapOp(
@@ -141,7 +141,7 @@ class TestAddGapOp:
         assert op.track == 1
 
     def test_duration_preserved(self) -> None:
-        """duration が保持される。"""
+        """duration is preserved."""
         from clipwright.schemas import RationalTimeModel
 
         op = AddGapOp(
@@ -153,15 +153,15 @@ class TestAddGapOp:
 
 
 # ===========================================================================
-# AddMarkerOp（判別共用体メンバー）
+# AddMarkerOp (discriminated union member)
 # ===========================================================================
 
 
 class TestAddMarkerOp:
-    """AddMarkerOp の型契約。"""
+    """Type contract for AddMarkerOp."""
 
     def test_construct(self) -> None:
-        """必須フィールドで構築できる。"""
+        """Can be constructed with required fields only."""
         from clipwright.schemas import RationalTimeModel, TimeRangeModel
 
         op = AddMarkerOp(
@@ -176,7 +176,7 @@ class TestAddMarkerOp:
         assert op.name == "chapter1"
 
     def test_color_optional(self) -> None:
-        """color は省略可能でデフォルト None。"""
+        """color is optional and defaults to None."""
         from clipwright.schemas import RationalTimeModel, TimeRangeModel
 
         op = AddMarkerOp(
@@ -190,7 +190,7 @@ class TestAddMarkerOp:
         assert op.color is None
 
     def test_metadata_optional(self) -> None:
-        """metadata は省略可能でデフォルト None。"""
+        """metadata is optional and defaults to None."""
         from clipwright.schemas import RationalTimeModel, TimeRangeModel
 
         op = AddMarkerOp(
@@ -205,15 +205,15 @@ class TestAddMarkerOp:
 
 
 # ===========================================================================
-# Operation 型エイリアス（判別共用体の統合テスト）
+# Operation type alias (discriminated union integration test)
 # ===========================================================================
 
 
 class TestOperationUnion:
-    """Operation 判別共用体の parse 契約。"""
+    """Parse contract for the Operation discriminated union."""
 
     def test_parse_add_clip(self) -> None:
-        """op='add_clip' を持つ dict は AddClipOp として parse される。"""
+        """A dict with op='add_clip' is parsed as AddClipOp."""
         from pydantic import TypeAdapter
 
         adapter: TypeAdapter[Operation] = TypeAdapter(Operation)
@@ -230,7 +230,7 @@ class TestOperationUnion:
         assert isinstance(op, AddClipOp)
 
     def test_parse_add_gap(self) -> None:
-        """op='add_gap' を持つ dict は AddGapOp として parse される。"""
+        """A dict with op='add_gap' is parsed as AddGapOp."""
         from pydantic import TypeAdapter
 
         adapter: TypeAdapter[Operation] = TypeAdapter(Operation)
@@ -243,7 +243,7 @@ class TestOperationUnion:
         assert isinstance(op, AddGapOp)
 
     def test_parse_add_marker(self) -> None:
-        """op='add_marker' を持つ dict は AddMarkerOp として parse される。"""
+        """A dict with op='add_marker' is parsed as AddMarkerOp."""
         from pydantic import TypeAdapter
 
         adapter: TypeAdapter[Operation] = TypeAdapter(Operation)
@@ -260,13 +260,13 @@ class TestOperationUnion:
         assert isinstance(op, AddMarkerOp)
 
     def test_unknown_op_raises(self) -> None:
-        """未知の op 値は Pydantic の ValidationError になる
-        （UNSUPPORTED_OPERATION 相当）。"""
+        """An unknown op value raises a Pydantic ValidationError
+        (UNSUPPORTED_OPERATION equivalent)."""
         from pydantic import TypeAdapter, ValidationError
 
         adapter: TypeAdapter[Operation] = TypeAdapter(Operation)
         data = {
-            "op": "delete_clip",  # 未知の op
+            "op": "delete_clip",  # unknown op
             "track": 0,
         }
         with pytest.raises(ValidationError):
@@ -274,15 +274,15 @@ class TestOperationUnion:
 
 
 # ===========================================================================
-# apply_operations — 正常系
+# apply_operations — success path
 # ===========================================================================
 
 
 class TestApplyOperationsSuccess:
-    """apply_operations の正常系テスト。"""
+    """Success path tests for apply_operations."""
 
     def test_apply_single_add_clip(self, tmp_path: Path) -> None:
-        """add_clip 1 件を適用すると ValidationReport(valid=True, applied_count=1)。"""
+        """One add_clip returns ValidationReport(valid=True, applied_count=1)."""
         from clipwright.otio_utils import new_timeline, save_timeline
         from clipwright.schemas import (
             MediaRef,
@@ -313,7 +313,7 @@ class TestApplyOperationsSuccess:
         assert report.errors == []
 
     def test_apply_single_add_gap(self, tmp_path: Path) -> None:
-        """add_gap 1 件を適用すると applied_count=1。"""
+        """Applying one add_gap returns applied_count=1."""
         from clipwright.otio_utils import new_timeline, save_timeline
         from clipwright.schemas import RationalTimeModel, ValidationReport
 
@@ -332,7 +332,7 @@ class TestApplyOperationsSuccess:
         assert report.applied_count == 1
 
     def test_apply_multiple_ops(self, tmp_path: Path) -> None:
-        """複数 op を適用すると applied_count が op 数と一致する。"""
+        """Applying multiple ops returns applied_count matching the number of ops."""
         from clipwright.otio_utils import new_timeline, save_timeline
         from clipwright.schemas import (
             MediaRef,
@@ -374,7 +374,7 @@ class TestApplyOperationsSuccess:
         assert report.applied_count == 3
 
     def test_apply_marker_to_empty_track_succeeds(self, tmp_path: Path) -> None:
-        """空トラックへの add_marker は成功する（§13.5 DC-GP-001 再）。"""
+        """add_marker on an empty track succeeds (§13.5 DC-GP-001 re)."""
         from clipwright.otio_utils import new_timeline, save_timeline
         from clipwright.schemas import (
             RationalTimeModel,
@@ -403,7 +403,7 @@ class TestApplyOperationsSuccess:
         assert report.applied_count == 1
 
     def test_operation_count_equals_ops_length(self, tmp_path: Path) -> None:
-        """report.operation_count は ops リストの件数に一致する。"""
+        """report.operation_count matches the length of the ops list."""
         from clipwright.otio_utils import new_timeline, save_timeline
         from clipwright.schemas import RationalTimeModel
 
@@ -424,15 +424,15 @@ class TestApplyOperationsSuccess:
 
 
 # ===========================================================================
-# apply_operations — track 範囲外 → TRACK_NOT_FOUND（§13.1/§13.5）
+# apply_operations — out-of-range track → TRACK_NOT_FOUND (§13.1/§13.5)
 # ===========================================================================
 
 
 class TestApplyOperationsTrackNotFound:
-    """apply_operations の TRACK_NOT_FOUND 検証テスト（§13.1 DC-AS-003）。"""
+    """TRACK_NOT_FOUND validation tests for apply_operations (§13.1 DC-AS-003)."""
 
     def test_out_of_range_track_returns_invalid(self, tmp_path: Path) -> None:
-        """範囲外 track index は valid=False の ValidationReport を返す。"""
+        """An out-of-range track index returns a ValidationReport with valid=False."""
         from clipwright.otio_utils import new_timeline, save_timeline
         from clipwright.schemas import RationalTimeModel, ValidationReport
 
@@ -441,7 +441,7 @@ class TestApplyOperationsTrackNotFound:
         save_timeline(tl, path)
 
         ops = [
-            # track=99 は存在しない（V1=0, A1=1 の 2 本しかない）
+            # track=99 does not exist (only V1=0 and A1=1)
             AddGapOp(
                 op="add_gap",
                 track=99,
@@ -453,7 +453,7 @@ class TestApplyOperationsTrackNotFound:
         assert report.valid is False
 
     def test_out_of_range_track_applied_count_is_zero(self, tmp_path: Path) -> None:
-        """all-or-nothing: 範囲外 track があれば applied_count=0（§13.1 DC-AM-004）。"""
+        """all-or-nothing: out-of-range track → applied_count=0 (§13.1 DC-AM-004)."""
         from clipwright.otio_utils import new_timeline, save_timeline
         from clipwright.schemas import RationalTimeModel
 
@@ -472,7 +472,7 @@ class TestApplyOperationsTrackNotFound:
         assert report.applied_count == 0
 
     def test_error_contains_track_not_found_code(self, tmp_path: Path) -> None:
-        """エラーの code に TRACK_NOT_FOUND が含まれる（§13.1 DC-AS-003）。"""
+        """The error code contains TRACK_NOT_FOUND (§13.1 DC-AS-003)."""
         from clipwright.errors import ErrorCode
         from clipwright.otio_utils import new_timeline, save_timeline
         from clipwright.schemas import RationalTimeModel
@@ -494,7 +494,7 @@ class TestApplyOperationsTrackNotFound:
         assert ErrorCode.TRACK_NOT_FOUND in codes
 
     def test_error_index_points_to_failing_op(self, tmp_path: Path) -> None:
-        """OperationError.index は失敗した op の位置（0 始まり）を示す。"""
+        """OperationError.index points to the position (0-based) of the failing op."""
         from clipwright.otio_utils import new_timeline, save_timeline
         from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
 
@@ -503,7 +503,7 @@ class TestApplyOperationsTrackNotFound:
         save_timeline(tl, path)
 
         ops: list[Operation] = [
-            # 0 番は有効
+            # index 0: valid
             AddClipOp(
                 op="add_clip",
                 track=0,
@@ -513,7 +513,7 @@ class TestApplyOperationsTrackNotFound:
                     duration=RationalTimeModel(value=30.0, rate=30.0),
                 ),
             ),
-            # 1 番は範囲外 track
+            # index 1: out-of-range track
             AddGapOp(
                 op="add_gap",
                 track=99,
@@ -527,15 +527,15 @@ class TestApplyOperationsTrackNotFound:
 
 
 # ===========================================================================
-# apply_operations — all-or-nothing（§13.1 DC-AM-004）
+# apply_operations — all-or-nothing (§13.1 DC-AM-004)
 # ===========================================================================
 
 
 class TestApplyOperationsAllOrNothing:
-    """all-or-nothing セマンティクスのテスト（§13.1 DC-AM-004）。"""
+    """all-or-nothing semantics tests (§13.1 DC-AM-004)."""
 
     def test_partial_invalid_applies_nothing(self, tmp_path: Path) -> None:
-        """1 op でも不正なら timeline にクリップが追加されない。"""
+        """If any op is invalid, no clips are added to the timeline."""
         from clipwright.otio_utils import (
             new_timeline,
             save_timeline,
@@ -548,7 +548,7 @@ class TestApplyOperationsAllOrNothing:
         save_timeline(tl, path)
 
         ops: list[Operation] = [
-            # 有効な op
+            # valid op
             AddClipOp(
                 op="add_clip",
                 track=0,
@@ -558,7 +558,7 @@ class TestApplyOperationsAllOrNothing:
                     duration=RationalTimeModel(value=30.0, rate=30.0),
                 ),
             ),
-            # 無効な op（範囲外 track）
+            # invalid op (out-of-range track)
             AddGapOp(
                 op="add_gap",
                 track=99,
@@ -567,12 +567,12 @@ class TestApplyOperationsAllOrNothing:
         ]
         report = apply_operations(tl, ops, validate_only=False)
         assert report.valid is False
-        # 有効な op も適用されていない（timeline は変更なし）
+        # The valid op is also not applied (timeline unchanged)
         summary = summarize_timeline(tl)
         assert summary["clip_count"] == 0
 
     def test_all_valid_applies_all(self, tmp_path: Path) -> None:
-        """全 op が有効なら全て適用される。"""
+        """All ops are applied when all are valid."""
         from clipwright.otio_utils import (
             new_timeline,
             save_timeline,
@@ -614,10 +614,10 @@ class TestApplyOperationsAllOrNothing:
 
 
 class TestApplyOperationsValidateOnly:
-    """validate_only=True のテスト（適用・保存しない）。"""
+    """Tests for validate_only=True (validates only, does not apply or save)."""
 
     def test_validate_only_returns_valid_true(self, tmp_path: Path) -> None:
-        """全 op が有効なら valid=True を返す。"""
+        """Returns valid=True when all ops are valid."""
         from clipwright.otio_utils import new_timeline, save_timeline
         from clipwright.schemas import RationalTimeModel
 
@@ -634,7 +634,7 @@ class TestApplyOperationsValidateOnly:
         assert report.valid is True
 
     def test_validate_only_applied_count_is_zero(self, tmp_path: Path) -> None:
-        """validate_only=True なら applied_count=0（適用しない・§13.1 DC-AM-003）。"""
+        """validate_only=True gives applied_count=0 (not applied, §13.1 DC-AM-003)."""
         from clipwright.otio_utils import new_timeline, save_timeline
         from clipwright.schemas import RationalTimeModel
 
@@ -651,7 +651,7 @@ class TestApplyOperationsValidateOnly:
         assert report.applied_count == 0
 
     def test_validate_only_does_not_modify_timeline(self, tmp_path: Path) -> None:
-        """validate_only=True なら timeline に変更が加わらない。"""
+        """validate_only=True does not modify the timeline."""
         from clipwright.otio_utils import (
             new_timeline,
             save_timeline,
@@ -670,10 +670,10 @@ class TestApplyOperationsValidateOnly:
         ]
         apply_operations(tl, ops, validate_only=True)
         summary = summarize_timeline(tl)
-        assert summary["gap_count"] == 0  # timeline は変更なし
+        assert summary["gap_count"] == 0  # timeline unchanged
 
     def test_validate_only_with_invalid_op(self, tmp_path: Path) -> None:
-        """validate_only=True でも不正 op は valid=False として検出される。"""
+        """validate_only=True still detects invalid ops as valid=False."""
         from clipwright.otio_utils import new_timeline, save_timeline
         from clipwright.schemas import RationalTimeModel
 
@@ -693,7 +693,7 @@ class TestApplyOperationsValidateOnly:
         assert report.applied_count == 0
 
     def test_validate_only_operation_count_set(self, tmp_path: Path) -> None:
-        """validate_only=True でも operation_count は ops 長に一致する。"""
+        """validate_only=True still sets operation_count to the length of ops."""
         from clipwright.otio_utils import new_timeline, save_timeline
         from clipwright.schemas import RationalTimeModel
 
@@ -714,15 +714,15 @@ class TestApplyOperationsValidateOnly:
 
 
 # ===========================================================================
-# apply_operations — track フラット index 動作確認
+# apply_operations — flat track index behaviour
 # ===========================================================================
 
 
 class TestApplyOperationsTrackIndex:
-    """フラット index（track=0→V1, track=1→A1）の動作テスト（§13.5 DC-AS-001 再）。"""
+    """Flat index tests (track=0→V1, track=1→A1) (§13.5 DC-AS-001 re)."""
 
     def test_track0_targets_video(self, tmp_path: Path) -> None:
-        """track=0 への add_clip は V1（video track）に追加される。"""
+        """add_clip to track=0 is appended to V1 (video track)."""
         import opentimelineio as otio
 
         from clipwright.otio_utils import new_timeline, save_timeline
@@ -744,13 +744,13 @@ class TestApplyOperationsTrackIndex:
             )
         ]
         apply_operations(tl, ops, validate_only=False)
-        # track=0 は V1（kind=Video）
+        # track=0 is V1 (kind=Video)
         video_track = tl.tracks[0]
         assert video_track.kind == otio.schema.TrackKind.Video
         assert len(video_track) == 1
 
     def test_track1_targets_audio(self, tmp_path: Path) -> None:
-        """track=1 への add_gap は A1（audio track）に追加される。"""
+        """add_gap to track=1 is appended to A1 (audio track)."""
         import opentimelineio as otio
 
         from clipwright.otio_utils import new_timeline, save_timeline
@@ -768,13 +768,13 @@ class TestApplyOperationsTrackIndex:
             )
         ]
         apply_operations(tl, ops, validate_only=False)
-        # track=1 は A1（kind=Audio）
+        # track=1 is A1 (kind=Audio)
         audio_track = tl.tracks[1]
         assert audio_track.kind == otio.schema.TrackKind.Audio
         assert len(audio_track) == 1
 
     def test_track2_out_of_range(self, tmp_path: Path) -> None:
-        """track=2 は存在しない（V1=0/A1=1 の 2 本のみ）→ TRACK_NOT_FOUND。"""
+        """track=2 does not exist (only V1=0 and A1=1) → TRACK_NOT_FOUND."""
         from clipwright.errors import ErrorCode
         from clipwright.otio_utils import new_timeline, save_timeline
         from clipwright.schemas import RationalTimeModel
@@ -797,17 +797,16 @@ class TestApplyOperationsTrackIndex:
 
 
 # ===========================================================================
-# apply_operations — AddMarkerOp が track 自体に marker を付与（§13.5 DC-GP-001 再）
+# apply_operations — AddMarkerOp attaches to the track itself (§13.5 DC-GP-001 re)
 # ===========================================================================
 
 
 class TestApplyOperationsMarkerOnTrack:
-    """AddMarkerOp が track（item=Track）に marker を付与する契約
-    （§13.5 DC-GP-001 再）。"""
+    """AddMarkerOp attaches a marker to the track (item=Track) contract
+    (§13.5 DC-GP-001 re)."""
 
     def test_marker_added_to_track_not_clip(self, tmp_path: Path) -> None:
-        """AddMarkerOp の marker は track.markers に追加される
-        （clip.markers ではない）。"""
+        """AddMarkerOp marker is added to track.markers (not clip.markers)."""
         from clipwright.otio_utils import new_timeline, save_timeline
         from clipwright.schemas import RationalTimeModel, TimeRangeModel
 
@@ -827,14 +826,14 @@ class TestApplyOperationsMarkerOnTrack:
             )
         ]
         apply_operations(tl, ops, validate_only=False)
-        # marker は track 自体に付与されている
+        # marker is attached to the track itself
         video_track = tl.tracks[0]
         assert len(video_track.markers) == 1
         assert video_track.markers[0].name == "track_marker"
 
     def test_marker_on_empty_track_valid(self, tmp_path: Path) -> None:
-        """空トラックへの AddMarkerOp は valid=True・applied_count=1
-        （§13.5 DC-GP-001 再）。"""
+        """AddMarkerOp on an empty track returns valid=True / applied_count=1
+        (§13.5 DC-GP-001 re)."""
         from clipwright.otio_utils import new_timeline, save_timeline
         from clipwright.schemas import RationalTimeModel, TimeRangeModel
 
@@ -842,7 +841,7 @@ class TestApplyOperationsMarkerOnTrack:
         path = str(tmp_path / "tl.otio")
         save_timeline(tl, path)
 
-        assert len(tl.tracks[0]) == 0  # V1 は空
+        assert len(tl.tracks[0]) == 0  # V1 is empty
 
         ops = [
             AddMarkerOp(
@@ -861,29 +860,29 @@ class TestApplyOperationsMarkerOnTrack:
 
 
 # ===========================================================================
-# M-5 / F-09 回帰テスト:
-# AddClipOp.metadata / AddMarkerOp.metadata に dict[str, Any] を受け付ける
-# （型変更: dict | None  →  dict[str, Any] | None）
+# M-5 / F-09 regression tests:
+# AddClipOp.metadata / AddMarkerOp.metadata accepts dict[str, Any]
+# (type change: dict | None  →  dict[str, Any] | None)
 #
-# 【Red 化困難な理由】
-# この変更は型アノテーションのみの変更であり、Pydantic のランタイム挙動は
-# 変わらない。型変更前から dict 値は受理されているため、テストを先に書いても
-# 最初から Pass する（Red にならない）。
-# 【代替検証の観点】
-# 1. ランタイム回帰テスト（本クラス）: metadata に dict[str, Any] 相当の値を
-#    渡した際にモデル構築と値保持が正しく動作することを確保する。
-# 2. mypy 検証: developer が `type: ignore[type-arg]` を削除して
-#    `dict[str, Any] | None` に変更した後、`uv run mypy` でエラーが出ないことを
-#    別途確認する。変更前（dict のみ）は mypy strict で [type-arg] エラーが
-#    発生することを確認済み。
+# [Why Red is difficult]
+# This is a type annotation change only; Pydantic runtime behaviour is unchanged.
+# dict values were already accepted before the type change, so writing the test
+# first will pass immediately (not Red).
+# [Alternative verification approach]
+# 1. Runtime regression tests (this class): verify that passing a dict[str, Any]
+#    value to metadata correctly builds the model and preserves the value.
+# 2. mypy verification: after the developer removes `type: ignore[type-arg]` and
+#    changes to `dict[str, Any] | None`, confirm that `uv run mypy` shows no errors.
+#    The pre-change type (`dict` only) is confirmed to cause a mypy strict [type-arg]
+#    error.
 # ===========================================================================
 
 
 class TestMetadataDictStrAny:
-    """M-5 / F-09: metadata が dict[str, Any] | None を受け付ける回帰テスト。"""
+    """M-5 / F-09: regression tests for metadata accepting dict[str, Any] | None."""
 
     def test_add_clip_op_accepts_flat_dict(self) -> None:
-        """AddClipOp の metadata にフラットな dict を渡すとモデルが構築される。"""
+        """AddClipOp metadata accepts a flat dict and the model is built correctly."""
         from typing import Any
 
         from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
@@ -904,7 +903,7 @@ class TestMetadataDictStrAny:
         assert op.metadata["count"] == 3
 
     def test_add_clip_op_accepts_nested_dict(self) -> None:
-        """AddClipOp の metadata にネストした dict を渡すとモデルが構築される。"""
+        """AddClipOp metadata accepts a nested dict and the model is built correctly."""
         from typing import Any
 
         from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
@@ -930,7 +929,7 @@ class TestMetadataDictStrAny:
         assert op.metadata["clipwright"]["confidence"] == 0.95
 
     def test_add_clip_op_metadata_none_by_default(self) -> None:
-        """AddClipOp の metadata のデフォルトは None（型変更後も維持）。"""
+        """AddClipOp metadata defaults to None (preserved after type change)."""
         from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
 
         op = AddClipOp(
@@ -944,7 +943,7 @@ class TestMetadataDictStrAny:
         assert op.metadata is None
 
     def test_add_marker_op_accepts_flat_dict(self) -> None:
-        """AddMarkerOp の metadata にフラットな dict を渡すとモデルが構築される。"""
+        """AddMarkerOp metadata accepts a flat dict and the model is built correctly."""
         from typing import Any
 
         from clipwright.schemas import RationalTimeModel, TimeRangeModel
@@ -965,7 +964,7 @@ class TestMetadataDictStrAny:
         assert op.metadata["enabled"] is True
 
     def test_add_marker_op_accepts_nested_dict(self) -> None:
-        """AddMarkerOp の metadata にネストした dict を渡すとモデルが構築される。"""
+        """AddMarkerOp metadata accepts a nested dict and builds the model correctly."""
         from typing import Any
 
         from clipwright.schemas import RationalTimeModel, TimeRangeModel
@@ -989,7 +988,7 @@ class TestMetadataDictStrAny:
         assert op.metadata["clipwright"]["tool"] == "scene-detect"
 
     def test_add_marker_op_metadata_none_by_default(self) -> None:
-        """AddMarkerOp の metadata のデフォルトは None（型変更後も維持）。"""
+        """AddMarkerOp metadata defaults to None (preserved after type change)."""
         from clipwright.schemas import RationalTimeModel, TimeRangeModel
 
         op = AddMarkerOp(
@@ -1005,7 +1004,7 @@ class TestMetadataDictStrAny:
     def test_add_clip_op_metadata_passed_to_apply_operations(
         self, tmp_path: Path
     ) -> None:
-        """AddClipOp に dict metadata を渡して apply_operations を呼ぶと成功する。"""
+        """Passing dict metadata to AddClipOp and calling apply_operations succeeds."""
         from typing import Any
 
         from clipwright.otio_utils import new_timeline, save_timeline
@@ -1035,7 +1034,7 @@ class TestMetadataDictStrAny:
     def test_add_marker_op_metadata_passed_to_apply_operations(
         self, tmp_path: Path
     ) -> None:
-        """AddMarkerOp に dict metadata を渡して apply_operations を呼ぶと成功する。"""
+        """Passing dict metadata to AddMarkerOp then apply_operations succeeds."""
         from typing import Any
 
         from clipwright.otio_utils import new_timeline, save_timeline

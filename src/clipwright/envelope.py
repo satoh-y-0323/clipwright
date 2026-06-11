@@ -1,8 +1,8 @@
-"""envelope.py — 返り値エンベロープ生成ヘルパー。
+"""envelope.py — Return value envelope construction helpers.
 
-全ツールの返り値を統一形式（§6.3 / §6.4）に整える薄いヘルパー。
-ToolResult / ToolErrorResult の dict 表現を返すため、
-FastMCP の JSON シリアライズと直接互換する。
+Thin helpers that normalise all tool return values to the standard format (§6.3 / §6.4).
+Returns dict representations of ToolResult / ToolErrorResult, which are directly
+compatible with FastMCP JSON serialisation.
 """
 
 from __future__ import annotations
@@ -17,19 +17,19 @@ def ok_result(
     artifacts: list[Any] | None = None,
     warnings: list[str] | None = None,
 ) -> dict[str, Any]:
-    """成功エンベロープ dict を構築する（§6.3 ToolResult 形）。
+    """Build a success envelope dict (§6.3 ToolResult form).
 
-    summary には AI が次の一手を判断できる要点（件数・尺・最大値等）を含める。
-    "最小限"にしない。
+    summary must include key points an AI needs to decide the next action
+    (counts, durations, maxima, etc.). Do not make it minimal.
 
     Args:
-        summary: 処理結果の要点（必須）。
-        data: 付帯情報（任意）。
-        artifacts: 出力ファイルへの参照リスト（任意）。
-        warnings: 警告メッセージリスト（任意）。
+        summary: Key points of the result (required).
+        data: Supplementary information (optional).
+        artifacts: List of references to output files (optional).
+        warnings: List of warning messages (optional).
 
     Returns:
-        { ok: True, summary, data, artifacts, warnings } の dict。
+        A dict of the form { ok: True, summary, data, artifacts, warnings }.
     """
     return {
         "ok": True,
@@ -41,18 +41,18 @@ def ok_result(
 
 
 def error_result(code: str, message: str, hint: str) -> dict[str, Any]:
-    """失敗エンベロープ dict を構築する（§6.4 ToolErrorResult 形）。
+    """Build a failure envelope dict (§6.4 ToolErrorResult form).
 
-    message には何が起きたかを、hint には次の一手（具体的な解決策）を記す。
-    hint が空では規約違反（§6 エラー規約）。
+    message describes what happened; hint describes the concrete next step.
+    An empty hint violates the error contract (§6).
 
     Args:
-        code: ErrorCode 値の文字列表現。
-        message: 何が起きたか。
-        hint: 次の一手（具体的・アクション可能な内容）。
+        code: String representation of an ErrorCode value.
+        message: What happened.
+        hint: Concrete, actionable next step.
 
     Returns:
-        { ok: False, error: { code, message, hint } } の dict。
+        A dict of the form { ok: False, error: { code, message, hint } }.
     """
     return {
         "ok": False,

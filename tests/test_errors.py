@@ -1,26 +1,24 @@
-"""test_errors.py — errors.py の契約面テスト（Red フェーズ）。
+"""test_errors.py — Contract tests for errors.py (Red phase).
 
-対象:
-- ErrorCode(Enum): 必須メンバーの存在確認（§4 + §13.1 DC-AM-002/DC-AS-003）
-- ClipwrightError: code / message / hint を保持する例外クラス
-
-このテストは errors.py が未実装のため ImportError で失敗する（Red）。
+Covers:
+- ErrorCode(Enum): verify all required members exist (§4 + §13.1 DC-AM-002/DC-AS-003)
+- ClipwrightError: exception class holding code / message / hint
 """
 
 from __future__ import annotations
 
 import pytest
 
-# --- Import（errors.py 未実装のため ImportError が発生する → Red） ---
+# --- Import ---
 from clipwright.errors import ClipwrightError, ErrorCode
 
 # ===========================================================================
-# ErrorCode — 必須メンバー存在確認
+# ErrorCode — required member existence
 # ===========================================================================
 
 
 class TestErrorCodeMembers:
-    """ErrorCode Enum の必須メンバーが全て定義されていることを確認する。"""
+    """Verify all required ErrorCode Enum members are defined."""
 
     @pytest.mark.parametrize(
         "name",
@@ -36,27 +34,27 @@ class TestErrorCodeMembers:
             "PROJECT_NOT_FOUND",
             "PROJECT_EXISTS",
             "UNSUPPORTED_OPERATION",
-            "INTERNAL",  # §13.1 DC-AM-002 で追加
-            "TRACK_NOT_FOUND",  # §13.1 DC-AS-003 で追加
+            "INTERNAL",  # added in §13.1 DC-AM-002
+            "TRACK_NOT_FOUND",  # added in §13.1 DC-AS-003
         ],
     )
     def test_member_exists(self, name: str) -> None:
-        """必須メンバーが ErrorCode に存在する。"""
-        assert hasattr(ErrorCode, name), f"ErrorCode.{name} が定義されていません"
+        """Each required member exists in ErrorCode."""
+        assert hasattr(ErrorCode, name), f"ErrorCode.{name} is not defined"
 
     def test_is_str_enum(self) -> None:
-        """ErrorCode が str のサブクラスである（str, Enum 継承）。"""
+        """ErrorCode is a subclass of str (inherits str, Enum)."""
         assert issubclass(ErrorCode, str)
 
     def test_value_is_string(self) -> None:
-        """値が文字列として取得できる。"""
+        """Values can be retrieved as strings."""
         code = ErrorCode.DEPENDENCY_MISSING
         assert isinstance(code.value, str)
 
     @pytest.mark.parametrize(
         "name, expected_value",
         [
-            # 値は name と一致することを期待（str Enum の慣習）
+            # value must match name (str Enum convention)
             ("DEPENDENCY_MISSING", "DEPENDENCY_MISSING"),
             ("INVALID_INPUT", "INVALID_INPUT"),
             ("FILE_NOT_FOUND", "FILE_NOT_FOUND"),
@@ -73,17 +71,17 @@ class TestErrorCodeMembers:
         ],
     )
     def test_value_matches_name(self, name: str, expected_value: str) -> None:
-        """ErrorCode の値は名前文字列と一致する（JSON 境界でのシリアライズ互換）。"""
+        """Each ErrorCode value equals its name string (JSON serialisation compat)."""
         member = ErrorCode[name]
         assert member.value == expected_value
 
     def test_can_construct_from_string(self) -> None:
-        """文字列から ErrorCode を逆引きできる。"""
+        """ErrorCode can be reverse-looked up from a string."""
         code = ErrorCode("INVALID_INPUT")
         assert code == ErrorCode.INVALID_INPUT
 
     def test_all_required_members_count(self) -> None:
-        """必須の13メンバーが全員いる（追加は構わないが欠損は禁止）。"""
+        """All 13 required members are present (additions allowed; omissions are not)."""  # noqa: E501
         required = {
             "DEPENDENCY_MISSING",
             "INVALID_INPUT",
@@ -101,7 +99,7 @@ class TestErrorCodeMembers:
         }
         actual = {m.name for m in ErrorCode}
         missing = required - actual
-        assert not missing, f"ErrorCode に以下のメンバーが欠落しています: {missing}"
+        assert not missing, f"ErrorCode is missing the following members: {missing}"
 
 
 # ===========================================================================
@@ -110,40 +108,40 @@ class TestErrorCodeMembers:
 
 
 class TestClipwrightError:
-    """ClipwrightError 例外クラスの基本契約。"""
+    """Basic contract for the ClipwrightError exception class."""
 
     def test_is_exception(self) -> None:
-        """ClipwrightError は Exception のサブクラス。"""
+        """ClipwrightError is a subclass of Exception."""
         assert issubclass(ClipwrightError, Exception)
 
     def test_construct_and_attributes(self) -> None:
-        """code / message / hint を保持する。"""
+        """Holds code / message / hint."""
         err = ClipwrightError(
             code=ErrorCode.FILE_NOT_FOUND,
-            message="ファイルが見つかりません",
-            hint="パスを確認してください",
+            message="File not found",
+            hint="Check the path",
         )
         assert err.code == ErrorCode.FILE_NOT_FOUND
-        assert err.message == "ファイルが見つかりません"
-        assert err.hint == "パスを確認してください"
+        assert err.message == "File not found"
+        assert err.hint == "Check the path"
 
     def test_can_be_raised_and_caught(self) -> None:
-        """raise して ClipwrightError で捕捉できる。"""
+        """Can be raised and caught as ClipwrightError."""
         with pytest.raises(ClipwrightError) as exc_info:
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
-                message="不正な入力です",
-                hint="入力値を確認してください",
+                message="Invalid input",
+                hint="Check the input value",
             )
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_also_catchable_as_exception(self) -> None:
-        """Exception としても捕捉できる。"""
+        """Also catchable as a plain Exception."""
         with pytest.raises(ClipwrightError):
             raise ClipwrightError(
                 code=ErrorCode.INTERNAL,
-                message="予期しないエラー",
-                hint="再現条件を添えて報告してください",
+                message="Unexpected error",
+                hint="Please report with reproduction steps",
             )
 
     @pytest.mark.parametrize(
@@ -163,29 +161,29 @@ class TestClipwrightError:
         ],
     )
     def test_all_error_codes_usable(self, code: ErrorCode) -> None:
-        """全エラーコードで ClipwrightError を構築できる。"""
-        err = ClipwrightError(code=code, message="テスト", hint="ヒント")
+        """ClipwrightError can be constructed with every error code."""
+        err = ClipwrightError(code=code, message="test", hint="hint")
         assert err.code == code
 
     def test_code_is_error_code_type(self) -> None:
-        """code 属性は ErrorCode 型。"""
+        """The code attribute is of type ErrorCode."""
         err = ClipwrightError(
             code=ErrorCode.OTIO_ERROR,
-            message="OTIO エラー",
-            hint="OTIO ファイルを確認してください",
+            message="OTIO error",
+            hint="Check the OTIO file",
         )
         assert isinstance(err.code, ErrorCode)
 
     def test_dependency_missing_message_hint_pattern(self) -> None:
-        """DEPENDENCY_MISSING は Windows 向け hint を含むことを想定する（契約確認）。"""
+        """DEPENDENCY_MISSING carries a Windows-oriented hint (contract check)."""
         err = ClipwrightError(
             code=ErrorCode.DEPENDENCY_MISSING,
-            message="ffprobe が見つかりません",
+            message="ffprobe not found",
             hint=(
-                "winget install Gyan.FFmpeg で導入し、シェルを再起動するか"
-                " CLIPWRIGHT_FFPROBE に実行ファイルのフルパスを設定してください"
+                "Install via winget install Gyan.FFmpeg and restart the shell, "
+                "or set CLIPWRIGHT_FFPROBE to the full executable path"
             ),
         )
-        # hint が空でないこと（アクション可能であることが必須・§4 規約）
+        # hint must be non-empty (actionable hint required — §4 contract)
         assert len(err.hint) > 0
-        assert err.message == "ffprobe が見つかりません"
+        assert err.message == "ffprobe not found"

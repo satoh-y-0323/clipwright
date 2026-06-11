@@ -1,12 +1,12 @@
-"""project.py — プロジェクトディレクトリ・マニフェスト管理。
+"""project.py — Project directory and manifest management.
 
-プロジェクト構成:
+Project layout:
   <project_dir>/
-    clipwright.json   — マニフェスト
-    timeline.otio     — OTIO タイムライン（V1/A1 トラック付き空 timeline）
-    sources/          — 入力素材置き場
-    artifacts/        — 中間生成物置き場
-    outputs/          — 最終出力置き場
+    clipwright.json   — manifest
+    timeline.otio     — OTIO timeline (empty timeline with V1/A1 tracks)
+    sources/          — input media storage
+    artifacts/        — intermediate output storage
+    outputs/          — final output storage
 """
 
 from __future__ import annotations
@@ -23,27 +23,27 @@ from clipwright import __version__
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.otio_utils import new_timeline, save_timeline
 
-# マニフェストファイル名
+# Manifest filename
 _MANIFEST_FILENAME = "clipwright.json"
 
-# マニフェストのスキーマバージョン（将来の移行判定に使う）
+# Manifest schema version (used for future migration detection)
 _SCHEMA_VERSION = "1.0"
 
-# サブディレクトリ一覧（init_project で必ず作成・再作成する）
+# Subdirectory list (created/re-created unconditionally by init_project)
 _SUBDIRS = ("sources", "artifacts", "outputs")
 
 
 # ===========================================================================
-# 内部ヘルパー
+# Internal helpers
 # ===========================================================================
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
-    """テキストをアトミックに書き込む（temp → os.replace）。
+    """Atomically write text to a file (temp → os.replace).
 
-    同一ディレクトリに一時ファイルを作成してから os.replace で置き換えることで、
-    書き込み途中の中断によるファイル破損を防ぐ。クロスデバイス移動を避けるため
-    一時ファイルは destination と同一ディレクトリに作成する。
+    Creates a temp file in the same directory as the destination, then replaces it
+    with os.replace to prevent file corruption on interrupted writes.
+    Using the same directory avoids cross-device moves.
     """
     dir_path = path.parent
     fd, tmp_path = tempfile.mkstemp(dir=str(dir_path), suffix=".tmp")
@@ -52,7 +52,7 @@ def _atomic_write_text(path: Path, text: str) -> None:
             f.write(text)
         os.replace(tmp_path, str(path))
     except Exception:
-        # temp 削除のための broad catch。例外は常に再送出し握りつぶさない（NL-2）
+        # Broad catch only to clean up the temp file; always re-raise (NL-2).
         with contextlib.suppress(OSError):
             os.unlink(tmp_path)
         raise
@@ -69,51 +69,51 @@ def init_project(
     *,
     force: bool = False,
 ) -> None:
-    """プロジェクトディレクトリを初期化する。
+    """Initialise a project directory.
 
-    project_dir が存在しない場合は作成する。
-    sources / artifacts / outputs サブディレクトリを作成する。
-    clipwright.json マニフェストと空の timeline.otio を生成する。
+    Creates project_dir if it does not exist.
+    Creates the sources / artifacts / outputs subdirectories.
+    Generates a clipwright.json manifest and an empty timeline.otio.
 
-    既存プロジェクト（clipwright.json が存在する）に force=False で呼ぶと
-    ClipwrightError(PROJECT_EXISTS) を発生させる。
+    Calling with force=False on an existing project (clipwright.json present) raises
+    ClipwrightError(PROJECT_EXISTS).
 
-    force=True の挙動（§13.2 DC-AM-007・非破壊）:
-      - マニフェストを再生成する（name 等の変更を反映）
-      - サブディレクトリの存在を保証する（消えていれば再作成）
-      - 既存の sources / artifacts / outputs / timeline.otio は削除・上書きしない
-      - timeline.otio が欠落している場合のみ空 timeline を生成する
+    force=True behaviour (§13.2 DC-AM-007 — non-destructive):
+      - Regenerates the manifest (reflects changes to name, etc.)
+      - Ensures subdirectories exist (recreates them if missing)
+      - Does not overwrite existing sources / artifacts / outputs / timeline.otio
+      - Generates an empty timeline only if timeline.otio is absent
 
-    脅威モデル:
-      この関数は任意のパスにディレクトリを作成・初期化できる。
-      信頼された呼び出し元（ローカル MCP クライアント・開発者スクリプト等）を前提とし、
-      悪意ある外部入力に対するサンドボックスは持たない。
-      呼び出し元が project_dir の妥当性を事前に検証する責任を負う。
+    Threat model:
+      This function can create and initialise a directory at any path.
+      It assumes a trusted caller (local MCP client, developer script, etc.) and
+      provides no sandbox against malicious external input.
+      The caller is responsible for validating project_dir before calling this function.
     """
     proj = Path(project_dir)
     manifest_path = proj / _MANIFEST_FILENAME
     timeline_path = proj / "timeline.otio"
 
-    # 既存チェック
+    # Check for existing project
     if manifest_path.exists() and not force:
         raise ClipwrightError(
             code=ErrorCode.PROJECT_EXISTS,
-            message=f"プロジェクトがすでに存在します: {project_dir}",
+            message=f"Project already exists: {project_dir}",
             hint=(
-                "既存プロジェクトを再初期化するには force=True を指定してください。"
-                " force=True は非破壊です"
-                "（既存 sources/artifacts/outputs/timeline.otio を保持します）。"
+                "Pass force=True to reinitialise an existing project."
+                " force=True is non-destructive"
+                " (preserves existing sources/artifacts/outputs/timeline.otio)."
             ),
         )
 
-    # ディレクトリ作成（存在していても問題なし）
+    # Create directory (safe even if it already exists)
     proj.mkdir(parents=True, exist_ok=True)
 
-    # サブディレクトリ作成（存在保証）
+    # Ensure subdirectories exist
     for subdir in _SUBDIRS:
         (proj / subdir).mkdir(exist_ok=True)
 
-    # マニフェスト生成（force=True では再生成）
+    # Generate manifest (regenerated when force=True)
     manifest: dict[str, Any] = {
         "schema_version": _SCHEMA_VERSION,
         "name": name,
@@ -126,7 +126,7 @@ def init_project(
         json.dumps(manifest, ensure_ascii=False, indent=2),
     )
 
-    # timeline.otio 生成（force=True かつ既存がある場合はスキップ）
+    # Generate timeline.otio (skipped when force=True and the file already exists)
     if not timeline_path.exists():
         timeline = new_timeline(name)
         save_timeline(timeline, str(timeline_path))
@@ -138,20 +138,20 @@ def init_project(
 
 
 def find_project(start_dir: str) -> str:
-    """start_dir から上位ディレクトリへ遡って clipwright.json を探索する。
+    """Walk up from start_dir to find clipwright.json.
 
-    見つかった場合は clipwright.json があるディレクトリのパス（str）を返す。
-    start_dir がディレクトリでない場合は ClipwrightError(INVALID_INPUT)。
-    ルートまで辿っても見つからない場合は ClipwrightError(PROJECT_NOT_FOUND)。
+    Returns the path (str) of the directory containing clipwright.json.
+    Raises ClipwrightError(INVALID_INPUT) if start_dir is not a directory.
+    Raises ClipwrightError(PROJECT_NOT_FOUND) if the root is reached without finding it.
     """
     start_path = Path(start_dir)
     if not start_path.is_dir():
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message=f"start_dir はディレクトリである必要があります: {start_dir}",
+            message=f"start_dir must be a directory: {start_dir}",
             hint=(
-                "存在するディレクトリのパスを指定してください。"
-                f"指定されたパス '{start_path.name}' はディレクトリではありません。"
+                "Specify a path to an existing directory."
+                f" The given path '{start_path.name}' is not a directory."
             ),
         )
 
@@ -163,14 +163,14 @@ def find_project(start_dir: str) -> str:
 
         parent = current.parent
         if parent == current:
-            # ファイルシステムルートに達した
+            # Reached the filesystem root
             break
         current = parent
 
     raise ClipwrightError(
         code=ErrorCode.PROJECT_NOT_FOUND,
-        message=f"clipwright.json が見つかりません（探索開始: {start_path.name}）",
-        hint="init_project でプロジェクトを初期化してから再実行してください。",
+        message=f"clipwright.json not found (search started from: {start_path.name})",
+        hint="Initialise a project with init_project, then try again.",
     )
 
 
@@ -180,27 +180,27 @@ def find_project(start_dir: str) -> str:
 
 
 def load_manifest(project_dir: str) -> dict[str, Any]:
-    """プロジェクトディレクトリのマニフェスト（clipwright.json）を読み込む。
+    """Load the manifest (clipwright.json) from a project directory.
 
-    clipwright.json が存在しない場合は ClipwrightError(PROJECT_NOT_FOUND)。
-    戻り値は dict（JSON の top-level object を直接返す）。
+    Raises ClipwrightError(PROJECT_NOT_FOUND) if clipwright.json does not exist.
+    Returns a dict (the top-level JSON object).
     """
     manifest_path = Path(project_dir) / _MANIFEST_FILENAME
     if not manifest_path.exists():
         raise ClipwrightError(
             code=ErrorCode.PROJECT_NOT_FOUND,
-            message=f"clipwright.json が見つかりません: {project_dir}",
-            hint="init_project でプロジェクトを初期化してください。",
+            message=f"clipwright.json not found: {project_dir}",
+            hint="Initialise a project with init_project.",
         )
     return json.loads(manifest_path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
 
 
 def save_manifest(project_dir: str, manifest: dict[str, Any]) -> None:
-    """マニフェストをプロジェクトディレクトリにアトミックに書き込む。
+    """Atomically write the manifest to the project directory.
 
-    temp → os.replace パターンで書き込むことで、書き込み途中の中断による
-    clipwright.json の破損を防ぐ（M-3 対応）。
-    manifest は dict（JSON にシリアライズ可能な型のみ使用すること）。
+    Uses the temp → os.replace pattern to prevent clipwright.json corruption
+    on interrupted writes (M-3).
+    manifest must be a dict containing only JSON-serialisable types.
     """
     manifest_path = Path(project_dir) / _MANIFEST_FILENAME
     _atomic_write_text(

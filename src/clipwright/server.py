@@ -1,10 +1,11 @@
-"""server.py — FastMCP プリミティブサーバー（4 ツール）。
+"""server.py — FastMCP primitive server (4 tools).
 
-各ツールはライブラリ層（media / otio_utils / operations / project / envelope）を
-呼ぶ薄いラッパーとし、ClipwrightError をエンベロープ（error_result）へ変換する。
-ビジネスロジックは server に書かない（単一責任）。
+Each tool is a thin wrapper that calls the library layer
+(media / otio_utils / operations / project / envelope) and converts
+ClipwrightError into an envelope (error_result).
+Business logic is kept out of the server layer (single responsibility).
 
-トランスポートは stdio 既定（mcp.run(transport="stdio")）。
+Transport defaults to stdio (mcp.run(transport="stdio")).
 """
 
 from __future__ import annotations
@@ -30,20 +31,20 @@ from clipwright.otio_utils import load_timeline, save_timeline, summarize_timeli
 from clipwright.project import init_project as _init_project
 from clipwright.schemas import Artifact, MediaInfo
 
-# FastMCP インスタンス（名前 = MCP サーバー名）
+# FastMCP instance (name = MCP server name)
 mcp = FastMCP("clipwright")
 
-# marker truncation 閾値（§13.2 DC-AS-004）
+# Marker truncation threshold (§13.2 DC-AS-004)
 _MARKER_THRESHOLD = 50
 
 
 def _inspect_media(path: str) -> MediaInfo:
-    """clipwright.media.inspect_media への薄いラッパー。
+    """Thin wrapper around clipwright.media.inspect_media.
 
-    server モジュール名前空間に _inspect_media を露出することで、
-    テストが clipwright.server._inspect_media をパッチできる（M-2）。
-    実装は clipwright.media モジュール経由で呼ぶため、
-    clipwright.media.inspect_media のパッチも有効になる。
+    Exposing _inspect_media in the server module's namespace allows tests to
+    patch clipwright.server._inspect_media (M-2).
+    Because the implementation goes through the clipwright.media module,
+    patching clipwright.media.inspect_media also works.
     """
     return _media.inspect_media(path)
 
@@ -66,32 +67,32 @@ def clipwright_init_project(
         str,
         Field(
             description=(
-                "初期化するプロジェクトディレクトリのパス。"
-                "存在しない場合は作成する。"
+                "Path to the project directory to initialise."
+                " Created if it does not exist."
             )
         ),
     ],
     name: Annotated[
         str,
-        Field(description="プロジェクト名（clipwright.json に記録される）。"),
+        Field(description="Project name (recorded in clipwright.json)."),
     ],
     force: Annotated[
         bool,
         Field(
             description=(
-                "True のとき既存プロジェクトを非破壊で再初期化する"
-                "（§13.2 DC-AM-007）。"
+                "When True, reinitialises an existing project non-destructively"
+                " (§13.2 DC-AM-007)."
             )
         ),
     ] = False,
 ) -> dict[str, Any]:
-    """プロジェクトディレクトリを初期化する。
+    """Initialise a project directory.
 
-    sources / artifacts / outputs サブディレクトリ、clipwright.json マニフェスト、
-    空の timeline.otio（V1/A1 トラック付き）を生成する。
+    Creates the sources / artifacts / outputs subdirectories, a clipwright.json
+    manifest, and an empty timeline.otio (with V1/A1 tracks).
 
-    force=True は非破壊：既存の sources/artifacts/outputs/timeline.otio を保持し、
-    マニフェストの再生成とディレクトリ存在保証のみ行う（§13.2 DC-AM-007）。
+    force=True is non-destructive: preserves existing media files and timeline.otio,
+    and only regenerates the manifest and ensures directories exist (§13.2 DC-AM-007).
     """
     try:
         _init_project(project_dir, name, force=force)
@@ -100,8 +101,8 @@ def clipwright_init_project(
     except Exception:
         return error_result(
             ErrorCode.INTERNAL,
-            "予期しないエラーが発生しました",
-            "再現条件を添えて報告してください。",
+            "An unexpected error occurred",
+            "Please report with reproduction steps.",
         )
 
     proj = Path(project_dir)
@@ -109,16 +110,12 @@ def clipwright_init_project(
     timeline_path = proj / "timeline.otio"
 
     artifacts = [
-        Artifact(
-            role="manifest", path=str(manifest_path), format="json"
-        ).model_dump(),
-        Artifact(
-            role="timeline", path=str(timeline_path), format="otio"
-        ).model_dump(),
+        Artifact(role="manifest", path=str(manifest_path), format="json").model_dump(),
+        Artifact(role="timeline", path=str(timeline_path), format="otio").model_dump(),
     ]
 
     return ok_result(
-        f"プロジェクト '{name}' を初期化しました: {project_dir}",
+        f"Project '{name}' initialised: {project_dir}",
         data={"project_dir": str(proj), "name": name},
         artifacts=artifacts,
     )
@@ -138,18 +135,17 @@ def clipwright_init_project(
     )
 )
 def clipwright_inspect_media(
-    path: Annotated[
-        str, Field(description="プローブ対象のメディアファイルパス。")
-    ],
+    path: Annotated[str, Field(description="Path to the media file to probe.")],
 ) -> dict[str, Any]:
-    """メディアファイルを ffprobe でプローブして情報を返す。
+    """Probe a media file with ffprobe and return its information.
 
-    ffprobe は CLIPWRIGHT_FFPROBE 環境変数 → PATH の順で探す（ADR-3）。
-    ffprobe が見つからない場合は最初の呼び出し時に DEPENDENCY_MISSING を返す
-    （起動時チェックはしない。§13.3 DC-GP-001）。
+    ffprobe is located via CLIPWRIGHT_FFPROBE env var, then PATH (ADR-3).
+    If ffprobe is not found, DEPENDENCY_MISSING is returned on the first call
+    (no startup check; §13.3 DC-GP-001).
 
-    Windows での依存欠如時は winget install Gyan.FFmpeg で導入できる旨を hint に含める。
-    依存チェックは _inspect_media 内部の resolve_tool で行う（M-2: 二重呼び出し排除）。
+    The hint includes instructions for installing via winget on Windows.
+    The dependency check is performed by resolve_tool inside _inspect_media
+    (M-2: avoids double invocation).
     """
     try:
         media_info = _inspect_media(path)
@@ -158,16 +154,14 @@ def clipwright_inspect_media(
     except Exception:
         return error_result(
             ErrorCode.INTERNAL,
-            "予期しないエラーが発生しました",
-            "再現条件を添えて報告してください。",
+            "An unexpected error occurred",
+            "Please report with reproduction steps.",
         )
 
     data: dict[str, Any] = {
         "path": media_info.path,
         "container": media_info.container,
-        "duration": (
-            media_info.duration.model_dump() if media_info.duration else None
-        ),
+        "duration": (media_info.duration.model_dump() if media_info.duration else None),
         "streams": [s.model_dump() for s in media_info.streams],
     }
     video_streams = [s for s in media_info.streams if s.codec_type == "video"]
@@ -178,9 +172,9 @@ def clipwright_inspect_media(
         else None
     )
     summary = (
-        f"メディア probe 完了: {path} "
-        f"(映像:{len(video_streams)}ストリーム, 音声:{len(audio_streams)}ストリーム"
-        + (f", duration={duration_sec:.2f}秒" if duration_sec is not None else "")
+        f"Media probe complete: {path} "
+        f"(video: {len(video_streams)} stream(s), audio: {len(audio_streams)} stream(s)"
+        + (f", duration={duration_sec:.2f}s" if duration_sec is not None else "")
         + ")"
     )
 
@@ -205,8 +199,8 @@ def clipwright_read_timeline(
         str | None,
         Field(
             description=(
-                "プロジェクトディレクトリのパス。"
-                "timeline_path と排他必須（どちらか一方のみ指定）。"
+                "Path to the project directory."
+                " Mutually exclusive with timeline_path (specify exactly one)."
             )
         ),
     ] = None,
@@ -214,60 +208,60 @@ def clipwright_read_timeline(
         str | None,
         Field(
             description=(
-                "timeline.otio ファイルの直接パス。"
-                "project_dir と排他必須（どちらか一方のみ指定）。"
+                "Direct path to a timeline.otio file."
+                " Mutually exclusive with project_dir (specify exactly one)."
             )
         ),
     ] = None,
 ) -> dict[str, Any]:
-    """timeline.otio を読み込んでサマリを返す。
+    """Load timeline.otio and return a summary.
 
-    project_dir または timeline_path のどちらか一方のみ指定する（排他必須）。
-    両方指定・両方未指定はいずれも INVALID_INPUT（§13.2 DC-AS-004）。
+    Exactly one of project_dir or timeline_path must be specified (mutually exclusive).
+    Providing both or neither is INVALID_INPUT (§13.2 DC-AS-004).
 
-    marker 件数 ≤ 50: data.markers にリストを返す。
-    marker 件数 > 50: data.markers を省略し data.markers_truncated=True と
-    data.marker_count のみ返す（§13.2 DC-AS-004 / §13.5 DC-AM-001）。
+    marker count ≤ 50: returns the list in data.markers.
+    marker count > 50: omits data.markers; returns data.markers_truncated=True and
+    data.marker_count only (§13.2 DC-AS-004 / §13.5 DC-AM-001).
 
-    全件は artifacts の timeline.otio から取得できる。
+    The full list is available from the timeline.otio in artifacts.
     """
-    # 排他入力検証（§13.2 DC-AS-004）
+    # Mutually exclusive input validation (§13.2 DC-AS-004)
     if project_dir is None and timeline_path is None:
         return error_result(
             ErrorCode.INVALID_INPUT,
-            "project_dir または timeline_path のどちらか一方を指定してください",
+            "Specify either project_dir or timeline_path",
             (
-                "project_dir にプロジェクトディレクトリのパスを指定するか、"
-                "timeline_path に timeline.otio のフルパスを指定してください。"
+                "Provide a project directory path in project_dir,"
+                " or a full path to timeline.otio in timeline_path."
             ),
         )
     if project_dir is not None and timeline_path is not None:
         return error_result(
             ErrorCode.INVALID_INPUT,
-            "project_dir と timeline_path を同時に指定することはできません",
+            "project_dir and timeline_path cannot both be specified",
             (
-                "どちらか一方のみ指定してください。"
-                "project_dir 指定時は <project_dir>/timeline.otio を読み込みます。"
+                "Specify only one."
+                " When project_dir is given, <project_dir>/timeline.otio is used."
             ),
         )
 
-    # timeline パスを確定
+    # Resolve the timeline path
     if project_dir is not None:
         resolved_path = str(Path(project_dir) / "timeline.otio")
     else:
-        # timeline_path 直接指定: .otio 拡張子ホワイトリスト検証（パストラバーサル対策）
+        # Direct timeline_path: whitelist .otio extension (path-traversal guard)
         resolved = Path(str(timeline_path)).resolve()
         if resolved.suffix != ".otio":
             return error_result(
                 ErrorCode.PATH_NOT_ALLOWED,
-                f"timeline_path は .otio ファイルを指定してください: {resolved.name}",
-                ".otio 拡張子のファイルパスを指定してください。",
+                f"timeline_path must point to a .otio file: {resolved.name}",
+                "Specify a file path with the .otio extension.",
             )
         if not resolved.is_file():
             return error_result(
                 ErrorCode.FILE_NOT_FOUND,
-                f"timeline_path が存在しません: {resolved.name}",
-                "有効な .otio ファイルのパスを指定してください。",
+                f"timeline_path does not exist: {resolved.name}",
+                "Specify a valid path to an existing .otio file.",
             )
         resolved_path = str(resolved)
 
@@ -278,13 +272,13 @@ def clipwright_read_timeline(
     except Exception:
         return error_result(
             ErrorCode.OTIO_ERROR,
-            "timeline.otio の読み込みに失敗しました",
-            "ファイルが有効な OTIO ファイルか確認してください。",
+            "Failed to load timeline.otio",
+            "Check that the file is a valid OTIO file.",
         )
 
     summary_dict = summarize_timeline(timeline)
 
-    # marker truncation 整形（§13.5 DC-AM-001 再: server の責務）
+    # Marker truncation formatting (§13.5 DC-AM-001 re: server's responsibility)
     marker_count: int = summary_dict["marker_count"]
     total_dur = summary_dict["total_duration"]
     data: dict[str, Any] = {
@@ -292,13 +286,11 @@ def clipwright_read_timeline(
         "gap_count": summary_dict["gap_count"],
         "marker_count": marker_count,
         "total_duration": (
-            total_dur.model_dump()
-            if hasattr(total_dur, "model_dump")
-            else total_dur
+            total_dur.model_dump() if hasattr(total_dur, "model_dump") else total_dur
         ),
     }
     if marker_count <= _MARKER_THRESHOLD:
-        # ≤ 50: markers リストをそのまま返す
+        # ≤ 50: return the markers list as-is
         raw_markers: list[dict[str, Any]] = []
         for m in summary_dict["markers"]:
             entry: dict[str, Any] = {}
@@ -308,20 +300,20 @@ def clipwright_read_timeline(
         data["markers"] = raw_markers
         data["markers_truncated"] = False
     else:
-        # > 50: markers 省略、truncation フラグと件数のみ
+        # > 50: omit markers; return truncation flag and count only
         data["markers_truncated"] = True
 
     artifacts = [
         Artifact(role="timeline", path=resolved_path, format="otio").model_dump(),
     ]
 
-    # summarize_timeline の warnings をエンベロープに詰める（M-4）
+    # Forward summarize_timeline warnings into the envelope (M-4)
     summary_warnings: list[str] = summary_dict.get("warnings", [])
 
     return ok_result(
-        f"timeline 読み込み完了: {timeline.name} "
-        f"(clip={data['clip_count']}, gap={data['gap_count']}"
-        f", marker={marker_count})",
+        f"Timeline loaded: {timeline.name} "
+        f"(clips={data['clip_count']}, gaps={data['gap_count']}"
+        f", markers={marker_count})",
         data=data,
         artifacts=artifacts,
         warnings=summary_warnings if summary_warnings else None,
@@ -346,8 +338,7 @@ def clipwright_write_timeline(
         str,
         Field(
             description=(
-                "プロジェクトディレクトリのパス。"
-                "<project_dir>/timeline.otio を対象とする。"
+                "Path to the project directory. Targets <project_dir>/timeline.otio."
             )
         ),
     ],
@@ -355,9 +346,9 @@ def clipwright_write_timeline(
         list[dict[str, Any]],
         Field(
             description=(
-                "宣言的オペレーション列。各要素は op フィールドで種別を指定する。"
-                "対応 op: add_clip / add_gap / add_marker。"
-                "all-or-nothing: 1 件でも不正なら全件不適用（§13.1 DC-AM-004）。"
+                "Declarative operation list. Each element specifies its type via the op"
+                " field. Supported ops: add_clip / add_gap / add_marker."
+                " All-or-nothing: if any op is invalid, none are applied (§13.1)."
             )
         ),
     ],
@@ -365,25 +356,26 @@ def clipwright_write_timeline(
         bool,
         Field(
             description=(
-                "True のとき検証のみ実施し timeline に書き込まない（dry-run）。"
+                "When True, validates only without writing to the timeline (dry-run)."
             )
         ),
     ] = False,
 ) -> dict[str, Any]:
-    """宣言的オペレーション列を timeline.otio に追記する。
+    """Append a declarative operation list to timeline.otio.
 
-    既存 timeline の内容を保持したまま追記する（§13.2 DC-AM-001 追記セマンティクス）。
-    既存内容は消去しない。destructiveHint=False の根拠: 元素材は不変、
-    timeline.otio はアトミック上書き（破損しない）。
+    Appends to the existing timeline without discarding its contents
+    (§13.2 DC-AM-001 append semantics). Existing content is never cleared.
+    Rationale for destructiveHint=False: source media is immutable;
+    timeline.otio is written atomically (no corruption).
 
-    validate_only=True の場合: 検証のみ実施し applied_count=0 で返す。
-    timeline.otio の更新は行わない。
+    validate_only=True: validates only, returns applied_count=0.
+    timeline.otio is not updated.
 
-    data には ValidationReport（valid/operation_count/applied_count/errors）を詰める。
+    data contains the ValidationReport (valid/operation_count/applied_count/errors).
     """
     resolved_path = str(Path(project_dir) / "timeline.otio")
 
-    # timeline 読み込み
+    # Load the timeline
     try:
         timeline = load_timeline(resolved_path)
     except ClipwrightError as exc:
@@ -391,11 +383,11 @@ def clipwright_write_timeline(
     except Exception:
         return error_result(
             ErrorCode.OTIO_ERROR,
-            "timeline.otio の読み込みに失敗しました",
-            "init_project でプロジェクトを初期化してから再実行してください。",
+            "Failed to load timeline.otio",
+            "Initialise the project with init_project, then try again.",
         )
 
-    # operations を Pydantic 型に変換（unknown_op 等の不正 op をここで弾く）
+    # Convert to Pydantic types (rejects unknown_op and other invalid ops here)
     op_adapter: TypeAdapter[Operation] = TypeAdapter(Operation)
     typed_ops: list[AddClipOp | AddGapOp | AddMarkerOp] = []
     parse_errors: list[dict[str, Any]] = []
@@ -405,44 +397,44 @@ def clipwright_write_timeline(
             typed_op = op_adapter.validate_python(raw_op)
             typed_ops.append(typed_op)
         except ValidationError as exc:
-            first_msg = exc.errors()[0]["msg"] if exc.errors() else "不明なエラー"
+            first_msg = exc.errors()[0]["msg"] if exc.errors() else "unknown error"
             parse_errors.append(
                 {
                     "index": i,
                     "code": ErrorCode.UNSUPPORTED_OPERATION,
                     "message": (
-                        f"op {i}: {exc.error_count()} 件の検証エラー: {first_msg}"
+                        f"op {i}: {exc.error_count()} validation error(s): {first_msg}"
                     ),
                 }
             )
 
     if parse_errors:
-        # Pydantic 検証失敗（不正な op 種別等）→ 入力スキーマ違反
-        # ok=False の error_result で返す（§6.4 契約）
+        # Pydantic validation failure (invalid op type, etc.) → input schema violation.
+        # Return ok=False via error_result (§6.4 contract).
         first_err = parse_errors[0]
         hint_detail = first_err.get("message", "")
         return error_result(
             ErrorCode.INVALID_INPUT,
-            f"operations の入力検証に失敗しました: {len(parse_errors)} 件のエラー",
+            f"Input validation failed for operations: {len(parse_errors)} error(s)",
             (
-                f"対応 op は add_clip / add_gap / add_marker のみです。{hint_detail}"
+                f"Supported ops are add_clip / add_gap / add_marker only. {hint_detail}"
                 if hint_detail
-                else "対応 op は add_clip / add_gap / add_marker のみです。"
+                else "Supported ops are add_clip / add_gap / add_marker only."
             ),
         )
 
-    # apply_operations（all-or-nothing / validate_only 対応）
+    # apply_operations (all-or-nothing / validate_only support)
     report = apply_operations(timeline, typed_ops, validate_only=validate_only)
 
-    # 適用成功かつ validate_only でない場合のみ保存
+    # Save only when apply succeeded and validate_only is False
     if report.valid and not validate_only and len(typed_ops) > 0:
         try:
             save_timeline(timeline, resolved_path)
         except Exception:
             return error_result(
                 ErrorCode.OTIO_ERROR,
-                "timeline.otio の保存に失敗しました",
-                "ディスク容量・書き込み権限を確認してください。",
+                "Failed to save timeline.otio",
+                "Check disk space and write permissions.",
             )
 
     report_data = {
@@ -455,17 +447,13 @@ def clipwright_write_timeline(
     if report.valid:
         if validate_only:
             summary = (
-                f"validate_only: {report.operation_count} 件の"
-                " operations を検証しました（適用なし）"
+                f"validate_only: validated {report.operation_count} operation(s)"
+                " (not applied)"
             )
         else:
-            summary = (
-                f"{report.applied_count} 件の operations を timeline に適用しました"
-            )
+            summary = f"Applied {report.applied_count} operation(s) to the timeline"
     else:
-        summary = (
-            f"operations の検証に失敗しました: {len(report.errors)} 件のエラー"
-        )
+        summary = f"Operation validation failed: {len(report.errors)} error(s)"
 
     artifacts = [
         Artifact(role="timeline", path=resolved_path, format="otio").model_dump(),
@@ -475,7 +463,7 @@ def clipwright_write_timeline(
 
 
 # ===========================================================================
-# エントリポイント
+# Entry point
 # ===========================================================================
 
 
