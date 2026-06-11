@@ -18,7 +18,7 @@ import pytest
 from clipwright.errors import ClipwrightError, ErrorCode
 from pydantic import ValidationError
 
-from clipwright_render.plan import ProbeInfo
+from clipwright_render.plan import BgmClip, ProbeInfo
 from clipwright_render.schemas import RenderOptions
 
 if TYPE_CHECKING:
@@ -1528,3 +1528,1255 @@ class TestBuildPlanMultiSourceAudioPipe:
         plan = self._build_multi_with_audio(loudness=_VALID_LOUDNORM_DIRECTIVE)
         warning_text = " ".join(plan.warnings)
         assert "複数ソース合体" in warning_text or "ずれ" in warning_text
+
+
+# ===========================================================================
+# BGM ミックス拡張テスト（ADR-B4-r2/B5-r2/B5-r3/B6-r2/B9-r3）
+# ===========================================================================
+# 実 ffmpeg 確認済み構文（2026-06-11）:
+# - -stream_loop -1 + atrim=0:{main_dur} → 5秒出力 OK
+# - [N:a]aformat=48000:stereo,atrim=0:{d},asetpts=PTS-STARTPTS,volume={v}dB[bgm] → OK
+# - [main_fmt][bgm]amix=inputs=2:normalize=0,alimiter=limit=1.0[outa_bgm] → OK
+# - sidechaincompress: BGM=第1入力・本編=第2(サイドチェーン) → OK
+# - afade=t=in:st=0:d={d}, afade=t=out:st={st}:d={d} → OK
+# - 本編無音 + BGM単独系統（amixなし） → 出力に音声1ストリーム OK
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# BGM テスト用ヘルパー定数
+# ---------------------------------------------------------------------------
+
+_VALID_BGM_DIRECTIVE: dict = {
+    "tool": "clipwright-bgm",
+    "version": "0.1.0",
+    "kind": "bgm",
+    "volume_db": -6.0,
+    "fade_in_sec": 0.0,
+    "fade_out_sec": 0.0,
+    "ducking": {"enabled": False, "threshold": 0.05, "ratio": 4.0},
+}
+
+_VALID_BGM_DIRECTIVE_WITH_FADE: dict = {
+    "tool": "clipwright-bgm",
+    "version": "0.1.0",
+    "kind": "bgm",
+    "volume_db": -6.0,
+    "fade_in_sec": 1.0,
+    "fade_out_sec": 1.5,
+    "ducking": {"enabled": False, "threshold": 0.05, "ratio": 4.0},
+}
+
+_VALID_BGM_DIRECTIVE_DUCKING: dict = {
+    "tool": "clipwright-bgm",
+    "version": "0.1.0",
+    "kind": "bgm",
+    "volume_db": -6.0,
+    "fade_in_sec": 0.0,
+    "fade_out_sec": 0.0,
+    "ducking": {"enabled": True, "threshold": 0.05, "ratio": 4.0},
+}
+
+
+def _make_bgm_clip(
+    bgm_source: str = "/proj/bgm.mp3",
+    directive: dict | None = None,
+    timeline_duration_sec: float = 5.0,
+) -> BgmClip:
+    """BGM テスト用 BgmClip を構築するヘルパー。"""
+    from pydantic import TypeAdapter
+
+    from clipwright_render.plan import (  # type: ignore[attr-defined]
+        BgmClip,
+        BgmDirective,
+    )
+
+    d = directive or _VALID_BGM_DIRECTIVE
+    bgm_dir = TypeAdapter(BgmDirective).validate_python(d)
+    source_range = _tr(0.0, timeline_duration_sec)
+    return BgmClip(
+        source=bgm_source,
+        source_range=source_range,
+        directive=bgm_dir,
+    )
+
+
+def _make_single_source_timeline_with_audio(
+    source: str = "/src/a.mp4",
+    duration: float = 5.0,
+) -> otio.schema.Timeline:
+    """単一ソース・音声あり Timeline を返すヘルパー。"""
+    video_track = otio.schema.Track(kind=otio.schema.TrackKind.Video)
+    video_track.append(_make_clip(source, 0.0, duration))
+    tl = otio.schema.Timeline()
+    tl.tracks.append(video_track)
+    return tl
+
+
+def _make_bgm_otio_timeline(
+    bgm_source: str = "/proj/bgm.mp3",
+    directive: dict | None = None,
+    main_source: str = "/src/a.mp4",
+    main_duration: float = 5.0,
+) -> otio.schema.Timeline:
+    """BGM クリップを A2 トラックに含む Timeline を返すヘルパー（resolve_bgm テスト用）。"""
+    d = directive or _VALID_BGM_DIRECTIVE
+    # V1 video トラック
+    video_track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
+    video_track.append(_make_clip(main_source, 0.0, main_duration))
+    # A1 本編音声トラック（kind!="bgm" クリップ）
+    audio_track_a1 = otio.schema.Track(name="A1", kind=otio.schema.TrackKind.Audio)
+    clip_a1 = _make_clip(main_source, 0.0, main_duration)
+    audio_track_a1.append(clip_a1)
+    # A2 BGM トラック（kind=="bgm" クリップ）
+    audio_track_a2 = otio.schema.Track(name="A2", kind=otio.schema.TrackKind.Audio)
+    clip_bgm = otio.schema.Clip()
+    clip_bgm.media_reference = otio.schema.ExternalReference(target_url=bgm_source)
+    clip_bgm.source_range = _tr(0.0, main_duration)
+    clip_bgm.metadata["clipwright"] = d
+    audio_track_a2.append(clip_bgm)
+    tl = otio.schema.Timeline()
+    tl.tracks.append(video_track)
+    tl.tracks.append(audio_track_a1)
+    tl.tracks.append(audio_track_a2)
+    return tl
+
+
+# ---------------------------------------------------------------------------
+# 観点1: BgmDirective reader-strict バリデーション（ADR-B9-r2/B9-r3）
+# ---------------------------------------------------------------------------
+
+
+class TestBgmDirectiveValidation:
+    """BgmDirective の reader-strict バリデーションを検証する（観点1・ADR-B9-r2）。"""
+
+    def test_1_valid_directive_accepts_normal_values(self) -> None:
+        """正常値の BgmDirective が構築できる（観点1）。"""
+        from clipwright_render.plan import BgmDirective  # type: ignore[attr-defined]
+
+        d = BgmDirective(**_VALID_BGM_DIRECTIVE)
+        assert d.volume_db == -6.0
+        assert d.fade_in_sec == 0.0
+        assert d.fade_out_sec == 0.0
+        assert d.kind == "bgm"
+
+    def test_1_invalid_kind_raises(self) -> None:
+        """kind が "bgm" 以外 → ValidationError（観点1）。"""
+        from pydantic import ValidationError
+
+        from clipwright_render.plan import BgmDirective  # type: ignore[attr-defined]
+
+        bad = dict(_VALID_BGM_DIRECTIVE, kind="noise")
+        with pytest.raises(ValidationError):
+            BgmDirective(**bad)
+
+    def test_1_negative_fade_in_raises(self) -> None:
+        """fade_in_sec が負 → ValidationError（ge=0 制約・ADR-B9-r3）。"""
+        from pydantic import ValidationError
+
+        from clipwright_render.plan import BgmDirective  # type: ignore[attr-defined]
+
+        bad = dict(_VALID_BGM_DIRECTIVE, fade_in_sec=-0.1)
+        with pytest.raises(ValidationError):
+            BgmDirective(**bad)
+
+    def test_1_negative_fade_out_raises(self) -> None:
+        """fade_out_sec が負 → ValidationError（ge=0 制約・ADR-B9-r3）。"""
+        from pydantic import ValidationError
+
+        from clipwright_render.plan import BgmDirective  # type: ignore[attr-defined]
+
+        bad = dict(_VALID_BGM_DIRECTIVE, fade_out_sec=-0.1)
+        with pytest.raises(ValidationError):
+            BgmDirective(**bad)
+
+    def test_1_tool_over_64_chars_raises(self) -> None:
+        """tool が max_length=64 超 → ValidationError（ADR-B9-r2）。"""
+        from pydantic import ValidationError
+
+        from clipwright_render.plan import BgmDirective  # type: ignore[attr-defined]
+
+        bad = dict(_VALID_BGM_DIRECTIVE, tool="x" * 65)
+        with pytest.raises(ValidationError):
+            BgmDirective(**bad)
+
+    def test_1_version_over_64_chars_raises(self) -> None:
+        """version が max_length=64 超 → ValidationError（ADR-B9-r2）。"""
+        from pydantic import ValidationError
+
+        from clipwright_render.plan import BgmDirective  # type: ignore[attr-defined]
+
+        bad = dict(_VALID_BGM_DIRECTIVE, version="v" * 65)
+        with pytest.raises(ValidationError):
+            BgmDirective(**bad)
+
+    def test_1_unknown_key_raises_forbidden_extra(self) -> None:
+        """未知キー → reader-strict（forbid extra）で ValidationError（観点1）。"""
+        from pydantic import ValidationError
+
+        from clipwright_render.plan import BgmDirective  # type: ignore[attr-defined]
+
+        bad = dict(_VALID_BGM_DIRECTIVE, unknown_field="evil")
+        with pytest.raises(ValidationError):
+            BgmDirective(**bad)
+
+    def test_1_inf_volume_db_raises(self) -> None:
+        """volume_db が inf → allow_inf_nan=False で ValidationError（観点1）。"""
+        import math
+
+        from pydantic import ValidationError
+
+        from clipwright_render.plan import BgmDirective  # type: ignore[attr-defined]
+
+        bad = dict(_VALID_BGM_DIRECTIVE, volume_db=math.inf)
+        with pytest.raises(ValidationError):
+            BgmDirective(**bad)
+
+    def test_1_nan_volume_db_raises(self) -> None:
+        """volume_db が nan → allow_inf_nan=False で ValidationError（観点1）。"""
+        import math
+
+        from pydantic import ValidationError
+
+        from clipwright_render.plan import BgmDirective  # type: ignore[attr-defined]
+
+        bad = dict(_VALID_BGM_DIRECTIVE, volume_db=math.nan)
+        with pytest.raises(ValidationError):
+            BgmDirective(**bad)
+
+
+# ---------------------------------------------------------------------------
+# 観点2: resolve_bgm（ADR-B4-r2）
+# ---------------------------------------------------------------------------
+
+
+class TestResolveBgm:
+    """resolve_bgm の挙動を検証する（観点2・ADR-B4-r2）。"""
+
+    def test_2_single_bgm_clip_returns_bgm_clip(self) -> None:
+        """kind=="bgm" クリップ 1件 → BgmClip を返す（ADR-B4-r2）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            BgmClip,
+            resolve_bgm,
+        )
+
+        tl = _make_bgm_otio_timeline()
+        result = resolve_bgm(tl)
+        assert isinstance(result, BgmClip)
+        assert result.source == "/proj/bgm.mp3"
+
+    def test_2_no_bgm_clip_returns_none(self) -> None:
+        """kind=="bgm" クリップ 0件 → None（後方互換・ADR-B4-r2）。"""
+        from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
+
+        # BGMトラックなし: V1 + A1 のみ
+        tl = _make_single_source_timeline_with_audio()
+        result = resolve_bgm(tl)
+        assert result is None
+
+    def test_2_two_bgm_clips_raises_unsupported(self) -> None:
+        """kind=="bgm" クリップ 2件以上 → UNSUPPORTED_OPERATION（ADR-B4-r2）。"""
+        from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
+
+        # A2 と A3 に BGM クリップを置く
+        tl = _make_bgm_otio_timeline()  # A2 に 1件追加済み
+        # A3 にもう1件追加
+        audio_track_a3 = otio.schema.Track(name="A3", kind=otio.schema.TrackKind.Audio)
+        clip_bgm2 = otio.schema.Clip()
+        clip_bgm2.media_reference = otio.schema.ExternalReference(
+            target_url="/proj/bgm2.mp3"
+        )
+        clip_bgm2.source_range = _tr(0.0, 5.0)
+        clip_bgm2.metadata["clipwright"] = _VALID_BGM_DIRECTIVE
+        audio_track_a3.append(clip_bgm2)
+        tl.tracks.append(audio_track_a3)
+        with pytest.raises(ClipwrightError) as exc_info:
+            resolve_bgm(tl)
+        assert exc_info.value.code == ErrorCode.UNSUPPORTED_OPERATION
+
+    def test_2_a1_with_main_audio_and_one_bgm_does_not_raise_unsupported(self) -> None:
+        """A1 本編音声（kind!="bgm"）+ A2 BGM 1件 → UNSUPPORTED にならない（ADR-B4-r2 DC-AS-002）。
+
+        Audio トラックが2本あっても BGM クリップが1件なら正常。
+        複数 Audio トラック数では判定しない（A1 本編常在の誤検出回避）。
+        """
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            BgmClip,
+            resolve_bgm,
+        )
+
+        tl = _make_bgm_otio_timeline()  # V1 + A1(本編) + A2(BGM)
+        # Audio トラックは 2本だが BGM クリップは 1件
+        result = resolve_bgm(tl)
+        assert isinstance(result, BgmClip)
+
+    def test_2_bgm_clip_source_preserved(self) -> None:
+        """resolve_bgm が返す BgmClip の source が正しいパス（観点2）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            BgmClip,
+            resolve_bgm,
+        )
+
+        tl = _make_bgm_otio_timeline(bgm_source="/music/track.mp3")
+        result = resolve_bgm(tl)
+        assert isinstance(result, BgmClip)
+        assert result.source == "/music/track.mp3"
+
+    def test_2_bgm_clip_directive_volume_preserved(self) -> None:
+        """resolve_bgm が返す BgmClip の directive.volume_db が正しい値（観点2）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            BgmClip,
+            resolve_bgm,
+        )
+
+        d = dict(_VALID_BGM_DIRECTIVE, volume_db=-12.0)
+        tl = _make_bgm_otio_timeline(directive=d)
+        result = resolve_bgm(tl)
+        assert isinstance(result, BgmClip)
+        assert result.directive.volume_db == -12.0
+
+    def test_2_bgm_only_in_a2_but_a1_has_normal_clips(self) -> None:
+        """A1 に kind 未設定の通常クリップ + A2 に kind=="bgm" → 1件正常検出（ADR-B4-r2）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            BgmClip,
+            resolve_bgm,
+        )
+
+        # A1 は metadata なし通常クリップ
+        tl = _make_bgm_otio_timeline()
+        result = resolve_bgm(tl)
+        assert isinstance(result, BgmClip)
+
+
+# ---------------------------------------------------------------------------
+# 観点3・4: build_plan(bgm=BgmClip) → audio_map_label / RenderPlan.bgm_source / BGM index
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPlanBgmOutputLabels:
+    """build_plan(bgm=...) が正しい audio_map_label と RenderPlan フィールドを返す（観点3・4）。"""
+
+    def _build_with_bgm(
+        self,
+        bgm_source: str = "/proj/bgm.mp3",
+        directive: dict | None = None,
+        audio_count: int = 1,
+    ) -> RenderPlan:  # type: ignore[name-defined]
+        """単一ソース + BGM の build_plan ヘルパー。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=audio_count, bit_rate=None)
+        bgm_clip = _make_bgm_clip(bgm_source=bgm_source, directive=directive)
+        return build_plan(ranges, probe, RenderOptions(), bgm=bgm_clip)  # type: ignore[call-arg]
+
+    def test_3_audio_map_label_is_outa_bgm(self) -> None:
+        """bgm=BgmClip → audio_map_label == [outa_bgm]（観点3）。"""
+        plan = self._build_with_bgm()
+        args_str = " ".join(plan.ffmpeg_args)
+        assert "[outa_bgm]" in args_str
+
+    def test_3_bgm_source_set_in_render_plan(self) -> None:
+        """build_plan(bgm=...) → RenderPlan.bgm_source == bgm.source（観点3）。"""
+        plan = self._build_with_bgm(bgm_source="/proj/bgm.mp3")
+        assert plan.bgm_source == "/proj/bgm.mp3"  # type: ignore[attr-defined]
+
+    def test_3_bgm_source_none_when_bgm_not_provided(self) -> None:
+        """bgm=None → RenderPlan.bgm_source is None（後方互換・ADR-B7）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+        plan = build_plan(ranges, probe, RenderOptions())
+        assert plan.bgm_source is None  # type: ignore[attr-defined]
+
+    def test_4_bgm_index_equals_len_input_sources(self) -> None:
+        """BGM filter の入力ラベルが [len(input_sources):a]（DC-AS-005・観点4）。"""
+        plan = self._build_with_bgm()
+        # 単一ソース経路: input_sources=1件 → BGM index=1 → [1:a]
+        expected_label = f"[{len(plan.input_sources)}:a]"
+        assert expected_label in plan.filter_complex
+
+    def test_4_bgm_source_not_in_input_sources(self) -> None:
+        """bgm_source は input_sources に含まれない（DC-AS-005・観点4）。"""
+        plan = self._build_with_bgm(bgm_source="/proj/bgm.mp3")
+        assert plan.bgm_source not in plan.input_sources  # type: ignore[attr-defined]
+
+    def test_4_bgm_index_two_sources(self) -> None:
+        """2本編ソース + BGM → BGM index=2（[2:a] が filter に含まれる・DC-AS-005）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        clips = [_make_clip("/src/a.mp4", 0.0, 3.0), _make_clip("/src/b.mp4", 0.0, 2.0)]
+        tl = _make_timeline_with_clips(clips)
+        ranges = resolve_kept_ranges(tl)
+        source_probes = {
+            "/src/a.mp4": _make_probe(audio_count=1, width=1920, height=1080, fps=30.0),
+            "/src/b.mp4": _make_probe(audio_count=1, width=1920, height=1080, fps=30.0),
+        }
+        bgm_clip = _make_bgm_clip(bgm_source="/proj/bgm.mp3")
+        plan = build_plan(
+            ranges,
+            source_probes["/src/a.mp4"],
+            RenderOptions(),
+            source_probes=source_probes,
+            bgm=bgm_clip,  # type: ignore[call-arg]
+        )
+        # 2ソース → BGM index=2
+        assert "[2:a]" in plan.filter_complex
+        assert plan.bgm_source not in plan.input_sources  # type: ignore[attr-defined]
+        assert len(plan.input_sources) == 2
+
+
+# ---------------------------------------------------------------------------
+# 観点5: BGM filter 文字列（実機確認済み構文・ADR-B5-r3/B6-r2）
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPlanBgmFilterComplex:
+    """BGM filter_complex の文字列構成を検証する（観点5・ADR-B5-r3/B6-r2）。"""
+
+    def _build_with_bgm_fc(
+        self,
+        directive: dict | None = None,
+        audio_count: int = 1,
+        bgm_source: str = "/proj/bgm.mp3",
+    ) -> tuple[str, RenderPlan]:  # type: ignore[name-defined]
+        """filter_complex 文字列と RenderPlan を返す単一ソース BGM テストヘルパー。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=audio_count, bit_rate=None)
+        bgm_clip = _make_bgm_clip(bgm_source=bgm_source, directive=directive)
+        plan = build_plan(ranges, probe, RenderOptions(), bgm=bgm_clip)  # type: ignore[call-arg]
+        return plan.filter_complex, plan
+
+    def test_5_bgm_filter_has_aformat_48000_stereo(self) -> None:
+        """BGM 側に aformat=sample_rates=48000:channel_layouts=stereo が含まれる（DC-AS-007）。"""
+        fc, _ = self._build_with_bgm_fc()
+        assert "aformat=sample_rates=48000:channel_layouts=stereo" in fc
+
+    def test_5_bgm_filter_has_atrim_main_dur(self) -> None:
+        """BGM filter に atrim=0:{main_dur} が含まれる（ADR-B6-r2・-stream_loop + atrim）。"""
+        fc, _ = self._build_with_bgm_fc()
+        # main_dur=5.0（1クリップ duration=5.0）
+        assert "atrim=0:5" in fc
+
+    def test_5_bgm_filter_has_volume_db(self) -> None:
+        """BGM filter に volume={db}dB が含まれる（観点5）。"""
+        fc, _ = self._build_with_bgm_fc()
+        assert "volume=-6dB" in fc or "volume=-6.0dB" in fc
+
+    def test_5_bgm_filter_has_asetpts(self) -> None:
+        """BGM filter に asetpts=PTS-STARTPTS が含まれる（観点5）。"""
+        fc, _ = self._build_with_bgm_fc()
+        assert "asetpts=PTS-STARTPTS" in fc
+
+    def test_5_main_fmt_aformat_present(self) -> None:
+        """本編側に aformat=sample_rates=48000:channel_layouts=stereo が含まれる（DC-AS-007）。
+
+        単一ソース経路でも amix 入力規格統一のため本編側 aformat は必須（ADR-B5-r3）。
+        """
+        fc, _ = self._build_with_bgm_fc()
+        # [main_fmt] が作られ、aformat が含まれる
+        assert "main_fmt" in fc
+        assert "aformat=sample_rates=48000:channel_layouts=stereo" in fc
+
+    def test_5_amix_inputs2_normalize0_present(self) -> None:
+        """amix=inputs=2:normalize=0 が含まれる（ADR-B5-r3）。"""
+        fc, _ = self._build_with_bgm_fc()
+        assert "amix=inputs=2:normalize=0" in fc
+
+    def test_5_alimiter_present(self) -> None:
+        """alimiter=limit=1.0 が含まれる（DC-AM-001・クリッピング対策）。"""
+        fc, _ = self._build_with_bgm_fc()
+        assert "alimiter=limit=1.0" in fc
+
+    def test_5_outa_bgm_label_present(self) -> None:
+        """[outa_bgm] ラベルが filter_complex に含まれる（観点5）。"""
+        fc, _ = self._build_with_bgm_fc()
+        assert "[outa_bgm]" in fc
+
+    def test_5_aloop_not_present(self) -> None:
+        """aloop は filter_complex に含まれない（ADR-B6-r2・aloop 廃止）。"""
+        fc, _ = self._build_with_bgm_fc()
+        assert "aloop" not in fc
+
+
+# ---------------------------------------------------------------------------
+# 観点6: fade_in/out=0 では afade が入らない（ADR-B9-r3・DC-AM-003）
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPlanBgmFade:
+    """afade の注入条件を検証する（観点6・ADR-B9-r3/DC-AM-003）。"""
+
+    def test_6_fade_in_zero_no_afade_in(self) -> None:
+        """fade_in_sec=0.0 → afade=t=in が filter_complex に含まれない（DC-AM-003）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+        d = dict(_VALID_BGM_DIRECTIVE, fade_in_sec=0.0)
+        bgm_clip = _make_bgm_clip(directive=d)
+        plan = build_plan(ranges, probe, RenderOptions(), bgm=bgm_clip)  # type: ignore[call-arg]
+        assert "afade=t=in" not in plan.filter_complex
+
+    def test_6_fade_out_zero_no_afade_out(self) -> None:
+        """fade_out_sec=0.0 → afade=t=out が filter_complex に含まれない（DC-AM-003）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+        d = dict(_VALID_BGM_DIRECTIVE, fade_out_sec=0.0)
+        bgm_clip = _make_bgm_clip(directive=d)
+        plan = build_plan(ranges, probe, RenderOptions(), bgm=bgm_clip)  # type: ignore[call-arg]
+        assert "afade=t=out" not in plan.filter_complex
+
+    def test_6_fade_in_positive_afade_in_present(self) -> None:
+        """fade_in_sec > 0 → afade=t=in が filter_complex に含まれる（DC-AM-003）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+        d = dict(_VALID_BGM_DIRECTIVE, fade_in_sec=1.0)
+        bgm_clip = _make_bgm_clip(directive=d)
+        plan = build_plan(ranges, probe, RenderOptions(), bgm=bgm_clip)  # type: ignore[call-arg]
+        assert "afade=t=in" in plan.filter_complex
+
+    def test_6_fade_out_positive_afade_out_present(self) -> None:
+        """fade_out_sec > 0 → afade=t=out が filter_complex に含まれる（DC-AM-003）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+        d = dict(_VALID_BGM_DIRECTIVE, fade_out_sec=1.5)
+        bgm_clip = _make_bgm_clip(directive=d)
+        plan = build_plan(ranges, probe, RenderOptions(), bgm=bgm_clip)  # type: ignore[call-arg]
+        assert "afade=t=out" in plan.filter_complex
+
+
+# ---------------------------------------------------------------------------
+# 観点7: ducking ON/OFF（ADR-B5-r3・DC-AS-006）
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPlanBgmDucking:
+    """ducking ON/OFF の filter 生成を検証する（観点7・ADR-B5-r3/DC-AS-006）。"""
+
+    def test_7_ducking_off_no_sidechaincompress(self) -> None:
+        """ducking.enabled=False → sidechaincompress が filter に含まれない（観点7）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+        bgm_clip = _make_bgm_clip(directive=_VALID_BGM_DIRECTIVE)
+        plan = build_plan(ranges, probe, RenderOptions(), bgm=bgm_clip)  # type: ignore[call-arg]
+        assert "sidechaincompress" not in plan.filter_complex
+
+    def test_7_ducking_on_sidechaincompress_present(self) -> None:
+        """ducking.enabled=True → sidechaincompress が filter_complex に含まれる（観点7）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+        bgm_clip = _make_bgm_clip(directive=_VALID_BGM_DIRECTIVE_DUCKING)
+        plan = build_plan(ranges, probe, RenderOptions(), bgm=bgm_clip)  # type: ignore[call-arg]
+        assert "sidechaincompress" in plan.filter_complex
+
+    def test_7_ducking_on_threshold_ratio_in_filter(self) -> None:
+        """ducking ON → threshold=0.05:ratio=4.0 が filter に含まれる（DC-AS-006）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+        bgm_clip = _make_bgm_clip(directive=_VALID_BGM_DIRECTIVE_DUCKING)
+        plan = build_plan(ranges, probe, RenderOptions(), bgm=bgm_clip)  # type: ignore[call-arg]
+        fc = plan.filter_complex
+        assert "threshold=0.05" in fc
+        assert "ratio=4.0" in fc or "ratio=4" in fc
+
+    def test_7_ducking_on_bgm_is_first_input_of_sidechaincompress(self) -> None:
+        """ducking ON: [bgm][main_sc]sidechaincompress の順序（BGM=第1入力・DC-AS-006）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+        bgm_clip = _make_bgm_clip(directive=_VALID_BGM_DIRECTIVE_DUCKING)
+        plan = build_plan(ranges, probe, RenderOptions(), bgm=bgm_clip)  # type: ignore[call-arg]
+        fc = plan.filter_complex
+        # [bgm] が sidechaincompress より前に出現（[bgm]...[main_sc]sidechaincompress の順）
+        bgm_pos = fc.find("[bgm]")
+        sc_pos = fc.find("sidechaincompress")
+        assert bgm_pos != -1 and sc_pos != -1
+        assert bgm_pos < sc_pos, (
+            f"[bgm] (pos={bgm_pos}) が sidechaincompress (pos={sc_pos}) より後にある"
+        )
+
+    def test_7_ducking_on_asplit_present(self) -> None:
+        """ducking ON → asplit が filter_complex に含まれる（本編を2分岐・DC-AS-006）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+        bgm_clip = _make_bgm_clip(directive=_VALID_BGM_DIRECTIVE_DUCKING)
+        plan = build_plan(ranges, probe, RenderOptions(), bgm=bgm_clip)  # type: ignore[call-arg]
+        assert "asplit" in plan.filter_complex
+
+    def test_7_ducking_on_outa_bgm_in_ffmpeg_args(self) -> None:
+        """ducking ON でも audio_map_label == [outa_bgm]（観点7）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+        bgm_clip = _make_bgm_clip(directive=_VALID_BGM_DIRECTIVE_DUCKING)
+        plan = build_plan(ranges, probe, RenderOptions(), bgm=bgm_clip)  # type: ignore[call-arg]
+        assert "[outa_bgm]" in plan.ffmpeg_args
+
+
+# ---------------------------------------------------------------------------
+# 観点8: 既存音声パイプ後段に BGM 段が乗る（denoise/loudness との連携）
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPlanBgmAfterAudioPipe:
+    """denoise/loudness 後段に BGM 段が乗り、終端ラベルを正しく参照する（観点8）。"""
+
+    def _build_with_denoise_and_bgm(self) -> RenderPlan:  # type: ignore[name-defined]
+        """denoise + BGM の build_plan ヘルパー。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+        bgm_clip = _make_bgm_clip()
+        return build_plan(
+            ranges,
+            probe,
+            RenderOptions(),
+            denoise=_VALID_AFFTDN_DIRECTIVE,
+            bgm=bgm_clip,  # type: ignore[call-arg]
+        )
+
+    def _build_with_loudness_and_bgm(self) -> RenderPlan:  # type: ignore[name-defined]
+        """loudness + BGM の build_plan ヘルパー。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+        bgm_clip = _make_bgm_clip()
+        return build_plan(
+            ranges,
+            probe,
+            RenderOptions(),
+            loudness=_VALID_PEAK_DIRECTIVE,
+            bgm=bgm_clip,  # type: ignore[call-arg]
+        )
+
+    def test_8_denoise_then_bgm_audio_map_label_outa_bgm(self) -> None:
+        """denoise あり + BGM → audio_map_label == [outa_bgm]（観点8）。"""
+        plan = self._build_with_denoise_and_bgm()
+        assert "[outa_bgm]" in plan.ffmpeg_args
+
+    def test_8_denoise_then_bgm_afftdn_present_in_filter(self) -> None:
+        """denoise あり + BGM → afftdn が filter_complex に含まれる（観点8）。"""
+        plan = self._build_with_denoise_and_bgm()
+        assert "afftdn" in plan.filter_complex
+
+    def test_8_denoise_then_bgm_main_fmt_uses_outa_dn(self) -> None:
+        """denoise あり + BGM → [main_fmt] は [outa_dn] を aformat した系統（観点8）。
+
+        BGM 段の本編入力は denoise 終端 [outa_dn] を aformat したものになる。
+        [outa_dn] または [outa_dn] 後に aformat されたラベルが main_fmt として
+        filter_complex に現れることを確認する。
+        """
+        plan = self._build_with_denoise_and_bgm()
+        fc = plan.filter_complex
+        # [outa_dn] が filter に含まれる
+        assert "[outa_dn]" in fc
+        # [main_fmt] が filter に含まれる（aformat の先頭入力として [outa_dn] 参照）
+        assert "main_fmt" in fc
+        # [outa_dn] が main_fmt の前に出現する（正しい接続順）
+        dn_pos = fc.find("[outa_dn]")
+        fmt_pos = fc.find("main_fmt")
+        assert dn_pos < fmt_pos, (
+            f"[outa_dn] (pos={dn_pos}) が main_fmt (pos={fmt_pos}) より後"
+        )
+
+    def test_8_loudness_then_bgm_audio_map_label_outa_bgm(self) -> None:
+        """loudness あり + BGM → audio_map_label == [outa_bgm]（観点8）。"""
+        plan = self._build_with_loudness_and_bgm()
+        assert "[outa_bgm]" in plan.ffmpeg_args
+
+    def test_8_loudness_then_bgm_outa_ln_present_in_filter(self) -> None:
+        """loudness あり + BGM → [outa_ln] が filter_complex に含まれる（観点8）。"""
+        plan = self._build_with_loudness_and_bgm()
+        assert "[outa_ln]" in plan.filter_complex
+
+
+# ---------------------------------------------------------------------------
+# 観点9: 後方互換（BGM なしで既存 filter_complex と完全一致・ADR-B7）
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPlanBgmBackwardCompat:
+    """bgm=None のとき既存 filter_complex が変わらない（観点9・ADR-B7）。"""
+
+    def test_9_bgm_none_filter_complex_unchanged(self) -> None:
+        """bgm=None → filter_complex が BGM 段なし従来形式と完全一致（ADR-B7）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+        # BGM なし（デフォルト）
+        plan_no_bgm = build_plan(ranges, probe, RenderOptions())
+        # bgm=None 明示
+        plan_bgm_none = build_plan(ranges, probe, RenderOptions(), bgm=None)  # type: ignore[call-arg]
+        assert plan_no_bgm.filter_complex == plan_bgm_none.filter_complex
+
+    def test_9_bgm_none_no_outa_bgm_in_filter(self) -> None:
+        """bgm=None → [outa_bgm] が filter_complex に含まれない（ADR-B7）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+        plan = build_plan(ranges, probe, RenderOptions())
+        assert "[outa_bgm]" not in plan.filter_complex
+
+    def test_9_bgm_none_bgm_source_is_none(self) -> None:
+        """bgm=None → RenderPlan.bgm_source is None（ADR-B7）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+        plan = build_plan(ranges, probe, RenderOptions())
+        assert plan.bgm_source is None  # type: ignore[attr-defined]
+
+    def test_9_bgm_none_no_alimiter_in_filter(self) -> None:
+        """bgm=None → alimiter が filter_complex に含まれない（BGM 段なし確認・ADR-B7）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+        plan = build_plan(ranges, probe, RenderOptions())
+        assert "alimiter" not in plan.filter_complex
+
+
+# ---------------------------------------------------------------------------
+# 観点10: 本編無音（has_main_audio=False）+ BGM（ADR-B5-r2・DC-AS-004）
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPlanBgmNoMainAudio:
+    """本編無音 + BGM → BGM 単独系統で has_audio_output=True（観点10・ADR-B5-r2）。"""
+
+    def _build_no_main_audio_with_bgm(self) -> RenderPlan:  # type: ignore[name-defined]
+        """本編音声なし（audio_count=0）+ BGM の build_plan ヘルパー。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=0, bit_rate=None)
+        bgm_clip = _make_bgm_clip()
+        return build_plan(ranges, probe, RenderOptions(), bgm=bgm_clip)  # type: ignore[call-arg]
+
+    def test_10_no_main_audio_with_bgm_has_audio_map(self) -> None:
+        """本編無音 + BGM → -map [outa_bgm] が ffmpeg_args に含まれる（観点10）。"""
+        plan = self._build_no_main_audio_with_bgm()
+        assert "[outa_bgm]" in plan.ffmpeg_args
+
+    def test_10_no_main_audio_with_bgm_no_amix(self) -> None:
+        """本編無音 + BGM → amix が filter_complex に含まれない（BGM 単独系統・ADR-B5-r2）。"""
+        plan = self._build_no_main_audio_with_bgm()
+        # 本編音声がないため amix は不要（BGM が唯一の音声）
+        assert "amix" not in plan.filter_complex
+
+    def test_10_no_main_audio_with_bgm_concat_a0(self) -> None:
+        """本編無音 + BGM → concat は a=0（映像のみ concat・ADR-B5-r2）。"""
+        plan = self._build_no_main_audio_with_bgm()
+        assert "a=0" in plan.filter_complex
+
+    def test_10_no_main_audio_with_bgm_outa_bgm_in_filter(self) -> None:
+        """本編無音 + BGM → [outa_bgm] が filter_complex に含まれる（ADR-B5-r2）。"""
+        plan = self._build_no_main_audio_with_bgm()
+        assert "[outa_bgm]" in plan.filter_complex
+
+
+# ---------------------------------------------------------------------------
+# 観点11: denoise/loudness スキップ警告は has_main_audio=False で出る（DC-AM-004）
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPlanBgmAudioWarnings:
+    """denoise/loudness スキップ警告の出現条件を検証する（観点11・DC-AM-004）。"""
+
+    def test_11_no_main_audio_with_denoise_adds_warning(self) -> None:
+        """has_main_audio=False + denoise → スキップ警告が出る（DC-AM-004）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=0, bit_rate=None)
+        bgm_clip = _make_bgm_clip()
+        plan = build_plan(
+            ranges,
+            probe,
+            RenderOptions(),
+            denoise=_VALID_AFFTDN_DIRECTIVE,
+            bgm=bgm_clip,  # type: ignore[call-arg]
+        )
+        warning_text = " ".join(plan.warnings)
+        assert "denoise" in warning_text or "スキップ" in warning_text
+
+    def test_11_no_main_audio_with_loudness_adds_warning(self) -> None:
+        """has_main_audio=False + loudness → スキップ警告が出る（DC-AM-004）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=0, bit_rate=None)
+        bgm_clip = _make_bgm_clip()
+        plan = build_plan(
+            ranges,
+            probe,
+            RenderOptions(),
+            loudness=_VALID_PEAK_DIRECTIVE,
+            bgm=bgm_clip,  # type: ignore[call-arg]
+        )
+        warning_text = " ".join(plan.warnings)
+        assert "loudness" in warning_text or "スキップ" in warning_text
+
+    def test_11_has_main_audio_with_bgm_no_skip_warning(self) -> None:
+        """has_main_audio=True + BGM → denoise/loudness スキップ警告は出ない（DC-AM-004）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+        bgm_clip = _make_bgm_clip()
+        # denoise/loudness なし・BGM ありで警告がないこと
+        plan = build_plan(ranges, probe, RenderOptions(), bgm=bgm_clip)  # type: ignore[call-arg]
+        warning_text = " ".join(plan.warnings)
+        # BGM あっても音声スキップ警告は出ない（has_main_audio=True）
+        assert "denoise スキップ" not in warning_text
+        assert "loudness スキップ" not in warning_text
+
+
+# ===========================================================================
+# レビュー指摘テスト（CR L-1/L-2/M-1、SR M-1/I-1/M-3）
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# 観点12: resolve_bgm の ValidationError パス（CR L-2/M-1）
+# ---------------------------------------------------------------------------
+
+
+class TestResolveBgmValidationError:
+    """resolve_bgm に不正 metadata を持つ Timeline を渡したとき INVALID_INPUT が送出される（CR L-2/M-1）。"""
+
+    def test_12_volume_db_string_raises_invalid_input(self) -> None:
+        """volume_db が文字列型 → resolve_bgm が INVALID_INPUT を送出する（CR L-2）。"""
+        from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
+
+        bad_directive = dict(_VALID_BGM_DIRECTIVE, volume_db="not_a_number")
+        tl = _make_bgm_otio_timeline(directive=bad_directive)
+        with pytest.raises(ClipwrightError) as exc_info:
+            resolve_bgm(tl)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_12_missing_required_tool_field_raises_invalid_input(self) -> None:
+        """必須フィールド tool 欠落（kind="bgm" は残す） → resolve_bgm が INVALID_INPUT を送出する（CR L-2）。
+
+        kind="bgm" は存在するため BGM クリップとして収集されるが、
+        tool フィールド欠落で BgmDirective バリデーションが失敗する。
+        """
+        from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
+
+        bad_directive = {k: v for k, v in _VALID_BGM_DIRECTIVE.items() if k != "tool"}
+        tl = _make_bgm_otio_timeline(directive=bad_directive)
+        with pytest.raises(ClipwrightError) as exc_info:
+            resolve_bgm(tl)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_12_unknown_extra_field_raises_invalid_input(self) -> None:
+        """未知フィールド（extra=forbid） → resolve_bgm が INVALID_INPUT を送出する（CR M-1）。"""
+        from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
+
+        bad_directive = dict(_VALID_BGM_DIRECTIVE, unknown_evil_field="x")
+        tl = _make_bgm_otio_timeline(directive=bad_directive)
+        with pytest.raises(ClipwrightError) as exc_info:
+            resolve_bgm(tl)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_12_volume_db_inf_raises_invalid_input(self) -> None:
+        """volume_db=inf → resolve_bgm が INVALID_INPUT を送出する（CR L-2）。"""
+        import math
+
+        from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
+
+        bad_directive = dict(_VALID_BGM_DIRECTIVE, volume_db=math.inf)
+        tl = _make_bgm_otio_timeline(directive=bad_directive)
+        with pytest.raises(ClipwrightError) as exc_info:
+            resolve_bgm(tl)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+
+# ---------------------------------------------------------------------------
+# 観点13: DuckingDirective の inf/nan・範囲外バリデーション（SR M-1）
+# ---------------------------------------------------------------------------
+
+
+class TestResolveBgmDuckingDirectiveValidation:
+    """DuckingDirective に inf/nan・範囲外値を持つ Timeline を resolve_bgm に渡したとき INVALID_INPUT が送出される（SR M-1）。"""
+
+    def test_13_ducking_threshold_inf_raises_invalid_input(self) -> None:
+        """ducking.threshold=inf → resolve_bgm が INVALID_INPUT を送出する（SR M-1）。"""
+        import math
+
+        from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
+
+        bad_directive = dict(
+            _VALID_BGM_DIRECTIVE,
+            ducking={"enabled": True, "threshold": math.inf, "ratio": 4.0},
+        )
+        tl = _make_bgm_otio_timeline(directive=bad_directive)
+        with pytest.raises(ClipwrightError) as exc_info:
+            resolve_bgm(tl)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_13_ducking_threshold_nan_raises_invalid_input(self) -> None:
+        """ducking.threshold=nan → resolve_bgm が INVALID_INPUT を送出する（SR M-1）。"""
+        import math
+
+        from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
+
+        bad_directive = dict(
+            _VALID_BGM_DIRECTIVE,
+            ducking={"enabled": False, "threshold": math.nan, "ratio": 4.0},
+        )
+        tl = _make_bgm_otio_timeline(directive=bad_directive)
+        with pytest.raises(ClipwrightError) as exc_info:
+            resolve_bgm(tl)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_13_ducking_threshold_zero_raises_invalid_input(self) -> None:
+        """ducking.threshold=0.0（gt=0.0 制約違反） → resolve_bgm が INVALID_INPUT を送出する（SR M-1）。"""
+        from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
+
+        bad_directive = dict(
+            _VALID_BGM_DIRECTIVE,
+            ducking={"enabled": False, "threshold": 0.0, "ratio": 4.0},
+        )
+        tl = _make_bgm_otio_timeline(directive=bad_directive)
+        with pytest.raises(ClipwrightError) as exc_info:
+            resolve_bgm(tl)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_13_ducking_threshold_over_one_raises_invalid_input(self) -> None:
+        """ducking.threshold=1.1（le=1.0 制約違反） → resolve_bgm が INVALID_INPUT を送出する（SR M-1）。"""
+        from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
+
+        bad_directive = dict(
+            _VALID_BGM_DIRECTIVE,
+            ducking={"enabled": False, "threshold": 1.1, "ratio": 4.0},
+        )
+        tl = _make_bgm_otio_timeline(directive=bad_directive)
+        with pytest.raises(ClipwrightError) as exc_info:
+            resolve_bgm(tl)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_13_ducking_ratio_zero_raises_invalid_input(self) -> None:
+        """ducking.ratio=0.9（ge=1.0 制約違反） → resolve_bgm が INVALID_INPUT を送出する（SR M-1）。"""
+        from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
+
+        bad_directive = dict(
+            _VALID_BGM_DIRECTIVE,
+            ducking={"enabled": False, "threshold": 0.05, "ratio": 0.9},
+        )
+        tl = _make_bgm_otio_timeline(directive=bad_directive)
+        with pytest.raises(ClipwrightError) as exc_info:
+            resolve_bgm(tl)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_13_ducking_ratio_over_twenty_raises_invalid_input(self) -> None:
+        """ducking.ratio=20.1（le=20.0 制約違反） → resolve_bgm が INVALID_INPUT を送出する（SR M-1）。"""
+        from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
+
+        bad_directive = dict(
+            _VALID_BGM_DIRECTIVE,
+            ducking={"enabled": False, "threshold": 0.05, "ratio": 20.1},
+        )
+        tl = _make_bgm_otio_timeline(directive=bad_directive)
+        with pytest.raises(ClipwrightError) as exc_info:
+            resolve_bgm(tl)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_13_ducking_ratio_nan_raises_invalid_input(self) -> None:
+        """ducking.ratio=nan → resolve_bgm が INVALID_INPUT を送出する（SR M-1）。"""
+        import math
+
+        from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
+
+        bad_directive = dict(
+            _VALID_BGM_DIRECTIVE,
+            ducking={"enabled": False, "threshold": 0.05, "ratio": math.nan},
+        )
+        tl = _make_bgm_otio_timeline(directive=bad_directive)
+        with pytest.raises(ClipwrightError) as exc_info:
+            resolve_bgm(tl)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_13_valid_ducking_defaults_resolve_ok(self) -> None:
+        """既定値 threshold=0.05/ratio=4.0 → resolve_bgm が正常終了する（SR M-1 正常系）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            BgmClip,
+            resolve_bgm,
+        )
+
+        tl = _make_bgm_otio_timeline(directive=_VALID_BGM_DIRECTIVE)
+        result = resolve_bgm(tl)
+        assert isinstance(result, BgmClip)
+        assert result.directive.ducking.threshold == 0.05
+        assert result.directive.ducking.ratio == 4.0
+
+
+# ---------------------------------------------------------------------------
+# 観点14: BgmDirective.volume_db 範囲外バリデーション（SR I-1）
+# ---------------------------------------------------------------------------
+
+
+class TestBgmDirectiveVolumeDbRange:
+    """BgmDirective.volume_db の範囲外値が resolve_bgm で INVALID_INPUT になることを検証する（SR I-1）。"""
+
+    def test_14_volume_db_too_low_raises_invalid_input(self) -> None:
+        """volume_db=-200（ge=-60.0 制約違反） → resolve_bgm が INVALID_INPUT を送出する（SR I-1）。"""
+        from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
+
+        bad_directive = dict(_VALID_BGM_DIRECTIVE, volume_db=-200.0)
+        tl = _make_bgm_otio_timeline(directive=bad_directive)
+        with pytest.raises(ClipwrightError) as exc_info:
+            resolve_bgm(tl)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_14_volume_db_too_high_raises_invalid_input(self) -> None:
+        """volume_db=100（le=20.0 制約違反） → resolve_bgm が INVALID_INPUT を送出する（SR I-1）。"""
+        from clipwright_render.plan import resolve_bgm  # type: ignore[attr-defined]
+
+        bad_directive = dict(_VALID_BGM_DIRECTIVE, volume_db=100.0)
+        tl = _make_bgm_otio_timeline(directive=bad_directive)
+        with pytest.raises(ClipwrightError) as exc_info:
+            resolve_bgm(tl)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_14_volume_db_boundary_low_ok(self) -> None:
+        """volume_db=-60.0（境界値・ge=-60 ちょうど） → resolve_bgm が正常終了する（SR I-1 正常系）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            BgmClip,
+            resolve_bgm,
+        )
+
+        boundary_directive = dict(_VALID_BGM_DIRECTIVE, volume_db=-60.0)
+        tl = _make_bgm_otio_timeline(directive=boundary_directive)
+        result = resolve_bgm(tl)
+        assert isinstance(result, BgmClip)
+        assert result.directive.volume_db == -60.0
+
+    def test_14_volume_db_boundary_high_ok(self) -> None:
+        """volume_db=20.0（境界値・le=20 ちょうど） → resolve_bgm が正常終了する（SR I-1 正常系）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            BgmClip,
+            resolve_bgm,
+        )
+
+        boundary_directive = dict(_VALID_BGM_DIRECTIVE, volume_db=20.0)
+        tl = _make_bgm_otio_timeline(directive=boundary_directive)
+        result = resolve_bgm(tl)
+        assert isinstance(result, BgmClip)
+        assert result.directive.volume_db == 20.0
+
+
+# ---------------------------------------------------------------------------
+# 観点15: fade_out_sec/fade_in_sec > main_dur ガード（SR M-3）
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPlanBgmFadeGuard:
+    """fade_out_sec/fade_in_sec が本編尺を超える場合に INVALID_INPUT が送出されることを検証する（SR M-3）。"""
+
+    def _build_with_fade(
+        self,
+        fade_in_sec: float = 0.0,
+        fade_out_sec: float = 0.0,
+        main_duration: float = 5.0,
+    ) -> None:
+        """指定 fade 設定で build_plan を実行するヘルパー（例外伝播を呼び出し側でハンドル）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        d = dict(
+            _VALID_BGM_DIRECTIVE, fade_in_sec=fade_in_sec, fade_out_sec=fade_out_sec
+        )
+        tl = _make_single_source_timeline_with_audio(duration=main_duration)
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+        bgm_clip = _make_bgm_clip(directive=d, timeline_duration_sec=main_duration)
+        build_plan(ranges, probe, RenderOptions(), bgm=bgm_clip)  # type: ignore[call-arg]
+
+    def test_15_fade_out_exceeds_main_dur_raises_invalid_input(self) -> None:
+        """fade_out_sec > main_dur → build_plan が INVALID_INPUT を送出する（SR M-3）。"""
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._build_with_fade(fade_out_sec=10.0, main_duration=5.0)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_15_fade_in_exceeds_main_dur_raises_invalid_input(self) -> None:
+        """fade_in_sec > main_dur → build_plan が INVALID_INPUT を送出する（SR M-3）。"""
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._build_with_fade(fade_in_sec=6.0, main_duration=5.0)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_15_fade_out_error_message_contains_fade_out(self) -> None:
+        """fade_out_sec 超過エラーの message に "fade_out" が含まれる（NR-L-3: どちらが超過したか区別）。"""
+        # Arrange / Act
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._build_with_fade(fade_out_sec=10.0, main_duration=5.0)
+        # Assert: fade_out_sec 超過であることが message から識別できる
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+        assert "fade_out" in exc_info.value.message
+
+    def test_15_fade_in_error_message_contains_fade_in(self) -> None:
+        """fade_in_sec 超過エラーの message に "fade_in" が含まれる（NR-L-3: どちらが超過したか区別）。"""
+        # Arrange / Act
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._build_with_fade(fade_in_sec=6.0, main_duration=5.0)
+        # Assert: fade_in_sec 超過であることが message から識別できる
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+        assert "fade_in" in exc_info.value.message
+
+    def test_15_fade_out_equals_main_dur_ok(self) -> None:
+        """fade_out_sec == main_dur（ちょうど） → build_plan が正常終了する（SR M-3 境界値）。"""
+        self._build_with_fade(fade_out_sec=5.0, main_duration=5.0)
+
+    def test_15_fade_in_equals_main_dur_ok(self) -> None:
+        """fade_in_sec == main_dur（ちょうど） → build_plan が正常終了する（SR M-3 境界値）。"""
+        self._build_with_fade(fade_in_sec=5.0, main_duration=5.0)
+
+    def test_15_fade_zero_is_ok(self) -> None:
+        """fade_in_sec=0・fade_out_sec=0 → build_plan が正常終了し afade が含まれない（従来動作）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        d = dict(_VALID_BGM_DIRECTIVE, fade_in_sec=0.0, fade_out_sec=0.0)
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+        bgm_clip = _make_bgm_clip(directive=d)
+        plan = build_plan(ranges, probe, RenderOptions(), bgm=bgm_clip)  # type: ignore[call-arg]
+        assert "afade" not in plan.filter_complex
+
+    def test_15_fade_out_within_main_dur_ok_afade_out_present(self) -> None:
+        """fade_out_sec < main_dur → build_plan が正常終了し afade=t=out が含まれる（従来動作）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        d = dict(_VALID_BGM_DIRECTIVE, fade_out_sec=2.0)
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+        bgm_clip = _make_bgm_clip(directive=d)
+        plan = build_plan(ranges, probe, RenderOptions(), bgm=bgm_clip)  # type: ignore[call-arg]
+        assert "afade=t=out" in plan.filter_complex

@@ -5,6 +5,8 @@
     inspect_media 呼び出し・MediaInfo→ProbeInfo アダプタ変換
   - render_timeline(timeline, source, output, options, dry_run) のオーケストレーション
     入力検証・dry_run 経路・実行経路・エラー伝播
+  - BGM オーケストレーション拡張（§7 ADR-B4-r2/B5-r2/B6-r2/B8）
+    resolve_bgm 呼び出し・build_plan bgm 受け渡し・-stream_loop -i 並び検証
 
 inspect_media は clipwright_render.render.inspect_media をモックして検証する。
 process.run は ffmpeg 呼び出し専用に縮小して patch する。
@@ -2094,3 +2096,683 @@ class TestMultiSourceDryRun:
         assert result["data"]["segment_count"] == 2
         assert "total_duration_seconds" in result["data"]
         assert abs(result["data"]["total_duration_seconds"] - 5.0) < 0.01
+
+
+# ---------------------------------------------------------------------------
+# BGM オーケストレーション拡張テスト（§7 ADR-B4-r2 / B5-r2 / B6-r2 / B8）
+# ---------------------------------------------------------------------------
+# plan.resolve_bgm / plan.BgmClip / plan.build_plan(bgm=...) / RenderPlan.bgm_source
+# inspect_media / resolve_tool / run / plan.resolve_bgm / plan.build_plan はすべてモック。
+# 実 ffmpeg/ffprobe バイナリは一切呼ばない。
+# ---------------------------------------------------------------------------
+
+
+def _make_bgm_otio_file(
+    main_clips: list[tuple[str, float, float]],
+    bgm_source: str,
+    bgm_duration: float,
+    tmp_path: Path,
+) -> Path:
+    """A1 本編 + A2 BGM クリップを持つ OTIO タイムラインを生成して書き出すヘルパー。
+
+    A2 AudioTrack の BGM クリップに metadata["clipwright"]["kind"]=="bgm" を付与する。
+    bgm_directive は最小限（volume_db=-6.0, fade_in_sec=0.0, fade_out_sec=0.0）。
+    """
+    import opentimelineio as otio
+
+    # Video トラック + A1 本編 Audio トラック
+    v_track = otio.schema.Track(kind=otio.schema.TrackKind.Video)
+    a1_track = otio.schema.Track(kind=otio.schema.TrackKind.Audio, name="A1")
+    for src, start, dur in main_clips:
+        clip = otio.schema.Clip()
+        clip.media_reference = otio.schema.ExternalReference(target_url=src)
+        clip.source_range = _tr(start, dur)
+        v_track.append(clip)
+        a1_clip = otio.schema.Clip()
+        a1_clip.media_reference = otio.schema.ExternalReference(target_url=src)
+        a1_clip.source_range = _tr(start, dur)
+        a1_track.append(a1_clip)
+
+    # A2 BGM Audio トラック
+    a2_track = otio.schema.Track(kind=otio.schema.TrackKind.Audio, name="A2")
+    bgm_clip = otio.schema.Clip()
+    bgm_clip.media_reference = otio.schema.ExternalReference(target_url=bgm_source)
+    bgm_clip.source_range = _tr(0.0, bgm_duration)
+    bgm_clip.metadata["clipwright"] = {
+        "tool": "clipwright-bgm",
+        "version": "0.1.0",
+        "kind": "bgm",
+        "volume_db": -6.0,
+        "fade_in_sec": 0.0,
+        "fade_out_sec": 0.0,
+        "ducking": {"enabled": False, "threshold": 0.05, "ratio": 4.0},
+    }
+    a2_track.append(bgm_clip)
+
+    tl = otio.schema.Timeline()
+    tl.tracks.append(v_track)
+    tl.tracks.append(a1_track)
+    tl.tracks.append(a2_track)
+
+    tl_path = tmp_path / "tl_with_bgm.otio"
+    otio.adapters.write_to_file(tl, str(tl_path))
+    return tl_path
+
+
+class TestBgmResolveBgmCalled:
+    """観点1: BGM クリップありの timeline で resolve_bgm が呼ばれ build_plan に bgm= が渡る。
+
+    ADR-B4-r2: _render_inner は resolve_bgm(tl) を呼び BgmClip を取得する。
+    ADR-B5-r2: build_plan に bgm=BgmClip を渡す。
+    """
+
+    def test_resolve_bgm_called_and_bgm_passed_to_build_plan(
+        self, tmp_path: Path
+    ) -> None:
+        """BGM クリップありの timeline で resolve_bgm が1回呼ばれ、
+        build_plan の bgm 引数に BgmClip が渡ること（ADR-B4-r2/B5-r2）。
+
+        未実装のため render.resolve_bgm が AttributeError で失敗すること（Red）。
+        """
+        from clipwright_render.render import render_timeline
+
+        src = str(tmp_path / "main.mp4")
+        bgm = str(tmp_path / "bgm.mp3")
+        Path(src).touch()
+        Path(bgm).touch()
+
+        tl_path = _make_bgm_otio_file(
+            [(src, 0.0, 5.0)], bgm_source=bgm, bgm_duration=30.0, tmp_path=tmp_path
+        )
+        output = str(tmp_path / "out.mp4")
+
+        resolve_bgm_calls: list[Any] = []
+        build_plan_bgm_args: list[Any] = []
+
+        fake_bgm_clip_sentinel = object()  # BgmClip 代替センチネル
+
+        def _fake_resolve_bgm(tl: Any) -> Any:
+            resolve_bgm_calls.append(tl)
+            return fake_bgm_clip_sentinel
+
+        from clipwright_render.plan import RenderPlan
+
+        def _fake_build_plan(*args: Any, **kwargs: Any) -> RenderPlan:
+            build_plan_bgm_args.append(kwargs.get("bgm"))
+            return RenderPlan(
+                filter_complex=(
+                    "[0:v]trim=0:5,setpts=PTS-STARTPTS[v0];[v0]concat=n=1:v=1:a=0[outv]"
+                ),
+                ffmpeg_args=["-filter_complex", "...", "-map", "[outv]"],
+                segment_count=1,
+                total_duration_seconds=5.0,
+                input_sources=[src],
+            )
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=src),
+            ),
+            patch(
+                "clipwright_render.render.resolve_bgm",
+                side_effect=_fake_resolve_bgm,
+            ),
+            patch(
+                "clipwright_render.render.build_plan",
+                side_effect=_fake_build_plan,
+            ),
+        ):
+            render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(),
+                dry_run=True,
+            )
+
+        # resolve_bgm が1回呼ばれること
+        assert len(resolve_bgm_calls) == 1
+        # build_plan に bgm= が渡ること
+        assert len(build_plan_bgm_args) == 1
+        assert build_plan_bgm_args[0] is fake_bgm_clip_sentinel
+
+
+class TestBgmFfmpegInputOrder:
+    """観点2: ffmpeg -i 並びが [*input_sources, -stream_loop, -1, -i, bgm_source] の順。
+
+    ADR-B6-r2/DC-AS-005/B5-r2: BGM は末尾・-stream_loop が BGM -i の直前。
+    単一ソース＋BGM → -i が2つ・-stream_loop 1つ。
+    """
+
+    def test_bgm_input_appended_after_main_sources_with_stream_loop(
+        self, tmp_path: Path
+    ) -> None:
+        """単一ソース＋BGM の ffmpeg コマンドで -i が2つ、
+        2番目 -i の直前に -stream_loop -1 がある（ADR-B6-r2）。
+
+        未実装のため RenderPlan.bgm_source 属性が存在せず TypeError で
+        失敗すること（Red）。
+        """
+        from clipwright_render.plan import RenderPlan
+        from clipwright_render.render import render_timeline
+
+        src = str(tmp_path / "main.mp4")
+        bgm = str(tmp_path / "bgm.mp3")
+        Path(src).touch()
+        Path(bgm).touch()
+        (tmp_path / "out.mp4").touch()
+
+        tl_path = _make_bgm_otio_file(
+            [(src, 0.0, 5.0)], bgm_source=bgm, bgm_duration=30.0, tmp_path=tmp_path
+        )
+        output = str(tmp_path / "out.mp4")
+
+        # build_plan が bgm_source を含む RenderPlan を返すようにモック
+        # bgm_source フィールドは未実装のため type: ignore[call-arg] を付ける
+        fake_plan = RenderPlan(
+            filter_complex=(
+                "[0:v]trim=0:5,setpts=PTS-STARTPTS[v0];"
+                "[v0]concat=n=1:v=1:a=1[outv][outa];"
+                "[1:a]aformat=sample_rates=48000:channel_layouts=stereo,"
+                "atrim=0:5,asetpts=PTS-STARTPTS,volume=-6dB[bgm];"
+                "[main_fmt][bgm]amix=inputs=2:normalize=0,alimiter=limit=1.0[outa_bgm]"
+            ),
+            ffmpeg_args=[
+                "-filter_complex",
+                "...",
+                "-map",
+                "[outv]",
+                "-map",
+                "[outa_bgm]",
+            ],
+            segment_count=1,
+            total_duration_seconds=5.0,
+            input_sources=[src],
+            bgm_source=bgm,  # type: ignore[call-arg]
+        )
+
+        captured_cmd: list[str] = []
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            captured_cmd.extend(cmd)
+            return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=src),
+            ),
+            patch(
+                "clipwright_render.render.resolve_bgm",
+                return_value=object(),  # BgmClip センチネル
+            ),
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
+            patch("clipwright_render.render.build_plan", return_value=fake_plan),
+            patch("clipwright_render.render.run", side_effect=_fake_run),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(overwrite=True),
+            )
+
+        assert result["ok"] is True, f"失敗: {result.get('error')}"
+
+        # -i の出現インデックスを列挙
+        i_indices = [i for i, v in enumerate(captured_cmd) if v == "-i"]
+        assert len(i_indices) == 2, f"-i は2つ期待: {captured_cmd}"
+
+        # 1番目 -i は src（本編ソース）
+        assert captured_cmd[i_indices[0] + 1] == src
+
+        # 2番目 -i は bgm、その直前に "-stream_loop" "-1" が並ぶ（ADR-B6-r2）
+        bgm_i_pos = i_indices[1]
+        assert captured_cmd[bgm_i_pos + 1] == bgm, (
+            "2番目 -i の次は bgm_source でなければならない"
+        )
+        assert bgm_i_pos >= 2, "-stream_loop -1 の前置スペースが足りない"
+        assert captured_cmd[bgm_i_pos - 2] == "-stream_loop", (
+            f"-stream_loop が BGM -i の2つ前にない: {captured_cmd}"
+        )
+        assert captured_cmd[bgm_i_pos - 1] == "-1", (
+            f"-1 が BGM -i の1つ前にない: {captured_cmd}"
+        )
+
+        # BGM index = len(input_sources) = 1（DC-AS-005 不変条件）
+        bgm_index = len(fake_plan.input_sources)
+        assert bgm_index == 1  # 単一ソース → BGM は index 1
+
+
+class TestBgmSourceBoundaryCheck:
+    """観点3/4: BGM ソースの境界検証（ADR-B8）。
+
+    観点3: BGM ソースが timeline ディレクトリ外 → PATH_NOT_ALLOWED
+    観点4: output == BGM ソース → PATH_NOT_ALLOWED（全ソース _check_path_not_allowed）
+    """
+
+    def test_bgm_source_outside_timeline_dir_raises_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """BGM ソースが timeline ディレクトリ外 → PATH_NOT_ALLOWED（ADR-B8）。
+
+        _check_source_within_timeline_dir が BGM ソースにも適用されること。
+        未実装のため render_timeline が PATH_NOT_ALLOWED を返さず ok=True または
+        別エラーとなること（Red）。
+        """
+        from clipwright_render.render import render_timeline
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+
+        src = str(project_dir / "main.mp4")
+        bgm_outside = str(outside_dir / "bgm.mp3")  # 境界外
+        Path(src).touch()
+        Path(bgm_outside).touch()
+
+        tl_path = _make_bgm_otio_file(
+            [(src, 0.0, 5.0)],
+            bgm_source=bgm_outside,
+            bgm_duration=30.0,
+            tmp_path=project_dir,
+        )
+        output = str(project_dir / "out.mp4")
+
+        with patch(
+            "clipwright_render.render.inspect_media",
+            return_value=_make_media_info(path=src),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(),
+            )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
+
+    def test_output_equals_bgm_source_raises_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """output == BGM ソース → PATH_NOT_ALLOWED（ADR-B8・非破壊）。
+
+        _check_path_not_allowed が BGM ソースにも適用されること。
+        未実装のため render_timeline が PATH_NOT_ALLOWED を返さず ok=True または
+        別エラーとなること（Red）。
+        """
+        from clipwright_render.render import render_timeline
+
+        src = str(tmp_path / "main.mp4")
+        bgm = str(tmp_path / "bgm.mp3")
+        Path(src).touch()
+        Path(bgm).touch()
+
+        tl_path = _make_bgm_otio_file(
+            [(src, 0.0, 5.0)], bgm_source=bgm, bgm_duration=30.0, tmp_path=tmp_path
+        )
+        # output == bgm（BGM ソースと同じパス → 非破壊違反）
+        output = bgm
+
+        with patch(
+            "clipwright_render.render.inspect_media",
+            return_value=_make_media_info(path=src),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(),
+            )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
+
+
+class TestBgmSourceNotFound:
+    """観点5: BGM ソース不在 → FILE_NOT_FOUND・basename のみ・絶対パス非露出（CWE-209）。
+
+    ADR-B8: BGM ソースにも存在確認を適用する。
+    """
+
+    def test_bgm_source_not_found_returns_file_not_found(self, tmp_path: Path) -> None:
+        """BGM ソースが存在しない → FILE_NOT_FOUND（ADR-B8）。
+
+        未実装のため render_timeline が FILE_NOT_FOUND を返さないことで失敗する（Red）。
+        """
+        from clipwright_render.render import render_timeline
+
+        src = str(tmp_path / "main.mp4")
+        bgm_missing = str(tmp_path / "missing_bgm.mp3")  # 存在しない
+        Path(src).touch()
+        # bgm_missing は作成しない
+
+        tl_path = _make_bgm_otio_file(
+            [(src, 0.0, 5.0)],
+            bgm_source=bgm_missing,
+            bgm_duration=30.0,
+            tmp_path=tmp_path,
+        )
+        output = str(tmp_path / "out.mp4")
+
+        with patch(
+            "clipwright_render.render.inspect_media",
+            return_value=_make_media_info(path=src),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(),
+            )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
+
+    def test_bgm_source_not_found_basename_only_in_message(
+        self, tmp_path: Path
+    ) -> None:
+        """BGM ソース不在エラーのメッセージに絶対パスが露出せず basename のみ（CWE-209）。
+
+        未実装のため basename のみの検証が通らないことで失敗する（Red）。
+        """
+        from clipwright_render.render import render_timeline
+
+        src = str(tmp_path / "main.mp4")
+        bgm_missing = str(tmp_path / "missing_bgm.mp3")
+        Path(src).touch()
+
+        tl_path = _make_bgm_otio_file(
+            [(src, 0.0, 5.0)],
+            bgm_source=bgm_missing,
+            bgm_duration=30.0,
+            tmp_path=tmp_path,
+        )
+        output = str(tmp_path / "out.mp4")
+
+        with patch(
+            "clipwright_render.render.inspect_media",
+            return_value=_make_media_info(path=src),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(),
+            )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
+        error_message: str = result["error"]["message"]
+        # 絶対パス（ディレクトリ部分）が露出していない
+        assert str(tmp_path) not in error_message
+        # basename は含まれる
+        assert "missing_bgm.mp3" in error_message
+
+
+class TestBgmBackwardCompat:
+    """観点6: BGM クリップ無し（resolve_bgm->None）-> 後方互換確認。
+
+    ADR-B7: BGM 段はクリップ有無で分岐し、なければ既存挙動を完全維持する。
+    - build_plan に bgm=None が渡る
+    - -i は input_sources のみ（bgm_source は None）
+    - -stream_loop なし
+    - dry_run summary が既存フォーマットと同じ
+    """
+
+    def test_no_bgm_build_plan_receives_bgm_none(self, tmp_path: Path) -> None:
+        """BGM クリップなし timeline では build_plan の bgm 引数が None（ADR-B7）。
+
+        未実装のため bgm=None が渡らないか、resolve_bgm 自体が ImportError で
+        失敗することで Red になること。
+        """
+        from clipwright_render.render import render_timeline
+
+        src = str(tmp_path / "main.mp4")
+        Path(src).touch()
+
+        # BGM なし timeline（通常の単一ソース）
+        tl_path = tmp_path / "tl.otio"
+        _write_timeline(tl_path, [_make_clip(src, 0.0, 5.0)])
+        output = str(tmp_path / "out.mp4")
+
+        build_plan_bgm_args: list[Any] = []
+
+        from clipwright_render.plan import RenderPlan
+
+        def _fake_build_plan(*args: Any, **kwargs: Any) -> RenderPlan:
+            build_plan_bgm_args.append(kwargs.get("bgm"))
+            return RenderPlan(
+                filter_complex=(
+                    "[0:v]trim=0:5,setpts=PTS-STARTPTS[v0];[v0]concat=n=1:v=1:a=0[outv]"
+                ),
+                ffmpeg_args=["-filter_complex", "...", "-map", "[outv]"],
+                segment_count=1,
+                total_duration_seconds=5.0,
+                input_sources=[src],
+            )
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=src),
+            ),
+            patch(
+                "clipwright_render.render.resolve_bgm",
+                return_value=None,
+            ),
+            patch(
+                "clipwright_render.render.build_plan",
+                side_effect=_fake_build_plan,
+            ),
+        ):
+            render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(),
+                dry_run=True,
+            )
+
+        assert len(build_plan_bgm_args) == 1
+        assert build_plan_bgm_args[0] is None
+
+    def test_no_bgm_ffmpeg_has_no_stream_loop(self, tmp_path: Path) -> None:
+        """BGM クリップなし -> ffmpeg コマンドに -stream_loop が含まれない（ADR-B7）。
+
+        未実装のため -stream_loop が除外されていないか、resolve_bgm が ImportError で
+        失敗することで Red になること。
+        """
+        from clipwright_render.plan import RenderPlan
+        from clipwright_render.render import render_timeline
+
+        src = str(tmp_path / "main.mp4")
+        Path(src).touch()
+        (tmp_path / "out.mp4").touch()
+
+        tl_path = tmp_path / "tl.otio"
+        _write_timeline(tl_path, [_make_clip(src, 0.0, 5.0)])
+        output = str(tmp_path / "out.mp4")
+
+        # bgm_source フィールドなし（既存 RenderPlan）
+        fake_plan = RenderPlan(
+            filter_complex=(
+                "[0:v]trim=0:5,setpts=PTS-STARTPTS[v0];[v0]concat=n=1:v=1:a=0[outv]"
+            ),
+            ffmpeg_args=["-filter_complex", "...", "-map", "[outv]"],
+            segment_count=1,
+            total_duration_seconds=5.0,
+            input_sources=[src],
+        )
+
+        captured_cmd: list[str] = []
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            captured_cmd.extend(cmd)
+            return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=src),
+            ),
+            patch(
+                "clipwright_render.render.resolve_bgm",
+                return_value=None,
+            ),
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
+            patch("clipwright_render.render.build_plan", return_value=fake_plan),
+            patch("clipwright_render.render.run", side_effect=_fake_run),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(overwrite=True),
+            )
+
+        assert result["ok"] is True, f"失敗: {result.get('error')}"
+        # -stream_loop が含まれない（BGM なし -> ADR-B7）
+        assert "-stream_loop" not in captured_cmd, (
+            f"-stream_loop が含まれるべきでないコマンドに含まれた: {captured_cmd}"
+        )
+        # -i は src のみ
+        i_indices = [i for i, v in enumerate(captured_cmd) if v == "-i"]
+        assert len(i_indices) == 1
+        assert captured_cmd[i_indices[0] + 1] == src
+
+    def test_no_bgm_dry_run_summary_unchanged(self, tmp_path: Path) -> None:
+        """BGM クリップなし -> dry_run summary が BGM 拡張前と同じフォーマット（ADR-B7）。
+
+        既存テスト test_dry_run_summary_contains_segment_count_and_duration と
+        同じ検証を BGM 拡張後も確認する後方互換テスト。
+        未実装のため resolve_bgm が ImportError で失敗することで Red になること。
+        """
+        from clipwright_render.render import render_timeline
+
+        src = str(tmp_path / "main.mp4")
+        Path(src).touch()
+
+        tl_path = tmp_path / "tl.otio"
+        _write_timeline(tl_path, [_make_clip(src, 0.0, 5.0)])
+        output = str(tmp_path / "out.mp4")
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=src, bit_rate=8_000_000),
+            ),
+            patch(
+                "clipwright_render.render.resolve_bgm",
+                return_value=None,
+            ),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(),
+                dry_run=True,
+            )
+
+        assert result["ok"] is True
+        assert "summary" in result
+        # segment_count が含まれること
+        assert "1" in result["summary"]
+        # data に segment_count と total_duration_seconds が含まれること
+        assert result["data"]["segment_count"] == 1
+        assert abs(result["data"]["total_duration_seconds"] - 5.0) < 0.01
+
+
+class TestBgmDryRun:
+    """観点7: dry_run（BGM あり）-> ok_result に filter_complex が返り run 非呼び出し。
+
+    ADR-B5-r2: dry_run 時は filter_complex（BGM 段含む）を data に返す。
+    run は呼ばれない。
+    """
+
+    def test_bgm_dry_run_returns_ok_and_no_run(self, tmp_path: Path) -> None:
+        """BGM ありの dry_run=True で ok=True が返り ffmpeg run が呼ばれない。
+
+        未実装のため resolve_bgm または RenderPlan.bgm_source が存在せず
+        AttributeError で失敗することで Red になること。
+        """
+        from clipwright_render.plan import RenderPlan
+        from clipwright_render.render import render_timeline
+
+        src = str(tmp_path / "main.mp4")
+        bgm = str(tmp_path / "bgm.mp3")
+        Path(src).touch()
+        Path(bgm).touch()
+
+        tl_path = _make_bgm_otio_file(
+            [(src, 0.0, 5.0)], bgm_source=bgm, bgm_duration=30.0, tmp_path=tmp_path
+        )
+        output = str(tmp_path / "out.mp4")
+
+        bgm_filter = (
+            "[0:v]trim=0:5,setpts=PTS-STARTPTS[v0];"
+            "[0:a]atrim=0:5,asetpts=PTS-STARTPTS,"
+            "aformat=sample_rates=48000:channel_layouts=stereo[a0];"
+            "[v0][a0]concat=n=1:v=1:a=1[outv][outa];"
+            "[outa]aformat=sample_rates=48000:channel_layouts=stereo[main_fmt];"
+            "[1:a]aformat=sample_rates=48000:channel_layouts=stereo,"
+            "atrim=0:5,asetpts=PTS-STARTPTS,volume=-6dB[bgm];"
+            "[main_fmt][bgm]amix=inputs=2:normalize=0,alimiter=limit=1.0[outa_bgm]"
+        )
+        fake_plan = RenderPlan(
+            filter_complex=bgm_filter,
+            ffmpeg_args=[
+                "-filter_complex",
+                bgm_filter,
+                "-map",
+                "[outv]",
+                "-map",
+                "[outa_bgm]",
+            ],
+            segment_count=1,
+            total_duration_seconds=5.0,
+            input_sources=[src],
+            bgm_source=bgm,  # type: ignore[call-arg]
+        )
+
+        run_called = False
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            nonlocal run_called
+            run_called = True
+            return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=src),
+            ),
+            patch(
+                "clipwright_render.render.resolve_bgm",
+                return_value=object(),  # BgmClip センチネル
+            ),
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
+            patch("clipwright_render.render.build_plan", return_value=fake_plan),
+            patch("clipwright_render.render.run", side_effect=_fake_run),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(),
+                dry_run=True,
+            )
+
+        assert result["ok"] is True, f"失敗: {result.get('error')}"
+        # run が呼ばれていない
+        assert run_called is False
+        # data に filter_complex が含まれる
+        assert "filter_complex" in result["data"]
+        # filter_complex に BGM 段（amix または alimiter または bgm ラベル）が含まれる
+        fc = result["data"]["filter_complex"]
+        assert "amix" in fc or "alimiter" in fc or "bgm" in fc.lower(), (
+            f"filter_complex に BGM 段が見当たらない: {fc}"
+        )

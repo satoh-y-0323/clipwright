@@ -30,8 +30,10 @@ from clipwright.otio_utils import get_clipwright_metadata, load_timeline
 from clipwright.process import resolve_tool, run
 
 from clipwright_render.plan import (
+    BgmClip,
     ProbeInfo,
     build_plan,
+    resolve_bgm,
     resolve_kept_ranges,
     unique_sources_in_order,
 )
@@ -252,11 +254,19 @@ def _render_inner(
     options: RenderOptions,
     dry_run: bool,
 ) -> dict[str, Any]:
-    """render の内部実装。ClipwrightError をそのまま送出する。"""
+    """render の内部実装。ClipwrightError をそのまま送出する。
+
+    BGM オーケストレーション拡張（§7 ADR-B4-r2/B5-r2/B6-r2/B8）:
+    - resolve_bgm(tl) で A2 Audio トラックの BGM クリップを検出する。
+    - BGM クリップがある場合、BGM ソースにも全ソース境界検証を適用する（ADR-B8）。
+    - build_plan に bgm=BgmClip を渡す（None でも従来同一・後方互換・ADR-B7）。
+    - plan.bgm_source がある場合、-i 並びに -stream_loop -1 を前置して
+      BGM を末尾に追加する（ADR-B6-r2/DC-AS-005）。
+    """
     timeline_path = Path(timeline)
     output_path = Path(output)
 
-    # --- 1. 入力検証 ---
+    # --- 1. 入力検証（timeline 存在確認）---
 
     # timeline ファイル存在確認
     if not timeline_path.exists():
@@ -265,6 +275,28 @@ def _render_inner(
             message=f"タイムラインファイルが見つかりません: {timeline_path.name}",
             hint="有効な .otio ファイルパスを指定してください。",
         )
+
+    # --- 2. OTIO 解析（先行）---
+    # BGM ソースと output の比較を出力拡張子チェックより先に行うため、
+    # OTIO 解析を前倒しにする（ADR-B8・output==BGM で PATH_NOT_ALLOWED 優先）。
+    tl = load_timeline(timeline)
+    ranges = resolve_kept_ranges(tl)
+
+    # 全ユニークソースを出現順で取得する（ADR-C9-r2）
+    # unique_sources_in_order は plan.py の単一情報源（ADR-C9-r2）
+    unique_sources = unique_sources_in_order(ranges)
+
+    # --- 2b. BGM クリップ検出（ADR-B4-r2）---
+    # A2 Audio トラックの kind=="bgm" クリップを検出する。
+    # 複数 BGM クリップは UNSUPPORTED_OPERATION（resolve_bgm が送出）。
+    bgm_clip: BgmClip | None = resolve_bgm(tl)
+
+    # BGM ソースと output の早期パス衝突確認（ADR-B8・PATH_NOT_ALLOWED 優先）
+    # output == BGM ソース は拡張子チェックより前に検出する（非破壊保証）。
+    if isinstance(bgm_clip, BgmClip):
+        _check_path_not_allowed(output_path, bgm_clip.source)
+
+    # --- 3. 出力の入力検証 ---
 
     # 出力拡張子ホワイトリスト確認（DC-AM-003）
     output_ext = output_path.suffix.lower()
@@ -293,15 +325,7 @@ def _render_inner(
             hint="出力先ディレクトリを先に作成してから再実行してください。",
         )
 
-    # --- 2. OTIO 解析 ---
-    tl = load_timeline(timeline)
-    ranges = resolve_kept_ranges(tl)
-
-    # 全ユニークソースを出現順で取得する（ADR-C9-r2）
-    # unique_sources_in_order は plan.py の単一情報源（ADR-C9-r2）
-    unique_sources = unique_sources_in_order(ranges)
-
-    # 全ユニークソースに境界検証・存在確認・パス衝突確認を適用する（ADR-C8）
+    # --- 4. 全ユニークソースに境界検証・存在確認・パス衝突確認を適用する（ADR-C8）---
     for src in unique_sources:
         # source がタイムラインと同一ディレクトリ配下にあることを検証する（Sec M-2）
         _check_source_within_timeline_dir(timeline_path, src)
@@ -316,6 +340,24 @@ def _render_inner(
                 message=f"ソースメディアファイルが見つかりません: {Path(src).name}",
                 hint=(
                     "OTIO タイムラインに記録されているソースファイルを配置してください。"  # noqa: E501
+                ),
+            )
+
+    # --- 4b. BGM ソースの詳細境界検証（ADR-B8）---
+    # BGM ソースにも既存の全ソース境界検証を適用する。
+    # 早期パス衝突確認（ステップ2b）で output == BGM は既にチェック済み。
+    if isinstance(bgm_clip, BgmClip):
+        bgm_src = bgm_clip.source
+        _check_source_within_timeline_dir(timeline_path, bgm_src)
+        # output == bgm_src は早期チェック済みだが、ここでも適用する（二重保護）
+        _check_path_not_allowed(output_path, bgm_src)
+        if not Path(bgm_src).exists():
+            raise ClipwrightError(
+                code=ErrorCode.FILE_NOT_FOUND,
+                message=f"BGM ソースファイルが見つかりません: {Path(bgm_src).name}",
+                hint=(
+                    "OTIO タイムラインに記録されている"
+                    " BGM ソースファイルを配置してください。"
                 ),
             )
 
@@ -347,6 +389,7 @@ def _render_inner(
 
     # --- 5. build_plan ---
     # source_probes を渡して複数ソース経路を有効にする（ADR-C2-r2 / ADR-C9-r2）
+    # bgm_clip を渡して BGM 音声チェーンを組み込む（ADR-B5-r2・bgm=None で後方互換）
     plan = build_plan(
         ranges,
         probe_info,
@@ -354,6 +397,7 @@ def _render_inner(
         denoise=raw_denoise,
         loudness=raw_loudness,
         source_probes=source_probes,
+        bgm=bgm_clip,
     )
 
     # --- 6a. dry_run ---
@@ -392,6 +436,12 @@ def _render_inner(
     inputs: list[str] = []
     for src in plan.input_sources:
         inputs += ["-i", src]
+
+    # BGM がある場合、-stream_loop -1 を前置して BGM を末尾 -i として追加する
+    # （ADR-B6-r2/DC-AS-005）。-stream_loop は入力オプションのため -i の直前に置く。
+    # BGM index == len(plan.input_sources) の不変条件を維持する（DC-AS-005）。
+    if plan.bgm_source is not None:
+        inputs += ["-stream_loop", "-1", "-i", plan.bgm_source]
 
     cmd = [ffmpeg] + overwrite_flag + inputs + plan.ffmpeg_args + [str(output)]
 

@@ -26,11 +26,20 @@ ffmpeg/ffprobe を一切実行しない。probe 結果は ProbeInfo を引数で
   model_validator（schemas.py）が ValidationError で弾く。
   _build_multi_source_filter_complex の出力規格決定ロジックは
   「両方指定」または「両方 None」のみを想定する。
+- BGM ミックス（ADR-B4-r2/B5-r2/B5-r3/B6-r2/B9-r3）:
+  resolve_bgm で全 Audio トラックから kind=="bgm" クリップを検出する（ADR-B4-r2）。
+  build_plan の bgm 引数が非 None のとき _append_bgm_pipe で BGM 段を追記する。
+  has_main_audio（本編音声有無）と has_audio_output（最終出力音声有無）を分離する
+  （ADR-B5-r2）。
+  -stream_loop -1 は render.py が付与し、plan は atrim=0:{main_dur} のみで
+  尺合わせする（ADR-B6-r2）。
+  BGM index = len(input_sources)（bgm_source は input_sources 非包含・DC-AS-005）。
 """
 
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal
 
@@ -191,6 +200,51 @@ class LoudnessDirective(BaseModel):
 
 
 # ===========================================================================
+# BGM スキーマ（clipwright-bgm には依存しない・render 内自前定義）
+# ADR-B9-r2: reader-strict・未知キー forbid・allow_inf_nan=False
+# NR-M-1: tool/version は max_length=64（writer 側 clipwright-bgm と一致）
+# ===========================================================================
+
+
+class DuckingDirective(BaseModel):
+    """BGM ダッキング設定の検証モデル（ADR-B5-r3/DC-AS-006）。
+
+    enabled: True のとき sidechaincompress を注入して BGM を本編音声でダッキングする。
+    threshold: sidechaincompress の threshold パラメータ。
+        ffmpeg 実許容域は 0.000976563〜1.0。
+    ratio: sidechaincompress の ratio パラメータ。ffmpeg 実許容域は 1.0〜20.0。
+    SR M-1: allow_inf_nan=False で OTIO 由来の inf/nan を弾く。
+    """
+
+    model_config = {"extra": "forbid", "allow_inf_nan": False}
+
+    enabled: bool = False
+    threshold: Annotated[float, Field(gt=0.0, le=1.0)]
+    ratio: Annotated[float, Field(ge=1.0, le=20.0)]
+
+
+class BgmDirective(BaseModel):
+    """BGM クリップ metadata["clipwright"] の検証モデル（ADR-B9-r2/B9-r3）。
+
+    render 読み込み時に Pydantic で検証し、不正な場合は INVALID_INPUT を送出する。
+    reader-strict（未知キー forbid）・allow_inf_nan=False。
+    fade_in_sec / fade_out_sec の既定値は 0.0（無フェード・ADR-B9-r3）。
+    afade は値が > 0 のときのみ注入する。
+    SR I-1: volume_db に ge=-60.0/le=20.0 を追加（writer BgmOptions と一致）。
+    """
+
+    model_config = {"extra": "forbid", "allow_inf_nan": False}
+
+    tool: Annotated[str, Field(max_length=64)]
+    version: Annotated[str, Field(max_length=64)]
+    kind: Literal["bgm"]
+    volume_db: Annotated[float, Field(ge=-60.0, le=20.0, allow_inf_nan=False)]
+    fade_in_sec: Annotated[float, Field(ge=0)] = 0.0
+    fade_out_sec: Annotated[float, Field(ge=0)] = 0.0
+    ducking: DuckingDirective
+
+
+# ===========================================================================
 # データ型
 # ===========================================================================
 
@@ -205,6 +259,20 @@ class KeptRange:
 
     source: str
     source_range: otio.opentime.TimeRange
+
+
+@dataclass(frozen=True)
+class BgmClip:
+    """BGM クリップの情報を表す値オブジェクト（ADR-B4-r2）。
+
+    source: BGM メディアファイルの target_url（ソースパス）
+    source_range: BGM メディア全長（OTIO TimeRange）
+    directive: BgmDirective で検証済みの BGM 指示
+    """
+
+    source: str
+    source_range: otio.opentime.TimeRange
+    directive: BgmDirective
 
 
 @dataclass
@@ -235,6 +303,7 @@ class RenderPlan:
     estimated_size_bytes: 概算ファイルサイズ（bytes）。bit_rate None 時は None。
     warnings: dry_run 概算の注意事項。
     input_sources: 入力ソース一覧（出現順・重複排除）。ADR-C9-r2 の単一情報源。
+    bgm_source: BGM ソースパス。BGM なしのとき None（ADR-B5/B7）。
     """
 
     filter_complex: str
@@ -244,6 +313,7 @@ class RenderPlan:
     estimated_size_bytes: float | None = None
     warnings: list[str] = field(default_factory=list)
     input_sources: list[str] = field(default_factory=list)
+    bgm_source: str | None = None
 
 
 # ===========================================================================
@@ -347,6 +417,81 @@ def resolve_kept_ranges(timeline: otio.schema.Timeline) -> list[KeptRange]:
         )
 
     return ranges
+
+
+# ===========================================================================
+# resolve_bgm
+# ===========================================================================
+
+
+def resolve_bgm(timeline: otio.schema.Timeline) -> BgmClip | None:
+    """全 Audio トラックを走査し kind=="bgm" クリップを検出して BgmClip を返す。
+
+    ADR-B4-r2 準拠。
+
+    Audio トラック本数ではなく kind=="bgm" クリップ数で判定する（DC-AS-002）。
+    A1 本編音声トラック（kind!="bgm"）が存在しても 1件の BGM クリップは正常検出する。
+
+    Returns:
+        BGM クリップが1件のとき BgmClip。0件のとき None（後方互換）。
+
+    Raises:
+        ClipwrightError(UNSUPPORTED_OPERATION): BGM クリップが2件以上のとき
+            （単一 BGM のみ対応）。
+        ClipwrightError(INVALID_INPUT): BGM クリップの metadata 検証失敗時。
+    """
+    bgm_clips: list[tuple[str, otio.opentime.TimeRange, Mapping[str, Any]]] = []
+
+    # 全 Audio トラックを走査して kind=="bgm" クリップを収集する
+    for track in timeline.tracks:
+        if track.kind != otio.schema.TrackKind.Audio:
+            continue
+        for item in track:
+            if not isinstance(item, otio.schema.Clip):
+                continue
+            cw_meta = item.metadata.get("clipwright")
+            # OTIO の metadata 値は AnyDictionary 型（dict の subclass ではない）のため
+            # Mapping プロトコルで判定する（DC-AS-002）
+            if not isinstance(cw_meta, Mapping):
+                continue
+            if cw_meta.get("kind") != "bgm":
+                continue
+            mr = item.media_reference
+            if not isinstance(mr, otio.schema.ExternalReference):
+                continue
+            source_range = item.source_range
+            bgm_clips.append((mr.target_url, source_range, cw_meta))
+
+    if len(bgm_clips) == 0:
+        return None
+
+    if len(bgm_clips) >= 2:
+        raise ClipwrightError(
+            code=ErrorCode.UNSUPPORTED_OPERATION,
+            message="BGM クリップが2件以上含まれています（単一 BGM のみ対応）。",
+            hint=(
+                "timeline 内の BGM クリップを1件に絞ってください。"
+                " 複数 BGM のミックスは現在未対応です。"
+            ),
+        )
+
+    # 1件の場合: BgmDirective を検証して BgmClip を返す
+    source, source_range, raw_meta = bgm_clips[0]
+    try:
+        directive = BgmDirective(**raw_meta)
+    except (ValidationError, TypeError, ValueError):
+        # ValueError も含む理由: 将来の model_validator 由来の raise ValueError を考慮。
+        # loudness の踏襲（_validate_loudness_directive と同じ捕捉リスト）。
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message="BGM クリップの metadata 検証に失敗しました。フィールド名・型・値を確認してください。",  # noqa: E501
+            hint=(
+                "BGM クリップの metadata['clipwright'] に kind='bgm'・volume_db・"
+                "fade_in_sec・fade_out_sec・ducking が正しく設定されているか確認してください。"  # noqa: E501
+            ),
+        ) from None
+
+    return BgmClip(source=source, source_range=source_range, directive=directive)
 
 
 # ===========================================================================
@@ -821,6 +966,95 @@ def _build_multi_source_filter_complex(
     return filter_complex, video_map_label, audio_map_label, use_afftdn, use_loudness
 
 
+def _append_bgm_pipe(
+    filter_parts: list[str],
+    bgm: BgmClip,
+    audio_map_label: str,
+    has_main_audio: bool,
+    main_dur: float,
+    bgm_index: int,
+) -> str:
+    """BGM 音声チェーンを filter_parts に追記し、新しい audio_map_label を返す。
+
+    ADR-B5-r2/B5-r3 準拠。実機確認済み構文（test-report §5・2026-06-11）に
+    厳密に従う（DC-AS-004）。
+
+    has_main_audio=True のとき:
+        本編終端ラベル L を aformat して [main_fmt] を作り、BGM と amix する。
+        ducking OFF:
+            [main_fmt][bgm]amix=inputs=2:normalize=0,alimiter=limit=1.0[outa_bgm]
+        ducking ON:
+            [main_fmt]asplit→[bgm][main_sc]sidechaincompress→amix→alimiter[outa_bgm]
+    has_main_audio=False のとき:
+        BGM 単独系統として
+        [{bgm_index}:a]aformat...atrim,asetpts,volume,(afade)[outa_bgm]
+
+    -stream_loop -1 は render.py が付与するため plan.py では aloop を使わない
+    （ADR-B6-r2）。afade は fade_in_sec > 0 / fade_out_sec > 0 のときのみ注入する
+    （ADR-B9-r3）。
+    """
+    d = bgm.directive
+    vol_str = f"{d.volume_db:g}dB"
+    dur_str = f"{main_dur:g}"
+
+    # SR M-3: fade 秒数が本編尺を超える場合は意図しない音声出力になるため INVALID_INPUT を送出する。  # noqa: E501
+    # BgmOptions には main_dur が不明のため上限制約を持てず、実行時ガードが必要。
+    if d.fade_in_sec > main_dur:
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message="fade_in_sec が本編尺を超えています。",
+            hint=f"fade は本編尺 {main_dur:.2f} 秒以下にしてください。",
+        )
+    if d.fade_out_sec > main_dur:
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message="fade_out_sec が本編尺を超えています。",
+            hint=f"fade は本編尺 {main_dur:.2f} 秒以下にしてください。",
+        )
+
+    # BGM 音声チェーン共通部分: aformat → atrim → asetpts → volume → (afade)
+    # afade は >0 のときのみ注入（ADR-B9-r3・DC-AM-003）
+    bgm_chain = (
+        f"[{bgm_index}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
+        f"atrim=0:{dur_str},asetpts=PTS-STARTPTS,volume={vol_str}"
+    )
+    if d.fade_in_sec > 0:
+        bgm_chain += f",afade=t=in:st=0:d={d.fade_in_sec:g}"
+    if d.fade_out_sec > 0:
+        st_out = max(0.0, main_dur - d.fade_out_sec)
+        bgm_chain += f",afade=t=out:st={st_out:g}:d={d.fade_out_sec:g}"
+
+    if not has_main_audio:
+        # 本編無音 + BGM 単独系統（ADR-B5-r2/DC-AS-004）: BGM を直接 [outa_bgm] へ
+        filter_parts.append(f"{bgm_chain}[outa_bgm]")
+    else:
+        # 本編あり: BGM を [bgm] で中間ラベルに出力してから amix する
+        filter_parts.append(f"{bgm_chain}[bgm]")
+
+        # 本編終端ラベル L を aformat して [main_fmt] を生成（DC-AS-007）
+        filter_parts.append(
+            f"{audio_map_label}aformat=sample_rates=48000:channel_layouts=stereo[main_fmt]"
+        )
+
+        if d.ducking.enabled:
+            # ducking ON: [bgm][main_sc]sidechaincompress 入力順序（DC-AS-006）
+            filter_parts.append("[main_fmt]asplit[main_mix][main_sc]")
+            filter_parts.append(
+                f"[bgm][main_sc]sidechaincompress="
+                f"threshold={d.ducking.threshold:g}:ratio={d.ducking.ratio:g}[bgm_duck]"
+            )
+            filter_parts.append(
+                "[main_mix][bgm_duck]amix=inputs=2:normalize=0,alimiter=limit=1.0[outa_bgm]"
+            )
+        else:
+            # ducking OFF: [main_fmt][bgm]amix→alimiter（DC-AM-001）
+            filter_parts.append(
+                "[main_fmt][bgm]amix=inputs=2:normalize=0,alimiter=limit=1.0[outa_bgm]"
+            )
+
+    return "[outa_bgm]"
+
+
 def _build_ffmpeg_args(
     filter_complex: str,
     video_map_label: str,
@@ -874,11 +1108,13 @@ def build_plan(
     denoise: dict[str, Any] | None = None,
     loudness: dict[str, Any] | None = None,
     source_probes: dict[str, ProbeInfo] | None = None,
+    bgm: BgmClip | None = None,
 ) -> RenderPlan:
     """filter_complex 文字列と ffmpeg 引数配列を RenderPlan で返す（ADR-1/ADR-7）。
 
     本関数は薄いオーケストレーターとして、検証 → filter_complex 構築
     （_build_filter_complex or _build_multi_source_filter_complex）→
+    BGM 段追記（_append_bgm_pipe）→
     ffmpeg_args 構築（_build_ffmpeg_args）→ dry_run 概算・警告生成の順で呼び出す。
 
     - source_probes 未指定 or ユニークソース1個 → 単一ソース経路（後方互換）。
@@ -906,6 +1142,10 @@ def build_plan(
     - source_probes 指定時（ユニークソース ≥ 2）: 各ソースの has_video が False なら
       UNSUPPORTED_OPERATION（ADR-C12）。
     - RenderPlan.input_sources = unique_sources_in_order(ranges)（ADR-C9-r2）。
+    - bgm: BgmClip が非 None のとき BGM 段を最終段に追記する（ADR-B4-r2/B5-r2/B5-r3）。
+      has_main_audio（本編音声有無）と has_audio_output（最終出力音声有無）を分離する。
+      BGM index = len(input_sources)（bgm_source は input_sources 非包含・DC-AS-005）。
+      bgm=None は従来完全同一（後方互換・ADR-B7）。
     """
     # denoise 指示を検証する（不正ならここで INVALID_INPUT / UNSUPPORTED_OPERATION）
     denoise_directive: DenoiseDirective | None = None
@@ -1011,6 +1251,35 @@ def build_plan(
             )
         )
 
+    # ---------- BGM 段の追記（ADR-B5-r2/B5-r3）----------
+    # has_main_audio: 本編（concat 後）の音声有無（既存の has_audio 相当）
+    # has_audio_output: 最終出力音声有無（has_main_audio or BGM あり）
+    has_main_audio = has_audio
+    bgm_source_out: str | None = None
+
+    if bgm is not None:
+        # BGM index = len(input_sources)（bgm_source は input_sources 非包含・DC-AS-005）  # noqa: E501
+        bgm_index = len(input_sources)
+        total_duration_for_bgm = sum(
+            _to_seconds(r.source_range.duration) for r in ranges
+        )
+
+        # filter_complex を filter_parts リストに展開して BGM 段を追記する
+        filter_parts_bgm = filter_complex.split(";")
+        audio_map_label = _append_bgm_pipe(
+            filter_parts_bgm,
+            bgm,
+            audio_map_label,
+            has_main_audio,
+            total_duration_for_bgm,
+            bgm_index,
+        )
+        filter_complex = ";".join(filter_parts_bgm)
+        has_audio = (
+            True  # BGM があるため最終出力には音声がある（has_audio_output=True）
+        )
+        bgm_source_out = bgm.source
+
     # ---------- ffmpeg_args 構築 ----------
     ffmpeg_args = _build_ffmpeg_args(
         filter_complex,
@@ -1027,14 +1296,15 @@ def build_plan(
     estimated_size: float | None = None
     warnings: list[str] = []
 
-    # has_audio=False ＋ denoise 指示 → 音声なしで denoise スキップ（DC-AS-005）
-    if denoise_directive is not None and not has_audio:
+    # has_main_audio=False ＋ denoise 指示 → 本編音声なしで denoise スキップ（DC-AM-004）  # noqa: E501
+    # 注: BGM の有無に関わらず、本編音声がなければ denoise は適用対象外
+    if denoise_directive is not None and not has_main_audio:
         warnings.append(
             "音声なしのため denoise スキップ: afftdn フィルタは適用されませんでした。"
         )
 
-    # has_audio=False ＋ loudness 指示 → 音声なしで loudness スキップ
-    if loudness_directive is not None and not has_audio:
+    # has_main_audio=False ＋ loudness 指示 → 本編音声なしで loudness スキップ（DC-AM-004）  # noqa: E501
+    if loudness_directive is not None and not has_main_audio:
         warnings.append(
             "音声なしのため loudness スキップ:"
             " loudnorm/volume フィルタは適用されませんでした。"
@@ -1047,7 +1317,7 @@ def build_plan(
         loudness_directive is not None
         and loudness_directive.mode == "peak"
         and denoise_directive is not None
-        and has_audio
+        and has_main_audio
     ):
         warnings.append(
             "peak モードと denoise の併用:"
@@ -1056,7 +1326,7 @@ def build_plan(
         )
 
     # 複数ソース（ユニークソース ≥ 2）＋ loudness → 測定値ずれ警告（ADR-C11-r2）
-    if loudness_directive is not None and has_audio and len(input_sources) >= 2:
+    if loudness_directive is not None and has_main_audio and len(input_sources) >= 2:
         warnings.append(
             "複数ソース合体に track loudness を適用しています。"
             " measured は単一メディア測定値のため、合体後トラック全体への適用は"
@@ -1100,4 +1370,5 @@ def build_plan(
         estimated_size_bytes=estimated_size,
         warnings=warnings,
         input_sources=input_sources,
+        bgm_source=bgm_source_out,
     )
