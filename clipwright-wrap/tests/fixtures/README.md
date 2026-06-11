@@ -1,31 +1,31 @@
-# fixtures/ 確定事項
+# fixtures/ Confirmed Matters
 
-spike-budoux スパイク（2026-06-11）で確定した budoux API 仕様。
-test-contract / impl-wrapcli / impl-wrap / e2e のゲートとして使う。
+budoux API specification confirmed in spike-budoux spike (2026-06-11).
+Used as gate for test-contract / impl-wrapcli / impl-wrap / e2e.
 
 ---
 
-## 1. budoux バージョン
+## 1. budoux Version
 
 ```
 budoux 0.8.4
 ```
 
-## 2. parser ロード API 確定値
+## 2. parser Load API Confirmed Value
 
-### 重要: `load_parser()` は存在しない
+### Important: `load_parser()` Does Not Exist
 
-budoux 0.8.4 には `budoux.load_parser(<name>)` という汎用ロード関数は**存在しない**。
-代わりに言語ごとの専用関数を使う:
+budoux 0.8.4 does not have a generic `budoux.load_parser(<name>)` function.
+Instead, use language-specific functions:
 
-| 言語 | 確定 API | 戻り値型 |
+| Language | Confirmed API | Return Type |
 |---|---|---|
-| `ja`（日本語） | `budoux.load_default_japanese_parser()` | `Parser` |
-| `zh-hans`（簡体字） | `budoux.load_default_simplified_chinese_parser()` | `Parser` |
-| `zh-hant`（繁体字） | `budoux.load_default_traditional_chinese_parser()` | `Parser` |
-| `th`（タイ語） | `budoux.load_default_thai_parser()` | `Parser` |
+| `ja` (Japanese) | `budoux.load_default_japanese_parser()` | `Parser` |
+| `zh-hans` (Simplified Chinese) | `budoux.load_default_simplified_chinese_parser()` | `Parser` |
+| `zh-hant` (Traditional Chinese) | `budoux.load_default_traditional_chinese_parser()` | `Parser` |
+| `th` (Thai) | `budoux.load_default_thai_parser()` | `Parser` |
 
-**language → ロード関数のマッピング**（wrap_cli.py のモジュール定数として隔離すること）:
+**Language → Loader Function Mapping** (should be isolated as module constant in wrap_cli.py):
 ```python
 _PARSER_LOADERS = {
     "ja": budoux.load_default_japanese_parser,
@@ -35,17 +35,17 @@ _PARSER_LOADERS = {
 }
 ```
 
-## 3. parse() 戻り値仕様
+## 3. parse() Return Value Specification
 
 ```
 parser.parse(text: str) -> list[str]
 ```
 
-- 戻り値は `list[str]`（文節トークンのリスト）。
-- 各トークンを結合（区切り文字なし）すると元のテキストに完全復元できる: `"".join(segments) == text`
-- 半角空白・区切り文字は**挿入しない**（WR-AD-14 カウント仕様に合致）。
+- Return value is `list[str]` (list of phrase tokens).
+- Joining each token (with no delimiter) perfectly reconstructs the original text: `"".join(segments) == text`
+- Half-width spaces and delimiters are **not inserted** (conforming to WR-AD-14 counting specification).
 
-### parse サンプル結果（ja）
+### parse Sample Results (ja)
 
 ```python
 parser.parse("今日はいい天気です。")
@@ -61,59 +61,59 @@ parser.parse("字幕改行ツールclipwright-wrapはBudouXを使って日本語
 # → ["字幕改行ツールclipwright-wrapは", "BudouXを", "使って", "日本語テキストを", "文節で", "分割します。"]
 ```
 
-## 4. 実ロード可能な対応言語（DC-AM-005 ゲート）
+## 4. Loadable Languages (DC-AM-005 Gate)
 
-**全4言語ロード成功**。schemas.py の `language` pattern に残す言語:
+**All 4 languages loaded successfully**. Keep the languages in schemas.py `language` pattern:
 
 ```
 ja | zh-hans | zh-hant | th
 ```
 
-正規表現パターン: `^(ja|zh-hans|zh-hant|th)$`
+Regular expression pattern: `^(ja|zh-hans|zh-hant|th)$`
 
-ロード不可言語: **なし**（4言語すべて成功）
+Unsupported languages: **None** (all 4 languages succeed)
 
-## 5. parser ロード時間（DC-AS-002 / DC-GP-005 ゲート）
+## 5. parser Load Time (DC-AS-002 / DC-GP-005 Gate)
 
-初回 `load_default_*_parser()` の所要時間（典型値）:
+Time required for initial `load_default_*_parser()` (typical values):
 
-| 言語 | ロード時間 |
+| Language | Load Time |
 |---|---|
 | `ja` | ≈ 0.4 ms |
 | `zh-hans` | ≈ 1.0 ms |
 | `zh-hant` | ≈ 1.1 ms |
 | `th` | ≈ 0.6 ms |
 
-**結論**: ロードは極めて高速。texts ループ外で1回だけロードすれば実用上問題ない（DC-AS-002 準拠）。
+**Conclusion**: Loading is extremely fast. Loading once outside the texts loop poses no practical issues (conforming to DC-AS-002).
 
-## 6. 長文 cue パース時間と timeout 妥当性（DC-GP-005 ゲート）
+## 6. Long-Text cue Parse Time and timeout Reasonableness (DC-GP-005 Gate)
 
-### 計測結果（日本語・5回平均）
+### Measurement Results (Japanese, 5-run Average)
 
-| テキスト長 | 平均パース時間 | 文節数 |
+| Text Length | Average Parse Time | Phrase Count |
 |---|---|---|
-| 2000 文字 | ≈ 3.7 ms | ≈ 553 文節 |
-| 3000 文字 | ≈ 5.5 ms | ≈ 829 文節 |
-| 5000 文字 | ≈ 9.3 ms | ≈ 1380 文節 |
-| 25 文字（典型1cue） | ≈ 0.04 ms | — |
+| 2000 characters | ≈ 3.7 ms | ≈ 553 phrases |
+| 3000 characters | ≈ 5.5 ms | ≈ 829 phrases |
+| 5000 characters | ≈ 9.3 ms | ≈ 1380 phrases |
+| 25 characters (typical 1 cue) | ≈ 0.04 ms | — |
 
-### WR-AD-15(2) `max(30, ceil(cue_count * 0.05))` の妥当性判断
+### Reasonableness Assessment of WR-AD-15(2) `max(30, ceil(cue_count * 0.05))`
 
-**0.05 係数・下限 30 秒は妥当。総文字数連動への切り替えは不要。**
+**0.05 coefficient and lower bound of 30 seconds is reasonable. Switching to total character count dependency is not necessary.**
 
-根拠:
-- 典型1cue（25文字）のパース時間は ≈ 0.04 ms = 0.00004 秒。
-- 1000 cue の場合: 実パース ≈ 40 ms = 0.04 秒に対して timeout = 50 秒（1000 × 0.05）。
-- 5000 文字の極端な長文1cueでも ≈ 9.3 ms。timeout の下限 30 秒は極端な長文を含む100cue 以上の字幕を十分吸収する。
-- 1cue が万単位の文字数になることは字幕として非現実的なため、文字数連動は過剰設計。
-- `cue_count * 0.05` の係数はパース処理以外のオーバーヘッド（subprocess 起動・JSON I/O・OS スケジューリング）を吸収するバッファとして妥当。
+Rationale:
+- Parse time for typical 1 cue (25 characters) is ≈ 0.04 ms = 0.00004 seconds.
+- For 1000 cues: actual parse ≈ 40 ms = 0.04 seconds vs. timeout = 50 seconds (1000 × 0.05).
+- Even for extreme long text of 1 cue (5000 characters), ≈ 9.3 ms; timeout lower bound of 30 seconds adequately covers 100+ cues with long text.
+- It is unrealistic for 1 cue to contain tens of thousands of characters in subtitles, so character-count dependency is over-engineering.
+- The coefficient of `cue_count * 0.05` is reasonable as a buffer to absorb overhead from subprocess startup, JSON I/O, and OS scheduling beyond parse processing itself.
 
-**impl-wrap への指示**: `max(30, ceil(cue_count * 0.05))` をモジュール定数として実装すること。
+**Instruction for impl-wrap**: Implement `max(30, ceil(cue_count * 0.05))` as a module constant.
 
-## 7. フィクスチャファイル
+## 7. Fixture Files
 
-- `budoux_sample.json`: ja の複数サンプル（短文・長文・句読点入り・英数字混じり）の実 budoux 出力。test-wrapcli/test-captions の確定 fixture として使う。
+- `budoux_sample.json`: ja with multiple samples (short text, long text, with punctuation, mixed alphanumeric) of actual budoux output. Used as confirmed fixture for test-wrapcli/test-captions.
 
 ---
 
-*生成: spike-budoux タスク（plan-report-20260611-023253.md）*
+*Generated: spike-budoux task (plan-report-20260611-023253.md)*
