@@ -11,7 +11,7 @@ Mocking strategy:
   - Real budoux and real SRT/VTT file writes are verified in wrap e2e tests.
   - captions.parse_captions / captions.serialize_captions are called for real (pure logic).
 
-Verification aspects (architecture-report-20260611-022805.md WR-AD-02/07/08/09/11/13/14/15):
+Verification aspects (WR-AD-02/07/08/09/11/13/14/15):
   ① Output validation (WR-AD-07/08): extension match, parent dir existence, output==input prohibited
   ② Input validation (WR-AD-09): FILE_NOT_FOUND basename only, INVALID_INPUT on parse failure
   ③ DC-GP-001 language responsibility: WrapCaptionsOptions(language='xx') → ValidationError

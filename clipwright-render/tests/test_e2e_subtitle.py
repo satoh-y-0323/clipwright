@@ -1,8 +1,8 @@
 """test_e2e_subtitle.py — Real e2e tests for subtitle burn-in in clipwright-render (task_id: e2e-subtitle).
 
 Design rationale:
-  - architecture-report-20260611-210021 §7 v2 (ADR-S4-r2/S5-r2/S6-r2/S6-r3)
-  - requirements-report-20260611-205356 (subtitle timestamp base = output timeline head 0 s, DC-AM-003)
+  - §7 v2 (ADR-S4-r2/S5-r2/S6-r2/S6-r3)
+  - subtitle timestamp base = output timeline head 0 s (DC-AM-003)
   - ADR-S1: render extension (via RenderOptions.subtitle, MCP path only, no CLI)
   - ADR-S3: _ALLOWED_SUBTITLE_EXTENSIONS = {.srt, .vtt, .ass}
   - ADR-S4-r2: _append_subtitle_filter signature (no timeline_dir arg; boundary check unified in render)

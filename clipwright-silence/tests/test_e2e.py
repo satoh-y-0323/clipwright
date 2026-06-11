@@ -3,7 +3,7 @@
 This test uses no mocks and validates the detect_silence -> render_timeline
 integration pipeline using real ffmpeg/ffprobe binaries.
 
-Verification flow (architecture-report-20260610-141050.md / DC-AS-001/002/005):
+Verification flow (DC-AS-001/002/005):
   (1) Generate a video+audio source (speech + silence + speech) via ffmpeg lavfi
   (2) Run detect_silence to produce a KEEP-clip timeline.otio (V1, absolute target_url)
   (3) Run render_timeline to materialize the timeline; confirm output mp4 is shorter than source
@@ -537,7 +537,7 @@ def test_vad_backend_e2e(
 ) -> None:
     """VAD backend e2e: demonstrate cough noise is excluded by VAD but kept by silencedetect.
 
-    Verification flow (architecture-report §7.8 / DC-AS-007):
+    Verification flow (§7.8 / DC-AS-007):
       (1) Generate material where VAD classifies speech using ffmpeg flite TTS (pre-establish)
       (2) Insert a cough-equivalent noise burst (0.2s) outside speech intervals
       (3) detect with backend="vad" -> confirm cough interval is not in KEEP

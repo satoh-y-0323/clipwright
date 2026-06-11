@@ -1,7 +1,7 @@
 """test_e2e_loudness.py — Real e2e tests for loudnorm/peak (task_id: e2e-loudnorm).
 
 Design rationale:
-  - architecture-report-20260611-114314 §4, §9
+  - §4, §9
   - ADR-L1: loudnorm two-pass linear apply (detect obtains measured_* -> render applies
     linear=true)
   - ADR-L2: peak uses volumedetect max_volume and applies differential gain via volume filter

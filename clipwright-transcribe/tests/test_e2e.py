@@ -3,7 +3,7 @@
 No mocks are used; real whisper.cpp / ffmpeg binaries drive the
 transcribe -> render pipeline.
 
-Verification flow (architecture-report-20260610-221243.md §6/§8, TR-AD-10):
+Verification flow (§6/§8, TR-AD-10):
   ① Generate an mp4 from ffmpeg testsrc + libflite TTS audio (DC-AS-002)
   ② Run clipwright_transcribe; expect SRT/VTT/OTIO to be produced (success
      condition 1)
@@ -369,7 +369,7 @@ def test_transcribe_e2e(tmp_path: Path) -> None:
     # (DC-AS-003-R).
     actual_binary_name = Path(_WHISPER_BIN).name
     if actual_binary_name != WHISPER_BINARY_NAME:
-        # Record the discrepancy but do not skip (document in test-report).
+        # Record the discrepancy but do not skip.
         pytest.fail(
             f"WHISPER_BINARY_NAME constant ('{WHISPER_BINARY_NAME}') does not match "
             f"the actual binary name ('{actual_binary_name}'). "

@@ -6,7 +6,7 @@
 
 A hypothetical fixture generated without executing the actual whisper.cpp binary,
 due to `CLIPWRIGHT_WHISPER` and `CLIPWRIGHT_WHISPER_MODEL` environment variables not being set.
-Based on the assumed schema from TR-AD-02 in architecture-report-20260610-221243.md.
+Based on the assumed schema from TR-AD-02.
 
 ---
 

@@ -12,7 +12,7 @@ Mocking policy:
   - Patch clipwright_silence.detect.run to control silencedetect stderr.
   - No real ffmpeg/ffprobe binaries are called.
 
-Verification aspects (architecture-report-20260610-141050.md / DC-AS-001-005 / DC-AM-002/003):
+Verification aspects (DC-AS-001-005 / DC-AM-002/003):
   (1) silencedetect stderr parsing (regex, line-start match, '.' fixed decimal, DC-AM-003)
   (2) Trailing silence with missing silence_end -> completed with total_duration (DC-AM-002)
   (3) KEEP clip list (V1, source_range rate, target_url, metadata) (DC-AS-001/003)

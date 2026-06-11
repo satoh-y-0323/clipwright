@@ -277,7 +277,6 @@ def test_e2e_2_transcribe_srt_ok(tmp_path: Path) -> None:
 
     When _TRANSCRIBE_IMPORT_OK is True: transcribe path (primary).
     When False: manually crafted fixture path (fallback).
-    Record the path used in the test-report.
     """
     # Write the transcribe output to a file
     in_srt = tmp_path / "transcribe_out.srt"

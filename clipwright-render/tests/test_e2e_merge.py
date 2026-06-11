@@ -1,7 +1,7 @@
 """test_e2e_merge.py — Real e2e tests for multi-source concatenation (task_id: e2e-merge).
 
 Design rationale:
-  - architecture-report-20260611-154732 §7 v2
+  - §7 v2
   - ADR-C5-r2: pre-process each clip with format-normalisation filters (fps/scale/pad/setsar)
   - ADR-C7-r2: mandatory audio format normalisation (aformat=48000/stereo), anullsrc silence fill
   - ADR-C3: route by unique source count; preserve backward compatibility for single-source path

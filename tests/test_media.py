@@ -981,7 +981,7 @@ class TestToOptionalInt:
 class TestMediaInfoBitRate:
     """AD-1: Pin format.bit_rate → MediaInfo.bit_rate parse contract.
 
-    Design decision AD-1 (architecture-report-20260610-125203):
+    Design decision AD-1:
     - Add `bit_rate: int | None = None` to MediaInfo in schemas.py.
     - Parse via `_to_optional_int(raw_format.get("bit_rate"))` in _parse_ffprobe_json.
     - "N/A" / missing key → None (reuses _to_optional_int "N/A" absorption).

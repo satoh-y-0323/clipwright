@@ -116,4 +116,4 @@ Rationale:
 
 ---
 
-*Generated: spike-budoux task (plan-report-20260611-023253.md)*
+*Generated: spike-budoux task*

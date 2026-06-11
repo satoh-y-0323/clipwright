@@ -11,18 +11,18 @@ Design decisions:
   a single segment. ffmpeg handles n=1 correctly.
 - First audio stream only (ADR-7): mapping multiple audio streams adds significant
   complexity; only the first stream is handled in this iteration.
-- afftdn denoise injection (architecture-report-20260611-092647 §B-2):
+- afftdn denoise injection (§B-2):
   filter_parts order is fixed as trim/atrim → concat → afftdn → scale.
   afftdn (audio chain) and scale (video chain) use independent labels without
   conflict. When has_audio=False, afftdn is not inserted and a warning is
   appended.
-- loudness injection (architecture-report-20260611-114314 §3.3 ADR-L5/L5b/L6):
+- loudness injection (ADR-L5/L5b/L6):
   loudness filter is chained after denoise (acoustically correct order).
   The audio map terminal label is resolved via a cumulative-pipe helper
   (DC-AM-001): [outa] → (denoise present → [outa_dn]) → (track loudness
   present → [outa_ln]). No loudness directive is fully backward compatible
   (ADR-L6).
-- Multi-source support (ADR-C1–C12; architecture-report-20260611-154732 §7 v2):
+- Multi-source support (ADR-C1–C12, §7 v2):
   Routing branches on unique source count; single-source backward compatibility
   is strictly preserved (ADR-C3). unique_sources_in_order is the single source
   of truth for input index assignment (ADR-C9-r2).
@@ -1179,7 +1179,7 @@ def _append_bgm_pipe(
     audio_map_label.
 
     Conforms to ADR-B5-r2/B5-r3. Follows the verified syntax exactly
-    (test-report §5; 2026-06-11; DC-AS-004).
+    (DC-AS-004).
 
     When has_main_audio=True:
         Aformats the main terminal label L to [main_fmt], then amixes with BGM.
@@ -1340,7 +1340,7 @@ def build_plan(
     - When bit_rate is None: estimated_size_bytes=None + warning added (ADR-3).
     - When any of codec/resolution/fps/crf is non-None: "estimate is approximate"
       warning (DC-AM-005).
-    - denoise: afftdn injection (B-2; architecture-report-20260611-092647).
+    - denoise: afftdn injection (B-2).
       has_audio=True + backend=="afftdn" → inject afftdn after concat, produce
       [outa_dn]. has_audio=False + denoise → skip afftdn and add warning.
       backend=="deepfilternet" → UNSUPPORTED_OPERATION.

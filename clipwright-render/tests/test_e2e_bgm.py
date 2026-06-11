@@ -1,7 +1,7 @@
 """test_e2e_bgm.py — Real e2e tests for clipwright-render BGM mixing (task_id: e2e-bgm).
 
 Design rationale:
-  - architecture-report-20260611-172611 §7 revision v2
+  - design §7 revision v2
   - ADR-B5-r2/B5-r3: has_main_audio/has_audio_output separation, amix+alimiter
   - ADR-B5-r3: amix wiring, mandatory aformat, sidechaincompress input order
     (DC-AS-005/006/007, DC-AM-001)

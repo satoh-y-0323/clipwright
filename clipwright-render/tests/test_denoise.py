@@ -4,7 +4,7 @@ Targets:
   - build_plan(ranges, probe_info, options, denoise=...) — afftdn injection, has_audio branching, scale coexistence
   - render_timeline() — DenoiseDirective validation, get_clipwright_metadata read path
 
-Design rationale (architecture-report-20260611-090313 §3 / 20260611-092647 §B-2):
+Design rationale (§3 / §B-2):
   - backend=afftdn + has_audio=True: inject afftdn after concat [outa] and replace map with [outa_dn]
   - backend=afftdn + has_audio=False: skip afftdn injection and add a warning about no audio
   - scale + afftdn both specified: filter_complex has both [outvscaled] and [outa_dn] maps (B-2)

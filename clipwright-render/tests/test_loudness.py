@@ -5,7 +5,7 @@ Targets:
   - audio map terminal label accumulation chain (ADR-L5b / DC-AM-001)
   - render_timeline() — LoudnessDirective validation, get_clipwright_metadata read path
 
-Design rationale (architecture-report-20260611-114314 §3.3):
+Design rationale (§3.3):
   - ADR-L5: apply denoise then loudness in order. Filter injection order: loudnorm appended after afftdn.
   - ADR-L5b: audio map terminal label resolved via cumulative pipe helper (DC-AM-001).
     [outa] -> (denoise -> [outa_dn]) -> (track loudness -> [outa_ln])
