@@ -172,7 +172,7 @@ src/clipwright/
 
 依存方向: `schemas / envelope / errors` (契約面) → `process / media / otio_utils / project` → `operations` → `server`
 
-詳細は `architecture-report` を参照。
+詳細は [docs/clipwright-spec.md](docs/clipwright-spec.md) を参照。
 
 ---
 

@@ -172,7 +172,7 @@ src/clipwright/
 
 Dependency direction: `schemas / envelope / errors` (contract surface) → `process / media / otio_utils / project` → `operations` → `server`
 
-For details, see `architecture-report`.
+For details, see [docs/clipwright-spec.md](docs/clipwright-spec.md).
 
 ---
 
