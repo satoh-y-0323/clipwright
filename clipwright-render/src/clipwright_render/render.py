@@ -22,7 +22,7 @@ from typing import Any
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.media import inspect_media
-from clipwright.otio_utils import load_timeline
+from clipwright.otio_utils import get_clipwright_metadata, load_timeline
 from clipwright.process import resolve_tool, run
 
 from clipwright_render.plan import ProbeInfo, build_plan, resolve_kept_ranges
@@ -274,10 +274,17 @@ def _render_inner(
     # --- 3. probe ---
     probe_info = _probe(source)
 
-    # --- 4. build_plan ---
-    plan = build_plan(ranges, probe_info, options)
+    # --- 4. denoise メタデータ読み出し ---
+    # timeline-level metadata["clipwright"]["denoise"] を読み出す。
+    # None のときは後方互換で denoise なし（既存テスト非回帰）。
+    # 存在するときは build_plan 内で DenoiseDirective 検証を行い、
+    # 不正なら INVALID_INPUT が送出される。
+    raw_denoise = get_clipwright_metadata(tl).get("denoise")
 
-    # --- 5a. dry_run ---
+    # --- 5. build_plan ---
+    plan = build_plan(ranges, probe_info, options, denoise=raw_denoise)
+
+    # --- 6a. dry_run ---
     if dry_run:
         size_info = (
             f"、概算サイズ {plan.estimated_size_bytes / 1024 / 1024:.1f} MB"
@@ -301,7 +308,7 @@ def _render_inner(
             warnings=plan.warnings,
         )
 
-    # --- 5b. 実行 ---
+    # --- 6b. 実行 ---
     ffmpeg = resolve_tool("ffmpeg", "CLIPWRIGHT_FFMPEG")
     timeout = max(300, math.ceil(plan.total_duration_seconds * 10))
 

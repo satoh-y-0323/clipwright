@@ -9,6 +9,7 @@ resolution-markers = [
 [manifest]
 members = [
     "clipwright",
+    "clipwright-noise",
     "clipwright-render",
     "clipwright-silence",
     "clipwright-transcribe",
@@ -223,6 +224,43 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "mypy", specifier = ">=2.1.0" },
+    { name = "pytest", specifier = ">=9.0.3" },
+    { name = "pytest-cov", specifier = ">=7.1.0" },
+    { name = "pytest-mock", specifier = ">=3.15.1" },
+    { name = "ruff", specifier = ">=0.15.16" },
+]
+
+[[package]]
+name = "clipwright-noise"
+version = "0.1.0"
+source = { editable = "clipwright-noise" }
+dependencies = [
+    { name = "clipwright" },
+    { name = "mcp", extra = ["cli"] },
+    { name = "pydantic" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "clipwright-render" },
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "pytest-mock" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "clipwright", editable = "." },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.27.2" },
+    { name = "pydantic", specifier = ">=2" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "clipwright-render", editable = "clipwright-render" },
     { name = "mypy", specifier = ">=2.1.0" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-cov", specifier = ">=7.1.0" },

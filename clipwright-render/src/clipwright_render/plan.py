@@ -10,16 +10,63 @@ ffmpeg/ffprobe を一切実行しない。probe 結果は ProbeInfo を引数で
   ffmpeg は n=1 を正常に処理する。
 - 音声複数時は第1音声のみ採用（ADR-7）: 複数音声ストリームのマッピングは
   複雑さを大幅に増すため、本イテレーションでは第1音声のみを対象とする。
+- denoise afftdn 注入（architecture-report-20260611-092647 §B-2）:
+  filter_parts の順序を trim/atrim → concat → afftdn → scale に固定する。
+  afftdn（audio チェーン）と scale（video チェーン）は独立ラベルで競合しない。
+  has_audio=False のときは afftdn を入れず warnings に追加する。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Annotated, Any, Literal
 
 import opentimelineio as otio
 from clipwright.errors import ClipwrightError, ErrorCode
+from pydantic import BaseModel, Field, ValidationError
 
 from clipwright_render.schemas import RenderOptions
+
+# ===========================================================================
+# Denoise スキーマ（clipwright-noise には依存しない・render 内自前定義）
+# ===========================================================================
+
+
+class AfftdnParams(BaseModel):
+    """afftdn フィルタのパラメータ検証モデル（DC-AS-006）。
+
+    nr: ノイズ低減量（dB）。0.01〜97 の範囲。
+    nf: ノイズフロア（dB）。-80〜-20 の範囲。
+    nt: ノイズタイプ。"w"=ホワイトノイズ、"v"=バイナリノイズ。
+    """
+
+    nr: Annotated[float, Field(ge=0.01, le=97)]
+    nf: Annotated[float, Field(ge=-80, le=-20)]
+    nt: Literal["w", "v"] = "w"
+
+
+class DenoiseDirective(BaseModel):
+    """timeline metadata["clipwright"]["denoise"] の検証モデル（DC-AS-006/ADR-N9）。
+
+    render 読み込み時に Pydantic で検証し、不正な場合は INVALID_INPUT を送出する。
+    backend=="afftdn" のとき params を AfftdnParams で再検証する（render.py が担う）。
+    backend=="deepfilternet" のとき params は {} 固定。
+
+    SR L-1: tool/version に max_length 制約を設ける（長大文字列混入防止）。
+    SR L-3: measured_noise_floor_db は -200〜0 dB の有限値のみ許容（inf/nan 排除）。
+    """
+
+    # NR-M-1: noise 側 schemas.py（writer）と max_length を一致させる（reader が厳格だと
+    # ライターが通す値を弾く非互換になる）。tool/version とも 64 に統一。
+    tool: Annotated[str, Field(max_length=64)]
+    version: Annotated[str, Field(max_length=64)]
+    kind: Literal["denoise"]
+    backend: Literal["afftdn", "deepfilternet"]
+    params: dict[str, Any]
+    measured_noise_floor_db: (
+        Annotated[float, Field(ge=-200.0, le=0.0, allow_inf_nan=False)] | None
+    ) = None
+
 
 # ===========================================================================
 # データ型
@@ -178,10 +225,45 @@ def _to_seconds(rt: otio.opentime.RationalTime) -> float:
     return round(float(rt.to_seconds()), 6)
 
 
+def _validate_denoise_directive(denoise: dict[str, Any]) -> DenoiseDirective:
+    """denoise 指示 dict を DenoiseDirective で検証し、失敗時は INVALID_INPUT を送出する。
+
+    backend=="afftdn" のとき AfftdnParams での params 再検証も行う。
+    """  # noqa: E501
+    try:
+        directive = DenoiseDirective(**denoise)
+    except (ValidationError, TypeError):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message="denoise 指示の検証に失敗しました。フィールド名・型・値を確認してください。",  # noqa: E501
+            hint=(
+                "timeline metadata の denoise フィールドが正しい形式か確認"
+                "してください。backend は 'afftdn' または 'deepfilternet'"
+                " を指定してください。"
+            ),
+        ) from None
+
+    if directive.backend == "afftdn":
+        try:
+            AfftdnParams(**directive.params)
+        except (ValidationError, TypeError):
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message="afftdn params の検証に失敗しました。フィールド名・型・値を確認してください。",  # noqa: E501
+                hint=(
+                    "params.nr は 0.01〜97、params.nf は -80〜-20 の float、"
+                    "params.nt は 'w' または 'v' を指定してください。"
+                ),
+            ) from None
+
+    return directive
+
+
 def build_plan(
     ranges: list[KeptRange],
     probe_info: ProbeInfo,
     options: RenderOptions,
+    denoise: dict[str, Any] | None = None,
 ) -> RenderPlan:
     """filter_complex 文字列と ffmpeg 引数配列を RenderPlan で返す（ADR-1/ADR-7）。
 
@@ -193,6 +275,10 @@ def build_plan(
     - filter_complex は単一文字列として返す（コマンドインジェクション回避）。
     - bit_rate が None の場合は estimated_size_bytes=None + warnings 追加（ADR-3）。
     - codec 等のいずれか非 None 指定時に「概算は目安」warning（DC-AM-005）。
+    - denoise: afftdn 注入（B-2・architecture-report-20260611-092647）。
+      has_audio=True ＋ backend=="afftdn" → concat 後 afftdn を注入し [outa_dn] を生成。
+      has_audio=False ＋ denoise → afftdn を入れず warnings に追加。
+      backend=="deepfilternet" → UNSUPPORTED_OPERATION。
     """
     if not probe_info.has_video:
         raise ClipwrightError(
@@ -200,6 +286,20 @@ def build_plan(
             message="映像ストリームが含まれていません。",
             hint="映像ストリームを持つメディアファイルを使用してください。",
         )
+
+    # denoise 指示を検証する（不正ならここで INVALID_INPUT / UNSUPPORTED_OPERATION）
+    denoise_directive: DenoiseDirective | None = None
+    if denoise is not None:
+        denoise_directive = _validate_denoise_directive(denoise)
+        if denoise_directive.backend == "deepfilternet":
+            raise ClipwrightError(
+                code=ErrorCode.UNSUPPORTED_OPERATION,
+                message="backend=deepfilternet は render での適用に未対応です。",
+                hint=(
+                    "backend=afftdn で再検出するか、deepfilternet の render 対応版を"
+                    "お待ちください。"
+                ),
+            )
 
     # 音声有無: 複数音声は第1音声のみ採用（a=1 として扱う）
     has_audio = probe_info.audio_count >= 1
@@ -244,6 +344,27 @@ def build_plan(
         f"{input_labels}concat=n={n}:v={v_count}:a={a_count}{concat_output}"
     )
 
+    # denoise afftdn 注入（B-2・architecture-report-20260611-092647）
+    # 順序: trim/atrim → concat → afftdn（has_audio ＋ afftdn のときのみ）→ scale
+    # afftdn（audio チェーン）と scale（video チェーン）は独立ラベルで競合しない。
+    # has_audio=False ＋ denoise の場合は afftdn を入れず、warnings への追加は
+    # 後段（has_audio=False ＋ denoise 指示ブロック）で行う（DC-AS-005）。
+    use_afftdn = False
+    if (
+        denoise_directive is not None
+        and denoise_directive.backend == "afftdn"
+        and has_audio
+    ):
+        params = AfftdnParams(**denoise_directive.params)
+        # ロケール非依存フォーマット: g 形式で数値を書く（余分な0を省略）
+        nr_str = f"{params.nr:g}"
+        nf_str = f"{params.nf:g}"
+        nt_str = params.nt
+        filter_parts.append(
+            f"[outa]afftdn=nr={nr_str}:nf={nf_str}:nt={nt_str}[outa_dn]"
+        )
+        use_afftdn = True
+
     # width/height 指定時: scale を filter_complex 内に統合する（ADR-1 準拠）。
     # -vf と -filter_complex を同時指定すると ffmpeg がエラーを返すため、
     # concat 出力 [outv] に対して scale フィルタを連結して [outvscaled] を生成し
@@ -266,7 +387,9 @@ def build_plan(
         video_map_label,
     ]
     if has_audio:
-        ffmpeg_args += ["-map", "[outa]"]
+        # afftdn 適用時は [outa_dn]、それ以外は既存の [outa]（後方互換）
+        audio_map_label = "[outa_dn]" if use_afftdn else "[outa]"
+        ffmpeg_args += ["-map", audio_map_label]
 
     # RenderOptions → ffmpeg 引数への写像
     if options.video_codec is not None:
@@ -284,6 +407,12 @@ def build_plan(
 
     estimated_size: float | None = None
     warnings: list[str] = []
+
+    # has_audio=False ＋ denoise 指示 → 音声なしで denoise スキップ（DC-AS-005）
+    if denoise_directive is not None and not has_audio:
+        warnings.append(
+            "音声なしのため denoise スキップ: afftdn フィルタは適用されませんでした。"
+        )
 
     if probe_info.bit_rate is not None:
         estimated_size = probe_info.bit_rate * total_duration / 8.0

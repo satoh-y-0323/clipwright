@@ -1,7 +1,7 @@
 [project]
-name = "clipwright"
+name = "clipwright-noise"
 version = "0.1.0"
-description = "FFmpeg/OTIO をラップする MCP サーバー群。映像編集ワークフローを AI エージェントから操作できるプリミティブを提供する。"
+description = "ノイズ検出 → OTIO タイムライン注記生成 MCP ツール。ffmpeg astats でノイズフロアを測定し、denoise 指示を timeline.otio に書き込む。"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
@@ -9,10 +9,13 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
+    "clipwright",
     "mcp[cli]>=1.27.2",
-    "opentimelineio>=0.18",
     "pydantic>=2",
 ]
+
+[project.scripts]
+clipwright-noise = "clipwright_noise.server:main"
 
 [build-system]
 requires = ["uv_build>=0.11.19,<0.12.0"]
@@ -20,6 +23,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "clipwright-render",
     "mypy>=2.1.0",
     "pytest>=9.0.3",
     "pytest-cov>=7.1.0",
@@ -27,16 +31,23 @@ dev = [
     "ruff>=0.15.16",
 ]
 
+# workspace 内の clipwright (core) および clipwright-render をパス参照で解決する
+[tool.uv.sources]
+clipwright = { workspace = true }
+clipwright-render = { workspace = true }
+
 # --- Ruff ---
 [tool.ruff]
 target-version = "py311"
 line-length = 88
-# templates/ はプレースホルダ（__TOOL__ 等）を含む雛形。lint/format 対象外。
-extend-exclude = ["templates"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
 ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+# テストファイルの日本語 docstring/コメントは E501 を許容する
+"tests/*.py" = ["E501"]
 
 [tool.ruff.format]
 # ruff formatter のデフォルトで OK
@@ -49,8 +60,6 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 disallow_any_generics = true
-# templates/ はプレースホルダを含む雛形。型検査対象外。
-exclude = ["^templates/"]
 
 # opentimelineio はスタブなし・mypy strict で ignore
 [[tool.mypy.overrides]]
@@ -64,17 +73,14 @@ addopts = "--strict-markers -q"
 markers = [
     "integration: ffmpeg/ffprobe 実バイナリを必要とする統合テスト",
     "slow: 実行時間が長いテスト",
+    "e2e: ffmpeg 実バイナリを使った e2e テスト",
 ]
 
 # --- coverage ---
 [tool.coverage.run]
-source = ["clipwright"]
+source = ["clipwright_noise"]
 omit = ["tests/*"]
 
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
-
-# --- uv workspace ---
-[tool.uv.workspace]
-members = ["clipwright-noise", "clipwright-render", "clipwright-silence", "clipwright-transcribe", "clipwright-wrap"]
