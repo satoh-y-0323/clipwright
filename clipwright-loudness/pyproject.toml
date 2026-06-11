@@ -1,7 +1,7 @@
 [project]
-name = "clipwright-render"
+name = "clipwright-loudness"
 version = "0.1.0"
-description = "OTIO タイムラインを FFmpeg で実体化する MCP ツール。区間抽出・連結・トリムを一回の再エンコードで完結させる。"
+description = "音量均一化検出 → OTIO タイムライン注記生成 MCP ツール。ffmpeg loudnorm/volumedetect でラウドネスを測定し、loudness 指示を timeline-level metadata に書き込む。"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
@@ -11,12 +11,11 @@ requires-python = ">=3.11"
 dependencies = [
     "clipwright",
     "mcp[cli]>=1.27.2",
-    "opentimelineio>=0.18",
     "pydantic>=2",
 ]
 
 [project.scripts]
-clipwright-render = "clipwright_render.server:main"
+clipwright-loudness = "clipwright_loudness.server:main"
 
 [build-system]
 requires = ["uv_build>=0.11.19,<0.12.0"]
@@ -45,7 +44,7 @@ select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
 ignore = []
 
 [tool.ruff.lint.per-file-ignores]
-# テストファイルの日本語 docstring/コメントは E501 を許容する（wrap/silence と同規約）
+# テストファイルの日本語 docstring/コメントは E501 を許容する
 "tests/*.py" = ["E501"]
 
 [tool.ruff.format]
@@ -72,12 +71,12 @@ addopts = "--strict-markers -q"
 markers = [
     "integration: ffmpeg/ffprobe 実バイナリを必要とする統合テスト",
     "slow: 実行時間が長いテスト",
-    "e2e: 実 ffmpeg バイナリを使った e2e テスト（ラウドネス正規化等）",
+    "e2e: ffmpeg 実バイナリを使った e2e テスト",
 ]
 
 # --- coverage ---
 [tool.coverage.run]
-source = ["clipwright_render"]
+source = ["clipwright_loudness"]
 omit = ["tests/*"]
 
 [tool.coverage.report]

@@ -274,15 +274,19 @@ def _render_inner(
     # --- 3. probe ---
     probe_info = _probe(source)
 
-    # --- 4. denoise メタデータ読み出し ---
-    # timeline-level metadata["clipwright"]["denoise"] を読み出す。
-    # None のときは後方互換で denoise なし（既存テスト非回帰）。
-    # 存在するときは build_plan 内で DenoiseDirective 検証を行い、
+    # --- 4. denoise / loudness メタデータ読み出し ---
+    # timeline-level metadata["clipwright"] から denoise / loudness を読み出す。
+    # None のときは後方互換でそれぞれなし（既存テスト非回帰・ADR-L6）。
+    # 存在するときは build_plan 内で各 Directive 検証を行い、
     # 不正なら INVALID_INPUT が送出される。
-    raw_denoise = get_clipwright_metadata(tl).get("denoise")
+    clipwright_meta = get_clipwright_metadata(tl)
+    raw_denoise = clipwright_meta.get("denoise")
+    raw_loudness = clipwright_meta.get("loudness")
 
     # --- 5. build_plan ---
-    plan = build_plan(ranges, probe_info, options, denoise=raw_denoise)
+    plan = build_plan(
+        ranges, probe_info, options, denoise=raw_denoise, loudness=raw_loudness
+    )
 
     # --- 6a. dry_run ---
     if dry_run:

@@ -77,4 +77,4 @@ skip_covered = false
 
 # --- uv workspace ---
 [tool.uv.workspace]
-members = ["clipwright-noise", "clipwright-render", "clipwright-silence", "clipwright-transcribe", "clipwright-wrap"]
+members = ["clipwright-loudness", "clipwright-noise", "clipwright-render", "clipwright-silence", "clipwright-transcribe", "clipwright-wrap"]
