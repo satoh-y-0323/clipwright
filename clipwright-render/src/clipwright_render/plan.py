@@ -47,7 +47,7 @@ import opentimelineio as otio
 from clipwright.errors import ClipwrightError, ErrorCode
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from clipwright_render.schemas import RenderOptions
+from clipwright_render.schemas import RenderOptions, SubtitleOptions
 
 # ===========================================================================
 # Denoise スキーマ（clipwright-noise には依存しない・render 内自前定義）
@@ -499,6 +499,131 @@ def resolve_bgm(timeline: otio.schema.Timeline) -> BgmClip | None:
 # ===========================================================================
 
 
+def _escape_filtergraph(path: str) -> str:
+    """filtergraph の filename= / fontsdir= 用パスエスケープを行う。
+
+    実機確認済みエスケープ規則（M2 2026-06-11 / DC-AS-005）:
+    1. バックスラッシュ（\\） → \\\\
+    2. コロン（:） → \\:
+    この順序を守ることで Windows 絶対パス（C:\\...）が cwd 非依存で ffmpeg へ渡せる。
+
+    例: C:\\Users\\sub.srt → C\\:\\\\Users\\\\sub.srt
+    """
+    return path.replace("\\", "\\\\").replace(":", "\\:")
+
+
+def _rgb_to_ass_colour(hex_color: str) -> str:
+    """#RRGGBB 形式の色文字列を ASS PrimaryColour 形式（&H00BBGGRR・8桁）に変換する。
+
+    実機確認済み（M2 2026-06-11 / DC-AM-002）:
+    - 8桁 &H00BBGGRR（AA=00 = 不透明）形式で不透明描画が確実。
+    - 例: #FF0000（赤: R=FF,G=00,B=00）→ &H000000FF（BGR 順）。
+
+    Args:
+        hex_color: '#RRGGBB' 形式の色文字列。
+
+    Returns:
+        '&H00BBGGRR' 形式の ASS PrimaryColour 文字列（大文字）。
+    """
+    # 先頭の # を除去して R/G/B を取り出す
+    hex_str = hex_color.lstrip("#")
+    r = int(hex_str[0:2], 16)
+    g = int(hex_str[2:4], 16)
+    b = int(hex_str[4:6], 16)
+    # ASS は BGR 順・AA=00（不透明）の 8桁
+    return f"&H00{b:02X}{g:02X}{r:02X}"
+
+
+def _build_force_style(subtitle: SubtitleOptions, is_ass: bool) -> str | None:
+    """SubtitleOptions からフィルタグラフ用 force_style 文字列を組み立てて返す。
+
+    ASS 入力時は force_style を不適用とし None を返す（ADR-S6-r2 / DC-AS-002）。
+    スタイル系フィールドが全て None のとき None を返す（force_style= を省略する）。
+
+    Returns:
+        'FontName=...,FontSize=...' 形式の文字列。付与不要のとき None。
+    """
+    if is_ass:
+        # ASS は内蔵スタイルを持つため force_style を適用しない（DC-AS-002）
+        return None
+
+    parts: list[str] = []
+    if subtitle.font_name is not None:
+        parts.append(f"FontName={subtitle.font_name}")
+    if subtitle.font_size is not None:
+        parts.append(f"FontSize={subtitle.font_size}")
+    if subtitle.font_color is not None:
+        ass_colour = _rgb_to_ass_colour(subtitle.font_color)
+        parts.append(f"PrimaryColour={ass_colour}")
+    if subtitle.outline is not None:
+        # :g フォーマットで余分な小数点ゼロを除去する
+        parts.append(f"Outline={subtitle.outline:g}")
+    if subtitle.alignment is not None:
+        parts.append(f"Alignment={subtitle.alignment}")
+    if subtitle.margin_v is not None:
+        parts.append(f"MarginV={subtitle.margin_v}")
+
+    if not parts:
+        return None
+    return ",".join(parts)
+
+
+def _append_subtitle_filter(
+    filter_parts: list[str],
+    video_map_label: str,
+    subtitle: SubtitleOptions,
+) -> str:
+    """字幕段（subtitles フィルタ）を filter_parts に追記し新しい映像ラベルを返す。
+
+    実機確認済み構文（M2 2026-06-11）に従う（ADR-S4-r2 / ADR-S5-r2 / ADR-S6-r2）。
+    timeline_dir 引数は持たない（境界検証は render.py に一本化・DC-AS-001）。
+
+    フィルタ形式:
+    {L_v}subtitles=filename='{esc(path)}'[:fontsdir='{esc(dir)}']
+                  [:force_style='{style}'][:charenc=UTF-8][outvsub]
+
+    ASS 入力時は force_style 不適用・charenc/fontsdir は付与可（DC-AS-002）。
+    SRT/VTT 入力時は charenc=UTF-8 と force_style を付与する（M2 真理値表）。
+
+    Args:
+        filter_parts: filter_complex の各セグメントリスト（破壊的に追記する）。
+        video_map_label: 映像チェーン終端ラベル（'[outv]' 等）。
+        subtitle: SubtitleOptions（path が絶対パスに解決済み・ADR-S5-r2）。
+
+    Returns:
+        新しい video_map_label '[outvsub]'。
+    """
+    path = subtitle.path
+    ext = os.path.splitext(path)[1].lower()
+    is_ass = ext == ".ass"
+
+    # パスをエスケープする（実機確認済み構文: \ → \\\\ then : → \\:）
+    esc_path = _escape_filtergraph(path)
+
+    # subtitles フィルタ組み立て
+    # filename= に絶対パスをシングルクォートで囲む（ADR-S5-r2）
+    filter_str = f"{video_map_label}subtitles=filename='{esc_path}'"
+
+    # fontsdir 付与（ASS/SRT/VTT 問わず指定があれば付与）
+    if subtitle.fonts_dir is not None:
+        esc_dir = _escape_filtergraph(subtitle.fonts_dir)
+        filter_str += f":fontsdir='{esc_dir}'"
+
+    # force_style 付与（SRT/VTT のみ・ASS は内蔵スタイル優先）
+    force_style = _build_force_style(subtitle, is_ass)
+    if force_style is not None:
+        filter_str += f":force_style='{force_style}'"
+
+    # charenc=UTF-8 付与（SRT/VTT のみ・ASS はエンコーディング内包）
+    if not is_ass:
+        filter_str += ":charenc=UTF-8"
+
+    filter_str += "[outvsub]"
+    filter_parts.append(filter_str)
+
+    return "[outvsub]"
+
+
 def _to_seconds(rt: otio.opentime.RationalTime) -> float:
     """RationalTime を秒（小数6桁）に変換する。
 
@@ -752,6 +877,13 @@ def _build_filter_complex(
     else:
         video_map_label = "[outv]"
 
+    # 字幕段注入（video_map_label 確定直後・ADR-S4-r3）。
+    # subtitle=None のとき何もしない（後方互換・ADR-S8）。
+    if options.subtitle is not None:
+        video_map_label = _append_subtitle_filter(
+            filter_parts, video_map_label, options.subtitle
+        )
+
     filter_complex = ";".join(filter_parts)
 
     # 音声 map 終端ラベルを累積パイプで決定する（ADR-L5b・DC-AM-001）:
@@ -952,6 +1084,13 @@ def _build_multi_source_filter_complex(
     # 複数ソース経路では options.width/height による後段 scale は行わない
     # （各クリップ前段で規格統一済み・ADR-C5-r2）
     video_map_label = "[outv]"
+
+    # 字幕段注入（video_map_label 確定直後・ADR-S4-r3）。
+    # subtitle=None のとき何もしない（後方互換・ADR-S8）。
+    if options.subtitle is not None:
+        video_map_label = _append_subtitle_filter(
+            filter_parts, video_map_label, options.subtitle
+        )
 
     filter_complex = ";".join(filter_parts)
 

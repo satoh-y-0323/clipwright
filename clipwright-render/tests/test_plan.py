@@ -2780,3 +2780,750 @@ class TestBuildPlanBgmFadeGuard:
         bgm_clip = _make_bgm_clip(directive=d)
         plan = build_plan(ranges, probe, RenderOptions(), bgm=bgm_clip)  # type: ignore[call-arg]
         assert "afade=t=out" in plan.filter_complex
+
+
+# ===========================================================================
+# 字幕焼き込み拡張テスト（ADR-S4-r2/S4-r3/S5-r2/S2-r2/S6-r2/S6-r3）
+# ===========================================================================
+# 実機確認済み (M2 2026-06-11):
+#   - Windowsパスエスケープ確定構文: \ → \\ then : → \:
+#     例: C:\path\to\sub.srt → C\:\\path\\to\\sub.srt
+#   - VTT直読: 可能 (ffmpeg 8.1.1 subtitles フィルタで RC=0)
+#   - PrimaryColour 6桁 &HBBGGRR: 受理可 / 8桁 &HAABBGGRR: 受理可
+#     不透明描画には AA=00 (8桁) 推奨（6桁のみでは alpha 未定義になる実装依存あり）
+#   - force_style: FontName/FontSize/Outline/Alignment/MarginV 全て受理
+#   - fontsdir: :fontsdir='<esc_path>' で受理
+#   - Alignment 1〜9 全値受理（ASS v4+ numpad: 1=左下 2=中下 3=右下
+#                               4=左中 5=中央 6=右中 7=左上 8=中上 9=右上）
+#   - ASS + force_style: RC=0（内蔵スタイル優先は libass 動作・API エラーなし）
+#   - ASS + charenc=UTF-8: RC=0
+#   - filter_complex 内 [outv]subtitles=...[outvsub]: 全経路で RC=0
+#   - 字幕段は builder 内注入（ADR-S4-r3）・build_plan は video_map_label 不変
+# ===========================================================================
+
+
+def _escape_filtergraph_path(path: str) -> str:
+    """テスト用 filtergraph パスエスケープ関数。
+
+    実機確認済みの確定エスケープ規則（M2 2026-06-11）:
+    1. バックスラッシュ → \\\\
+    2. コロン → \\:
+    この順序を守ることで Windows 絶対パスが cwd 非依存に ffmpeg へ渡せる。
+    """
+    return path.replace("\\", "\\\\").replace(":", "\\:")
+
+
+def _make_subtitle_options(
+    path: str = "/proj/subs.srt",
+    font_name: str | None = None,
+    fonts_dir: str | None = None,
+    font_size: int | None = None,
+    font_color: str | None = None,
+    outline: float | None = None,
+    alignment: int | None = None,
+    margin_v: int | None = None,
+) -> Any:
+    """テスト用 SubtitleOptions 構築ヘルパー。"""
+    from clipwright_render.schemas import SubtitleOptions  # type: ignore[attr-defined]
+
+    return SubtitleOptions(
+        path=path,
+        font_name=font_name,
+        fonts_dir=fonts_dir,
+        font_size=font_size,
+        font_color=font_color,
+        outline=outline,
+        alignment=alignment,
+        margin_v=margin_v,
+    )
+
+
+def _make_subtitle_render_options(**kwargs: Any) -> RenderOptions:
+    """字幕付き RenderOptions を構築するテストヘルパー。"""
+    sub = _make_subtitle_options(**kwargs)
+    return RenderOptions(subtitle=sub)  # type: ignore[call-arg]
+
+
+# ---------------------------------------------------------------------------
+# 観点S1: _append_subtitle_filter — 基本動作（ADR-S4-r2）
+# ---------------------------------------------------------------------------
+
+
+class TestAppendSubtitleFilter:
+    """_append_subtitle_filter の filter 文字列・ラベル返却を検証する（ADR-S4-r2）。"""
+
+    def test_s1_returns_outvsub_label(self) -> None:
+        """_append_subtitle_filter が [outvsub] ラベルを返す（ADR-S4-r2）。"""
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/proj/subs.srt")
+        filter_parts: list[str] = []
+        result = _append_subtitle_filter(filter_parts, "[outv]", sub)
+
+        # Assert
+        assert result == "[outvsub]"
+
+    def test_s1_appends_subtitles_filter_to_filter_parts(self) -> None:
+        """_append_subtitle_filter が filter_parts に subtitles 段を追記する（ADR-S4-r2）。"""
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/proj/subs.srt")
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub)
+
+        assert len(filter_parts) == 1
+        assert "subtitles=" in filter_parts[0]
+
+    def test_s1_filter_part_starts_with_video_map_label(self) -> None:
+        """追記された filter 段が video_map_label から始まる（ADR-S4-r2）。"""
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/proj/subs.srt")
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub)
+
+        assert filter_parts[0].startswith("[outv]")
+
+    def test_s1_filter_part_ends_with_outvsub_label(self) -> None:
+        """追記された filter 段が [outvsub] で終わる（ADR-S4-r2）。"""
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/proj/subs.srt")
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub)
+
+        assert filter_parts[0].endswith("[outvsub]")
+
+    def test_s1_outvscaled_input_label_works(self) -> None:
+        """scale あり経路（[outvscaled]）を video_map_label として受理する（ADR-S4-r2）。"""
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/proj/subs.srt")
+        filter_parts: list[str] = []
+        result = _append_subtitle_filter(filter_parts, "[outvscaled]", sub)
+
+        assert result == "[outvsub]"
+        assert filter_parts[0].startswith("[outvscaled]")
+
+
+# ---------------------------------------------------------------------------
+# 観点S2: エスケープ構文（ADR-S5-r2 / 実機確認済み構文）
+# ---------------------------------------------------------------------------
+
+
+class TestSubtitleFilterEscape:
+    """filtergraph エスケープ構文を検証する（ADR-S5-r2 / M2実機確認）。
+
+    確定エスケープ: \\ → \\\\ then : → \\:
+    Windows絶対パスは render.py が絶対パス化して渡す（ADR-S5-r2）。
+    _append_subtitle_filter はエスケープ済みパスを filename= に埋め込む。
+    """
+
+    def test_s2_unix_path_embedded_in_filename(self) -> None:
+        """UNIX パス（/ のみ）の場合 filename= にパスがそのまま含まれる。"""
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/proj/subs.srt")
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub)
+
+        assert "filename=" in filter_parts[0]
+        assert "subs.srt" in filter_parts[0]
+
+    def test_s2_windows_absolute_path_backslash_escaped(self) -> None:
+        """Windows絶対パス（バックスラッシュ含む）がエスケープされて filename= に含まれる。
+
+        確定エスケープ（M2): \\ → \\\\ then : → \\:
+        例: C:\\Users\\sub.srt → C\\\\:\\\\Users\\\\sub.srt
+        """
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        win_path = r"C:\Users\shoma\proj\sub.srt"
+        # render.py が絶対パス化した後のパスをそのまま渡すと想定
+        sub = _make_subtitle_options(path=win_path)
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub)
+
+        fc_part = filter_parts[0]
+        # コロン ( : ) が \: にエスケープされていること
+        assert "\\:" in fc_part or "C\\\\" in fc_part, (
+            f"Windows パスのエスケープが不正: {fc_part}"
+        )
+
+    def test_s2_path_without_special_chars_embedded_directly(self) -> None:
+        """特殊文字なしパスは変換されずに filename= に含まれる。"""
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/simple/sub.srt")
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub)
+
+        assert "/simple/sub.srt" in filter_parts[0]
+
+
+# ---------------------------------------------------------------------------
+# 観点S3: force_style 組み立て（ADR-S6-r2 / DC-AM-001 / DC-AM-002 / DC-AS-002）
+# ---------------------------------------------------------------------------
+
+
+class TestSubtitleFilterForceStyle:
+    """force_style 文字列の組み立てを検証する（ADR-S6-r2 / DC-AM-001 / DC-AM-002）。
+
+    実機確認済み（M2）:
+    - force_style='FontName=...,FontSize=...,PrimaryColour=&H...,Outline=...,
+                  Alignment=...,MarginV=...' は全て受理
+    - PrimaryColour は 8桁 &HAABBGGRR（AA=00 が不透明）推奨
+    - Alignment は ASS v4+ numpad 1〜9 で全て受理
+    """
+
+    def test_s3_no_style_options_no_force_style(self) -> None:
+        """スタイル系フィールドが全て None のとき force_style が含まれない。"""
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/sub.srt")
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub)
+
+        assert "force_style" not in filter_parts[0]
+
+    def test_s3_font_name_included_in_force_style(self) -> None:
+        """font_name 指定時 force_style に FontName= が含まれる。"""
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/sub.srt", font_name="Arial")
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub)
+
+        assert "FontName=Arial" in filter_parts[0]
+
+    def test_s3_font_size_included_in_force_style(self) -> None:
+        """font_size 指定時 force_style に FontSize= が含まれる。"""
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/sub.srt", font_size=28)
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub)
+
+        assert "FontSize=28" in filter_parts[0]
+
+    def test_s3_outline_included_in_force_style(self) -> None:
+        """outline 指定時 force_style に Outline= が含まれる。"""
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/sub.srt", outline=1.5)
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub)
+
+        assert "Outline=" in filter_parts[0]
+
+    def test_s3_outline_zero_explicit_in_force_style(self) -> None:
+        """outline=0.0 のとき force_style に Outline=0 が含まれる（縁取りなし明示・NR-L-1）。
+
+        0.0 は「縁取りなし」を明示する有効な指定であり、
+        libass 既定（None）とは区別される。:g フォーマットで 0.0 → "0" に変換される。
+        """
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/sub.srt", outline=0.0)
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub)
+
+        assert "Outline=0" in filter_parts[0]
+
+    def test_s3_outline_none_not_in_force_style(self) -> None:
+        """outline=None のとき force_style に Outline キーが含まれない（libass 既定に委ねる・NR-L-1）。
+
+        None は「未指定」を意味し、0.0（縁取りなし明示）とは明確に区別される。
+        """
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/sub.srt", outline=None)
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub)
+
+        assert "Outline" not in filter_parts[0]
+
+    def test_s3_margin_v_included_in_force_style(self) -> None:
+        """margin_v 指定時 force_style に MarginV= が含まれる。"""
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/sub.srt", margin_v=20)
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub)
+
+        assert "MarginV=20" in filter_parts[0]
+
+    def test_s3_alignment_1_included_in_force_style(self) -> None:
+        """alignment=1（左下・ASS v4+）が force_style に Alignment=1 として含まれる（DC-AM-001）。"""
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/sub.srt", alignment=1)
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub)
+
+        assert "Alignment=1" in filter_parts[0]
+
+    def test_s3_alignment_5_included_in_force_style(self) -> None:
+        """alignment=5（中央・ASS v4+）が force_style に Alignment=5 として含まれる（DC-AM-001）。"""
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/sub.srt", alignment=5)
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub)
+
+        assert "Alignment=5" in filter_parts[0]
+
+    def test_s3_alignment_9_included_in_force_style(self) -> None:
+        """alignment=9（右上・ASS v4+）が force_style に Alignment=9 として含まれる（DC-AM-001）。"""
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/sub.srt", alignment=9)
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub)
+
+        assert "Alignment=9" in filter_parts[0]
+
+    def test_s3_font_color_converted_to_ass_primarycolour_8digit(self) -> None:
+        """font_color='#RRGGBB' → force_style に PrimaryColour=&HAABBGGRR（8桁・AA=00）が含まれる（DC-AM-002）。
+
+        M2確認: 8桁 &H00BBGGRR（AA=00 = 不透明）で不透明描画が確実。
+        #FF0000（赤: R=FF G=00 B=00）→ BGR順 &H000000FF。
+        """
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        # 赤: #FF0000 → BGR → &H000000FF (8桁 AA=00)
+        sub = _make_subtitle_options(path="/sub.srt", font_color="#FF0000")
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub)
+
+        fc_part = filter_parts[0]
+        # PrimaryColour= が含まれる
+        assert "PrimaryColour=" in fc_part
+        # BGR変換確認: #FF0000(R=FF,G=00,B=00) → &H000000FF（8桁 AA=00 固定・M2確認済み）
+        assert "&H000000FF" in fc_part, (
+            f"#FF0000 の色変換が不正（8桁 &H00BBGGRR 形式で出力されること）: {fc_part}"
+        )
+
+    def test_s3_font_color_white_converted_correctly(self) -> None:
+        """font_color='#FFFFFF'（白）→ PrimaryColour=&H00FFFFFF が含まれる（DC-AM-002）。
+
+        白: R=FF,G=FF,B=FF → BGR = &HFFFFFF → 8桁: &H00FFFFFF
+        """
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/sub.srt", font_color="#FFFFFF")
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub)
+
+        fc_part = filter_parts[0]
+        assert "PrimaryColour=" in fc_part
+        # 白: R=FF,G=FF,B=FF → BGR = &HFFFFFF → 8桁: &H00FFFFFF（AA=00 固定・M2確認済み）
+        assert "&H00FFFFFF" in fc_part, (
+            f"#FFFFFF の色変換が不正（8桁 &H00BBGGRR 形式で出力されること）: {fc_part}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 観点S4: ASS 入力時の force_style/charenc 制御（DC-AS-002）
+# ---------------------------------------------------------------------------
+
+
+class TestSubtitleFilterAssInput:
+    """ASS 入力時の force_style/charenc 挙動を検証する（DC-AS-002 / ADR-S6-r2）。
+
+    M2確認済み真理値表:
+    - SRT: charenc=UTF-8 + force_style 付与
+    - ASS: force_style 不適用（内蔵スタイル優先）・charenc/fontsdir は実機確認で決定
+    - 本テストでは「ASS は force_style なし」を確定仕様として assert する
+    """
+
+    def test_s4_srt_input_has_force_style_when_style_specified(self) -> None:
+        """.srt 入力 + スタイル指定 → force_style が含まれる（SRT/VTT は force_style 付与）。"""
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/sub.srt", font_size=24)
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub)
+
+        assert "force_style" in filter_parts[0]
+
+    def test_s4_vtt_input_has_force_style_when_style_specified(self) -> None:
+        """.vtt 入力 + スタイル指定 → force_style が含まれる（VTT も SRT と同等）。"""
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/sub.vtt", font_size=24)
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub)
+
+        assert "force_style" in filter_parts[0]
+
+    def test_s4_ass_input_no_force_style_even_when_style_specified(self) -> None:
+        """.ass 入力 + スタイル指定 → force_style は含まれない（ASS は内蔵スタイル優先・DC-AS-002）。"""
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/sub.ass", font_size=24, alignment=2)
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub)
+
+        assert "force_style" not in filter_parts[0]
+
+
+# ---------------------------------------------------------------------------
+# 観点S5: fontsdir 指定（ADR-S2-r2 / M2確認済み）
+# ---------------------------------------------------------------------------
+
+
+class TestSubtitleFilterFontsDir:
+    """fontsdir オプションの付与・不付与を検証する（ADR-S2-r2）。
+
+    M2確認: :fontsdir='<esc_path>' で受理。複合（charenc+fontsdir+force_style）も受理。
+    """
+
+    def test_s5_fontsdir_included_when_specified(self) -> None:
+        """fonts_dir 指定時 fontsdir= が filter に含まれる（M2確認）。"""
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/sub.srt", fonts_dir="/usr/share/fonts")
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub)
+
+        assert "fontsdir=" in filter_parts[0]
+
+    def test_s5_fontsdir_not_included_when_not_specified(self) -> None:
+        """fonts_dir 未指定のとき fontsdir= が含まれない。"""
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/sub.srt")
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub)
+
+        assert "fontsdir=" not in filter_parts[0]
+
+    def test_s5_fontsdir_path_embedded_in_filter(self) -> None:
+        """fonts_dir のパスが filtergraph に含まれる。"""
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(
+            path="/sub.srt", fonts_dir="/usr/share/fonts/truetype"
+        )
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub)
+
+        # フォントディレクトリのパス要素が含まれる（エスケープ後）
+        assert "fonts" in filter_parts[0]
+
+
+# ---------------------------------------------------------------------------
+# 観点S6: build_plan 経由の字幕段注入（ADR-S4-r3 / ADR-S8）
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPlanSubtitle:
+    """build_plan で字幕段が映像終端に注入される動作を検証する（ADR-S4-r3 / ADR-S8）。
+
+    ADR-S4-r3: 字幕段は builder 内（video_map_label 確定直後）に注入する。
+    build_plan は video_map_label を変更しない（[outvsub] は builder 戻り値が確定）。
+    後方互換: subtitle=None のとき filter_complex 不変・video_map_label 不変。
+    """
+
+    def _build_with_subtitle(
+        self,
+        subtitle_path: str = "/proj/subs.srt",
+        font_size: int | None = None,
+        audio_count: int = 1,
+        use_scale: bool = False,
+        use_multi_source: bool = False,
+    ) -> RenderPlan:  # type: ignore[name-defined]
+        """字幕付き build_plan テストヘルパー（単一ソース）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=audio_count, bit_rate=None)
+        sub = _make_subtitle_options(path=subtitle_path, font_size=font_size)
+        opts = RenderOptions(subtitle=sub)  # type: ignore[call-arg]
+        if use_scale:
+            opts = RenderOptions(subtitle=sub, width=1280, height=720)  # type: ignore[call-arg]
+        return build_plan(ranges, probe, opts)
+
+    def test_s6_subtitle_filter_in_filter_complex(self) -> None:
+        """subtitle 指定時 filter_complex に 'subtitles=' が含まれる（ADR-S4-r3）。"""
+        plan = self._build_with_subtitle()
+        assert "subtitles=" in plan.filter_complex
+
+    def test_s6_outvsub_label_in_filter_complex(self) -> None:
+        """subtitle 指定時 filter_complex に [outvsub] が含まれる（ADR-S4-r3）。"""
+        plan = self._build_with_subtitle()
+        assert "[outvsub]" in plan.filter_complex
+
+    def test_s6_ffmpeg_args_maps_outvsub(self) -> None:
+        """subtitle 指定時 -map [outvsub] が ffmpeg_args に含まれる（ADR-S4-r3）。"""
+        plan = self._build_with_subtitle()
+        args_str = " ".join(plan.ffmpeg_args)
+        assert "[outvsub]" in args_str
+
+    def test_s6_ffmpeg_args_does_not_map_outv_when_subtitle(self) -> None:
+        """subtitle 指定時 -map [outv] は ffmpeg_args に含まれない（[outvsub] に差し替え）。"""
+        plan = self._build_with_subtitle()
+        # -map 直後の値は [outvsub] で [outv] は来ない
+        map_indices = [i for i, a in enumerate(plan.ffmpeg_args) if a == "-map"]
+        map_targets = [plan.ffmpeg_args[i + 1] for i in map_indices]
+        assert "[outvsub]" in map_targets
+        assert "[outv]" not in map_targets
+
+    def test_s6_subtitle_appended_after_scale_when_scale_specified(self) -> None:
+        """scale あり + subtitle: [outvscaled] の後に字幕段が入り [outvsub] が終端になる（ADR-S4-r3）。"""
+        plan = self._build_with_subtitle(use_scale=True)
+        fc = plan.filter_complex
+        # scale が含まれる
+        assert "scale=1280:720" in fc
+        # [outvscaled] の後に subtitles が来る（字幕は scale 後の出力解像度に焼く）
+        assert "[outvscaled]subtitles=" in fc or "[outvscaled]" in fc
+        # 最終 map は [outvsub]
+        args_str = " ".join(plan.ffmpeg_args)
+        assert "[outvsub]" in args_str
+
+    def test_s6_audio_map_label_unchanged_with_subtitle(self) -> None:
+        """字幕付き build_plan で audio_map_label ([outa]) は変化しない（ADR-S4-r3 独立性）。"""
+        plan = self._build_with_subtitle(audio_count=1)
+        args_str = " ".join(plan.ffmpeg_args)
+        assert "[outa]" in args_str
+
+    def test_s6_subtitle_none_filter_complex_unchanged(self) -> None:
+        """subtitle=None のとき filter_complex が subtitle なし版と完全一致する（ADR-S8 後方互換・最重要）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+
+        plan_no_sub = build_plan(ranges, probe, RenderOptions())
+        plan_sub_none = build_plan(ranges, probe, RenderOptions(subtitle=None))  # type: ignore[call-arg]
+
+        # subtitle=None は完全後方互換
+        assert plan_no_sub.filter_complex == plan_sub_none.filter_complex
+
+    def test_s6_subtitle_none_video_map_unchanged(self) -> None:
+        """subtitle=None のとき ffmpeg_args の map ラベルが変化しない（ADR-S8 後方互換）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+
+        plan_no_sub = build_plan(ranges, probe, RenderOptions())
+        plan_sub_none = build_plan(ranges, probe, RenderOptions(subtitle=None))  # type: ignore[call-arg]
+
+        assert plan_no_sub.ffmpeg_args == plan_sub_none.ffmpeg_args
+
+    def test_s6_subtitle_none_no_outvsub_in_filter_complex(self) -> None:
+        """subtitle=None のとき [outvsub] が filter_complex に含まれない（後方互換）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+        plan = build_plan(ranges, probe, RenderOptions())
+
+        assert "[outvsub]" not in plan.filter_complex
+
+
+# ---------------------------------------------------------------------------
+# 観点S7: 複数ソース経路での字幕段注入（ADR-S4-r3）
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPlanSubtitleMultiSource:
+    """複数ソース経路でも字幕段が映像終端に注入される（ADR-S4-r3）。"""
+
+    def _build_multi_with_subtitle(
+        self,
+        subtitle_path: str = "/proj/subs.srt",
+    ) -> RenderPlan:  # type: ignore[name-defined]
+        """複数ソース + 字幕の build_plan テストヘルパー。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        clips = [
+            _make_clip("/src/a.mp4", 0.0, 3.0),
+            _make_clip("/src/b.mp4", 0.0, 2.0),
+        ]
+        tl = _make_timeline_with_clips(clips)
+        ranges = resolve_kept_ranges(tl)
+        source_probes = {
+            "/src/a.mp4": _make_probe(audio_count=1, width=1920, height=1080, fps=30.0),
+            "/src/b.mp4": _make_probe(audio_count=1, width=1920, height=1080, fps=30.0),
+        }
+        sub = _make_subtitle_options(path=subtitle_path)
+        opts = RenderOptions(subtitle=sub)  # type: ignore[call-arg]
+        return build_plan(
+            ranges,
+            source_probes["/src/a.mp4"],
+            opts,
+            source_probes=source_probes,
+        )
+
+    def test_s7_multi_source_subtitle_in_filter_complex(self) -> None:
+        """複数ソース経路で subtitle 指定時 filter_complex に 'subtitles=' が含まれる。"""
+        plan = self._build_multi_with_subtitle()
+        assert "subtitles=" in plan.filter_complex
+
+    def test_s7_multi_source_outvsub_in_filter_complex(self) -> None:
+        """複数ソース経路で [outvsub] が filter_complex に含まれる（ADR-S4-r3）。"""
+        plan = self._build_multi_with_subtitle()
+        assert "[outvsub]" in plan.filter_complex
+
+    def test_s7_multi_source_ffmpeg_args_maps_outvsub(self) -> None:
+        """複数ソース経路で -map [outvsub] が ffmpeg_args に含まれる（ADR-S4-r3）。"""
+        plan = self._build_multi_with_subtitle()
+        args_str = " ".join(plan.ffmpeg_args)
+        assert "[outvsub]" in args_str
+
+    def test_s7_multi_source_audio_map_label_unchanged(self) -> None:
+        """複数ソース + 字幕で audio_map_label は不変（字幕は映像専用・ADR-S4-r3）。"""
+        plan = self._build_multi_with_subtitle()
+        args_str = " ".join(plan.ffmpeg_args)
+        assert "[outa]" in args_str
+
+
+# ---------------------------------------------------------------------------
+# 観点S8: BGM + 字幕の独立性（ADR-S4-r3）
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPlanSubtitleAndBgmIndependence:
+    """字幕段と BGM 段が独立していることを検証する（ADR-S4-r3）。
+
+    ADR-S4-r3: 字幕は builder 内（video チェーン側）で注入。
+    BGM は build_plan 内（audio 側）で追記。両者は独立。
+    字幕段は BGM 追記より前（video_map_label が確定してから BGM が audio に追記される）。
+    """
+
+    def test_s8_subtitle_and_bgm_both_present(self) -> None:
+        """subtitle + BGM 両方指定 → filter_complex に subtitles と BGM 両方含まれる。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+        sub = _make_subtitle_options(path="/proj/subs.srt")
+        opts = RenderOptions(subtitle=sub)  # type: ignore[call-arg]
+        bgm_clip = _make_bgm_clip()
+        plan = build_plan(ranges, probe, opts, bgm=bgm_clip)  # type: ignore[call-arg]
+
+        fc = plan.filter_complex
+        assert "subtitles=" in fc
+        assert "[outa_bgm]" in fc
+
+    def test_s8_subtitle_video_map_is_outvsub_with_bgm(self) -> None:
+        """subtitle + BGM: video は [outvsub] にマップされる（BGM は audio のみ）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+        sub = _make_subtitle_options(path="/proj/subs.srt")
+        opts = RenderOptions(subtitle=sub)  # type: ignore[call-arg]
+        bgm_clip = _make_bgm_clip()
+        plan = build_plan(ranges, probe, opts, bgm=bgm_clip)  # type: ignore[call-arg]
+
+        args_str = " ".join(plan.ffmpeg_args)
+        assert "[outvsub]" in args_str
+        assert "[outa_bgm]" in args_str
+
+    def test_s8_subtitle_before_bgm_in_filter_complex(self) -> None:
+        """filter_complex 内で字幕段（[outvsub]）が BGM 段（[outa_bgm]）より前に位置する（ADR-S4-r3）。"""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            build_plan,
+            resolve_kept_ranges,
+        )
+
+        tl = _make_single_source_timeline_with_audio()
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=1, bit_rate=None)
+        sub = _make_subtitle_options(path="/proj/subs.srt")
+        opts = RenderOptions(subtitle=sub)  # type: ignore[call-arg]
+        bgm_clip = _make_bgm_clip()
+        plan = build_plan(ranges, probe, opts, bgm=bgm_clip)  # type: ignore[call-arg]
+
+        fc = plan.filter_complex
+        outvsub_pos = fc.find("[outvsub]")
+        outa_bgm_pos = fc.find("[outa_bgm]")
+        assert outvsub_pos != -1, "[outvsub] が filter_complex に見つからない"
+        assert outa_bgm_pos != -1, "[outa_bgm] が filter_complex に見つからない"
+        # 字幕段が BGM 段より前に現れる
+        assert outvsub_pos < outa_bgm_pos, (
+            f"字幕段({outvsub_pos}) が BGM 段({outa_bgm_pos}) より後ろにある"
+        )

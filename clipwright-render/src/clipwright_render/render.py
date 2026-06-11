@@ -42,6 +42,9 @@ from clipwright_render.schemas import RenderOptions
 # 出力拡張子ホワイトリスト（DC-AM-003）
 _ALLOWED_EXTENSIONS = frozenset({".mp4", ".mkv", ".mov", ".webm"})
 
+# 字幕ファイル拡張子ホワイトリスト（ADR-S3）
+_ALLOWED_SUBTITLE_EXTENSIONS = frozenset({".srt", ".vtt", ".ass"})
+
 
 def _probe(source: str) -> ProbeInfo:
     """inspect_media を呼び出して ProbeInfo を返す（AD-3 / ADR-C2-r2）。
@@ -109,36 +112,49 @@ def _probe(source: str) -> ProbeInfo:
     )
 
 
-def _check_source_within_timeline_dir(timeline_path: Path, source: str) -> None:
-    """source パスが timeline 親ディレクトリ配下にあることを検証する（Sec M-2）。
+def _check_within_timeline_dir(
+    timeline_path: Path,
+    path_to_check: str,
+    kind: str,
+    hint_detail: str,
+) -> None:
+    """指定パスが timeline 親ディレクトリ配下にあることを検証する共通ヘルパー。
 
-    OTIO target_url に任意パスが埋め込まれた悪意ある OTIO への対策。
-    単一 source は OTIO と同一ディレクトリ配下に配置することを前提とする。
+    _check_source_within_timeline_dir・_check_subtitle_within_timeline_dir の
+    共通ロジックを一本化する（DRY 原則・CR-M-001）。
+    再帰配下を許可し、timeline dir のツリー外を指す場合のみ
+    PATH_NOT_ALLOWED を送出する。
+    resolve() 失敗時は absolute() ベースの best-effort 比較に
+    フォールバックする（SR L-1）。
 
     Args:
         timeline_path: OTIO タイムラインファイルのパス。
-        source: OTIO target_url から取得したメディアソースパス。
+        path_to_check: 境界検証対象のパス文字列。
+        kind: エラーメッセージ用の種別ラベル
+            （例: "source ファイル" / "字幕ファイル"）。
+        hint_detail: エラーヒントに使う具体的なファイル種別説明
+            （例: "ソースファイル"）。
 
     Raises:
-        ClipwrightError: PATH_NOT_ALLOWED（source がプロジェクト境界外を指す場合）。
+        ClipwrightError: PATH_NOT_ALLOWED（パスがプロジェクト境界外を指す場合）。
     """
     try:
         allowed_base = timeline_path.parent.resolve()
-        source_resolved = Path(source).resolve()
+        target_resolved = Path(path_to_check).resolve()
         # パス区切り文字を含めて比較し、ディレクトリ名の前方一致誤検知を防ぐ
-        source_str = str(source_resolved)
+        target_str = str(target_resolved)
         base_str = str(allowed_base)
         if not (
-            source_str == base_str
-            or source_str.startswith(base_str + "/")
-            or source_str.startswith(base_str + "\\")
+            target_str == base_str
+            or target_str.startswith(base_str + "/")
+            or target_str.startswith(base_str + "\\")
         ):
             raise ClipwrightError(
                 code=ErrorCode.PATH_NOT_ALLOWED,
-                message="source ファイルがプロジェクト境界外を指しています。",
+                message=f"{kind}がプロジェクト境界外を指しています。",
                 hint=(
                     "OTIO タイムラインと同じディレクトリ配下の"
-                    "ソースファイルを使用してください。"
+                    f"{hint_detail}を使用してください。"
                 ),
             )
     except ClipwrightError:
@@ -152,18 +168,18 @@ def _check_source_within_timeline_dir(timeline_path: Path, source: str) -> None:
         # （_check_path_not_allowed の既存フォールバック作法に倣う）。
         try:
             allowed_base_abs = str(timeline_path.parent.absolute())
-            source_abs = str(Path(source).absolute())
+            target_abs = str(Path(path_to_check).absolute())
             if not (
-                source_abs == allowed_base_abs
-                or source_abs.startswith(allowed_base_abs + "/")
-                or source_abs.startswith(allowed_base_abs + "\\")
+                target_abs == allowed_base_abs
+                or target_abs.startswith(allowed_base_abs + "/")
+                or target_abs.startswith(allowed_base_abs + "\\")
             ):
                 raise ClipwrightError(
                     code=ErrorCode.PATH_NOT_ALLOWED,
-                    message="source ファイルがプロジェクト境界外を指しています。",
+                    message=f"{kind}がプロジェクト境界外を指しています。",
                     hint=(
                         "OTIO タイムラインと同じディレクトリ配下の"
-                        "ソースファイルを使用してください。"
+                        f"{hint_detail}を使用してください。"
                     ),
                 )
         except ClipwrightError:
@@ -171,6 +187,48 @@ def _check_source_within_timeline_dir(timeline_path: Path, source: str) -> None:
         except OSError:
             # absolute() も失敗した場合のみスキップ（本当に解決不能なパスのみ）
             pass
+
+
+def _check_source_within_timeline_dir(timeline_path: Path, source: str) -> None:
+    """source パスが timeline 親ディレクトリ配下にあることを検証する（Sec M-2）。
+
+    OTIO target_url に任意パスが埋め込まれた悪意ある OTIO への対策。
+    単一 source は OTIO と同一ディレクトリ配下に配置することを前提とする。
+
+    Args:
+        timeline_path: OTIO タイムラインファイルのパス。
+        source: OTIO target_url から取得したメディアソースパス。
+
+    Raises:
+        ClipwrightError: PATH_NOT_ALLOWED（source がプロジェクト境界外を指す場合）。
+    """
+    _check_within_timeline_dir(
+        timeline_path,
+        source,
+        kind="source ファイル",
+        hint_detail="ソースファイル",
+    )
+
+
+def _check_subtitle_within_timeline_dir(timeline_path: Path, subtitle: str) -> None:
+    """字幕パスが timeline 親ディレクトリ配下にあることを検証する（ADR-S7）。
+
+    timeline dir のツリー外を指す場合のみ PATH_NOT_ALLOWED を送出し、
+    サブディレクトリ内の字幕ファイルは許可する。
+
+    Args:
+        timeline_path: OTIO タイムラインファイルのパス。
+        subtitle: 字幕ファイルパス。
+
+    Raises:
+        ClipwrightError: PATH_NOT_ALLOWED（字幕がプロジェクト境界外を指す場合）。
+    """
+    _check_within_timeline_dir(
+        timeline_path,
+        subtitle,
+        kind="字幕ファイル",
+        hint_detail="字幕ファイル",
+    )
 
 
 def _check_path_not_allowed(output_path: Path, source: str) -> None:
@@ -360,6 +418,69 @@ def _render_inner(
                     " BGM ソースファイルを配置してください。"
                 ),
             )
+
+    # --- 4c. 字幕オプションの境界検証・存在確認・拡張子 WL・fonts_dir 検証 ---
+    # options.subtitle が非 None のとき一本化して検証し、絶対パス化する
+    # （ADR-S4-r2/S5-r2）。subtitle=None は完全スキップ（後方互換・ADR-S8）。
+    if options.subtitle is not None:
+        sub_path_raw = options.subtitle.path
+
+        # 字幕パスが timeline ファイルと同じディレクトリにあることを検証する（ADR-S7）
+        _check_subtitle_within_timeline_dir(timeline_path, sub_path_raw)
+
+        # 字幕ファイル存在確認（FILE_NOT_FOUND・basename のみ・CWE-209）
+        sub_path_obj = Path(sub_path_raw)
+        if not sub_path_obj.exists():
+            raise ClipwrightError(
+                code=ErrorCode.FILE_NOT_FOUND,
+                message=f"字幕ファイルが見つかりません: {sub_path_obj.name}",
+                hint=(
+                    "有効な字幕ファイルパスを指定してください（.srt / .vtt / .ass）。"
+                ),
+            )
+
+        # 拡張子ホワイトリスト検証（INVALID_INPUT・ADR-S3）
+        sub_ext = sub_path_obj.suffix.lower()
+        if sub_ext not in _ALLOWED_SUBTITLE_EXTENSIONS:
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message=(
+                    f"字幕ファイルの拡張子が不正です: {sub_ext!r}。"
+                    f"許可: {sorted(_ALLOWED_SUBTITLE_EXTENSIONS)}"
+                ),
+                hint=(
+                    "字幕ファイルの拡張子を"
+                    " .srt / .vtt / .ass のいずれかにしてください。"
+                ),
+            )
+
+        # fonts_dir 指定時: 存在するディレクトリかを検証する（ADR-S7）
+        # 境界強制はしない（システム/同梱フォント置き場を指すのが自然）
+        if options.subtitle.fonts_dir is not None:
+            fonts_dir_path = Path(options.subtitle.fonts_dir)
+            if not fonts_dir_path.is_dir():
+                raise ClipwrightError(
+                    code=ErrorCode.INVALID_INPUT,
+                    message=(
+                        "指定された fonts_dir が存在しないか、"
+                        "ディレクトリではありません。"
+                    ),
+                    hint=(
+                        "有効なフォントディレクトリのパスを"
+                        " fonts_dir に指定してください。"
+                    ),
+                )
+
+        # 字幕パス・fonts_dir を絶対パス化して options に反映する（ADR-S5-r2）
+        # filename=/fontsdir= が cwd 非依存に開けるよう resolve() を適用する。
+        # Pydantic モデルのため model_copy で新規インスタンスを生成する。
+        subtitle_abs = str(sub_path_obj.resolve())
+        update_dict: dict[str, Any] = {"path": subtitle_abs}
+        if options.subtitle.fonts_dir is not None:
+            # fonts_dir も絶対パス化する（SR-INJ-002・ADR-S5-r2 適用範囲拡張）
+            update_dict["fonts_dir"] = str(Path(options.subtitle.fonts_dir).resolve())
+        updated_subtitle = options.subtitle.model_copy(update=update_dict)
+        options = options.model_copy(update={"subtitle": updated_subtitle})
 
     # output 既存 + overwrite=False → INVALID_INPUT（DC-AM-002）
     if output_path.exists() and not options.overwrite:

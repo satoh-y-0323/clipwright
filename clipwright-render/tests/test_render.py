@@ -2776,3 +2776,737 @@ class TestBgmDryRun:
         assert "amix" in fc or "alimiter" in fc or "bgm" in fc.lower(), (
             f"filter_complex に BGM 段が見当たらない: {fc}"
         )
+
+
+# ---------------------------------------------------------------------------
+# 字幕焼き込みオーケストレーションテスト（§7 v2 ADR-S4-r2/S5-r2/S7/S10）
+# ---------------------------------------------------------------------------
+# - options.subtitle があるとき境界検証・絶対パス化・拡張子 WL を _render_inner で適用。
+# - 字幕は -filter_complex 内 filename= 直読のため -i は増えない（ADR-S10）。
+# - subtitle=None は後方互換（字幕検証スキップ・既存挙動不変・ADR-S8）。
+# inspect_media / resolve_tool / run / build_plan はすべてモック。
+# 実 ffmpeg/ffprobe バイナリは一切呼ばない。
+# ---------------------------------------------------------------------------
+
+
+def _make_subtitle_render_setup(
+    tmp_path: Path,
+    *,
+    subtitle_filename: str = "subs.srt",
+    inside_timeline_dir: bool = True,
+) -> tuple[str, str, str, Path]:
+    """字幕テスト用セットアップヘルパー。
+
+    inside_timeline_dir=True  : timeline を tmp_path/project/ に置き、
+                                 字幕も project/ 直下に配置（境界内）。
+    inside_timeline_dir=False : timeline を tmp_path/project/ に置き、
+                                 字幕を tmp_path/elsewhere/ に配置（真の境界外）。
+    ソース/BGM 境界テストと同一の「project vs outside」パターンで統一する。
+
+    Returns:
+        (source_path, subtitle_path, output_path, tl_path)
+    """
+    project_dir = tmp_path / "project"
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    src = str(project_dir / "source.mp4")
+    Path(src).touch()
+
+    if inside_timeline_dir:
+        # timeline と同じ project ディレクトリに字幕ファイルを配置
+        sub_path = project_dir / subtitle_filename
+        sub_path.touch()
+        subtitle = str(sub_path)
+    else:
+        # timeline の外（tmp_path/elsewhere/）に配置 → 真の境界外
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir(parents=True, exist_ok=True)
+        sub_path = elsewhere / subtitle_filename
+        sub_path.touch()
+        subtitle = str(sub_path)
+
+    tl_path = project_dir / "tl.otio"
+    _write_timeline(tl_path, [_make_clip(src, 0.0, 5.0)])
+    output = str(project_dir / "out.mp4")
+    return src, subtitle, output, tl_path
+
+
+class TestSubtitleBoundaryAndValidation:
+    """観点1〜5: 字幕パス境界検証・拡張子 WL・fonts_dir 検証（ADR-S7/S4-r2/S5-r2）。
+
+    _render_inner が options.subtitle を受け取ったとき：
+    - timeline dir 配下強制（_check_source_within_timeline_dir）
+    - 存在確認（FILE_NOT_FOUND・basename のみ・CWE-209）
+    - 拡張子 WL（srt/vtt/ass・許可外 INVALID_INPUT）
+    - fonts_dir 不在 → INVALID_INPUT
+    - 絶対パス化して build_plan に渡す（DC-AS-005）
+
+    SubtitleOptions・RenderOptions.subtitle は未実装のため
+    すべてのテストが ImportError / AttributeError で Red になること。
+    """
+
+    def test_subtitle_within_timeline_dir_builds_plan_with_absolute_path(
+        self, tmp_path: Path
+    ) -> None:
+        """観点1: 字幕パスが timeline dir 内 → 境界検証を通過し、
+        絶対パス化された字幕パスで build_plan に options が渡ること（ADR-S7/S5-r2）。
+
+        build_plan に渡された options の subtitle.path が絶対パスであることを
+        厳密検証する（filename= が cwd 非依存・DC-AS-005）。
+        未実装のため SubtitleOptions が存在せず ImportError で失敗すること（Red）。
+        """
+        from clipwright_render.render import render_timeline
+
+        src, subtitle, output, tl_path = _make_subtitle_render_setup(tmp_path)
+
+        # SubtitleOptions と RenderOptions.subtitle は未実装 → type: ignore で書く
+        from clipwright_render.schemas import (  # type: ignore[attr-defined]
+            RenderOptions,
+            SubtitleOptions,
+        )
+
+        options = RenderOptions(
+            subtitle=SubtitleOptions(path=subtitle)  # type: ignore[call-arg]
+        )
+
+        build_plan_options_received: list[Any] = []
+
+        from clipwright_render.plan import RenderPlan
+
+        def _fake_build_plan(*args: Any, **kwargs: Any) -> RenderPlan:
+            # options は第3引数または keyword
+            if len(args) >= 3:
+                build_plan_options_received.append(args[2])
+            else:
+                build_plan_options_received.append(kwargs.get("options"))
+            return RenderPlan(
+                filter_complex="[0:v]trim=0:5,setpts=PTS-STARTPTS[v0];[v0]concat=n=1:v=1:a=0[outv]",
+                ffmpeg_args=["-filter_complex", "...", "-map", "[outv]"],
+                segment_count=1,
+                total_duration_seconds=5.0,
+                input_sources=[src],
+            )
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=src),
+            ),
+            patch(
+                "clipwright_render.render.resolve_bgm",
+                return_value=None,
+            ),
+            patch(
+                "clipwright_render.render.build_plan",
+                side_effect=_fake_build_plan,
+            ),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=options,
+                dry_run=True,
+            )
+
+        assert result["ok"] is True, f"境界内字幕で失敗: {result.get('error')}"
+        assert len(build_plan_options_received) == 1
+        received_options = build_plan_options_received[0]
+        # subtitle.path が絶対パスであること（DC-AS-005・filename= が cwd 非依存）
+        assert received_options.subtitle is not None
+        received_path = received_options.subtitle.path
+        assert Path(received_path).is_absolute(), (
+            f"subtitle.path が絶対パスでない: {received_path}"
+        )
+        # 絶対パスが期待する字幕ファイルを指すこと
+        assert Path(received_path).name == "subs.srt"
+
+    def test_subtitle_outside_timeline_dir_raises_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """観点2: 字幕パスが timeline dir 外 → PATH_NOT_ALLOWED（ADR-S7）。
+
+        _check_source_within_timeline_dir が字幕パスにも適用されること。
+        未実装のため render_timeline が PATH_NOT_ALLOWED を返さず ok=True または
+        別エラーとなること（Red）。
+        """
+        from clipwright_render.render import render_timeline
+
+        src, subtitle, output, tl_path = _make_subtitle_render_setup(
+            tmp_path, inside_timeline_dir=False
+        )
+
+        from clipwright_render.schemas import (  # type: ignore[attr-defined]
+            RenderOptions,
+            SubtitleOptions,
+        )
+
+        options = RenderOptions(
+            subtitle=SubtitleOptions(path=subtitle)  # type: ignore[call-arg]
+        )
+
+        with patch(
+            "clipwright_render.render.inspect_media",
+            return_value=_make_media_info(path=src),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=options,
+            )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
+
+    def test_subtitle_in_subdir_of_timeline_dir_is_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """観点2b: 字幕が timeline dir のサブディレクトリ内 → 境界検証を通過（ADR-S7 再帰配下許可）。
+
+        _check_source_within_timeline_dir と同一の「再帰配下許可」ロジックにより、
+        timeline_dir/subs/foo.srt のような配置は PATH_NOT_ALLOWED にならないこと。
+        ソース/BGM の境界テストと同じ許可条件。
+        """
+        from clipwright_render.render import render_timeline
+        from clipwright_render.schemas import (  # type: ignore[attr-defined]
+            RenderOptions,
+            SubtitleOptions,
+        )
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        subs_dir = project_dir / "subs"
+        subs_dir.mkdir()
+
+        src = str(project_dir / "source.mp4")
+        Path(src).touch()
+        sub_in_subdir = str(subs_dir / "foo.srt")
+        Path(sub_in_subdir).touch()
+
+        tl_path = project_dir / "tl.otio"
+        _write_timeline(tl_path, [_make_clip(src, 0.0, 5.0)])
+        output = str(project_dir / "out.mp4")
+
+        options = RenderOptions(
+            subtitle=SubtitleOptions(path=sub_in_subdir)  # type: ignore[call-arg]
+        )
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=src),
+            ),
+            patch(
+                "clipwright_render.render.resolve_bgm",
+                return_value=None,
+            ),
+            patch(
+                "clipwright_render.render.build_plan",
+                return_value=__import__(
+                    "clipwright_render.plan", fromlist=["RenderPlan"]
+                ).RenderPlan(
+                    filter_complex="[0:v]trim=0:5,setpts=PTS-STARTPTS[v0];[v0]concat=n=1:v=1:a=0[outv]",
+                    ffmpeg_args=["-filter_complex", "...", "-map", "[outv]"],
+                    segment_count=1,
+                    total_duration_seconds=5.0,
+                    input_sources=[src],
+                ),
+            ),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=options,
+                dry_run=True,
+            )
+
+        # サブディレクトリ内字幕は境界検証を通過して ok=True になること（S-M-3 / CR-T-004）
+        # 「PATH_NOT_ALLOWED でないこと」ではなく「ok=True であること」を確定的に assert する
+        assert result["ok"] is True, (
+            f"サブディレクトリ内字幕が誤って失敗した: {result.get('error')}"
+        )
+
+    def test_subtitle_not_found_returns_file_not_found_basename_only(
+        self, tmp_path: Path
+    ) -> None:
+        """観点3: 字幕パスが存在しない → FILE_NOT_FOUND・basename のみ・絶対パス非露出（CWE-209）。
+
+        error.message に絶対パス（ディレクトリ部分）が含まれず basename のみを含むこと。
+        未実装のため render_timeline が FILE_NOT_FOUND を返さないことで失敗する（Red）。
+        """
+        from clipwright_render.render import render_timeline
+
+        src = str(tmp_path / "source.mp4")
+        Path(src).touch()
+        # 字幕ファイルは作成しない（存在しないパス）
+        missing_sub = str(tmp_path / "missing_subs.srt")
+
+        tl_path = tmp_path / "tl.otio"
+        _write_timeline(tl_path, [_make_clip(src, 0.0, 5.0)])
+        output = str(tmp_path / "out.mp4")
+
+        from clipwright_render.schemas import (  # type: ignore[attr-defined]
+            RenderOptions,
+            SubtitleOptions,
+        )
+
+        options = RenderOptions(
+            subtitle=SubtitleOptions(path=missing_sub)  # type: ignore[call-arg]
+        )
+
+        with patch(
+            "clipwright_render.render.inspect_media",
+            return_value=_make_media_info(path=src),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=options,
+            )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
+        error_message: str = result["error"]["message"]
+        # 絶対パス（ディレクトリ部分）が露出していない（CWE-209）
+        assert str(tmp_path) not in error_message
+        # basename は含まれる
+        assert "missing_subs.srt" in error_message
+
+    @pytest.mark.parametrize("bad_ext", [".txt", ".pdf", ".subs", ".xml", ""])
+    def test_invalid_subtitle_extension_raises_invalid_input(
+        self, tmp_path: Path, bad_ext: str
+    ) -> None:
+        """観点4: 許可外拡張子（.srt/.vtt/.ass 以外）→ INVALID_INPUT（ADR-S3）。
+
+        未実装のため render_timeline が INVALID_INPUT を返さないことで失敗する（Red）。
+        """
+        from clipwright_render.render import render_timeline
+
+        src = str(tmp_path / "source.mp4")
+        Path(src).touch()
+        # 拡張子違反のファイルを作成（存在はするが拡張子が WL 外）
+        bad_sub = tmp_path / f"subs{bad_ext}"
+        bad_sub.touch()
+
+        tl_path = tmp_path / "tl.otio"
+        _write_timeline(tl_path, [_make_clip(src, 0.0, 5.0)])
+        output = str(tmp_path / "out.mp4")
+
+        from clipwright_render.schemas import (  # type: ignore[attr-defined]
+            RenderOptions,
+            SubtitleOptions,
+        )
+
+        options = RenderOptions(
+            subtitle=SubtitleOptions(path=str(bad_sub))  # type: ignore[call-arg]
+        )
+
+        with patch(
+            "clipwright_render.render.inspect_media",
+            return_value=_make_media_info(path=src),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=options,
+            )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+
+    def test_fonts_dir_not_found_raises_invalid_input(self, tmp_path: Path) -> None:
+        """観点5: fonts_dir が存在しないディレクトリ → INVALID_INPUT（ADR-S7）。
+
+        fonts_dir は境界強制なしだが存在するディレクトリの検証は行う。
+        未実装のため render_timeline が INVALID_INPUT を返さないことで失敗する（Red）。
+        """
+        from clipwright_render.render import render_timeline
+
+        src, subtitle, output, tl_path = _make_subtitle_render_setup(tmp_path)
+        missing_fonts_dir = str(tmp_path / "nonexistent_fonts")
+
+        from clipwright_render.schemas import (  # type: ignore[attr-defined]
+            RenderOptions,
+            SubtitleOptions,
+        )
+
+        options = RenderOptions(
+            subtitle=SubtitleOptions(  # type: ignore[call-arg]
+                path=subtitle,
+                fonts_dir=missing_fonts_dir,
+            )
+        )
+
+        with patch(
+            "clipwright_render.render.inspect_media",
+            return_value=_make_media_info(path=src),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=options,
+            )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        # fonts_dir の絶対パスがエラーメッセージに露出しないこと（SR-R-001 / CWE-209）
+        error_message: str = result["error"]["message"]
+        assert str(tmp_path) not in error_message, (
+            f"fonts_dir の親パス（tmp_path）がエラーメッセージに露出している: {error_message}"
+        )
+        assert missing_fonts_dir not in error_message, (
+            f"fonts_dir の絶対パスがエラーメッセージに露出している: {error_message}"
+        )
+
+    def test_relative_fonts_dir_is_absolutized_before_build_plan(
+        self, tmp_path: Path
+    ) -> None:
+        """観点SR-M-2: 相対パスの fonts_dir → 絶対パス化されて build_plan に渡ること（SR-INJ-002）。
+
+        ADR-S5-r2 の適用範囲が fonts_dir にも拡張されており、
+        render.py が fonts_dir を resolve() して絶対パスにしてから build_plan に渡す
+        ことを確認する（SR-INJ-002）。
+        """
+        from clipwright_render.plan import RenderPlan
+        from clipwright_render.render import render_timeline
+
+        src, subtitle, output, tl_path = _make_subtitle_render_setup(tmp_path)
+        # fonts_dir を実在するディレクトリ（tmp_path 自体）として相対パスで指定する
+        fonts_dir_abs = tmp_path
+        # os.getcwd() が tmp_path の親の場合を想定して、相対パスを計算する
+        import os
+
+        try:
+            fonts_dir_rel = os.path.relpath(str(fonts_dir_abs))
+        except ValueError:
+            # Windows でドライブが異なる場合は skip
+            pytest.skip("相対パス変換ができない環境（異なるドライブ）")
+
+        from clipwright_render.schemas import (  # type: ignore[attr-defined]
+            RenderOptions,
+            SubtitleOptions,
+        )
+
+        options = RenderOptions(
+            subtitle=SubtitleOptions(  # type: ignore[call-arg]
+                path=subtitle,
+                fonts_dir=fonts_dir_rel,  # 相対パスで指定
+            )
+        )
+
+        build_plan_options_received: list[Any] = []
+
+        def _fake_build_plan(*args: Any, **kwargs: Any) -> RenderPlan:
+            if len(args) >= 3:
+                build_plan_options_received.append(args[2])
+            else:
+                build_plan_options_received.append(kwargs.get("options"))
+            return RenderPlan(
+                filter_complex="[0:v]trim=0:5,setpts=PTS-STARTPTS[v0];[v0]concat=n=1:v=1:a=0[outv]",
+                ffmpeg_args=["-filter_complex", "...", "-map", "[outv]"],
+                segment_count=1,
+                total_duration_seconds=5.0,
+                input_sources=[src],
+            )
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=src),
+            ),
+            patch(
+                "clipwright_render.render.resolve_bgm",
+                return_value=None,
+            ),
+            patch(
+                "clipwright_render.render.build_plan",
+                side_effect=_fake_build_plan,
+            ),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=options,
+                dry_run=True,
+            )
+
+        assert result["ok"] is True, f"相対 fonts_dir で失敗: {result.get('error')}"
+        assert len(build_plan_options_received) == 1
+        received_options = build_plan_options_received[0]
+        assert received_options.subtitle is not None
+        received_fonts_dir = received_options.subtitle.fonts_dir
+        assert received_fonts_dir is not None
+        # fonts_dir が絶対パスに変換されていること（SR-INJ-002・ADR-S5-r2 拡張）
+        assert Path(received_fonts_dir).is_absolute(), (
+            f"fonts_dir が絶対パスに変換されていない: {received_fonts_dir}"
+        )
+        # 絶対パスが正しい場所を指すこと
+        assert Path(received_fonts_dir).resolve() == fonts_dir_abs.resolve(), (
+            f"fonts_dir の絶対パスが期待値と異なる: {received_fonts_dir}"
+        )
+
+
+class TestSubtitleNoAdditionalInputFlag:
+    """観点6: 字幕あり時も -i は input_sources のみ（ADR-S10）。
+
+    字幕は -filter_complex 内 filename= で直読みのため -i は増えない。
+    BGM と異なり追加 -i なし。
+    未実装のため -i が増えるか AttributeError で失敗すること（Red）。
+    """
+
+    def test_subtitle_present_i_flag_count_equals_source_count(
+        self, tmp_path: Path
+    ) -> None:
+        """字幕あり・単一ソース → ffmpeg コマンドの -i は1個（input_sources のみ・ADR-S10）。
+
+        字幕 -i が追加されないこと（BGM と異なる・ADR-S10）。
+        """
+        from clipwright_render.plan import RenderPlan
+        from clipwright_render.render import render_timeline
+
+        src, subtitle, output, tl_path = _make_subtitle_render_setup(tmp_path)
+        Path(output).touch()
+
+        from clipwright_render.schemas import (  # type: ignore[attr-defined]
+            RenderOptions,
+            SubtitleOptions,
+        )
+
+        options = RenderOptions(
+            subtitle=SubtitleOptions(path=subtitle),  # type: ignore[call-arg]
+            overwrite=True,
+        )
+
+        # build_plan に字幕あり options で呼ばれた RenderPlan（input_sources 不変）
+        fake_plan = RenderPlan(
+            filter_complex=(
+                "[0:v]trim=0:5,setpts=PTS-STARTPTS[v0];"
+                "[v0]subtitles=filename='subs.srt'[outvsub];"
+                "[outvsub]concat=n=1:v=1:a=0[outv]"
+            ),
+            ffmpeg_args=["-filter_complex", "...", "-map", "[outv]"],
+            segment_count=1,
+            total_duration_seconds=5.0,
+            input_sources=[src],  # 字幕は input_sources に含まれない
+        )
+
+        captured_cmd: list[str] = []
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            captured_cmd.extend(cmd)
+            return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=src),
+            ),
+            patch(
+                "clipwright_render.render.resolve_bgm",
+                return_value=None,
+            ),
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
+            patch("clipwright_render.render.build_plan", return_value=fake_plan),
+            patch("clipwright_render.render.run", side_effect=_fake_run),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=options,
+            )
+
+        assert result["ok"] is True, f"失敗: {result.get('error')}"
+        # -i の出現数は input_sources の件数のみ（字幕 -i は追加されない・ADR-S10）
+        i_indices = [i for i, v in enumerate(captured_cmd) if v == "-i"]
+        assert len(i_indices) == 1, (
+            f"字幕があるのに -i が {len(i_indices)} 個: {captured_cmd}"
+        )
+        assert captured_cmd[i_indices[0] + 1] == src
+
+
+class TestSubtitleBackwardCompat:
+    """観点7: subtitle=None → 字幕検証スキップ・既存 -i/summary 不変（ADR-S8）。
+
+    後方互換: subtitle フィールドを追加しても None のときは挙動が完全に同一。
+    SubtitleOptions が未実装でも None 指定は既存 RenderOptions で動くこと。
+    """
+
+    def test_subtitle_none_skips_subtitle_validation(self, tmp_path: Path) -> None:
+        """subtitle=None → 字幕パス検証が呼ばれず既存経路と同一の結果（ADR-S8）。
+
+        subtitle=None のとき ok=True が返り -i は1個（input_sources のみ）。
+        """
+        from clipwright_render.render import render_timeline
+
+        src = str(tmp_path / "source.mp4")
+        Path(src).touch()
+        tl_path = tmp_path / "tl.otio"
+        _write_timeline(tl_path, [_make_clip(src, 0.0, 5.0)])
+        output = str(tmp_path / "out.mp4")
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=src),
+            ),
+            patch(
+                "clipwright_render.render.resolve_bgm",
+                return_value=None,
+            ),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(),  # subtitle=None（デフォルト）
+                dry_run=True,
+            )
+
+        assert result["ok"] is True, f"subtitle=None で失敗: {result.get('error')}"
+        # data に segment_count が含まれること（既存仕様維持）
+        assert result["data"]["segment_count"] == 1
+        assert abs(result["data"]["total_duration_seconds"] - 5.0) < 0.01
+
+    def test_subtitle_none_ffmpeg_i_count_unchanged(self, tmp_path: Path) -> None:
+        """subtitle=None → ffmpeg -i の数は input_sources のみ（後方互換・ADR-S8）。
+
+        subtitle 追加前と同じ -i 1個が維持されること。
+        """
+        from clipwright_render.plan import RenderPlan
+        from clipwright_render.render import render_timeline
+
+        src = str(tmp_path / "source.mp4")
+        Path(src).touch()
+        (tmp_path / "out.mp4").touch()
+        tl_path = tmp_path / "tl.otio"
+        _write_timeline(tl_path, [_make_clip(src, 0.0, 5.0)])
+        output = str(tmp_path / "out.mp4")
+
+        fake_plan = RenderPlan(
+            filter_complex="[0:v]trim=0:5,setpts=PTS-STARTPTS[v0];[v0]concat=n=1:v=1:a=0[outv]",
+            ffmpeg_args=["-filter_complex", "...", "-map", "[outv]"],
+            segment_count=1,
+            total_duration_seconds=5.0,
+            input_sources=[src],
+        )
+
+        captured_cmd: list[str] = []
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            captured_cmd.extend(cmd)
+            return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=src),
+            ),
+            patch(
+                "clipwright_render.render.resolve_bgm",
+                return_value=None,
+            ),
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
+            patch("clipwright_render.render.build_plan", return_value=fake_plan),
+            patch("clipwright_render.render.run", side_effect=_fake_run),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(overwrite=True),  # subtitle=None
+            )
+
+        assert result["ok"] is True, f"失敗: {result.get('error')}"
+        i_indices = [i for i, v in enumerate(captured_cmd) if v == "-i"]
+        assert len(i_indices) == 1
+        assert captured_cmd[i_indices[0] + 1] == src
+
+
+class TestSubtitleDryRun:
+    """観点8: dry_run（subtitle あり）→ filter_complex に字幕段が含まれ run 非呼び出し（ADR-S10）。
+
+    build_plan が返した filter_complex が data に含まれ、
+    字幕 filename= 段が入っていること。run は呼ばれない。
+    未実装のため AttributeError または字幕段不在で失敗すること（Red）。
+    """
+
+    def test_subtitle_dry_run_filter_complex_contains_subtitle_segment(
+        self, tmp_path: Path
+    ) -> None:
+        """dry_run（subtitle あり）→ data.filter_complex に字幕 filename= 段が含まれ
+        run が呼ばれないこと（ADR-S10）。
+
+        build_plan をモックして字幕段を含む filter_complex を返し、
+        render_timeline が data にそれを反映することを確認する。
+        """
+        from clipwright_render.plan import RenderPlan
+        from clipwright_render.render import render_timeline
+
+        src, subtitle, output, tl_path = _make_subtitle_render_setup(tmp_path)
+
+        from clipwright_render.schemas import (  # type: ignore[attr-defined]
+            RenderOptions,
+            SubtitleOptions,
+        )
+
+        options = RenderOptions(
+            subtitle=SubtitleOptions(path=subtitle)  # type: ignore[call-arg]
+        )
+
+        subtitle_abs = str(Path(subtitle).resolve())
+
+        # build_plan が字幕段を含む filter_complex を返す（_append_subtitle_filter 相当）
+        subtitle_filter = (
+            f"[0:v]trim=0:5,setpts=PTS-STARTPTS[v0];"
+            f"[v0]subtitles=filename='{subtitle_abs}'[outvsub];"
+            f"[outvsub]concat=n=1:v=1:a=0[outv]"
+        )
+        fake_plan = RenderPlan(
+            filter_complex=subtitle_filter,
+            ffmpeg_args=["-filter_complex", subtitle_filter, "-map", "[outv]"],
+            segment_count=1,
+            total_duration_seconds=5.0,
+            input_sources=[src],
+        )
+
+        run_called = False
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            nonlocal run_called
+            run_called = True
+            return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=src),
+            ),
+            patch(
+                "clipwright_render.render.resolve_bgm",
+                return_value=None,
+            ),
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
+            patch("clipwright_render.render.build_plan", return_value=fake_plan),
+            patch("clipwright_render.render.run", side_effect=_fake_run),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=options,
+                dry_run=True,
+            )
+
+        assert result["ok"] is True, f"失敗: {result.get('error')}"
+        # run が呼ばれていない（dry_run）
+        assert run_called is False
+        # filter_complex に字幕段（subtitles=filename= または [outvsub]）が含まれる
+        fc = result["data"]["filter_complex"]
+        assert "subtitles" in fc or "outvsub" in fc, (
+            f"filter_complex に字幕段が見当たらない: {fc}"
+        )
