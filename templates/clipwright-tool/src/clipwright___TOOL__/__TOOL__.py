@@ -1,14 +1,14 @@
-"""__TOOL__.py — clipwright-__TOOL__ オーケストレーション層。
+"""__TOOL__.py — clipwright-__TOOL__ orchestration layer.
 
-入出力検証 → （必要なら）OSS を subprocess 起動 → 結果の正規化 →
-artifact 書き込み → エンベロープ返却。ここが「薄いラッパー/厚いアダプタ」の
-アダプタ本体（spec §2.3）。MCP プロトコル面（server.py）は薄く保つ。
+Input/output validation → (if needed) OSS subprocess launch → result normalization →
+artifact write → envelope return. This is the "adapter body" of "thin wrapper/thick adapter"
+(spec §2.3). Keep MCP protocol face (server.py) thin.
 
-CONVENTIONS の MUST 対応:
-- M2 返り値エンベロープ: clipwright.envelope の ok_result / error_result を使う。
-- M3 検出と適用の分離: detect/inspect 系はメディアを書き換えず注記を返す。
-- M4 外部 OSS は subprocess: 本体から import せず __TOOL___cli.py を別プロセス起動する。
-- M5 非破壊: 入力は読むだけ・出力は新規生成・output == input は拒否する。
+CONVENTIONS MUST correspondence:
+- M2 return value envelope: use ok_result / error_result from clipwright.envelope.
+- M3 separation of detection and application: detect/inspect types don't modify media, just return annotations.
+- M4 external OSS via subprocess: don't import in main, launch __TOOL___cli.py as separate process.
+- M5 non-destructive: read input only, generate output freshly, reject output == input.
 """
 
 from __future__ import annotations
@@ -24,10 +24,10 @@ from clipwright.errors import ClipwrightError, ErrorCode
 
 from clipwright___TOOL__.schemas import __Action__Options
 
-# subprocess 失敗/timeout 時のサニタイズ済み文言（stderr のパス・秘密漏洩防止・CWE-209）
-_SUBPROCESS_SAFE_MESSAGE = "内部サブプロセスが失敗しました"
+# Sanitized message on subprocess failure/timeout (prevents stderr path/secret leaks, CWE-209)
+_SUBPROCESS_SAFE_MESSAGE = "Internal subprocess failed"
 
-# OSS 起動の timeout（秒）。入力規模に連動させたい場合は cue 数等から計算する。
+# OSS invocation timeout (seconds). If linking to input size, calculate from cue count etc.
 _TIMEOUT_SECONDS = 60.0
 
 
@@ -36,18 +36,18 @@ def __ACTION__(
     output: str,
     options: __Action__Options,
 ) -> dict[str, Any]:
-    """（TODO: このツールが何をするかを1文で。例: 〜を検出して JSON 注記を返す。）
+    """(TODO: Describe in one sentence what this tool does. Example: Detect ~ and return JSON annotation.)
 
-    非破壊: 入力ファイルは読むだけで書き換えない（M5）。
-    出力は新規生成した artifact のパスを artifacts に返す。
+    Non-destructive: input file is read-only, not modified (M5).
+    Output returns path of freshly generated artifact in artifacts.
 
     Args:
-        input: 入力ファイルパス（既存ファイル）。
-        output: 出力 artifact パス（新規生成・入力とは別パス）。
-        options: __Action__Options。
+        input: Input file path (existing file).
+        output: Output artifact path (newly generated, different from input).
+        options: __Action__Options.
 
     Returns:
-        ok_result または error_result のエンベロープ dict。
+        ok_result or error_result envelope dict.
     """
     try:
         return ___ACTION___inner(input, output, options)
@@ -60,72 +60,72 @@ def ___ACTION___inner(
     output: str,
     options: __Action__Options,
 ) -> dict[str, Any]:
-    """__ACTION__ の内部実装。ClipwrightError をそのまま送出する。"""
+    """__ACTION__ internal implementation. Raises ClipwrightError as-is."""
     input_path = Path(input)
     output_path = Path(output)
 
-    # --- 1. 出力検証（M5）---
+    # --- 1. Output validation (M5) ---
 
-    # 出力拡張子の確認（このツールの出力形式に合わせる。雛形は JSON）。
+    # Check output extension (match tool output format. Template is JSON).
     if output_path.suffix.lower() != ".json":
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message=f"未対応の出力拡張子です: {output_path.suffix!r}",
-            hint="出力ファイルの拡張子を .json にしてください。",
+            message=f"Unsupported output extension: {output_path.suffix!r}",
+            hint="Change output file extension to .json.",
         )
 
-    # 出力先の親ディレクトリ存在確認
+    # Check output parent directory exists
     if not output_path.parent.exists():
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message="出力先ディレクトリが存在しません。",
-            hint="出力先ディレクトリを先に作成してから再実行してください。",
+            message="Output directory does not exist.",
+            hint="Create output directory first, then retry.",
         )
 
-    # output == input 禁止（非破壊・M5）
+    # Reject output == input (non-destructive, M5)
     if _same_path(output_path, input_path):
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message="出力パスと入力パスが同一です。",
-            hint="出力ファイルパスを入力とは別のパスに変更してください。",
+            message="Output path is identical to input path.",
+            hint="Change output file path to differ from input.",
         )
 
-    # --- 2. 入力存在検査（FILE_NOT_FOUND の message は basename のみ・パス非露出）---
+    # --- 2. Input existence check (FILE_NOT_FOUND message basename only, no path exposure) ---
 
     if not input_path.exists():
         raise ClipwrightError(
             code=ErrorCode.FILE_NOT_FOUND,
-            message=f"ファイルが見つかりません: {input_path.name}",
-            hint="入力ファイルのパスが正しいか確認してください。",
+            message=f"File not found: {input_path.name}",
+            hint="Verify input file path is correct.",
         )
 
-    # --- 3. 検出/解析の本体 ---
+    # --- 3. Detection/analysis body ---
     #
-    # TODO: ここで実際の処理を行う。
-    #   - 外部 OSS を使う場合: _run_cli() で別プロセス起動する（M4）。
-    #     OSS を使わない純 Python 処理ならこのブロックを直接実装する。
-    #   - detect/inspect 系はメディアを書き換えず注記データを作るだけ（M3）。
+    # TODO: Perform actual processing here.
+    #   - If using external OSS: launch via _run_cli() as separate process (M4).
+    #     For pure Python processing without OSS, implement this block directly.
+    #   - detect/inspect types don't modify media, only generate annotation data (M3).
     #
-    # 雛形ではダミー結果を生成する。
+    # Template generates dummy result.
     result_data: dict[str, Any] = {
         "input": input_path.name,
         "threshold": options.example_threshold,
-        "detections": [],  # TODO: 実際の検出結果に置き換える
+        "detections": [],  # TODO: Replace with actual detection results
     }
 
-    # --- 4. artifact 書き込み（巨大明細は data でなくファイルへ逃がす・§2 SHOULD）---
+    # --- 4. Artifact write (large details go to file, not data, §2 SHOULD) ---
 
     output_path.write_text(
         json.dumps(result_data, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
-    # --- 5. エンベロープ構築（summary は判断に足る1〜2文・§2 SHOULD）---
+    # --- 5. Envelope construction (summary is 1-2 sentences sufficient for judgment, §2 SHOULD) ---
 
     detection_count = len(result_data["detections"])
     summary = (
-        f"{input_path.name} を解析し {detection_count} 件を検出しました。"
-        f"結果を {output_path.name} に書き出しました。"
+        f"Analyzed {input_path.name} and detected {detection_count} items. "
+        f"Result written to {output_path.name}."
     )
 
     artifacts = [
@@ -141,7 +141,7 @@ def ___ACTION___inner(
 
 
 def _same_path(a: Path, b: Path) -> bool:
-    """2 パスが同一実体を指すかを判定する（resolve 失敗時は文字列比較に退避）。"""
+    """Check if two paths refer to the same entity (fall back to string comparison on resolve failure)."""
     try:
         return a.resolve() == b.resolve()
     except OSError:  # pragma: no cover
@@ -149,10 +149,10 @@ def _same_path(a: Path, b: Path) -> bool:
 
 
 def _run_cli(payload: dict[str, Any]) -> dict[str, Any]:
-    """__TOOL___cli.py を別プロセス起動し stdout JSON を返す（M4・参考実装）。
+    """Launch __TOOL___cli.py as separate process and return stdout JSON (M4, reference implementation).
 
-    OSS を使うツールだけがこのヘルパーを使う。__ACTION___inner の TODO から呼ぶ。
-    cli は常に return 0 し、失敗も stdout JSON の "error" キーで表現する契約。
+    Only tools using OSS use this helper. Call from __ACTION___inner TODO.
+    cli always returns 0; failures expressed as "error" key in stdout JSON.
     """
     stdin_payload = json.dumps(payload, ensure_ascii=False)
     try:
@@ -167,14 +167,14 @@ def _run_cli(payload: dict[str, Any]) -> dict[str, Any]:
     except subprocess.TimeoutExpired:
         raise ClipwrightError(
             code=ErrorCode.SUBPROCESS_TIMEOUT,
-            message=f"{_SUBPROCESS_SAFE_MESSAGE}（タイムアウト）",
-            hint="入力規模が大きすぎる可能性があります。再度試してください。",
+            message=f"{_SUBPROCESS_SAFE_MESSAGE} (timeout)",
+            hint="Input size may be too large. Try again.",
         ) from None
     except OSError:
         raise ClipwrightError(
             code=ErrorCode.SUBPROCESS_FAILED,
             message=_SUBPROCESS_SAFE_MESSAGE,
-            hint="CLI シムの起動に失敗しました。インストールを確認してください。",
+            hint="Failed to launch CLI shim. Verify installation.",
         ) from None
 
     try:
@@ -183,14 +183,14 @@ def _run_cli(payload: dict[str, Any]) -> dict[str, Any]:
         raise ClipwrightError(
             code=ErrorCode.SUBPROCESS_FAILED,
             message=_SUBPROCESS_SAFE_MESSAGE,
-            hint="CLI シムの出力 JSON パースに失敗しました。再実行してください。",
+            hint="Failed to parse CLI shim output JSON. Retry.",
         ) from None
 
     if "error" in parsed:
         err = parsed["error"]
         code_str: str = err.get("code", str(ErrorCode.INTERNAL))
-        msg: str = err.get("message", "CLI シムでエラーが発生しました")
-        hint: str = err.get("hint", "再現条件を添えて報告してください。")
+        msg: str = err.get("message", "CLI shim encountered an error")
+        hint: str = err.get("hint", "Report with reproduction steps.")
         try:
             code = ErrorCode(code_str)
         except ValueError:

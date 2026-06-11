@@ -1,16 +1,16 @@
-"""__TOOL___cli.py — 外部 OSS を包む別プロセス小 CLI（M4・参考実装）。
+"""__TOOL___cli.py — Small separate-process CLI wrapping external OSS (M4, reference implementation).
 
-OSS を使わない純 Python ツールではこのファイルは不要なので削除してよい。
+Not needed for pure Python tools without OSS, can be deleted.
 
-このモジュールは MCP サーバープロセスから import されない（ライセンス独立・M4）。
-__TOOL__.py が sys.executable -m clipwright___TOOL__.__TOOL___cli で別プロセス起動する。
+This module is not imported from MCP server process (license independence, M4).
+__TOOL__.py launches it as separate process via sys.executable -m clipwright___TOOL__.__TOOL___cli.
 
-CLI 契約:
-  - stdin: JSON（このツールの入力ペイロード）
-  - stdout: JSON（成功結果）
-  - エラー時 stdout: {"error": {"code": str, "message": str, "hint": str}}
-  - main() は全例外をトップレベルで捕捉し、必ず stdout JSON を出して return 0。
-  - stdout は JSON のみ。ログ・進捗・トレースは stderr へ（秘密漏洩防止・CWE-209）。
+CLI contract:
+  - stdin: JSON (input payload for this tool)
+  - stdout: JSON (success result)
+  - On error stdout: {"error": {"code": str, "message": str, "hint": str}}
+  - main() catches all exceptions at top level, always outputs stdout JSON and returns 0.
+  - stdout is JSON only. Logs, progress, traces go to stderr (prevent secret leaks, CWE-209).
 """
 
 from __future__ import annotations
@@ -22,57 +22,57 @@ from typing import Any
 
 from clipwright.errors import ErrorCode
 
-# OSS 導入ヒント。__TOOL__ を実 OSS パッケージ名に合わせて書き換える。
-_INSTALL_HINT = "`pip install <your-oss>` で依存をインストールしてください。"
+# OSS installation hint. Replace __TOOL__ with actual OSS package name.
+_INSTALL_HINT = "Install dependencies with `pip install <your-oss>`."
 
-# 外部 OSS はモジュールトップで import する（別プロセスなのでサーバーへ漏洩しない）。
-# 未インストールなら _OSS を None にし、main() で DEPENDENCY_MISSING を返す。
+# External OSS imported at module top (separate process so no server leak).
+# If not installed, set _OSS to None and main() returns DEPENDENCY_MISSING.
 try:
-    # import your_oss as _oss  # noqa: ERA001  TODO: 実 OSS に置き換える
-    _OSS: Any = object()  # 雛形ではダミー。実装時は import 結果を入れる。
+    # import your_oss as _oss  # noqa: ERA001  TODO: Replace with actual OSS
+    _OSS: Any = object()  # Template dummy. On implementation, put import result here.
 except ImportError:  # pragma: no cover
     _OSS = None
 
 
 def _error_output(code: str, message: str, hint: str) -> None:
-    """エラー JSON を stdout に出力する。message/hint はサニタイズ済みで渡すこと。"""
+    """Output error JSON to stdout. message/hint must be sanitized."""
     result: dict[str, Any] = {"error": {"code": code, "message": message, "hint": hint}}
     print(json.dumps(result, ensure_ascii=False), file=sys.stdout)
 
 
 def main(argv: list[str] | None = None) -> int:  # noqa: ARG001
-    """CLI エントリポイント。全例外を捕捉し stdout JSON を出して return 0。"""
+    """CLI entry point. Catch all exceptions, output stdout JSON, return 0."""
     try:
         try:
             payload: dict[str, Any] = json.loads(sys.stdin.read())
         except (json.JSONDecodeError, ValueError):
             _error_output(
                 code=str(ErrorCode.INVALID_INPUT),
-                message="stdin の JSON パースに失敗しました",
-                hint="stdin に有効な JSON オブジェクトを渡してください。",
+                message="Failed to parse JSON from stdin",
+                hint="Pass valid JSON object to stdin.",
             )
             return 0
 
         if _OSS is None:
             _error_output(
                 code=str(ErrorCode.DEPENDENCY_MISSING),
-                message="必要な OSS がインストールされていません",
+                message="Required OSS not installed",
                 hint=_INSTALL_HINT,
             )
             return 0
 
-        # TODO: payload を使って OSS を呼び、結果を組み立てる。
+        # TODO: Use payload to call OSS and assemble result.
         result: dict[str, Any] = {"result": payload}
         print(json.dumps(result, ensure_ascii=False), file=sys.stdout)
         return 0
 
     except Exception:
-        # 想定外の例外もすべて捕捉。str(exc) に内部パスが含まれうるため固定文言。
+        # Catch all unexpected exceptions. str(exc) may contain internal paths, so use fixed message.
         traceback.print_exc(file=sys.stderr)
         _error_output(
             code=str(ErrorCode.INTERNAL),
-            message="CLI シムで予期しないエラーが発生しました",
-            hint="再現条件を添えて報告してください。",
+            message="CLI shim encountered unexpected error",
+            hint="Report with reproduction steps.",
         )
         return 0
 

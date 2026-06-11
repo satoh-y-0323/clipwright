@@ -1,47 +1,47 @@
 # clipwright-__TOOL__
 
-（TODO: このツールが何をするか1文で。例: 〜を検出して OTIO/JSON 注記を返す MCP ツール。）
+(TODO: Describe in one sentence what this tool does. Example: MCP tool that detects ~ and returns OTIO/JSON annotation.)
 
-## 概要
+## Overview
 
-（TODO: 入力・処理・出力の概要。detect/inspect 系か render 系かを明記する。）
+(TODO: Overview of input, processing, output. Clarify if detect/inspect type or render type.)
 
-## MCP ツール
+## MCP Tool
 
 `clipwright___ACTION__`
 
-### パラメータ
+### Parameters
 
-| 名前 | 型 | 既定値 | 説明 |
-|---|---|---|---|
-| `input` | `string` | 必須 | 入力ファイルパス（既存ファイル） |
-| `output` | `string` | 必須 | 出力 artifact パス（新規生成・入力とは別パス） |
-| `example_threshold` | `float` | `0.5` | （TODO: 実パラメータに置き換える） |
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `input` | `string` | required | Input file path (existing file) |
+| `output` | `string` | required | Output artifact path (newly generated, different from input) |
+| `example_threshold` | `float` | `0.5` | (TODO: Replace with actual parameters) |
 
-## 依存関係
+## Dependencies
 
-| パッケージ | 用途 |
-|---|---|
-| `clipwright` | 共通型・エンベロープ・エラー |
-| `mcp[cli]` | MCP サーバー |
-| `pydantic` | パラメータ検証 |
+| Package | Purpose |
+|---------|---------|
+| `clipwright` | Shared types, envelope, errors |
+| `mcp[cli]` | MCP server |
+| `pydantic` | Parameter validation |
 
-（外部 OSS を subprocess で包む場合はここに追記し、README に PATH 前提や導入手順を明記する。）
+(If wrapping external OSS via subprocess, add here and clarify PATH prerequisites and installation steps in README.)
 
-## インストール・起動
+## Installation and Startup
 
 ```bash
 uv add clipwright-__TOOL__
 clipwright-__TOOL__
 ```
 
-または uv workspace 内で:
+Or within a uv workspace:
 
 ```bash
 uv run --package clipwright-__TOOL__ clipwright-__TOOL__
 ```
 
-## 前提
+## Prerequisites
 
-- Python 3.11 以上
-- （外部 OSS が必要なら PATH 前提をここに明記する）
+- Python 3.11 or later
+- (If external OSS required, clarify PATH prerequisites here)

@@ -1,184 +1,187 @@
-# Clipwright — 設計・要件・規約スペック
+# Clipwright—Design, Requirements & Contract Spec
 
-> AIに操作させることを前提とした、単機能・疎結合な動画編集ツール群（MCPスイート）。
-> このドキュメントは Claude Code に渡して、まず **コア（clipwright）** と **clipwright-render** を実装するための設計・規約をまとめたものです。
-
----
-
-## 0. このドキュメントの使い方
-
-- まず「1. プロジェクト概要」「2. 設計原則」で思想を固定する。これは後から動かさない前提（=規約）。
-- 「6. 規約（コントラクト）」が最重要。すべてのツール（コア・render・将来のツール）はここに従う。
-- 当面の実装対象は **コア + clipwright-render** のみ。detect系（silence/transcribe など）は規約に乗せる前提で後続。
-- 識別子・コード・スキーマは英語、説明は日本語で書いている。
+> A suite of single-purpose, loosely-coupled video editing tools (MCP) designed to be operated by AI agents, not humans at a GUI.
+> This document captures the design principles and contract for implementing the **core (clipwright)** and **clipwright-render** first, before adding detector tools.
 
 ---
 
-## 1. プロジェクト概要
+## 0. How to Read This Document
 
-**Clipwright** は、人間がGUIで操作することを想定せず、**AIエージェントが操作者になる**ことを前提に設計された動画編集ツールのスイート。
-
-性格を一言で言うと「職人の道具箱（clipwright）に、単機能の道具（clipwright-render, clipwright-silence, clipwright-transcribe …）が名前空間で収まっている」。各道具は Unix 哲学に従い、ひとつのことだけをうまくやる。
-
-### 立ち位置
-- **プラットフォームではなくツール。** 統合UIや課金基盤を作るのが目的ではない。AIから呼ばれる小さな道具を量産し、共通規約で束ねる。
-- **実装本体は持たない（薄いラッパー）。** 文字起こし・無音検出・エンコード等の中身は、評判が良く更新も活発な既存OSS（FFmpeg, whisper.cpp/faster-whisper, auto-editor 等）に任せる。Clipwright が作るのは「規約とインターフェース」。
-- **AIが背骨を通じて編集を組み立てる。** 編集の中間表現には業界標準の **OpenTimelineIO (OTIO)** を採用し、これを全ツール共通言語とする。
-
-### 名前空間
-- `clipwright` … コア（共有ライブラリ＋プリミティブMCP）
-- `clipwright-render` … OTIO を実体の動画に焼くツール（最初に作る2つ目）
-- `clipwright-transcribe` / `clipwright-silence` / `clipwright-noise` … 将来の detect 系ツール（規約に乗せて追加）
+- **§1 (Project Overview) & §2 (Design Principles)** are the fixed foundation. Do not revisit these.
+- **§6 (Contract) is critical**. Every tool (core, render, future) must follow it.
+- Scope for now: **core + clipwright-render only**. Detector tools (silence, transcribe, etc.) follow once proven on the contract.
+- Identifiers, code, and schemas are in English; descriptions in English (following spec conventions).
 
 ---
 
-## 2. 設計原則（動かさない前提）
+## 1. Project Overview
 
-1. **AIファースト / GUIレス。** 入力（素材＋指示）と出力（成果物）だけが存在する。人間用タイムラインUIは作らない。
-2. **単一責任。** 1ツール = 1機能。多機能な「全部入りサーバー」にしない。
-3. **薄いラッパー / 厚いアダプタ。** MCPのプロトコル面は薄く保つ。各OSSのネイティブ出力を OTIO に正規化するアダプタ層こそが本体の仕事であり、ここは薄くできないと認識する。
-4. **サブプロセス疎結合。** 外部OSS（ffmpeg/whisper/auto-editor 等）は必ず**別プロセス**として呼ぶ。ライブラリとして自分のバイナリにリンクしない。これは(a)ライセンス独立を保つため、(b)疎結合という思想のため、の両方。
-5. **検出と適用の分離（detect / render split）。** 解析系ツールはメディアを書き換えず OTIO 上の注記（マーカー/カット候補）を返すだけ。実体化は `clipwright-render` 一本がまとめて一回だけ行う。これでエージェントのループが安く・速く・非破壊になる。
-6. **ファイルパス受け渡し。** ツール間でメディアのバイト列を（AIのコンテキストを経由して）やり取りしない。入力はパスで受け取り、出力もパス＋メタデータで返す。重いデータはローカルディスクに留める。
-7. **軽いが十分なコンテキスト。** 返り値は「人間/AIが読める短いサマリ」＋「構造化データ」＋「完全な成果物（OTIO等）へのパス」。"最小限"ではなく"判断に必要なだけ"。AIはまずサマリで判断し、必要なときだけ詳細を取りに行く。
-8. **可搬フォーマット。** 字幕は SRT/VTT/ASS、編集判断は OTIO。独自フォーマットを新規発明しない。
+**Clipwright** is a suite of video editing tools designed with **AI agents as operators**, not human GUI users.
+
+In one sentence: "A craftsperson's toolkit (clipwright) containing single-purpose tools (clipwright-render, clipwright-silence, clipwright-transcribe, etc.) in a unified namespace." Each tool does one thing well, Unix-style.
+
+### Position
+- **Tooling, not platforming.** Not building a unified UI or a billing backend. Goal: produce small single-purpose tools called by AI, bound by a shared contract.
+- **Thin wrappers, thick adapters.** Core logic (transcription, silence detection, encoding) lives in battle-tested, actively-maintained OSS (FFmpeg, whisper.cpp/faster-whisper, auto-editor, etc.). Clipwright provides the contract and interfaces—it normalizes OSS output to OTIO/SRT, not reimplements.
+- **AI assembles edits through a backbone.** The common IR is the industry standard **OpenTimelineIO (OTIO)**—the lingua franca for all tools.
+
+### Namespaces
+- `clipwright` – Core (shared library + primitive MCP)
+- `clipwright-render` – Bakes OTIO to video (second tool, implemented first)
+- `clipwright-transcribe` / `clipwright-silence` / `clipwright-noise` – Future detectors (added following the contract)
 
 ---
 
-## 3. アーキテクチャ
+## 2. Design Principles (Fixed)
 
-### 3.1 全体像
+1. **AI-first, GUI-free.** Only inputs (media + instructions) and outputs (results) exist. No timeline UI for humans.
+2. **Single responsibility.** One tool = one function. No "everything server."
+3. **Thin protocol, thick adapter.** MCP surface is minimal. The real work is the adapter layer—normalizing each OSS's native output to OTIO. Recognize that this layer cannot be thin.
+4. **Subprocess loose coupling.** External OSS (ffmpeg, whisper, auto-editor, etc.) is **always a separate process**—never linked as a library. Reason: (a) license independence, (b) loose coupling philosophy.
+5. **Detect / render split.** Detection tools don't modify media; they return annotations (markers, cut suggestions) in OTIO. Only `clipwright-render` materializes, once, in one pass. This keeps agent loops cheap, fast, and non-destructive.
+6. **Path-based media exchange.** Never pass media byte streams between tools via AI context. Input is a path; output is a path + metadata. Heavy data stays on local disk.
+7. **Context: sufficient, not minimal.** Results are short summaries (human/AI-readable) + structured data + paths to full artifacts. Provide what's needed to decide, not less. AI reads summaries first; details on demand.
+8. **Portable formats.** Subtitles are SRT/VTT/ASS. Edits are OTIO. Don't invent proprietary formats.
+
+---
+
+## 3. Architecture
+
+### 3.1 Overview
 
 ```
-AI エージェント (Claude Code など)
+AI Agent (Claude Code, etc.)
         │  (MCP / stdio)
         ▼
-┌───────────────────────────────────────────────┐
-│ clipwright ツール群（各々が独立した stdio MCP） │
-│                                                 │
-│  clipwright (core)      … project / timeline /  │
-│                            media inspect 等の   │
-│                            プリミティブ          │
-│  clipwright-render      … OTIO → 実体動画(FFmpeg)│
-│  clipwright-silence     … 無音検出 → OTIOに注記 │ (後続)
-│  clipwright-transcribe  … 文字起こし → 字幕+OTIO│ (後続)
-└───────────────────────────────────────────────┘
-        │ 全ツールが共有する規約
+┌────────────────────────────────────────────┐
+│ Clipwright Tool Suite (each is stdio MCP)  │
+│                                             │
+│  clipwright (core)     – project/timeline  │
+│                          media inspect +   │
+│                          primitives        │
+│  clipwright-render     – OTIO → video      │
+│                          (FFmpeg)          │
+│  clipwright-silence    – detect silence → │ (future)
+│                          OTIO markers      │
+│  clipwright-transcribe – transcribe →     │ (future)
+│                          captions + OTIO  │
+└────────────────────────────────────────────┘
+        │ Shared contract
         ▼
-  共有 IR: OTIO タイムライン（プロジェクトの「背骨」）
-  共有ディスク: clipwright プロジェクトディレクトリ
-        │ 各ツールは内部で別プロセスとして呼ぶ
+  Shared IR: OTIO timeline (project "backbone")
+  Shared disk: clipwright project directory
+        │ Each tool invokes OSS as subprocess
         ▼
-  外部 OSS: ffmpeg / ffprobe / whisper.cpp / auto-editor …
+  External OSS: ffmpeg, ffprobe, whisper.cpp, auto-editor, …
 ```
 
-### 3.2 コンポーネントの役割分担
+### 3.2 Component Roles
 
-- **clipwright (core)** は2つの顔を持つ。
-  - **共有ライブラリ**（各ツールが `import` する）: OTIO 読み書き、メディア probe、返り値エンベロープ、エラー整形、サブプロセス実行、プロジェクト管理のユーティリティと型定義。各ツールはこれを土台にする。
-  - **プリミティブ MCP サーバー**: プロジェクト初期化・メディア検査・タイムライン読み書きといった基礎操作をAIに公開する。
-- **clipwright-render** は単独の MCP/CLI。OTIO タイムラインを受け取り、FFmpeg で一回（最小回数）にまとめて実体化する。唯一の「破壊的（=新ファイルを生成する）」ツール。
+- **clipwright (core)** has two faces:
+  - **Shared library** (imported by tools): OTIO read/write, media probe, response envelope, error formatting, subprocess runner, project management utilities and types. Tools build on this foundation.
+  - **Primitive MCP server**: Exposes basic operations—project init, media inspect, timeline read/write—to AI agents.
+- **clipwright-render** is a standalone MCP/CLI. Takes OTIO timeline, materializes with FFmpeg in one (minimal) pass. The only "destructive" tool (creates new media files).
 
-### 3.3 状態の持ち方（プロジェクトモデル）
+### 3.3 State Model (Project Structure)
 
-MCP の呼び出しは基本ステートレスなので、状態は**ディスク上のプロジェクトディレクトリ**で共有する。タイムライン（OTIO）が「背骨」で、各ツールはこれを読み書きして協調する。
+MCP calls are stateless by nature, so state lives **on disk in the project directory**. OTIO timeline is the "backbone"; all tools read/write it and coordinate.
 
 ```
 <project_dir>/
-  clipwright.json          # マニフェスト（バージョン, 作成情報, 設定）
-  timeline.otio            # 背骨。編集判断はすべてここに集約
-  sources/                 # 元素材（またはそのパス参照。コピーは任意）
-  artifacts/               # 中間生成物（字幕, 解析結果 等）
+  clipwright.json          # Manifest (version, creation info, settings)
+  timeline.otio            # Backbone. All edits decisions centralized here.
+  sources/                 # Source media (or path references; copy optional)
+  artifacts/               # Intermediate artifacts (captions, analysis, etc.)
     captions.srt
     silence.json
-  outputs/                 # render の最終成果物
+  outputs/                 # render's final outputs
     final.mp4
 ```
 
-- ツールは `timeline.otio` を読み、注記（マーカー/クリップ）を加えて書き戻す。
-- 元素材は**参照**が基本（OTIO は「メディアのコンテナではなく参照を持つ」設計なのでこれに合う）。
+- Tools read `timeline.otio`, add annotations (markers/clips), write back.
+- Source media is **referenced**, not contained (OTIO design supports this).
 
 ---
 
-## 4. 中間表現（OTIO）の規約
+## 4. Intermediate Representation (OTIO) Contract
 
-OTIO を共通言語として使う。独自の編集フォーマットは定義しない。
+OTIO is the common language. No proprietary edit formats.
 
-### 4.1 採用方針
-- ライブラリ: `opentimelineio`（PyPI, Apache-2.0, 公式Pythonバインディング。0.18 系）。
-- タイムラインは1本の OTIO ファイル（`timeline.otio`）に集約。
-- 出口は OTIO のアダプタ機構を利用（FCPXML / CMX3600 EDL 等への書き出しは将来オプション）。
+### 4.1 Adoption Policy
+- Library: `opentimelineio` (PyPI, Apache-2.0, official Python bindings, 0.18 series).
+- One OTIO file per timeline: `timeline.otio`.
+- Export uses OTIO's adapter mechanism (FCPXML, CMX3600 EDL, etc. are future options).
 
-### 4.2 「残す/捨てる」の表現
-- detect 系ツール（無音検出など）は、メディアを書き換えず **OTIO 上の注記**として結果を返す。
-- 推奨表現:
-  - カット候補・残す区間は **clip / gap** として timeline に並べる、もしくは
-  - 検出イベント（無音, フィラー, シーン境界など）は **marker** として該当 time に置き、`marker.metadata["clipwright"]` に種別・信頼度などを格納する。
-- どちらを使うかはツール種別で決め、規約として固定する（例: silence は「残す区間の clip 列」を生成、transcribe は「字幕 marker＋外部SRT」）。
+### 4.2 Expressing "Keep" / "Discard"
+- Detection tools don't modify media; they return results as **OTIO annotations**.
+- Recommended forms:
+  - Cut suggestions or keep-ranges: list as **clips / gaps** in the timeline, OR
+  - Detection events (silence, filler, scene boundaries, etc.): place as **markers** at the time, store metadata in `marker.metadata["clipwright"]` (type, confidence, etc.).
+- Fix the choice per tool type and enforce it as contract (example: silence generates "keep-range clips"; transcribe generates "subtitle markers + external SRT").
 
-### 4.3 メタデータ名前空間
-- Clipwright が書き込む独自メタデータはすべて `metadata["clipwright"]` 配下に置く。他ツール・他フォーマットとの衝突を避ける。
+### 4.3 Metadata Namespace
+- All Clipwright-written metadata goes under `metadata["clipwright"]`. Avoids collisions with other tools and formats.
   ```json
   { "clipwright": { "tool": "clipwright-silence", "version": "0.1.0", "kind": "keep", "confidence": 0.92 } }
   ```
 
-### 4.4 時間の扱い
-- 時間は OTIO の `opentime`（RationalTime / TimeRange）で扱い、秒の浮動小数で持ち回らない。フレーム精度・レート差での誤差を避ける。
+### 4.4 Time Representation
+- Use OTIO's `opentime` (RationalTime / TimeRange). Never use float seconds. Prevents frame precision loss and framerate mismatch errors.
 
 ---
 
-## 5. コア（clipwright）の要件
+## 5. Core (clipwright) Requirements
 
-コアは「他のツールが乗る土台」。ここが固まれば detect 系は同じ規約に乗せるだけで量産できる。
+Core is the foundation for all other tools. Once solid, detectors scale under the same contract.
 
-### 5.1 共有ライブラリとして提供するもの
-- **OTIO ヘルパー**: タイムラインの新規作成 / 読み込み / 保存、clip・gap・marker の追加、`metadata["clipwright"]` の読み書き。
-- **メディア probe**: `ffprobe` をサブプロセスで叩き、解像度・尺・fps・コーデック・音声トラック等を**構造化**して返す。
-- **返り値エンベロープ**: 全ツール共通のレスポンス整形ヘルパー（→ 6.3）。
-- **エラー整形**: アクション可能なエラーメッセージを作るヘルパー（→ 6.4）。
-- **サブプロセスランナー**: 外部CLIを安全・一貫した方法で実行（引数配列で渡す / shell=False / タイムアウト / stderr収集 / 終了コード検査）。
-- **プロジェクト管理**: プロジェクトディレクトリの init / 検出 / マニフェスト読み書き。
-- **共通型（スキーマ）**: `MediaRef`, `TimeRange`, `Artifact`, `ToolResult` などを Pydantic で定義し、全ツールで共有。
+### 5.1 Shared Library Exports
+- **OTIO helpers**: Create/read/save timelines, add clips/gaps/markers, read/write `metadata["clipwright"]`.
+- **Media probe**: Call `ffprobe` as subprocess, return **structured** resolution, duration, fps, codecs, audio tracks, etc.
+- **Response envelope**: Common formatter for all tool responses (→ §6.3).
+- **Error formatting**: Helper to create actionable error messages (→ §6.4).
+- **Subprocess runner**: Safe, consistent external CLI execution (arg array, shell=False, timeout, stderr collection, exit code check).
+- **Project management**: Init, detect, read/write project directories and manifests.
+- **Common types (schemas)**: Pydantic definitions for `MediaRef`, `TimeRange`, `Artifact`, `ToolResult`, shared by all tools.
 
-### 5.2 プリミティブ MCP サーバーとして公開するツール（最小）
-- `clipwright_init_project` — プロジェクトディレクトリを作成・初期化。
-- `clipwright_inspect_media` — 素材ファイルのメタデータを構造化して返す（render の前段でAIが素材を把握するのに使う）。
-- `clipwright_read_timeline` — `timeline.otio` を要約して返す（クリップ数・総尺・マーカー一覧などのサマリ＋パス。全文は返さない）。
-- `clipwright_write_timeline` — 与えられた編集操作を timeline に反映して保存（または検証のみ）。
+### 5.2 Primitive MCP Server (Minimal)
+- `clipwright_init_project` – Create and initialize project directory.
+- `clipwright_inspect_media` – Return structured metadata for a media file (AI sees media properties before render).
+- `clipwright_read_timeline` – Return summary of `timeline.otio` (clip count, duration, marker list, path; not full dump).
+- `clipwright_write_timeline` – Apply edit operations to timeline, save (or validate only).
 
-> 注: コアの MCP は「基礎操作」に絞る。編集の実体化は render の責務。
+> Note: Core MCP is basic operations only. Media realization is render's job.
 
-### 5.3 コアの非機能要件
-- 外部依存（ffmpeg/ffprobe）が無い場合は、起動時または最初の呼び出しで**明示的かつアクション可能なエラー**を返す（「`ffmpeg` が PATH 上に見つかりません。`brew install ffmpeg` 等で導入してください」）。
-- すべての公開ツールに 6.2 のアノテーションを付ける。
-- 返り値は 6.3 のエンベロープに統一。
+### 5.3 Non-Functional Requirements
+- If external dependencies (ffmpeg, ffprobe) are missing, return **explicit, actionable errors on startup or first call** ("ffmpeg not found in PATH. Install with `brew install ffmpeg`, etc.").
+- Annotate all public tools per §6.2.
+- Standardize responses to §6.3 envelope.
 
 ---
 
-## 6. 規約（コントラクト）★最重要
+## 6. Contract ★ Critical
 
-すべてのツール（コア・render・将来のツール）が従う契約。新しい道具を足す人（人間でもAIでも）はここだけ読めば乗せられる、を目指す。
+The covenant all tools (core, render, future) must follow. Aim: someone adding a tool needs to read only this section.
 
-### 6.1 ツール命名
-- ツール名は `clipwright_<action>` のスネークケース、動詞起点。例: `clipwright_render`, `clipwright_inspect_media`, `clipwright_detect_silence`。
-- パッケージ／配布名は `clipwright-<tool>`（例: `clipwright-render`）。CLI コマンドも同名で全部小文字。
-- 一貫した接頭辞によりエージェントが正しい道具を選びやすくする。
+### 6.1 Naming
+- Tool name: `clipwright_<action>` (snake_case, verb-first). Examples: `clipwright_render`, `clipwright_inspect_media`, `clipwright_detect_silence`.
+- Package/distrib name: `clipwright-<tool>` (example: `clipwright-render`). CLI command same, all lowercase.
+- Consistent prefix helps AI agents pick the right tool.
 
-### 6.2 アノテーション（MCP annotations）
-各ツールに必ず付与する。detect/render 分離が型に現れる。
-- detect 系・inspect 系: `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: true`。
-- `clipwright-render`: `readOnlyHint: false`（新ファイルを生成する）, `destructiveHint: false`（入力・OTIO は変更しない）, `idempotentHint: true`（同じ入力→同じ出力）。
-- 外部プロセス/ネット等に触れるものは `openWorldHint` を適切に設定。
+### 6.2 Annotations (MCP)
+All tools must have these. Detect/render split is visible in types.
+- Detection / inspect tools: `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: true`.
+- `clipwright-render`: `readOnlyHint: false` (creates new files), `destructiveHint: false` (input/OTIO unchanged), `idempotentHint: true` (same input → same output).
+- Tools touching external processes/network: set `openWorldHint` honestly.
 
-### 6.3 返り値エンベロープ（全ツール共通）
-「軽いサマリ＋構造化データ＋成果物パス」を必ずこの形で返す。
+### 6.3 Response Envelope (All Tools)
+Always return summaries + structured data + artifact paths in this form.
 
 ```jsonc
 {
   "ok": true,
-  "summary": "47区間・合計3分12秒の無音を検出。最長は02:14付近の8秒。",  // AI が一読して判断できる1〜2文
+  "summary": "Detected 47 silent intervals, 3m 12s total. Longest ~8s near 02:14.",  // 1–2 sentences AI can act on
   "data": {
-    // ツール固有の構造化結果（軽量。巨大配列はパスに逃がす）
+    // Tool-specific structured result (lightweight; big lists go to files)
   },
   "artifacts": [
     { "role": "timeline", "path": "<project>/timeline.otio", "format": "otio" },
@@ -187,218 +190,218 @@ OTIO を共通言語として使う。独自の編集フォーマットは定義
   "warnings": []
 }
 ```
-- `summary` は判断に必要な要点（件数・尺・最大値など）を含める。"最小限"にしない。
-- 巨大な明細（全カットリスト等）は `data` に詰めず、OTIO/JSON ファイルとして `artifacts` に出し、AIが必要なときだけ読む。
-- 可能なら MCP の `outputSchema` / `structuredContent` を併用し、クライアントが構造を解釈できるようにする。
+- `summary` includes essentials (counts, duration, max values, etc.). Don't skimp.
+- Huge details (full cut lists) go to OTIO/JSON files in `artifacts`, not `data`. AI fetches on demand.
+- Use MCP's `outputSchema` / `structuredContent` when possible so clients understand structure.
 
-### 6.4 エラー
-- 失敗時は `{ "ok": false, "error": { "code": "...", "message": "...", "hint": "..." } }`。
-- `message` は何が起きたか、`hint` は次の一手（具体的な解決策）を必ず書く。
+### 6.4 Errors
+- On failure: `{ "ok": false, "error": { "code": "...", "message": "...", "hint": "..." } }`.
+- `message`: what happened. `hint`: next step (concrete action). Both required.
 
-### 6.5 サブプロセス規律
-- 外部ツールは引数配列で実行（`shell=False` 相当）。ユーザー/AI由来の値を文字列連結でシェルに渡さない。
-- 入力ファイルパスは検証してから渡す。
-- すべて別プロセス。ライブラリリンクはしない（ライセンス独立の維持）。
+### 6.5 Subprocess Discipline
+- External tools run with arg arrays (`shell=False`). Never concatenate user/AI input into shell strings.
+- Validate file paths before passing.
+- All separate processes. No library linking (preserve license independence).
 
-### 6.6 ファイル入出力
-- 入力: 既存のパスを受け取る。バイト列は受け取らない。
-- 出力: `outputs/` または `artifacts/` に書き、パスを `artifacts` で返す。
-- 元素材・OTIO は破壊しない（render も含め、常に新規ファイルを生成）。
+### 6.6 File I/O
+- Input: receive existing paths (not byte streams).
+- Output: write to `outputs/` or `artifacts/`, return paths via `artifacts`.
+- Never destroy source media or OTIO (always generate new files, even for render).
 
-### 6.7 トランスポート
-- ローカル動作なので **stdio** トランスポートを既定とする（素材がローカルで巨大なため、アップロード不要・高速）。
-
----
-
-## 7. clipwright-render の要件
-
-最初に作る2つ目のツール。OTIO を受け取り、FFmpeg で実体化する唯一のツール。
-
-### 7.1 入力
-- `timeline`（OTIO ファイルのパス）＋ `output`（出力パス）＋ オプション（コーデック/解像度/字幕焼き込み有無 等）。
-
-### 7.2 振る舞い
-- OTIO のクリップ列（残す区間）を解決し、**一回（または最小回数）の FFmpeg 実行**で連結・トリムして出力する。中間で何度も再エンコードしない。
-- 当面サポート: 単一ソースからの区間抽出＋連結（=無音カットの実体化）、基本のトリム、パススルー。将来: 複数ソース連結、字幕焼き込み、トランジション。
-- **非破壊**: 入力・OTIO を変更せず、`outputs/` に新規生成。
-
-### 7.3 dry-run（プレビュー）モード
-- `dry_run: true` のとき、実際にレンダリングせず「何が起きるか」を返す: 予定の FFmpeg コマンド（またはフィルタ計画）、残す区間数、想定出力尺・概算サイズ。
-- これによりAIは安くタイムラインを反復・検証し、納得してから commit（実レンダリング）できる。detect/render 分離の利点を最大化する。
-
-### 7.4 返り値
-- 成功時: 6.3 のエンベロープ。`summary` に「総尺・出力サイズ・連結したクリップ数」など。`artifacts` に出力動画とタイムライン。
+### 6.7 Transport
+- **stdio** by default (local operation, large files stay on disk, fast).
 
 ---
 
-## 8. 技術スタックの判断
+## 7. clipwright-render Requirements
 
-- **言語: Python（FastMCP）を推奨。** 一般論では MCP は TypeScript SDK が手厚いが、本プロジェクトは OTIO の**公式バインディングが Python** であり、想定する外部OSS（auto-editor は Python、whisper.cpp は Python ラッパー多数）も Python 生態系が濃い。OTIO を背骨にする以上、Python が最も摩擦が少ない。
-  - トレードオフ: TS の方が SDK 成熟度・型の取り回しで有利な面はある。ただし本件では OTIO 連携の容易さを優先する。
-- **MCP フレームワーク**: Python SDK / FastMCP。`@mcp.tool`、Pydantic でスキーマ定義、アノテーション付与。
-- **スキーマ**: 入力は Pydantic で制約と説明（例つき）を書く。出力は可能な範囲で `outputSchema` を定義。
-- **外部依存**: `opentimelineio`（Apache-2.0）、`ffmpeg`/`ffprobe`（**同梱せず**前提インストール）。
-- **検証**: `python -m py_compile`、MCP Inspector（`npx @modelcontextprotocol/inspector`）で疎通確認。
+Second tool to build. Takes OTIO, materializes with FFmpeg—the only tool that writes media.
 
----
+### 7.1 Input
+- `timeline` (path to OTIO file) + `output` (output path) + options (codec, resolution, subtitle burn-in, etc.).
 
-## 9. ライセンス／配布方針
+### 7.2 Behavior
+- Resolve OTIO clip ranges (keep intervals), **execute FFmpeg once (or minimal times)** to concat, trim, output. No redundant re-encodes.
+- Supported now: single-source interval extraction + concat (silence cut realization), basic trim, passthrough. Future: multi-source concat, subtitle burn-in, transitions.
+- **Non-destructive**: input and OTIO unchanged; new files in `outputs/`.
 
-- **ラッパー本体（Clipwright のコード）は permissive: MIT もしくは Apache-2.0。**
-- **FFmpeg バイナリは同梱しない。** 「PATH 上に ffmpeg があること」を前提条件として README に明記。配布物に含めない＝LGPL/GPL の再配布義務を発生させない。
-- 取り込む各 OSS（auto-editor, unsilence 等）のライセンスは個別に確認し、**サブプロセスで呼ぶ**設計を保つ（import によるリンクを避ける）。
-- 将来、事業化や同梱インストーラを検討する段階になったら、その時点でライセンス専門家のレビューを受ける。
+### 7.3 Dry-Run (Preview) Mode
+- When `dry_run: true`: return what *would* happen—planned FFmpeg command (or filter plan), number of kept ranges, estimated output duration and size—without actually rendering.
+- Lets AI iterate timelines cheaply, verify, then commit (real render). Maximizes the detect/render split benefit.
 
----
-
-## 10. MVP スコープと段階
-
-### フェーズ1（今ここ）— 土台
-1. リポジトリ初期化、`clipwright` コア（共有ライブラリ＋プリミティブMCP）。
-   - OTIO ヘルパー、ffprobe ベースの `inspect_media`、プロジェクト管理、返り値エンベロープ、エラー整形、サブプロセスランナー、共通 Pydantic 型。
-2. `clipwright-render`（dry-run 付き）。
-   - 「単一ソースから OTIO の残す区間を連結して1本に出力」を最小成立条件にする。
-
-### フェーズ2 — 最初の detect ツールで規約を検証
-3. `clipwright-silence`（auto-editor もしくは無音検出を薄くラップ）。
-   - 「無音検出 → OTIO に残す区間として注記」を実装し、`silence → render` の連携が規約だけで成立することを確認する（規約のドッグフーディング）。
-
-### フェーズ3 — 広げる
-4. `clipwright-transcribe`（whisper.cpp / faster-whisper をラップ、SRT/VTT＋OTIO marker）。
-5. ノイズ除去等、必要な道具を同じ規約で追加。
-6. （任意）誰かが使いやすいよう統合プラットフォーム化を検討。ただしコアの思想は「ツールの集合」のまま保つ。
+### 7.4 Return Value
+- Success: §6.3 envelope. `summary` includes total duration, output size, clip count, etc. `artifacts` contains output video and timeline.
 
 ---
 
-## 11. 今後の方向性 / コントリビューション
+## 8. Technology Stack Decisions
 
-- 規約（第6章）を**ツール作者向けの公開コントラクト**として独立文書化し、外部の人が同じ作法で道具を足せるようにする。
-- 各ツールには MCP Inspector での疎通に加え、「AIが実際にタスクを解けるか」の評価（eval）を用意する（独立・読み取り専用・複数ツール呼び出しを要する現実的な設問）。
-- 名前空間 `clipwright-*` を中心に、detect 系を増やしていく。render は安定した1本を維持する。
-
----
-
-## 11.5 採用候補 OSS の評価と Adobe 連携方針（追記 2026-06-10）
-
-検討した代替・追加 OSS が、本スペックの設計原則（§2）・規約（§6）・ライセンス方針（§9）に乗るかの判断。
-
-### 採用可（OSS・サブプロセス化・OTIO/SRT 正規化が可能）
-
-- **Silero VAD（MIT）— `clipwright-silence` の上位バックエンド**: ffmpeg `silencedetect`（音量しきい値）に対し、ML ベースの発話検出。BGM/環境音下で精度が高い。重要な差: silencedetect は**音量**判定のため咳払い（大音量だが非発話）を無音と見なせず**残す**が、VAD は**発話/非発話**判定のため咳払いを**非発話として除去**できる。→ `clipwright-silence` の検出バックエンドとして採用（detect ロジックは単一アダプタ関数に隔離済みのため差し替え容易）。Python ライブラリのため §2.4 を守るには小さな CLI でサブプロセス起動する。注: 言語的フィラー（「えー/あの」）は発話のため VAD では残る（除去には transcribe ベースの検出が要る）。咳払い・息継ぎ等の非発話音は VAD の守備範囲。
-- **Whisper（whisper.cpp, MIT）— 文字起こし**: §1/§10 で既定の本命。C++ バイナリのためサブプロセス疎結合に最適。SRT/VTT + OTIO marker を出力。
-- **BudouX（Apache-2.0）— テロップ改行整形**: 字幕の自然な改行位置決め（日本語/CJK の文節境界）。純テキスト変換（メディア非改変）。薄い CLI ラッパー（subprocess）で `clipwright-*` ツール化する。transcribe 出力（SRT）の後処理に位置づく。
-
-### 採用不可（思想不一致）
-
-- **After Effects スクリプトによるテロップ合成 / MOGRT 出力 / AE 経由の Premiere 連携**: After Effects・Premiere Pro は専有・有料の GUI アプリで、§2.1（GUI レス）・§2.4＋§9（OSS をサブプロセスで疎結合・ライセンス独立）に反する。MOGRT は Adobe 専有フォーマットで §2.8（可搬フォーマット・独自フォーマットを新規発明しない）に反する。→ `clipwright-*` ツールとしては取り込まない。
-
-### spec 準拠の Adobe 連携の道
-
-OTIO を背骨に採用した利点として、**OTIO → FCPXML / AAF / EDL** を OTIO 標準アダプタで書き出せば（§4.1 の将来オプション）、**Premiere Pro / After Effects 利用者が最後の仕上げを自分の NLE で行える**。Clipwright は編集の骨組み（カット・字幕位置）を OTIO/可搬形式で渡すところまでを責務とし、凝ったアニメーションテロップ等の作り込みは NLE 側に委ねる（detect/render 分離思想の自然な延長）。
+- **Language: Python (FastMCP) recommended.** In general, TypeScript MCP SDK is more mature, but this project has OTIO's **official Python binding** and aligns with expected OSS ecosystem (auto-editor is Python, whisper.cpp has many Python wrappers). Python has the least friction when OTIO is the backbone.
+  - Trade-off: TypeScript has SDK maturity and type ergonomics. Here, OTIO integration ease takes priority.
+- **MCP framework**: Python SDK / FastMCP. `@mcp.tool`, Pydantic schema definitions, annotation attachment.
+- **Schemas**: Pydantic for input (constraints, descriptions, examples). Define `outputSchema` where possible.
+- **External dependencies**: `opentimelineio` (Apache-2.0), `ffmpeg`/`ffprobe` (**not bundled**; pre-install required).
+- **Verification**: `python -m py_compile`, MCP Inspector (`npx @modelcontextprotocol/inspector`) for connectivity.
 
 ---
 
-## 11.6 仕上げパイプライン構想（合体・音量均一化・BGM）（追記 2026-06-11）
+## 9. License & Distribution
 
-> 目的: 「複数の加工済み動画を1本に合体し、クリップ間の音量バラつきを均一化し、BGM を付ける」という**仕上げ系**の機能を、既存の設計原則（§2）・規約（§6）・detect/render 分離（§2.5）に乗せる方針を確定しておく。**`clipwright-noise`（フェーズ3-5・実装済み・コミット 19c161c）が本構想の実証済みパターン**であり、②はそのほぼ複製で作れる。
+- **Clipwright code: permissive (MIT or Apache-2.0).**
+- **FFmpeg binaries: not bundled.** README clearly states "ffmpeg on PATH required." No distribution bundling = no LGPL/GPL propagation obligations.
+- Each OSS integrated (auto-editor, etc.): check licenses individually, always use subprocess calls (avoid library linking).
+- Future commercialization or bundled installers: engage a licensing expert at that time.
 
-### 全体方針（最重要）
+---
 
-3 機能はいずれも「メディアの実体化（再エンコード・連結・ミックス）」を伴うため、**§2.5 / 規約 M3 により実体化は `clipwright-render` 一本に集約する**。新たに「動画を吐くツール」を増やさない。各機能は次の二系統に分かれる:
+## 10. MVP Scope & Phases
 
-- **A. render の機能拡張**（実体化そのもの）: ①合体・③BGMミックス。
-- **B. 新 detect/注記ツール ＋ render が適用**（測る/配置するだけ・メディア非改変）: ②音量均一化。`clipwright-noise` と同型。
+### Phase 1 (now) – Foundation
+1. Repository init, `clipwright` core (shared library + primitive MCP).
+   - OTIO helpers, ffprobe-based `inspect_media`, project management, response envelope, error formatting, subprocess runner, common Pydantic types.
+2. `clipwright-render` (with dry-run).
+   - Minimum: "concat kept OTIO ranges from one source to output"—proves detect/render split.
 
-そして OTIO 背骨に全ての「判断」を積み、**render が1回の ffmpeg パスでまとめて実体化**する（二重エンコード回避・最高音質）。最終的な合成像:
+### Phase 2 – Contract Validation
+3. `clipwright-silence` (auto-editor or thin silence-detection wrapper).
+   - Implement "detect silence → annotate as keep-ranges in OTIO" and verify `silence → render` composition works with contract alone (contract dogfooding).
+
+### Phase 3 – Scale
+4. `clipwright-transcribe` (whisper.cpp / faster-whisper wrapper, SRT/VTT + OTIO markers).
+5. Add tools as needed (noise removal, etc.) under the same contract.
+6. (Optional) Consider integrated platform UX once usage patterns emerge. Preserve core "tool suite" philosophy.
+
+---
+
+## 11. Future Direction & Contribution
+
+- **Elevate §6 (contract) to a standalone public document** for tool authors. Enable external contributions under the same discipline.
+- **Each tool gets evals**: Beyond MCP Inspector connectivity, prove "AI can solve real tasks" with independent, read-only, multi-tool scenarios.
+- **Scale under `clipwright-*` namespace**: Add detectors. Maintain stable render as the single materializer.
+
+---
+
+## 11.5 OSS Evaluation & Adobe Integration (Added 2026-06-10)
+
+Decision criteria: candidate OSS must align with §2 (design principles), §6 (contract), §9 (license).
+
+### Adopted (OSS, subprocess-ready, OTIO/SRT normalized)
+
+- **Silero VAD (MIT) – Upper layer for `clipwright-silence`**: Beyond ffmpeg's `silencedetect` (volume threshold), ML-based speech detection. Higher accuracy with BGM/ambient noise. Key difference: `silencedetect` judges **volume** (misses coughs as silent, keeps them); VAD judges **speech/non-speech** (can remove coughs as non-speech). → Use as `clipwright-silence` backend (detection logic already isolated in adapter function, easy to swap). Python library—wrap in small CLI subprocess to honor §2.4. Note: linguistic filler ("um", "uh") stays (requires transcribe-based detection to remove). Coughs, breath sounds: VAD's domain.
+- **Whisper (whisper.cpp, MIT) – Transcription**: §1/§10 default choice. C++ binary is perfect for subprocess decoupling. Output SRT/VTT + OTIO markers.
+- **BudouX (Apache-2.0) – Subtitle line-breaking**: Natural CJK line breaks (Japanese/CJK phrase boundaries). Pure text transform (no media change). Thin CLI wrapper → `clipwright-*` tool. Post-process transcribe output (SRT).
+
+### Not Adopted (Philosophy mismatch)
+
+- **After Effects scripting for caption compositing, MOGRT, Premiere via AE**: AE/Premiere are proprietary paid GUI apps, violating §2.1 (GUI-free), §2.4 + §9 (OSS subprocess decoupling + license independence), and §2.8 (portable formats; don't invent proprietary). MOGRT is Adobe-proprietary. → Not a `clipwright-*` tool.
+
+### Adobe Integration Aligned with Spec
+
+OTIO enables **OTIO → FCPXML / AAF / EDL** via standard OTIO adapters (§4.1 future option). Premiere Pro / After Effects users can finish editing in their NLE. Clipwright delivers the skeleton (cuts, captions positions) in OTIO/portable format; detailed animation/grading lives in the NLE (natural extension of detect/render split).
+
+---
+
+## 11.6 Finishing Pipeline Vision (Merge, Loudness, BGM) (Added 2026-06-11)
+
+> **Goal**: Settle the approach for **finishing features** (merge multi-video, normalize loudness across clips, add BGM) within existing design principles (§2), contract (§6), detect/render split (§2.5). **`clipwright-noise` (Phase 3-5, implemented, commit 19c161c) is the proven pattern**; feature② is nearly a copy.
+
+### Overall Strategy (Critical)
+
+All three features involve media realization (re-encode, concat, mix). By §2.5 / contract M3, **realization concentrates in `clipwright-render` alone**. No new media-writer tools. Two patterns:
+
+- **A. Render extensions** (realization itself): ① merge, ③ BGM mix.
+- **B. New detect/annotate tool + render applies** (measure/place, no media change): ② loudness normalization. Same shape as `clipwright-noise`.
+
+All decisions live in OTIO; **render applies in one ffmpeg pass** (avoid double-encoding, max quality):
 
 ```
-1本の timeline.otio:
-  ├ V1: 複数ソースのクリップ列（=合体①）＋カット（silence）
-  ├ A1: 本編音声（loudness 指示で正規化②・denoise 指示でノイズ除去）
-  ├ A2: BGM クリップ＋ミックス指示（③: volume / fade / ducking）
-  └ metadata["clipwright"]: denoise 指示・loudness 指示
-        ↓ clipwright_render（dry_run で確認 → 本実行）
-  カット＋連結＋denoise＋音量正規化＋BGMミックスを 1 パスで適用した完成動画
+One timeline.otio:
+  ├ V1: Multi-source clips (=merge①) + cuts (silence)
+  ├ A1: Dialog (loudness norm by ②, denoise by denoise flag)
+  ├ A2: BGM clip + mix instructions (③: volume/fade/ducking)
+  └ metadata["clipwright"]: denoise + loudness instructions
+        ↓ clipwright_render (dry_run preview → real render)
+  Final video: cut + concat + denoise + loudness norm + BGM mix in 1 pass
 ```
 
-すべて ffmpeg 内蔵フィルタで実現でき**新規バイナリ依存ゼロ**（M4: 引数配列・shell=False・timeout の subprocess 規律は `clipwright.process.run` を踏襲）。入力は全てパス受け取り・出力は新規生成（M5）。新 ErrorCode は不要（既存 §4 の許可リストで表現可能）。
+All via ffmpeg built-in filters—**zero new binary dependencies** (M4: arg arrays, shell=False, timeout via `clipwright.process.run`). Input: paths only (M5). Output: new files. No new ErrorCode needed (existing §4 list suffices).
 
 ---
 
-### ① 合体（複数動画を1本に連結）— render 拡張
+### ① Merge (Concat Multi-Video) – Render Extension
 
-- **形態**: `clipwright-render` の拡張（新ツールなし）。spec §7.2 が既に「将来: 複数ソース連結」を明記済み。
-- **現状の制約**: `clipwright-render/.../plan.py:resolve_kept_ranges` が「全クリップが同一 `target_url`（単一ソース）」を要求し、複数ソースは `UNSUPPORTED_OPERATION` で弾く。これを**複数ソース対応に拡張**する。
-- **OTIO 表現**: V1 トラックに複数ソース由来のクリップを順に並べる（各 `Clip.media_reference.target_url` が異なってよい）。境界検証 `_check_source_within_timeline_dir` は「全ソースが timeline と同一ディレクトリ配下」を要求するため、合体対象の素材は同一プロジェクト dir 配下に置く前提にする。
-- **実装方針（plan.py / render.py）**:
-  - `resolve_kept_ranges` の「単一ソース検証」を撤廃し、ソースごとに入力 index を割り当てる（`-i src0 -i src1 …`）。
-  - `build_plan` の `filter_complex` を「各クリップを `[i:v]trim` / `[i:a]atrim`（i=ソース index）→ 全クリップを `concat=n=N:v=1:a=1`」に拡張。現在の単一ソース版（`[0:v]`固定）の自然な一般化。
-  - **解像度/fps/SAR 不一致対策**: concat は各入力の規格一致が前提。クリップ前段に `scale`/`fps`/`setsar` を入れて統一する（出力規格は `RenderOptions.width/height/fps` か先頭クリップ基準）。これが①の主要な実装コスト。
-- **timeline 構築**: 既存 `clipwright_write_timeline`（`add_clip` を複数ソースで繰り返す）で組める。専用ツールは不要。
+- **Shape**: `clipwright-render` extension (no new tool). Spec §7.2 already notes "future: multi-source concat."
+- **Current constraint**: `clipwright-render/.../plan.py:resolve_kept_ranges` requires all clips from same `target_url` (single source); multiple sources hit `UNSUPPORTED_OPERATION`. **Extend to multi-source.**
+- **OTIO representation**: V1 track with clips from multiple sources (each `Clip.media_reference.target_url` may differ). Boundary validation `_check_source_within_timeline_dir` requires "all sources under timeline dir"; merge sources must be in same project dir.
+- **Implementation (plan.py / render.py)**:
+  - Drop "single-source" check in `resolve_kept_ranges`; assign input index per source (`-i src0 -i src1 …`).
+  - Extend `build_plan` `filter_complex`: each clip → `[i:v]trim` / `[i:a]atrim` (i=source index) → all → `concat=n=N:v=1:a=1`. Generalize current single-source (fixed `[0:v]`).
+  - **Resolution/fps/SAR mismatch**: concat needs uniform input specs. Insert `scale`/`fps`/`setsar` before clips (output spec = `RenderOptions.width/height/fps` or first clip). Major implementation cost for ①.
+- **Timeline build**: Use existing `clipwright_write_timeline` (repeat `add_clip` for multi-source). No special tool.
 
-### ② 音量の均一化（ラウドネス正規化・ピーク合わせ）— 新 detect ツール ＋ render 適用
+### ② Loudness Normalization (EBU R128, Peak Matching) – New Detect Tool + Render Apply
 
-- **形態**: **新パッケージ `clipwright-loudness`（detect/注記型）** ＋ render が適用。`clipwright-noise` のほぼ複製（雛形 `templates/clipwright-tool/` ＋ noise を参照）。
-- **想定 MCP**: `clipwright_detect_loudness(media, output, options=None, timeline=None)`（annotations: readOnly/非破壊/idempotent/openWorld=false）。
-- **解析（analyze 層）**: ffmpeg `ebur128`（EBU R128・統合ラウドネス LUFS / トゥルーピーク）または `volumedetect`（mean/max dB）を subprocess 実行して測定。noise の astats と同パターン（**実 ffmpeg 出力フィールドは実機確認**＝noise DC-AS-004 の教訓）。
-- **指示（OTIO 注記）**: `metadata["clipwright"]["loudness"]` に `{ tool, version, kind:"loudness", mode:"loudnorm"|"peak", target_lufs:-16.0|target_peak_db:-1.0, measured:{...}, scope:"per_clip"|"track" }`。**クリップ間バラつき均一化**は `scope:"per_clip"` で各クリップを個別測定→個別 gain（noise が「トラック一律」だったのに対し一段細かい）。
-- **render 適用**: `build_plan` が指示を読み、各クリップ音声に gain を当てる（`loudnorm=I=-16:TP=-1:LRA=11` の線形パラメータ適用、または単純 `volume={gain}dB`）。afftdn 注入と同じ「audio チェーンへのフィルタ挿入」で**単一パス**維持。
-  - 注: EBU R128 厳密版は二段測定（measure→apply）が理想。**測定は detect ツールが担い**、render は測定値を線形パラメータとして1パス適用（= noise の「detect で測る・render で当てる」と同じ二段分業）。
-- **検証（e2e）**: 適用後にラウドネス/ピークが目標値へ寄ることを実測（noise の -3dB e2e と同型・ネガティブ対照を入れる）。
+- **Shape**: **New package `clipwright-loudness` (detect/annotate type)** + render applies. Nearly a copy of `clipwright-noise` (template `templates/clipwright-tool/` + noise reference).
+- **Expected MCP**: `clipwright_detect_loudness(media, output, options=None, timeline=None)` (annotations: readOnly/non-destructive/idempotent/openWorld=false).
+- **Analysis layer**: Call ffmpeg `ebur128` (EBU R128 integrated loudness LUFS / true peak) or `volumedetect` (mean/max dB) as subprocess. Same pattern as noise's `astats` (**verify real ffmpeg output fields on hardware**—lesson from noise DC-AS-004).
+- **Instruction (OTIO annotation)**: `metadata["clipwright"]["loudness"]` gets `{ tool, version, kind:"loudness", mode:"loudnorm"|"peak", target_lufs:-16.0|target_peak_db:-1.0, measured:{...}, scope:"per_clip"|"track" }`. **Per-clip loudness uniformity**: `scope:"per_clip"` means measure each clip individually → apply per-clip gain (finer than noise's "track-wide").
+- **Render apply**: `build_plan` reads instruction, applies gain to each clip's audio (`loudnorm=I=-16:TP=-1:LRA=11` linear params, or simple `volume={gain}dB`). Same "insert filter into audio chain" as denoise injection—**single pass maintained**.
+  - Note: Strict EBU R128 is two-stage (measure → apply). **Detect tool measures**, render applies measured values as linear params (same two-stage division as noise: "detect measures, render applies").
+- **Validation (e2e)**: Post-apply loudness/peak converges to target (same e2e shape as noise's -3dB test; include negative controls).
 
-### ③ BGM の付与（ミックス）— render 拡張 ＋ timeline 配置
+### ③ BGM (Mix) – Render Extension + Timeline Placement
 
-- **形態**: `clipwright-render` の拡張（音声ミックス）＋ timeline へ BGM を配置する手段。
-- **OTIO 表現**: **第2音声トラック A2**（`new_timeline` は既に V1/A1 を作る。A2 を追加）に BGM クリップ（`target_url`=BGM ファイル）を置き、`metadata["clipwright"]["bgm"]` に `{ volume_db, fade_in_sec, fade_out_sec, ducking:{enabled, threshold, ratio} }` を注記。
-- **配置手段**: 既存 `clipwright_write_timeline` の `add_clip`（A2 へ）で組める。利便性のため薄い注記ツール `clipwright_add_bgm(timeline, bgm, output, options)`（メディア非改変・readOnly）を作ってもよいが必須ではない。
-- **render 適用（build_plan）**:
-  - 本編音声 `[outa]` と BGM `[bgm:a]` を `amix=inputs=2`（または `amerge`）で合成。BGM に `volume`／`afade`（フェード）を前置。
-  - **ダッキング**（喋りに合わせ BGM 自動減衰）: `sidechaincompress`（本編音声をサイドチェーンに BGM を圧縮）。初版は任意機能とし、まず固定音量＋フェードから。
-  - BGM 長 < 本編なら `aloop`/`apad`、長ければ `atrim` で尺合わせ。
-- **入力**: BGM はパスで受け取り（M5）。BGM も合体素材と同様プロジェクト dir 配下前提（境界検証）。
+- **Shape**: `clipwright-render` extension (audio mix) + way to place BGM in timeline.
+- **OTIO representation**: **Second audio track A2** (existing `new_timeline` makes V1/A1; add A2) with BGM clips (`target_url`=BGM file) + `metadata["clipwright"]["bgm"]` with `{ volume_db, fade_in_sec, fade_out_sec, ducking:{enabled, threshold, ratio} }`.
+- **Placement**: Use existing `clipwright_write_timeline` `add_clip` (to A2). Optionally create thin `clipwright_add_bgm(timeline, bgm, output, options)` helper (read-only, non-destructive); not required.
+- **Render apply (build_plan)**:
+  - Mix main audio `[outa]` + BGM `[bgm:a]` via `amix=inputs=2` (or `amerge`). Prefix BGM with `volume` / `afade`.
+  - **Ducking** (auto-reduce BGM during dialog): `sidechaincompress` (sidechain main audio, compress BGM). Optional v1; start with fixed volume + fade.
+  - Match duration: BGM < main → `aloop`/`apad`; longer → `atrim`.
+- **Input**: BGM path (M5). Same project dir assumption as merge sources (boundary validation).
 
 ---
 
-### 着手順序の目安と注意
+### Order of Attack & Cautions
 
-| 機能 | 形態 | 主な ffmpeg | 難度 | 備考 |
+| Feature | Shape | Key FFmpeg | Effort | Notes |
 |---|---|---|---|---|
-| ② 音量均一化 | 新 detect ツール `clipwright-loudness` ＋ render 適用 | `ebur128`/`loudnorm`/`volume` | 低〜中 | **noise の複製で最短。最初に着手推奨** |
-| ① 合体 | render 拡張 | `concat` ＋ `scale`/`fps` 統一 | 中 | resolve_kept_ranges の単一ソース制約撤廃が肝 |
-| ③ BGM | render 拡張 ＋ timeline 配置 | `amix`/`afade`/`sidechaincompress` | 中 | A2 トラック追加・ダッキングは後追い可 |
+| ② Loudness | New `clipwright-loudness` + render | `ebur128`/`loudnorm`/`volume` | Low–Mid | **Quickest: copy noise. Start here.** |
+| ① Merge | Render extension | `concat` + `scale`/`fps` unify | Mid | Crux: drop single-source check. Resolution unify costs. |
+| ③ BGM | Render ext. + timeline place | `amix`/`afade`/`sidechaincompress` | Mid | A2 track easy; ducking optional follow-up. |
 
-- **注意（render の肥大化）**: ①③で render に concat 一般化・音声ミックスが乗る。spec は「render は安定した1本を維持する」とするため、各拡張は**後方互換（指示・複数ソースが無ければ従来同一）**を厳守し、`clipwright-noise` の denoise 拡張で実証した「任意引数追加＋指示なしは従来通り」の作法を踏襲する。
-- **進め方**: 今回（clipwright-noise）と同じ C3 ワークフロー（ヒアリング→設計→C-3 設計監査→parallel-agents 実装→code/security レビューで 0 収束）を推奨。設計監査は実装前ギャップ検出に高い費用対効果（noise で21件を実装前に検出）。
+- **Caution (render scope creep)**: ① + ③ add concat generalization + audio mixing. Spec says "keep render stable"; enforce **backward compatibility** (no instruction/multi-source = old behavior). Follow `clipwright-noise` denoise pattern: "optional args + no instruction = legacy" discipline.
+- **Approach**: Repeat noise cycle: hearing → design → design audit → parallel-agents implement → code/security review to zero. Design audit has high ROI for pre-impl gap detection (noise caught 21 issues pre-implementation).
 
 ---
 
-## 12. Claude Code への着手指示（最初のタスク）
+## 12. Claude Code: First Steps
 
-1. リポジトリと開発環境を用意（Python, FastMCP, opentimelineio, ffprobe/ffmpeg の存在チェック）。推奨レイアウト:
+1. Set up repo and environment (Python, FastMCP, opentimelineio, verify ffprobe/ffmpeg exist). Recommended layout:
    ```
-   clipwright/                 # コア共有ライブラリ＋プリミティブMCP
+   clipwright/                 # Core: shared library + primitive MCP
      pyproject.toml            # license = MIT/Apache-2.0
      clipwright/
        __init__.py
-       otio_utils.py           # OTIO 読み書き/注記ヘルパー
-       media.py                # ffprobe ラッパー（構造化 probe）
-       project.py              # プロジェクトdir / マニフェスト
-       process.py              # サブプロセスランナー（shell=False, timeout）
-       envelope.py             # 返り値エンベロープ / エラー整形
-       schemas.py              # 共通 Pydantic 型（MediaRef, TimeRange, ToolResult …）
-       server.py               # プリミティブ MCP（init_project, inspect_media, read/write_timeline）
-   clipwright-render/          # 2つ目のツール（別パッケージ）
+       otio_utils.py           # OTIO read/write/annotation helpers
+       media.py                # ffprobe wrapper (structured output)
+       project.py              # project dir / manifest
+       process.py              # subprocess runner (shell=False, timeout)
+       envelope.py             # response envelope / error formatting
+       schemas.py              # common Pydantic types (MediaRef, TimeRange, ToolResult, …)
+       server.py               # Primitive MCP (init_project, inspect_media, read/write_timeline)
+   clipwright-render/          # Second tool (separate package)
      pyproject.toml
      clipwright_render/
        __init__.py
-       render.py               # OTIO → FFmpeg 計画 → 実行（dry_run 対応）
-       server.py               # MCP（clipwright_render）
-   CONVENTIONS.md              # 第6章を独立させたツール作者コントラクト（正式版）
-   README.md                   # ffmpeg 前提・インストール・使い方
+       render.py               # OTIO → FFmpeg plan → execute (dry_run-ready)
+       server.py               # MCP (clipwright_render)
+   CONVENTIONS.md              # Tool author contract (§6 extracted)
+   README.md                   # ffmpeg requirement, install, usage
    ```
-2. コアの共通型（`schemas.py`）と返り値エンベロープ（`envelope.py`）を最初に固定する。これが全ツールの契約面。
-3. `inspect_media`（ffprobe）と OTIO ヘルパーを実装し、プリミティブMCPを通す。
-4. `clipwright-render` を実装。まず `dry_run` で「FFmpeg 計画と想定尺」を返せるようにし、その後に実レンダリングを通す。
-5. MCP Inspector で疎通確認 → 小さな実素材で「区間を残して1本に連結」を検証。
+2. Fix core common types (`schemas.py`) and response envelope (`envelope.py`) first. This is the contract layer for all tools.
+3. Implement `inspect_media` (ffprobe) and OTIO helpers; ship primitive MCP.
+4. Implement `clipwright-render`: first, `dry_run` returns FFmpeg plan + estimated output; then real rendering.
+5. MCP Inspector connectivity check → validate with real media: concat kept intervals to one file.
 
-> 実装着手前に、`clipwright` / `clipwright-render` の名前が PyPI・npm・GitHub org・ドメインで空いていることを最終確認し、空いていれば PyPI のプロジェクト名だけ先に確保しておくこと。
+> Before starting implementation, confirm `clipwright` and `clipwriter-render` names are available on PyPI, npm, GitHub org, and domain registrars. If available, reserve PyPI project names early.

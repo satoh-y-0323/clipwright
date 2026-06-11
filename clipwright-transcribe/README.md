@@ -1,28 +1,28 @@
 # clipwright-transcribe
 
-音声・映像ファイルを文字起こしし、SRT/VTT キャプションと OTIO タイムラインを生成する MCP ツール。
+MCP tool to transcribe audio/video files and generate SRT/VTT captions and OTIO timeline.
 
-## 依存バイナリ・ファイル
+## External Binaries / Files
 
-このツールは以下の外部バイナリ・ファイルが実行環境に存在することを前提とする。**pip でインストールされない**ため、別途用意すること。
+This tool requires the following external binaries/files to exist in the execution environment. **They are not installed via pip**, so obtain them separately.
 
-### whisper.cpp バイナリ
+### whisper.cpp Binary
 
-文字起こしに使用する。
+Used for transcription.
 
-- PATH に `whisper-cli`（または環境に応じたバイナリ名）を配置するか、環境変数 `CLIPWRIGHT_WHISPER` にバイナリのフルパスを指定する。
-- 入手: https://github.com/ggerganov/whisper.cpp からビルド、またはリリースバイナリを使用する。
+- Place `whisper-cli` (or the binary name appropriate for your environment) on PATH, or specify the full path in the `CLIPWRIGHT_WHISPER` environment variable.
+- Obtain: Build from https://github.com/ggerganov/whisper.cpp, or use release binaries.
 
 ```
 export CLIPWRIGHT_WHISPER=/path/to/whisper-cli
 ```
 
-### ggml モデルファイル
+### ggml Model File
 
-whisper.cpp が使用する音声認識モデル（`.bin` ファイル）。
+Speech recognition model (`.bin` file) used by whisper.cpp.
 
-- 環境変数 `CLIPWRIGHT_WHISPER_MODEL` にモデルファイルのフルパスを指定する。ツール呼び出し時に `model_path` パラメータでも上書き可能。
-- 入手: https://huggingface.co/ggerganov/whisper.cpp などからダウンロード。
+- Specify the full path to the model file in the `CLIPWRIGHT_WHISPER_MODEL` environment variable. Can be overridden by the `model_path` parameter at tool invocation.
+- Obtain: Download from https://huggingface.co/ggerganov/whisper.cpp etc.
 
 ```
 export CLIPWRIGHT_WHISPER_MODEL=/path/to/ggml-base.bin
@@ -30,22 +30,22 @@ export CLIPWRIGHT_WHISPER_MODEL=/path/to/ggml-base.bin
 
 ### ffmpeg
 
-音声ファイルを 16kHz mono WAV に変換（whisper.cpp の入力形式）するために必須。
+Required to convert audio to 16kHz mono WAV (input format for whisper.cpp).
 
-- PATH に `ffmpeg` を配置するか、環境変数 `CLIPWRIGHT_FFMPEG` にフルパスを指定する。
+- Place `ffmpeg` on PATH, or specify the full path in the `CLIPWRIGHT_FFMPEG` environment variable.
 
 ```
 export CLIPWRIGHT_FFMPEG=/path/to/ffmpeg
 ```
 
-## 環境変数まとめ
+## Environment Variables Summary
 
-| 環境変数 | 用途 | 必須 |
+| Environment Variable | Purpose | Required |
 |---|---|---|
-| `CLIPWRIGHT_WHISPER` | whisper.cpp バイナリのパス（PATH になければ必須） | 条件付き |
-| `CLIPWRIGHT_WHISPER_MODEL` | ggml モデルファイルのパス（`model_path` パラメータが優先） | 条件付き |
-| `CLIPWRIGHT_FFMPEG` | ffmpeg バイナリのパス（PATH になければ必須） | 条件付き |
+| `CLIPWRIGHT_WHISPER` | Path to whisper.cpp binary (required if not on PATH) | Conditional |
+| `CLIPWRIGHT_WHISPER_MODEL` | Path to ggml model file (`model_path` parameter takes precedence) | Conditional |
+| `CLIPWRIGHT_FFMPEG` | Path to ffmpeg binary (required if not on PATH) | Conditional |
 
-## MCP ツール
+## MCP Tool
 
-`clipwright_transcribe(media, output, options?)` — 音声・映像ファイルを文字起こしし、`output.otio` / `output.srt` / `output.vtt` を生成する。
+`clipwright_transcribe(media, output, options?)` — Transcribe audio/video file and generate `output.otio` / `output.srt` / `output.vtt`.

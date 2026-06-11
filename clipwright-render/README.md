@@ -1,57 +1,57 @@
 # clipwright-render
 
-OTIO タイムラインを FFmpeg で実体化する MCP ツール。
+MCP tool to realize OTIO timelines with FFmpeg.
 
-clipwright は「検出（detect）と適用（render）の分離」を中核思想とする道具箱です。detect 系ツールはメディアを書き換えず OTIO に注記を返すだけで、**実体化はこの `clipwright-render` 一本がまとめて一回だけ行います**（再エンコード 1 回で区間抽出・連結・トリムを完結させます）。
-
----
-
-## 前提条件
-
-本ツールは以下の条件を満たす素材・タイムラインを対象とします。条件を外れた入力はエラーを返します。
-
-| 条件 | 詳細 |
-|---|---|
-| フレームレート | CFR（定フレームレート）のみ。VFR（可変フレームレート）は非対応 |
-| 解像度 | 固定解像度のみ。フレームごとに解像度が変動する素材は非対応 |
-| ソース数 | タイムライン内の素材は単一ソース（1 ファイル）のみ |
-| 映像トラック | 必須。映像なしは非対応 |
-| 音声トラック | 0 または 1 ストリームのみ。複数ある場合は第 1 音声のみ採用 |
-
-### スコープ外（将来対応予定）
-
-- VFR / 解像度変動素材
-- 複数ソースファイルの連結
-- 字幕焼き込み（subtitle burn-in）
-- トランジション
-- video トラック 2 本以上のタイムライン
+Clipwright is a toolkit centered on "separation of detection (detect) and application (render)". detect-type tools only return annotations to OTIO without modifying media, and **this single `clipwright-render` tool performs all realization in one pass** (completes segment extraction, concatenation, and trimming in a single transcode pass).
 
 ---
 
-## FFmpeg の準備
+## Prerequisites
 
-**FFmpeg / FFprobe はこのパッケージに同梱していません**。各自の環境に導入してください。
+This tool targets materials and timelines that meet the following conditions. Inputs outside these conditions return errors.
+
+| Condition | Details |
+|-----------|---------|
+| Frame rate | CFR (constant frame rate) only. VFR (variable frame rate) not supported |
+| Resolution | Fixed resolution only. Materials with per-frame resolution changes not supported |
+| Source count | Only single source (1 file) in timeline |
+| Video track | Required. No video not supported |
+| Audio track | 0 or 1 stream only. If multiple, first audio stream adopted |
+
+### Out of Scope (Planned for Future)
+
+- VFR / resolution-changing materials
+- Multiple source file concatenation
+- Subtitle burn-in
+- Transitions
+- 2+ video tracks in timeline
+
+---
+
+## FFmpeg Setup
+
+**FFmpeg / FFprobe are not bundled with this package**. Install in your environment.
 
 ```bash
-# macOS（Homebrew）
+# macOS (Homebrew)
 brew install ffmpeg
 
 # Ubuntu / Debian
 sudo apt install ffmpeg
 ```
 
-`ffmpeg` / `ffprobe` が PATH 上にある場合はそのまま動作します。PATH に追加できない環境では環境変数で明示的にパスを指定してください。
+If `ffmpeg` / `ffprobe` are on PATH, it works as-is. In environments where PATH cannot be modified, explicitly specify paths with environment variables.
 
 ```bash
 export CLIPWRIGHT_FFMPEG=/usr/local/bin/ffmpeg
 export CLIPWRIGHT_FFPROBE=/usr/local/bin/ffprobe
 ```
 
-> ライセンスについて: ラッパー本体（このパッケージ）は **MIT** ライセンスです。FFmpeg バイナリは同梱していないため、FFmpeg の LGPL / GPL 再配布義務はラッパーには適用されません。FFmpeg 自体のライセンス（LGPL v2.1 / GPL v2）はユーザー環境でご確認ください。
+> About license: This wrapper package itself is **MIT** licensed. Since FFmpeg binaries are not bundled, FFmpeg's LGPL / GPL redistribution obligations do not apply to this wrapper. Verify FFmpeg's own license (LGPL v2.1 / GPL v2) in your environment.
 
 ---
 
-## インストール
+## Installation
 
 ```bash
 uv sync
@@ -59,11 +59,11 @@ uv sync
 
 ---
 
-## 使い方
+## Usage
 
-### MCP ツール（`clipwright_render`）
+### MCP Tool (`clipwright_render`)
 
-Claude / エージェントから MCP 経由で呼び出します。
+Invoked from Claude / agents via MCP.
 
 ```jsonc
 {
@@ -85,35 +85,35 @@ Claude / エージェントから MCP 経由で呼び出します。
 }
 ```
 
-**引数**
+**Arguments**
 
-| 引数 | 型 | 必須 | 説明 |
-|---|---|---|---|
-| `timeline` | string | 必須 | 入力 OTIO ファイルのパス |
-| `output` | string | 必須 | 出力ファイルのパス（`.mp4` / `.mkv` / `.mov` / `.webm`） |
-| `dry_run` | bool | 省略可（既定 `false`） | `true` にすると実レンダリングを行わず計画のみ返す |
-| `options` | object | 省略可 | 出力オプション（下記 RenderOptions 参照） |
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `timeline` | string | yes | Input OTIO file path |
+| `output` | string | yes | Output file path (`.mp4` / `.mkv` / `.mov` / `.webm`) |
+| `dry_run` | bool | optional (default `false`) | If `true`, returns plan without actual rendering |
+| `options` | object | optional | Output options (see RenderOptions below) |
 
 **RenderOptions**
 
-| フィールド | 型 | 説明 |
-|---|---|---|
-| `video_codec` | string \| null | 映像コーデック（例: `libx264`・既定: ソース踏襲） |
-| `audio_codec` | string \| null | 音声コーデック（例: `aac`・既定: ソース踏襲） |
-| `width` | int \| null | 出力幅（`height` と必ずセットで指定） |
-| `height` | int \| null | 出力高さ（`width` と必ずセットで指定） |
-| `fps` | float \| null | 出力フレームレート |
-| `crf` | int \| null | 品質指定 CRF 値（0〜51） |
-| `overwrite` | bool | `true` にすると出力ファイルが既存でも上書き（既定 `false`） |
+| Field | Type | Description |
+|-------|------|-------------|
+| `video_codec` | string \| null | Video codec (e.g. `libx264`, default: inherit from source) |
+| `audio_codec` | string \| null | Audio codec (e.g. `aac`, default: inherit from source) |
+| `width` | int \| null | Output width (must be set with `height`) |
+| `height` | int \| null | Output height (must be set with `width`) |
+| `fps` | float \| null | Output frame rate |
+| `crf` | int \| null | Quality CRF value (0-51) |
+| `overwrite` | bool | If `true`, overwrite existing output file (default `false`) |
 
-`width` / `height` は両方指定するか両方 `null` にしてください。片方のみ指定はエラーになります。
+`width` / `height` must both be specified or both `null`. Specifying only one is an error.
 
-**返り値（成功時）**
+**Return Value (Success)**
 
 ```jsonc
 {
   "ok": true,
-  "summary": "2 クリップ → 45.2 秒 / 42.1 MB / outputs/out.mp4",
+  "summary": "2 clips → 45.2 sec / 42.1 MB / outputs/out.mp4",
   "data": {
     "output_path": "/path/to/output.mp4",
     "duration_sec": 45.2,
@@ -125,12 +125,12 @@ Claude / エージェントから MCP 経由で呼び出します。
 }
 ```
 
-**dry_run 時の返り値**
+**Return Value (dry_run)**
 
 ```jsonc
 {
   "ok": true,
-  "summary": "dry_run: 2 区間 / 想定 45.2 秒 / 概算 42.1 MB",
+  "summary": "dry_run: 2 segments / estimated 45.2 sec / approx 42.1 MB",
   "data": {
     "dry_run": true,
     "clip_count": 2,
@@ -143,45 +143,45 @@ Claude / エージェントから MCP 経由で呼び出します。
 }
 ```
 
-`estimated_size_bytes` は FFprobe で取得したビットレートと出力尺から計算した概算値です。ビットレートが取得できない場合は `null` になり `warnings` に理由が付きます。なお、`video_codec` / `width` / `height` / `fps` / `crf` のいずれかを指定した場合はソースビットレートベースの概算が実際と大きく異なる可能性があるため、`warnings` に目安旨が付きます。
+`estimated_size_bytes` is calculated from source bitrate obtained by FFprobe and output duration. If bitrate cannot be obtained, it is `null` with reason in `warnings`. If any of `video_codec` / `width` / `height` / `fps` / `crf` are specified, estimation based on source bitrate may differ significantly from actual, so `warnings` includes a note.
 
-**エラー時の返り値**
+**Return Value (Error)**
 
 ```jsonc
 {
   "ok": false,
   "error": {
     "code": "FILE_NOT_FOUND",
-    "message": "タイムラインファイルが見つかりません: /path/to/timeline.otio",
-    "hint": "ファイルパスを確認してください"
+    "message": "Timeline file not found: /path/to/timeline.otio",
+    "hint": "Verify the file path"
   }
 }
 ```
 
-主なエラーコード:
+Main error codes:
 
-| コード | 意味 |
-|---|---|
-| `FILE_NOT_FOUND` | タイムライン / ソース / 出力先ディレクトリが存在しない |
-| `INVALID_INPUT` | 不正な拡張子 / 既存出力で overwrite=false / 空タイムライン |
-| `PATH_NOT_ALLOWED` | 出力パスが入力ソースと同じ |
-| `UNSUPPORTED_OPERATION` | 映像なし / 複数ソース / Transition / video トラック 2 本以上 |
-| `PROBE_FAILED` | FFprobe の解析失敗 |
-| `SUBPROCESS_FAILED` | FFmpeg の終了コードが非ゼロ |
-| `SUBPROCESS_TIMEOUT` | FFmpeg がタイムアウト（`max(300, 尺秒 × 10)` 秒） |
-| `DEPENDENCY_MISSING` | ffmpeg / ffprobe が PATH にも環境変数にも見つからない |
+| Code | Meaning |
+|------|---------|
+| `FILE_NOT_FOUND` | Timeline / source / output directory does not exist |
+| `INVALID_INPUT` | Invalid extension / existing output with overwrite=false / empty timeline |
+| `PATH_NOT_ALLOWED` | Output path is same as input source |
+| `UNSUPPORTED_OPERATION` | No video / multiple sources / Transition / 2+ video tracks |
+| `PROBE_FAILED` | FFprobe analysis failed |
+| `SUBPROCESS_FAILED` | FFmpeg exit code non-zero |
+| `SUBPROCESS_TIMEOUT` | FFmpeg timeout (`max(300, duration_sec × 10)` seconds) |
+| `DEPENDENCY_MISSING` | ffmpeg / ffprobe not found in PATH or environment variables |
 
 ---
 
-### CLI（`clipwright-render`）
+### CLI (`clipwright-render`)
 
-コマンドラインから直接実行できます。MCP ツールと同じロジックを共有します。
+Can be run directly from command line. Shares same logic as MCP tool.
 
 ```bash
-clipwright-render <timeline> <output> [オプション]
+clipwright-render <timeline> <output> [options]
 ```
 
-**引数**
+**Arguments**
 
 ```
 clipwright-render <timeline> <output>
@@ -194,17 +194,17 @@ clipwright-render <timeline> <output>
     [--overwrite]
 ```
 
-**例: dry_run で計画を確認してからレンダリング**
+**Example: Verify plan with dry_run before rendering**
 
 ```bash
-# まず計画を確認
+# Verify plan first
 clipwright-render timeline.otio out.mp4 --dry-run
 
-# 問題なければ実レンダリング
+# Render if OK
 clipwright-render timeline.otio out.mp4 --video-codec libx264 --crf 23
 ```
 
-**例: 解像度を指定してレンダリング**
+**Example: Render with specified resolution**
 
 ```bash
 clipwright-render timeline.otio out.mp4 --width 1280 --height 720 --fps 29.97
@@ -212,19 +212,19 @@ clipwright-render timeline.otio out.mp4 --width 1280 --height 720 --fps 29.97
 
 ---
 
-## テスト
+## Testing
 
-### ユニットテスト（FFmpeg 不要）
+### Unit Tests (FFmpeg Not Required)
 
 ```bash
 uv run --package clipwright-render pytest clipwright-render/tests/ -m "not integration"
 ```
 
-### integration テスト（FFmpeg 必須）
+### Integration Tests (FFmpeg Required)
 
-実際に FFmpeg を使用して単一ソースの連結・出力を検証するテストです。FFmpeg が用意されていない環境では自動的にスキップされます。
+Tests that verify single-source concatenation and output using actual FFmpeg. Automatically skipped in environments without FFmpeg.
 
-環境変数を設定してから実行してください。
+Set environment variables before running:
 
 ```bash
 export CLIPWRIGHT_FFMPEG=/path/to/ffmpeg
@@ -233,12 +233,12 @@ export CLIPWRIGHT_FFPROBE=/path/to/ffprobe
 uv run --package clipwright-render pytest clipwright-render/tests/ -m integration
 ```
 
-> integration テストは `CLIPWRIGHT_FFMPEG` / `CLIPWRIGHT_FFPROBE` が設定されていない場合は skip します。CI で実行する場合はこれらの環境変数を設定してください。
+> Integration tests skip if `CLIPWRIGHT_FFMPEG` / `CLIPWRIGHT_FFPROBE` are not set. Set these variables when running in CI.
 
 ---
 
-## ライセンス
+## License
 
-ラッパー本体（このパッケージ）は **MIT** ライセンスです。
+This wrapper package itself is **MIT** licensed.
 
-FFmpeg バイナリは同梱していないため、FFmpeg の LGPL v2.1 / GPL v2 に基づく再配布義務はこのパッケージには適用されません。
+Since FFmpeg binaries are not bundled, FFmpeg's LGPL v2.1 / GPL v2 redistribution obligations do not apply to this package.

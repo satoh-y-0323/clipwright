@@ -1,7 +1,7 @@
-"""test___TOOL__.py — オーケストレーション層 __ACTION__ のテスト。
+"""test___TOOL__.py — Test orchestration layer __ACTION__.
 
-ハッピーパス1つと代表的なエラー（FILE_NOT_FOUND / 非破壊 / 拡張子）を検証する。
-実ツールでは検出ロジック・OSS subprocess 境界のテストを追加する。
+Validates happy path and representative errors (FILE_NOT_FOUND / non-destructive / extension).
+Real tools add detection logic and OSS subprocess boundary tests.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ def test_missing_input_returns_file_not_found(tmp_path: Path) -> None:
 
 
 def test_output_equals_input_rejected(sample_input: Path) -> None:
-    """非破壊（M5）: output == input は INVALID_INPUT で拒否する。"""
+    """Non-destructive (M5): output == input rejected as INVALID_INPUT."""
     result = __ACTION__(
         input=str(sample_input),
         output=str(sample_input),

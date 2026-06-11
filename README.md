@@ -1,86 +1,88 @@
 # Clipwright
 
-FFmpeg/OTIO をラップする MCP サーバー群。映像編集ワークフローを AI エージェントから操作できるプリミティブを提供する。
+> For Japanese, see [README.ja.md](README.ja.md).
 
-## 前提: FFmpeg
+MCP server group wrapping FFmpeg/OTIO. Provides primitives to manipulate video editing workflows from AI agents.
 
-Clipwright は ffprobe（ランタイム）と ffmpeg（テスト素材生成）を PATH 上に要求する。バイナリは同梱しない。
+## Prerequisite: FFmpeg
 
-### インストール（Windows / WinGet）
+Clipwright requires ffprobe (runtime) and ffmpeg (test fixture generation) on PATH. Binaries are not included.
+
+### Installation (Windows / WinGet)
 
 ```bash
 winget install Gyan.FFmpeg
 ```
 
-**PATH への反映にはシェルの再起動が必要。** Claude Code から使う場合はアプリ再起動後に PATH が有効になる。
+**PATH takes effect after shell restart.** When using with Claude Code, restart the app for PATH to become active.
 
-再起動を待てない場合は環境変数で直接指定する:
+If you cannot wait for a restart, specify environment variables directly:
 
 ```bash
-# runtime: ffprobe のみ使用
+# runtime: ffprobe only
 export CLIPWRIGHT_FFPROBE="C:/Users/<user>/AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe/ffmpeg-8.1.1-full_build/bin/ffprobe.exe"
 
-# test: ffmpeg + ffprobe 両方（テスト素材生成用）
+# test: both ffmpeg + ffprobe (for test fixture generation)
 export CLIPWRIGHT_FFMPEG="C:/Users/<user>/AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe/ffmpeg-8.1.1-full_build/bin/ffmpeg.exe"
 ```
 
-### 環境変数の用途区別
+### Environment Variable Usage
 
-| 変数 | 用途 |
-|------|------|
-| `CLIPWRIGHT_FFPROBE` | **ランタイム専用**。`clipwright_inspect_media` ツールが使用する |
-| `CLIPWRIGHT_FFMPEG` | **テスト専用**。`conftest.py` の `sample_media` フィクスチャが使用する |
+| Variable | Purpose |
+|----------|---------|
+| `CLIPWRIGHT_FFPROBE` | **Runtime only**. Used by the `clipwright_inspect_media` tool |
+| `CLIPWRIGHT_FFMPEG` | **Test only**. Used by the `sample_media` fixture in `conftest.py` |
 
-> ランタイムは ffprobe のみ依存する。ffmpeg はテスト素材生成にのみ使用（設計: [DC-AM-008]）。
+> Runtime depends only on ffprobe. ffmpeg is used only for test fixture generation (design: [DC-AM-008]).
 
 ---
 
-## 開発環境のセットアップ
+## Development Environment Setup
 
 ```bash
-# 依存インストール
+# Install dependencies
 uv sync --dev
 
-# テスト実行（カバレッジ付き）
+# Run tests (with coverage)
 uv run pytest --cov=clipwright --cov-report=term-missing
 
 # lint / format
 uv run ruff check src tests
 uv run ruff format src tests
 
-# 型検査
+# Type checking
 uv run mypy src
 ```
 
-### 統合テストの前提条件
+### Integration Test Prerequisites
 
-統合テスト（ffprobe/ffmpeg を実際に呼び出すテスト）を実行するには、ffmpeg / ffprobe が PATH 上に存在するか、または以下の環境変数を設定すること。
+To run integration tests (tests that actually invoke ffprobe/ffmpeg), ffmpeg / ffprobe must exist on PATH or the following environment variables must be set:
 
 ```bash
-# ffprobe のパスを指定（ランタイムおよび統合テストで使用）
+# Specify path to ffprobe (used by runtime and integration tests)
 export CLIPWRIGHT_FFPROBE="/path/to/ffprobe"
 
-# ffmpeg のパスを指定（テスト素材生成に使用）
+# Specify path to ffmpeg (used for test fixture generation)
 export CLIPWRIGHT_FFMPEG="/path/to/ffmpeg"
 ```
 
-PATH に ffmpeg / ffprobe が登録済みであれば環境変数の設定は不要。いずれも見つからない場合、対象の統合テストは自動的にスキップされる。
+If ffmpeg / ffprobe are already registered in PATH, setting environment variables is not required. If neither is found, integration tests are automatically skipped.
 
 ---
 
-## 開発メモ: MCP パッケージ
+## Development Notes: MCP Package
 
-### 採用パッケージ
+### Adopted Package
 
-**公式 MCP Python SDK**（`mcp[cli]`）を採用（ADR-5 確定）。
+**Official MCP Python SDK** (`mcp[cli]`) is adopted (ADR-5 confirmed).
 
 ```
 mcp[cli]>=1.27.2
 ```
 
-`from mcp.server.fastmcp import FastMCP` で import 可能。Python 3.11 / Windows で動作確認済み。
+Importable via `from mcp.server.fastmcp import FastMCP`. Verified to work on Python 3.11 / Windows.
 
-### annotations の記法（採用版）
+### Annotation Syntax (Adopted Version)
 
 ```python
 from mcp.server.fastmcp import FastMCP
@@ -97,15 +99,15 @@ mcp = FastMCP("clipwright")
     )
 )
 def clipwright_inspect_media(path: str) -> dict:
-    """メディアファイルを probe して情報を返す。"""
+    """Probe a media file and return its information."""
     ...
 ```
 
-`ToolAnnotations` のフィールド: `title`, `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`
+`ToolAnnotations` fields: `title`, `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`
 
 ### outputSchema / structured_output
 
-`mcp.tool(structured_output=True)` を指定すると Pydantic モデルの戻り値が JSON Schema として outputSchema に反映される。
+When `mcp.tool(structured_output=True)` is specified, Pydantic model return values are reflected in outputSchema as JSON Schema.
 
 ```python
 from pydantic import BaseModel
@@ -121,59 +123,59 @@ def clipwright_inspect_media(path: str) -> MediaResult:
 
 ---
 
-## MCP Inspector 疎通手順
+## MCP Inspector Communication Procedure
 
-MCP Inspector（`@modelcontextprotocol/inspector`）で server を手動確認する方法。
+How to manually verify the server using MCP Inspector (`@modelcontextprotocol/inspector`).
 
-### 準備（Node.js が必要）
+### Setup (Node.js Required)
 
 ```bash
-# Node.js がインストールされていることを確認
+# Verify Node.js is installed
 node --version
 npx --version
 ```
 
-### server の起動と接続
+### Starting the Server and Connecting
 
 ```bash
-# MCP Inspector を起動し、stdio 経由で server を接続する
+# Start MCP Inspector and connect the server via stdio
 npx @modelcontextprotocol/inspector uv run python -m clipwright.server
 ```
 
-ブラウザで `http://localhost:5173` が自動的に開く（または手動でアクセス）。
+Browser opens automatically at `http://localhost:5173` (or access manually).
 
-Inspector 上でツール一覧（`clipwright_init_project` / `clipwright_inspect_media` / `clipwright_read_timeline` / `clipwright_write_timeline`）が表示され、各ツールを手動実行できる。
+The tool list (`clipwright_init_project` / `clipwright_inspect_media` / `clipwright_read_timeline` / `clipwright_write_timeline`) appears in Inspector, and you can manually execute each tool.
 
-### 期待する動作
+### Expected Behavior
 
-- ツール一覧に 4 ツールが表示される
-- `clipwright_inspect_media` に存在しないパスを渡すと `ok=false` のエラーエンベロープが返る
-- ffprobe が PATH / 環境変数に設定されていない場合は `DEPENDENCY_MISSING` エラーが返る
+- 4 tools appear in the tool list
+- Passing a non-existent path to `clipwright_inspect_media` returns an error envelope with `ok=false`
+- If ffprobe is not set in PATH / environment variables, a `DEPENDENCY_MISSING` error is returned
 
 ---
 
-## アーキテクチャ概要
+## Architecture Overview
 
 ```
 src/clipwright/
-  __init__.py       # バージョン定義
-  schemas.py        # 共通 Pydantic 型（契約面）
-  envelope.py       # 返り値エンベロープ + エラー整形
-  errors.py         # エラーコード + ClipwrightError 例外
-  process.py        # サブプロセスランナー（shell=False / timeout 必須）
-  media.py          # ffprobe ラッパー
-  otio_utils.py     # OTIO ヘルパー
-  operations.py     # 宣言的編集オペレーション型 + 適用ロジック
-  project.py        # プロジェクトディレクトリ管理
-  server.py         # FastMCP サーバー（4 ツール公開）
+  __init__.py       # Version definition
+  schemas.py        # Shared Pydantic types (contract surface)
+  envelope.py       # Return value envelope + error formatting
+  errors.py         # Error codes + ClipwrightError exception
+  process.py        # Subprocess runner (shell=False / timeout required)
+  media.py          # ffprobe wrapper
+  otio_utils.py     # OTIO helpers
+  operations.py     # Declarative edit operation types + application logic
+  project.py        # Project directory management
+  server.py         # FastMCP server (4 tools exposed)
 ```
 
-依存方向: `schemas / envelope / errors` (契約面) → `process / media / otio_utils / project` → `operations` → `server`
+Dependency direction: `schemas / envelope / errors` (contract surface) → `process / media / otio_utils / project` → `operations` → `server`
 
-詳細は `architecture-report` を参照。
+For details, see `architecture-report`.
 
 ---
 
-## ライセンス
+## License
 
-MIT — 詳細は [LICENSE](LICENSE) を参照。
+MIT — See [LICENSE](LICENSE) for details.

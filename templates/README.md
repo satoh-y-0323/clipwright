@@ -1,43 +1,43 @@
-# clipwright ツール雛形（scaffold）
+# clipwright Tool Template (Scaffold)
 
-新しい `clipwright-*` ツールを足すときのコピー元雛形。`clipwright-tool/` を
-コピーしてプレースホルダを置換すれば、CONVENTIONS の MUST（M1〜M5）を満たした
-動く骨格（MCP サーバー + CLI シム + tests）が手に入る。
+Template source for adding new `clipwright-*` tools. Copy `clipwright-tool/`
+and replace placeholders to get a working skeleton meeting CONVENTIONS MUST requirements (M1-M5):
+MCP server + CLI shim + tests.
 
-> 方針: cookiecutter 等の依存は足さない（YAGNI）。素のコピー + 文字列置換で済ませる。
-> 規約の出典は root `CONVENTIONS.md`。
+> Policy: No additional dependencies like cookiecutter (YAGNI). Simple copy + string replacement.
+> Conventions source: root `CONVENTIONS.md`.
 
-## プレースホルダ
+## Placeholders
 
-| トークン | 意味 | 例 |
-|---|---|---|
-| `__TOOL__` | ツールの短いスラッグ（小文字・identifier 可） | `noise` |
-| `__ACTION__` | MCP アクション名（snake_case の動詞起点） | `detect_noise` |
-| `__Action__` | アクションの PascalCase（クラス名用） | `DetectNoise` |
+| Token | Meaning | Example |
+|-------|---------|---------|
+| `__TOOL__` | Tool short slug (lowercase, identifier-safe) | `noise` |
+| `__ACTION__` | MCP action name (snake_case verb-first) | `detect_noise` |
+| `__Action__` | Action PascalCase (for class names) | `DetectNoise` |
 
-`__TOOL__` はパッケージ名・ファイル名・CLI 名に、`__ACTION__` は MCP ツール名
-`clipwright___ACTION__` とオーケストレーション関数名に、`__Action__` は
-オプションクラス名 `__Action__Options` に使う。
+`__TOOL__` is used in package name, file names, CLI name; `__ACTION__` in MCP tool name
+`clipwright___ACTION__` and orchestration function names; `__Action__` in
+options class name `__Action__Options`.
 
-## 生成手順（Bash / MINGW64）
+## Generation Steps (Bash / MINGW64)
 
 ```bash
-# 1. パラメータを決める
-TOOL=noise                 # 小文字スラッグ
-ACTION=detect_noise        # snake_case のアクション
-ACTION_PASCAL=DetectNoise  # PascalCase のアクション
+# 1. Decide parameters
+TOOL=noise                 # lowercase slug
+ACTION=detect_noise        # snake_case action
+ACTION_PASCAL=DetectNoise  # PascalCase action
 
-# 2. 雛形をリポジトリ直下にコピー
+# 2. Copy template to repository root
 cp -r templates/clipwright-tool clipwright-$TOOL
 cd clipwright-$TOOL
 
-# 3. ファイル内容のトークンを置換（case-sensitive・3 トークン）
+# 3. Replace tokens in file contents (case-sensitive, 3 tokens)
 grep -rlZ -E '__ACTION__|__Action__|__TOOL__' . | xargs -0 sed -i \
   -e "s/__Action__/$ACTION_PASCAL/g" \
   -e "s/__ACTION__/$ACTION/g" \
   -e "s/__TOOL__/$TOOL/g"
 
-# 4. ディレクトリ・ファイル名をリネーム（ディレクトリ → 中のファイルの順）
+# 4. Rename directories and files (directories first, then files inside)
 mv src/clipwright___TOOL__ src/clipwright_$TOOL
 mv src/clipwright_$TOOL/__TOOL__.py        src/clipwright_$TOOL/$TOOL.py
 mv src/clipwright_$TOOL/__TOOL___cli.py    src/clipwright_$TOOL/${TOOL}_cli.py
@@ -45,19 +45,19 @@ mv tests/test___TOOL__.py                  tests/test_$TOOL.py
 cd ..
 ```
 
-外部 OSS を使わない純 Python ツールなら、`src/clipwright_$TOOL/${TOOL}_cli.py`
-は不要なので削除してよい（`*.py` 本体側の `_run_cli` 参照も外す）。
+For pure Python tools not using external OSS, `src/clipwright_$TOOL/${TOOL}_cli.py`
+can be deleted (also remove `_run_cli` reference from the `*.py` main file).
 
-## ワークスペース登録
+## Workspace Registration
 
-ルート `pyproject.toml` の uv workspace members に追加する:
+Add to root `pyproject.toml` uv workspace members:
 
 ```toml
 [tool.uv.workspace]
 members = ["clipwright-render", "clipwright-silence", "clipwright-transcribe", "clipwright-wrap", "clipwright-noise"]
 ```
 
-その後リポジトリ直下で:
+Then from repository root:
 
 ```bash
 uv sync
@@ -66,32 +66,32 @@ uv run ruff format clipwright-$TOOL && uv run ruff check clipwright-$TOOL
 uv run mypy clipwright-$TOOL/src
 ```
 
-## 雛形に含まれるもの
+## What the Template Includes
 
 ```
 clipwright-tool/
-  README.md                          # ツール自身の README（要編集）
-  pyproject.toml                     # MIT・clipwright 依存・ruff/mypy/pytest 設定
+  README.md                          # Tool's own README (needs editing)
+  pyproject.toml                     # MIT, clipwright dependency, ruff/mypy/pytest config
   src/clipwright___TOOL__/
     __init__.py                      # __version__
-    py.typed                         # 型配布マーカー
-    schemas.py                       # ツール固有 Pydantic（共通型は clipwright.schemas 再利用）
-    __TOOL__.py                      # オーケストレーション層（検証→OSS→正規化→エンベロープ）
-    __TOOL___cli.py                  # OSS を包む別プロセス CLI シム（M4・不要なら削除）
-    server.py                        # FastMCP @mcp.tool + annotations + stdio 起動
+    py.typed                         # Type distribution marker
+    schemas.py                       # Tool-specific Pydantic (reuse common types from clipwright.schemas)
+    __TOOL__.py                      # Orchestration layer (validation→OSS→normalization→envelope)
+    __TOOL___cli.py                  # OSS-wrapping subprocess CLI shim (M4, can delete if not needed)
+    server.py                        # FastMCP @mcp.tool + annotations + stdio startup
   tests/
     conftest.py / test_schemas.py / test_server.py / test___TOOL__.py
 ```
 
-## 置換後にやること（チェックリスト）
+## Post-Replacement Checklist
 
-雛形には `TODO:` を埋め込んである。最低限、以下を実装・確認する:
+The template includes `TODO:` markers. At minimum, implement/verify:
 
-- [ ] `pyproject.toml` の `description` を1文で書く。OSS を使うなら依存に追加。
-- [ ] `schemas.py` の `example_threshold` を実パラメータに置き換える。
-- [ ] `<tool>.py` の検出/解析本体（`# TODO:` ブロック）を実装する。
-- [ ] detect/inspect 系か render 系かで `server.py` の annotations を合わせる
-      （render 系は `readOnlyHint=False`）。ネット接続なら `openWorldHint=True`。
-- [ ] README のパラメータ表・前提（OSS の PATH 要否）を更新する。
-- [ ] `CONVENTIONS.md` §7 の PR 前セルフチェックリストを通す。
-- [ ] （任意）`evals/` に AI 実タスク評価を用意する（CONVENTIONS §6）。
+- [ ] `pyproject.toml` `description`: write one sentence. If using OSS, add to dependencies.
+- [ ] `schemas.py` `example_threshold`: replace with actual parameters.
+- [ ] `<tool>.py` detection/analysis body (`# TODO:` block): implement.
+- [ ] `server.py` annotations: adjust for detect/inspect vs render type
+      (render types: `readOnlyHint=False`). If network access: `openWorldHint=True`.
+- [ ] README parameter table, prerequisites (OSS PATH requirement): update.
+- [ ] `CONVENTIONS.md` §7 pre-PR self-check list: pass through.
+- [ ] (Optional) `evals/` AI real-task evaluation (CONVENTIONS §6).

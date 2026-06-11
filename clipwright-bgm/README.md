@@ -1,48 +1,48 @@
 # clipwright-bgm
 
-BGM 配置注記を OTIO タイムラインに書き込む MCP ツール。BGM の音量・フェード・ダッキング指示を A2 Audio トラッククリップのメタデータとして記録し、clipwright-render がミックスを実体化する。
+MCP tool to write BGM placement annotations to an OTIO timeline. Records BGM volume, fade, and ducking instructions as metadata on A2 Audio track clips, which clipwright-render realizes as a mix.
 
-## 概要
+## Overview
 
-- **入力**: タイムライン OTIO ファイル・BGM 音声ファイル・出力パス・オプション（音量・フェード・ダッキング）
-- **処理**: OTIO 操作のみ（ffmpeg/外部 OSS なし）。BGM クリップを A2 Audio トラックに追加し clipwright metadata を書き込む
-- **出力**: BGM 注記付きの新規 OTIO ファイル（入力 timeline は不変・M5）
+- **Input**: Timeline OTIO file, BGM audio file, output path, optional parameters (volume, fade, ducking)
+- **Process**: OTIO manipulation only (no ffmpeg/external OSS). Adds BGM clip to A2 Audio track and writes clipwright metadata
+- **Output**: New OTIO file with BGM annotations (input timeline immutable, M5)
 
-## MCP ツール
+## MCP Tool
 
 `clipwright_add_bgm`
 
-### パラメータ
+### Parameters
 
-| 名前 | 型 | 既定値 | 説明 |
-|---|---|---|---|
-| `timeline` | `string` | 必須 | 入力タイムラインファイルパス（既存 .otio） |
-| `bgm` | `string` | 必須 | BGM 音声ファイルパス（mp3/wav/m4a/aac/flac/ogg/opus/mp4/mkv/mov/webm） |
-| `output` | `string` | 必須 | 出力 OTIO ファイルパス（新規生成・入力とは別パス） |
-| `options` | `object` | `null` | BgmOptions（volume_db / fade_in_sec / fade_out_sec / ducking） |
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `timeline` | `string` | required | Input timeline file path (existing .otio) |
+| `bgm` | `string` | required | BGM audio file path (mp3/wav/m4a/aac/flac/ogg/opus/mp4/mkv/mov/webm) |
+| `output` | `string` | required | Output OTIO file path (newly generated, different from input) |
+| `options` | `object` | `null` | BgmOptions (volume_db / fade_in_sec / fade_out_sec / ducking) |
 
-## 依存関係
+## Dependencies
 
-| パッケージ | 用途 |
-|---|---|
-| `clipwright` | 共通型・エンベロープ・エラー・inspect_media |
-| `mcp[cli]` | MCP サーバー |
-| `pydantic` | パラメータ検証 |
+| Package | Purpose |
+|---------|---------|
+| `clipwright` | Shared types, envelope, errors, inspect_media |
+| `mcp[cli]` | MCP server |
+| `pydantic` | Parameter validation |
 
-## インストール・起動
+## Installation and Startup
 
 ```bash
 uv add clipwright-bgm
 clipwright-bgm
 ```
 
-または uv workspace 内で:
+Or within a uv workspace:
 
 ```bash
 uv run --package clipwright-bgm clipwright-bgm
 ```
 
-## 前提
+## Prerequisites
 
-- Python 3.11 以上
-- ffprobe が PATH 上、または `CLIPWRIGHT_FFPROBE` 環境変数で指定済み（BGM メディア尺取得に使用）
+- Python 3.11 or later
+- ffprobe available on PATH or specified via `CLIPWRIGHT_FFPROBE` environment variable (used to determine BGM media length)

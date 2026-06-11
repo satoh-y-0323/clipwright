@@ -1,7 +1,7 @@
 [project]
 name = "clipwright-silence"
 version = "0.1.0"
-description = "無音検出 → OTIO タイムライン生成 MCP ツール。ffmpeg silencedetect で無音区間を検出し、残す区間の clip 列を持つ timeline.otio を生成する。"
+description = "MCP tool for silence detection and OTIO timeline generation. Detects silence with ffmpeg silencedetect and generates timeline.otio with clip sequence for regions to keep."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
@@ -19,7 +19,7 @@ dependencies = [
 vad = [
     "silero-vad>=5.1",
     "onnxruntime>=1.17",
-    # numpy は onnxruntime の推移依存として入るが、最低バージョンを明示するために列挙する
+    # numpy is a transitive dependency of onnxruntime, but explicitly listed to pin minimum version
     "numpy>=1.24",
 ]
 
@@ -40,7 +40,7 @@ dev = [
     "ruff>=0.15.16",
 ]
 
-# workspace 内の clipwright (core) をパス参照で解決する
+# Resolve clipwright (core) within workspace by path reference
 [tool.uv.sources]
 clipwright = { workspace = true }
 
@@ -54,11 +54,11 @@ select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
 ignore = []
 
 [tool.ruff.lint.per-file-ignores]
-# テストファイルの日本語 docstring/コメントは E501 を許容する
+# Allow E501 for English docstrings/comments in test files
 "tests/*.py" = ["E501"]
 
 [tool.ruff.format]
-# ruff formatter のデフォルトで OK
+# Default ruff formatter is OK
 
 # --- mypy ---
 [tool.mypy]
@@ -69,12 +69,12 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 disallow_any_generics = true
 
-# opentimelineio はスタブなし・mypy strict で ignore
+# opentimelineio has no stubs, ignored with mypy strict
 [[tool.mypy.overrides]]
 module = "opentimelineio.*"
 ignore_missing_imports = true
 
-# silero-vad / onnxruntime はスタブなし・VAD optional extra のため ignore
+# silero-vad / onnxruntime have no stubs, ignored as VAD is optional extra
 [[tool.mypy.overrides]]
 module = "silero_vad.*"
 ignore_missing_imports = true
@@ -88,8 +88,8 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 addopts = "--strict-markers -q"
 markers = [
-    "integration: ffmpeg/ffprobe 実バイナリを必要とする統合テスト",
-    "slow: 実行時間が長いテスト",
+    "integration: integration test requiring actual ffmpeg/ffprobe binaries",
+    "slow: test with long execution time",
 ]
 
 # --- coverage ---

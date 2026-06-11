@@ -1,7 +1,7 @@
-"""clipwright-__TOOL__ テスト用共有フィクスチャ。
+"""clipwright-__TOOL__ shared test fixtures.
 
-雛形では一時入力ファイルを生成する最小フィクスチャだけを提供する。
-実ツールでは fixtures/ に小さな実素材を置き、ここでロードする。
+Template provides only minimal fixture generating temporary input file.
+Real tools place small real materials in fixtures/ and load them here.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import pytest
 
 @pytest.fixture
 def sample_input(tmp_path: Path) -> Path:
-    """テスト用のダミー入力ファイルを生成して返す。"""
+    """Generate and return dummy input file for testing."""
     path = tmp_path / "input.txt"
     path.write_text("sample", encoding="utf-8")
     return path

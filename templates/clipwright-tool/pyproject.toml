@@ -1,8 +1,8 @@
 [project]
-# __TOOL__ を実ツール名（小文字・例: noise）に置換する。
+# Replace __TOOL__ with actual tool name (lowercase, e.g. noise).
 name = "clipwright-__TOOL__"
 version = "0.1.0"
-description = "（TODO: このツールが何をするか1文で。例: 〜を検出して OTIO/JSON 注記を返す MCP ツール。）"
+description = "(TODO: Describe in one sentence what this tool does. Example: MCP tool that detects ~ and returns OTIO/JSON annotation.)"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
@@ -10,15 +10,15 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    # 外部 OSS を subprocess で包む場合はここに通常依存として追加する（M4）。
-    # 例: "budoux",
+    # If wrapping external OSS via subprocess, add here as normal dependency (M4).
+    # Example: "budoux",
     "clipwright",
     "mcp[cli]>=1.27.2",
     "pydantic>=2",
 ]
 
 [project.scripts]
-# CLI コマンド名 = MCP サーバー起動エントリポイント（M1）。
+# CLI command name = MCP server startup entry point (M1).
 clipwright-__TOOL__ = "clipwright___TOOL__.server:main"
 
 [build-system]
@@ -34,7 +34,7 @@ dev = [
     "ruff>=0.15.16",
 ]
 
-# workspace 内の clipwright (core) をパス参照で解決する。
+# Resolve clipwright (core) within workspace by path reference.
 [tool.uv.sources]
 clipwright = { workspace = true }
 
@@ -48,11 +48,11 @@ select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
 ignore = []
 
 [tool.ruff.lint.per-file-ignores]
-# テストファイルの日本語 docstring/コメントは E501 を許容する
+# Allow E501 for English docstrings/comments in test files
 "tests/*.py" = ["E501"]
 
 [tool.ruff.format]
-# ruff formatter のデフォルトで OK
+# Default ruff formatter is OK
 
 # --- mypy ---
 [tool.mypy]
@@ -63,7 +63,7 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 disallow_any_generics = true
 
-# 外部 OSS にスタブが無い場合は override で ignore する（例）。
+# If external OSS has no stubs, ignore in override (example).
 # [[tool.mypy.overrides]]
 # module = "your_oss.*"
 # ignore_missing_imports = true
@@ -73,8 +73,8 @@ disallow_any_generics = true
 testpaths = ["tests"]
 addopts = "--strict-markers -q"
 markers = [
-    "integration: ffmpeg/ffprobe 実バイナリを必要とする統合テスト",
-    "slow: 実行時間が長いテスト",
+    "integration: integration test requiring actual ffmpeg/ffprobe binaries",
+    "slow: test with long execution time",
 ]
 
 # --- coverage ---

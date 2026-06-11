@@ -1,7 +1,7 @@
 [project]
 name = "clipwright-bgm"
 version = "0.1.0"
-description = "BGM 配置注記を OTIO タイムラインに書き込む MCP ツール。BGM の音量・フェード・ダッキング指示を A2 Audio トラッククリップのメタデータとして記録し、clipwright-render がミックスを実体化する。"
+description = "MCP tool to write BGM placement annotations to OTIO timeline. Records BGM volume, fade, and ducking instructions as metadata on A2 Audio track clips, which clipwright-render realizes as a mix."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
@@ -30,7 +30,7 @@ dev = [
     "ruff>=0.15.16",
 ]
 
-# workspace 内の clipwright (core) をパス参照で解決する
+# Resolve clipwright (core) within workspace by path reference
 [tool.uv.sources]
 clipwright = { workspace = true }
 
@@ -44,11 +44,11 @@ select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
 ignore = []
 
 [tool.ruff.lint.per-file-ignores]
-# テストファイルの日本語 docstring/コメントは E501 を許容する
+# Allow E501 for English docstrings/comments in test files
 "tests/*.py" = ["E501"]
 
 [tool.ruff.format]
-# ruff formatter のデフォルトで OK
+# Default ruff formatter is OK
 
 # --- mypy ---
 [tool.mypy]
@@ -59,7 +59,7 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 disallow_any_generics = true
 
-# opentimelineio はスタブなし・mypy strict で ignore
+# opentimelineio has no stubs, ignored with mypy strict
 [[tool.mypy.overrides]]
 module = "opentimelineio.*"
 ignore_missing_imports = true
@@ -69,9 +69,9 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 addopts = "--strict-markers -q"
 markers = [
-    "integration: ffmpeg/ffprobe 実バイナリを必要とする統合テスト",
-    "slow: 実行時間が長いテスト",
-    "e2e: ffmpeg 実バイナリを使った e2e テスト",
+    "integration: integration test requiring actual ffmpeg/ffprobe binaries",
+    "slow: test with long execution time",
+    "e2e: e2e test using actual ffmpeg binary",
 ]
 
 # --- coverage ---

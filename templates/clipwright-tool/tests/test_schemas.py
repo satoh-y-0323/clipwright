@@ -1,6 +1,6 @@
-"""test_schemas.py — __Action__Options の検証。
+"""test_schemas.py — Validation of __Action__Options.
 
-契約面（schemas）は実質 100% を目標にカバーする（CONVENTIONS §テストカバレッジ）。
+Contract surface (schemas) targets ~100% coverage (CONVENTIONS §test coverage).
 """
 
 from __future__ import annotations
@@ -22,6 +22,6 @@ def test_accepts_valid_value() -> None:
 
 
 def test_rejects_non_positive() -> None:
-    """gt=0 制約: 0 以下は ValidationError（→ server 境界で INVALID_INPUT）。"""
+    """gt=0 constraint: values <= 0 raise ValidationError (→ INVALID_INPUT at server boundary)."""
     with pytest.raises(ValidationError):
         __Action__Options(example_threshold=0)

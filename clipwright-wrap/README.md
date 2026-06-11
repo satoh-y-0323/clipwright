@@ -1,79 +1,79 @@
 # clipwright-wrap
 
-字幕ファイル（SRT/VTT）の各 cue テキストを BudouX で文節境界改行整形する MCP ツール。
+MCP tool to format subtitle file text (SRT/VTT) at phrase boundaries using BudouX with line wrapping.
 
-## 概要
+## Overview
 
-`clipwright-wrap` は SRT/VTT 字幕ファイルを入力に取り、各 cue のテキストを BudouX で文節分割したうえで指定文字数・行数に収まるよう改行を挿入し、同形式の字幕ファイルを出力する。FFmpeg / Whisper には依存しない純テキスト整形ツール。
+`clipwright-wrap` takes SRT/VTT subtitle files as input, splits each cue text into phrase units by BudouX, inserts line breaks to fit within specified character count and line count, and outputs the subtitle file in the same format. A pure text formatting tool with no FFmpeg / Whisper dependencies.
 
-## 入出力
+## Input/Output
 
-- **入力**: SRT ファイル（`.srt`）または VTT ファイル（`.vtt`）
-- **出力**: 入力と同一形式の字幕ファイル（文節境界改行挿入済み）
-- **タイムコード**: 不変（再タイミングは行わない）
+- **Input**: SRT file (`.srt`) or VTT file (`.vtt`)
+- **Output**: Subtitle file in same format as input (with phrase boundary line breaks inserted)
+- **Timecodes**: Unchanged (no retiming)
 
-## MCP ツール
+## MCP Tool
 
 `clipwright_wrap_captions`
 
-### パラメータ
+### Parameters
 
-| 名前 | 型 | 既定値 | 説明 |
-|---|---|---|---|
-| `input` | `string` | 必須 | 入力字幕ファイルパス（`.srt` / `.vtt`） |
-| `output` | `string` | 必須 | 出力字幕ファイルパス（入力と同一拡張子） |
-| `language` | `string` | `"ja"` | 文節分割言語（`ja` / `zh-hans` / `zh-hant` / `th`） |
-| `max_chars` | `int` | `16` | 1 行最大文字数（全角・半角とも 1 文字カウント）。正の整数。 |
-| `max_lines` | `int` | `2` | 1 cue あたりの最大行数。超過 cue は warnings に記録（切り捨てなし）。正の整数。 |
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `input` | `string` | required | Input subtitle file path (`.srt` / `.vtt`) |
+| `output` | `string` | required | Output subtitle file path (same extension as input) |
+| `language` | `string` | `"ja"` | Phrase splitting language (`ja` / `zh-hans` / `zh-hant` / `th`) |
+| `max_chars` | `int` | `16` | Max characters per line (full-width and half-width both count as 1 character). Positive integer. |
+| `max_lines` | `int` | `2` | Max lines per cue. Over-limit cues recorded in warnings (not truncated). Positive integer. |
 
-### 文字数カウント仕様
+### Character Count Specification
 
-`max_chars` は **一律 1 文字カウント**（全角・半角とも `len()` の 1 文字）。全角換算は将来拡張（要件 §8）。
+`max_chars` is **counted uniformly as 1 character each** (both full-width and half-width as one `len()` character). Full-width normalization is a future extension (requirement §8).
 
-## 文節改行の仕組み
+## Phrase Wrapping Mechanism
 
-1. 各 cue テキスト（複数行を持つ場合は改行を除去して結合）を BudouX で文節分割
-2. 文節トークン列を `max_chars` に収まるよう貪欲に 1 行へ詰める
-3. 整形済みテキスト（`\n` 区切りの複数行）を cue に書き戻す
+1. Each cue text (if multiple lines, remove line breaks and concatenate) is split into phrases by BudouX
+2. Phrase token sequence is greedily packed into one line within `max_chars`
+3. Formatted text (multiple lines separated by `\n`) is written back to cue
 
-1 文節が単独で `max_chars` を超える場合はその文節を 1 行に置く（途中で割らない）。
+If a single phrase exceeds `max_chars` alone, place that phrase on one line (no splitting mid-phrase).
 
-## 対応言語
+## Supported Languages
 
-BudouX が文節分割をサポートする以下の言語に対応する:
+Supports the following languages for which BudouX provides phrase splitting:
 
-| `language` 値 | 言語 |
+| `language` Value | Language |
 |---|---|
-| `ja` | 日本語 |
-| `zh-hans` | 中国語（簡体字） |
-| `zh-hant` | 中国語（繁体字） |
-| `th` | タイ語 |
+| `ja` | Japanese |
+| `zh-hans` | Chinese (Simplified) |
+| `zh-hant` | Chinese (Traditional) |
+| `th` | Thai |
 
-## 依存関係
+## Dependencies
 
-| パッケージ | 用途 |
-|---|---|
-| `budoux` | 文節境界分割（通常依存・軽量モデル同梱） |
-| `clipwright` | 共通型・エンベロープ・エラー |
-| `mcp[cli]` | MCP サーバー |
-| `pydantic` | パラメータ検証 |
+| Package | Purpose |
+|---------|---------|
+| `budoux` | Phrase boundary splitting (standard dependency, lightweight model bundled) |
+| `clipwright` | Shared types, envelope, errors |
+| `mcp[cli]` | MCP server |
+| `pydantic` | Parameter validation |
 
-**FFmpeg・Whisper には依存しない**（純テキスト整形のため）。`budoux` は通常依存として同梱されるため、環境変数ゲートなしで e2e テストを常時実行できる。
+**No FFmpeg / Whisper dependencies** (pure text formatting). `budoux` is a standard dependency bundled with the package, so e2e tests can run continuously without environment variable gating.
 
-## インストール・起動
+## Installation and Startup
 
 ```bash
 uv add clipwright-wrap
 clipwright-wrap
 ```
 
-または uv workspace 内で:
+Or within a uv workspace:
 
 ```bash
 uv run --package clipwright-wrap clipwright-wrap
 ```
 
-## 前提
+## Prerequisites
 
-- Python 3.11 以上
-- FFmpeg 不要（テキスト整形のみ）
+- Python 3.11 or later
+- FFmpeg not required (text formatting only)

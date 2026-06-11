@@ -1,8 +1,8 @@
-"""schemas.py — clipwright-__TOOL__ 固有の Pydantic スキーマ。
+"""schemas.py — clipwright-__TOOL__ tool-specific Pydantic schemas.
 
-共通型（MediaRef / TimeRange / Artifact / ToolResult 等）は clipwright.schemas で
-一元定義されているため、このモジュールでは再定義しない（CONVENTIONS §2 共通型再利用）。
-ここにはこのツール固有の入力オプションだけを置く。
+Common types (MediaRef / TimeRange / Artifact / ToolResult etc) are defined
+centrally in clipwright.schemas, so not redefined here (CONVENTIONS §2 common type reuse).
+This module contains only tool-specific input options.
 """
 
 from __future__ import annotations
@@ -13,11 +13,11 @@ from pydantic import BaseModel, Field
 
 
 class __Action__Options(BaseModel):
-    """clipwright___ACTION__ のオプション。
+    """Options for clipwright___ACTION__.
 
-    FastMCP は Annotated[type, Field(description=...)] からスキーマを生成する。
-    description は AI が読む説明になるため、目的・既定値・制約を簡潔に書く。
-    フィールドはこのツール固有のものに置き換える（example_threshold は雛形例）。
+    FastMCP generates schemas from Annotated[type, Field(description=...)].
+    description is read by AI, so write purpose, default, constraints concisely.
+    Replace fields with tool-specific ones (example_threshold is template example).
     """
 
     example_threshold: Annotated[
@@ -26,9 +26,9 @@ class __Action__Options(BaseModel):
             default=0.5,
             gt=0,
             description=(
-                "（TODO: 雛形のサンプルフィールド。"
-                "実際の検出・整形パラメータに置き換える。）"
-                "gt=0 制約: 0 以下は INVALID_INPUT として拒否される。"
+                "(TODO: Sample template field. "
+                "Replace with actual detection/formatting parameters.) "
+                "gt=0 constraint: values <= 0 rejected as INVALID_INPUT."
             ),
         ),
     ] = 0.5

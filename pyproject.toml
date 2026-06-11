@@ -1,7 +1,7 @@
 [project]
 name = "clipwright"
 version = "0.1.0"
-description = "FFmpeg/OTIO をラップする MCP サーバー群。映像編集ワークフローを AI エージェントから操作できるプリミティブを提供する。"
+description = "MCP server group wrapping FFmpeg/OTIO. Provides primitives to manipulate video editing workflows from AI agents."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
@@ -31,7 +31,7 @@ dev = [
 [tool.ruff]
 target-version = "py311"
 line-length = 88
-# templates/ はプレースホルダ（__TOOL__ 等）を含む雛形。lint/format 対象外。
+# templates/ is a template containing placeholders (__TOOL__ etc). Excluded from lint/format.
 extend-exclude = ["templates"]
 
 [tool.ruff.lint]
@@ -39,7 +39,7 @@ select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
 ignore = []
 
 [tool.ruff.format]
-# ruff formatter のデフォルトで OK
+# Default ruff formatter is OK
 
 # --- mypy ---
 [tool.mypy]
@@ -49,10 +49,10 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 disallow_any_generics = true
-# templates/ はプレースホルダを含む雛形。型検査対象外。
+# templates/ is a template containing placeholders. Excluded from type checking.
 exclude = ["^templates/"]
 
-# opentimelineio はスタブなし・mypy strict で ignore
+# opentimelineio has no stubs, ignored with mypy strict
 [[tool.mypy.overrides]]
 module = "opentimelineio.*"
 ignore_missing_imports = true
@@ -62,8 +62,8 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 addopts = "--strict-markers -q"
 markers = [
-    "integration: ffmpeg/ffprobe 実バイナリを必要とする統合テスト",
-    "slow: 実行時間が長いテスト",
+    "integration: integration test requiring actual ffmpeg/ffprobe binaries",
+    "slow: test with long execution time",
 ]
 
 # --- coverage ---

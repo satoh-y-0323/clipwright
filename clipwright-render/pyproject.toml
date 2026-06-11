@@ -1,7 +1,7 @@
 [project]
 name = "clipwright-render"
 version = "0.1.0"
-description = "OTIO タイムラインを FFmpeg で実体化する MCP ツール。区間抽出・連結・トリムを一回の再エンコードで完結させる。"
+description = "MCP tool to realize OTIO timelines with FFmpeg. Completes segment extraction, concatenation, and trimming in a single transcode pass."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
@@ -31,7 +31,7 @@ dev = [
     "ruff>=0.15.16",
 ]
 
-# workspace 内の clipwright (core) をパス参照で解決する
+# Resolve clipwright (core) within workspace by path reference
 [tool.uv.sources]
 clipwright = { workspace = true }
 
@@ -45,11 +45,11 @@ select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
 ignore = []
 
 [tool.ruff.lint.per-file-ignores]
-# テストファイルの日本語 docstring/コメントは E501 を許容する（wrap/silence と同規約）
+# Allow E501 for English docstrings/comments in test files (same rules as wrap/silence)
 "tests/*.py" = ["E501"]
 
 [tool.ruff.format]
-# ruff formatter のデフォルトで OK
+# Default ruff formatter is OK
 
 # --- mypy ---
 [tool.mypy]
@@ -60,7 +60,7 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 disallow_any_generics = true
 
-# opentimelineio はスタブなし・mypy strict で ignore
+# opentimelineio has no stubs, ignored with mypy strict
 [[tool.mypy.overrides]]
 module = "opentimelineio.*"
 ignore_missing_imports = true
@@ -70,9 +70,9 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 addopts = "--strict-markers -q"
 markers = [
-    "integration: ffmpeg/ffprobe 実バイナリを必要とする統合テスト",
-    "slow: 実行時間が長いテスト",
-    "e2e: 実 ffmpeg バイナリを使った e2e テスト（ラウドネス正規化等）",
+    "integration: integration test requiring actual ffmpeg/ffprobe binaries",
+    "slow: test with long execution time",
+    "e2e: e2e test using actual ffmpeg binary (loudness normalization etc)",
 ]
 
 # --- coverage ---

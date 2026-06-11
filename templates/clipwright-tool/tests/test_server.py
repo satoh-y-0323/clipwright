@@ -1,11 +1,11 @@
-"""test_server.py — server.py（MCP + CLI）のテスト。
+"""test_server.py — Tests for server.py (MCP + CLI).
 
-対象:
-  - clipwright___ACTION__ が MCP に登録され __TOOL__.__ACTION__ へ委譲する
-  - MCP annotations（detect 系の既定値）
-  - 成功・失敗エンベロープのパススルー
-  - options=None 時に既定 __Action__Options() が委譲先へ渡る
-  - main() が mcp.run(transport="stdio") を呼ぶ
+Coverage:
+  - clipwright___ACTION__ registered in MCP and delegates to __TOOL__.__ACTION__
+  - MCP annotations (detect type defaults)
+  - Success/failure envelope passthrough
+  - When options=None, default __Action__Options() passed to delegate
+  - main() calls mcp.run(transport="stdio")
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ def _ok_envelope(**kwargs: Any) -> dict[str, Any]:
 class TestMcpAnnotations:
     def _annotations(self) -> Any:
         tool = mcp._tool_manager.get_tool("clipwright___ACTION__")  # noqa: SLF001
-        assert tool is not None, "clipwright___ACTION__ が mcp に登録されていること"
+        assert tool is not None, "clipwright___ACTION__ must be registered in mcp"
         return tool.annotations
 
     def test_tool_is_registered(self) -> None:
