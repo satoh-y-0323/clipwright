@@ -1321,3 +1321,776 @@ class TestNonDestructive:
             )
 
         assert tl_path.read_bytes() == original_tl_bytes
+
+
+# ---------------------------------------------------------------------------
+# 複数ソース・オーケストレーション拡張テスト
+# （ADR-C2-r2 / ADR-C8 / ADR-C9-r2 / DC-GP-001）
+# ---------------------------------------------------------------------------
+
+
+def _make_media_info_with_video_stream(
+    path: str,
+    *,
+    width: int = 1920,
+    height: int = 1080,
+    bit_rate: int | None = 8_000_000,
+    audio_streams: int = 1,
+    fps_rate: float | None = 30.0,
+) -> MediaInfo:
+    """video stream（width/height あり）と duration を持つ MediaInfo を生成するヘルパー。
+
+    fps_rate が None のとき duration=None（音声のみソースのセンチネル回避検証に使う）。
+    fps_rate が指定されたとき duration.rate = fps_rate を持つ RationalTimeModel を生成する。
+    duration.rate=1000.0 は音声のみソースのセンチネルとして使用する。
+    """
+    from clipwright.schemas import RationalTimeModel
+
+    streams: list[StreamInfo] = []
+    streams.append(
+        StreamInfo(
+            index=0,
+            codec_type="video",
+            codec_name="h264",
+            width=width,
+            height=height,
+        )
+    )
+    for _i in range(audio_streams):
+        streams.append(
+            StreamInfo(index=len(streams), codec_type="audio", codec_name="aac")
+        )
+
+    duration = None
+    if fps_rate is not None:
+        # duration.rate = fps_rate として ProbeInfo.fps 取得のテストに使う
+        duration = RationalTimeModel(value=10.0 * fps_rate, rate=fps_rate)
+
+    return MediaInfo(
+        path=path,
+        container="mov,mp4,m4a,3gp,3g2,mj2",
+        duration=duration,
+        streams=streams,
+        bit_rate=bit_rate,
+    )
+
+
+def _make_audio_only_media_info(path: str) -> MediaInfo:
+    """音声のみソース（rate=1000.0 センチネル）の MediaInfo を生成するヘルパー。
+
+    media.py の rate 決定規則: video stream なし → rate=1000.0 センチネル。
+    duration.rate が 1000.0 であっても fps として採用してはならない（ADR-C2-r2）。
+    """
+    from clipwright.schemas import RationalTimeModel
+
+    streams = [StreamInfo(index=0, codec_type="audio", codec_name="aac")]
+    # センチネル rate=1000.0 で duration を生成（音声のみ素材の実際の挙動を模倣）
+    duration = RationalTimeModel(value=10000.0, rate=1000.0)
+    return MediaInfo(
+        path=path,
+        container="mov,mp4,m4a,3gp,3g2,mj2",
+        duration=duration,
+        streams=streams,
+        bit_rate=4_000_000,
+    )
+
+
+def _make_multi_source_otio_file(
+    clips: list[tuple[str, float, float]],
+    tmp_path: Path,
+) -> Path:
+    """複数ソースを持つ Timeline の OTIO ファイルを生成し Path を返すヘルパー。
+
+    clips: [(source_path, start_sec, duration_sec), ...]
+    test_e2e_merge.py の同名ヘルパー（in-memory OTIO 返却）と区別するため
+    _make_multi_source_otio_file と命名する（CR L-1）。
+    """
+    otio_clips = [_make_clip(src, start, dur) for src, start, dur in clips]
+    tl_path = tmp_path / "tl.otio"
+    _write_timeline(tl_path, otio_clips)
+    return tl_path
+
+
+class TestMultiSourceProbeAllSources:
+    """観点1: 複数ソース timeline で各ユニークソースに inspect_media が呼ばれる。
+
+    ADR-C8: 全ユニークソースに probe を適用する。
+    render.py が build_plan 呼び出し前に source_probes を構築するため、
+    ユニークソース数と同じ回数 inspect_media が呼ばれることを検証する。
+    """
+
+    def test_all_unique_sources_are_probed(self, tmp_path: Path) -> None:
+        """2ソース timeline で inspect_media が2回呼ばれる（各ソース1回）。"""
+        from clipwright_render.render import render_timeline
+
+        src0 = str(tmp_path / "src0.mp4")
+        src1 = str(tmp_path / "src1.mp4")
+        Path(src0).touch()
+        Path(src1).touch()
+
+        tl_path = _make_multi_source_otio_file(
+            [(src0, 0.0, 3.0), (src1, 0.0, 2.0)],
+            tmp_path,
+        )
+        output = str(tmp_path / "out.mp4")
+
+        probe_calls: list[str] = []
+
+        def _fake_inspect(path: str) -> MediaInfo:
+            probe_calls.append(path)
+            return _make_media_info_with_video_stream(path)
+
+        with (
+            patch("clipwright_render.render.inspect_media", side_effect=_fake_inspect),
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
+            patch(
+                "clipwright_render.render.run",
+                return_value=CompletedProcess(
+                    args=[], returncode=0, stdout="", stderr=""
+                ),
+            ),
+        ):
+            render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(),
+                dry_run=True,
+            )
+
+        # 各ユニークソースが1回ずつ probe されること（順序不問・重複排除）
+        assert src0 in probe_calls
+        assert src1 in probe_calls
+        # ユニークソースは2個なので呼び出し回数は2回
+        assert len(probe_calls) == 2
+
+    def test_duplicate_source_is_probed_once(self, tmp_path: Path) -> None:
+        """同一ソースを2クリップで使っても inspect_media は1回のみ呼ばれる。
+
+        重複排除により probe コストを最小化する（ADR-C1）。
+        """
+        from clipwright_render.render import render_timeline
+
+        src0 = str(tmp_path / "src0.mp4")
+        Path(src0).touch()
+
+        tl_path = _make_multi_source_otio_file(
+            [(src0, 0.0, 3.0), (src0, 5.0, 2.0)],
+            tmp_path,
+        )
+        output = str(tmp_path / "out.mp4")
+
+        probe_calls: list[str] = []
+
+        def _fake_inspect(path: str) -> MediaInfo:
+            probe_calls.append(path)
+            return _make_media_info_with_video_stream(path)
+
+        with (
+            patch("clipwright_render.render.inspect_media", side_effect=_fake_inspect),
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
+            patch(
+                "clipwright_render.render.run",
+                return_value=CompletedProcess(
+                    args=[], returncode=0, stdout="", stderr=""
+                ),
+            ),
+        ):
+            render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(),
+                dry_run=True,
+            )
+
+        # ユニークソースは1個なので probe は1回のみ
+        assert len(probe_calls) == 1
+        assert probe_calls[0] == src0
+
+
+class TestMultiSourceFfmpegInputOrder:
+    """観点2: ffmpeg -i 並びが RenderPlan.input_sources の順序と一致する。
+
+    ADR-C9-r2: render.py は RenderPlan.input_sources をそのまま使い、
+    独自に順序を再計算しない。
+    """
+
+    def test_two_source_ffmpeg_has_two_i_flags(self, tmp_path: Path) -> None:
+        """2ソース timeline で ffmpeg コマンドに -i が2つ並ぶ。"""
+        from clipwright_render.render import render_timeline
+
+        src0 = str(tmp_path / "src0.mp4")
+        src1 = str(tmp_path / "src1.mp4")
+        Path(src0).touch()
+        Path(src1).touch()
+        (tmp_path / "out.mp4").touch()
+
+        tl_path = _make_multi_source_otio_file(
+            [(src0, 0.0, 3.0), (src1, 0.0, 2.0)],
+            tmp_path,
+        )
+        output = str(tmp_path / "out.mp4")
+
+        captured_cmd: list[str] = []
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            captured_cmd.extend(cmd)
+            return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                side_effect=lambda path: _make_media_info_with_video_stream(path),
+            ),
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
+            patch("clipwright_render.render.run", side_effect=_fake_run),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(overwrite=True),
+            )
+
+        assert result["ok"] is True, f"失敗: {result.get('error')}"
+        # -i が2つ存在する
+        i_indices = [i for i, v in enumerate(captured_cmd) if v == "-i"]
+        assert len(i_indices) == 2
+        # -i の後ろのパスが src0→src1 の出現順（RenderPlan.input_sources 順）
+        assert captured_cmd[i_indices[0] + 1] == src0
+        assert captured_cmd[i_indices[1] + 1] == src1
+
+    def test_single_source_ffmpeg_has_one_i_flag(self, tmp_path: Path) -> None:
+        """単一ソース timeline では -i が1つ（後方互換）。
+
+        観点7（後方互換）と兼ねる: 複数ソース拡張後も単一ソースは -i が1個。
+        """
+        from clipwright_render.render import render_timeline
+
+        src0 = str(tmp_path / "src0.mp4")
+        Path(src0).touch()
+        (tmp_path / "out.mp4").touch()
+
+        tl_path = _make_multi_source_otio_file(
+            [(src0, 0.0, 3.0), (src0, 5.0, 2.0)],
+            tmp_path,
+        )
+        output = str(tmp_path / "out.mp4")
+
+        captured_cmd: list[str] = []
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            captured_cmd.extend(cmd)
+            return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info_with_video_stream(src0),
+            ),
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
+            patch("clipwright_render.render.run", side_effect=_fake_run),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(overwrite=True),
+            )
+
+        assert result["ok"] is True, f"失敗: {result.get('error')}"
+        i_indices = [i for i, v in enumerate(captured_cmd) if v == "-i"]
+        assert len(i_indices) == 1
+        assert captured_cmd[i_indices[0] + 1] == src0
+
+    def test_input_order_matches_render_plan_input_sources(
+        self, tmp_path: Path
+    ) -> None:
+        """ffmpeg -i 並びが RenderPlan.input_sources と厳密に一致する。
+
+        ADR-C9-r2: render.py は独自に順序を再計算せず RenderPlan.input_sources を使う。
+        build_plan をモックして input_sources を明示的に制御し、
+        ffmpeg コマンドの -i 並びがそれと一致することを検証する。
+        """
+        from clipwright_render.plan import RenderPlan
+        from clipwright_render.render import render_timeline
+
+        src0 = str(tmp_path / "src0.mp4")
+        src1 = str(tmp_path / "src1.mp4")
+        Path(src0).touch()
+        Path(src1).touch()
+        (tmp_path / "out.mp4").touch()
+
+        tl_path = _make_multi_source_otio_file(
+            [(src0, 0.0, 3.0), (src1, 0.0, 2.0)],
+            tmp_path,
+        )
+        output = str(tmp_path / "out.mp4")
+
+        # build_plan が返す RenderPlan に input_sources を含める
+        fake_plan = RenderPlan(
+            filter_complex="[0:v]trim=0:3,setpts=PTS-STARTPTS[v0];[1:v]trim=0:2,setpts=PTS-STARTPTS[v1];[v0][v1]concat=n=2:v=1:a=0[outv]",
+            ffmpeg_args=["-filter_complex", "...", "-map", "[outv]", "-c:v", "libx264"],
+            segment_count=2,
+            total_duration_seconds=5.0,
+            input_sources=[src0, src1],  # ADR-C9-r2: 明示的な順序
+        )
+
+        captured_cmd: list[str] = []
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            captured_cmd.extend(cmd)
+            return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                side_effect=lambda path: _make_media_info_with_video_stream(path),
+            ),
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
+            patch("clipwright_render.render.build_plan", return_value=fake_plan),
+            patch("clipwright_render.render.run", side_effect=_fake_run),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(overwrite=True),
+            )
+
+        assert result["ok"] is True, f"失敗: {result.get('error')}"
+        i_indices = [i for i, v in enumerate(captured_cmd) if v == "-i"]
+        assert len(i_indices) == 2
+        # input_sources=[src0, src1] の順序通りに -i が並ぶこと
+        assert captured_cmd[i_indices[0] + 1] == src0
+        assert captured_cmd[i_indices[1] + 1] == src1
+
+
+class TestMultiSourceBoundaryCheck:
+    """観点3/4/5: ADR-C8 全ユニークソースへの境界検証適用。
+
+    2番目以降のソースの境界外・パス衝突・不在をそれぞれ検出すること。
+    """
+
+    def test_second_source_outside_timeline_dir_raises_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """2番目ソースが timeline ディレクトリ外 → PATH_NOT_ALLOWED（ADR-C8）。
+
+        先頭ソースは境界内だが、2番目ソースが境界外のとき検出されること。
+        """
+        from clipwright_render.render import render_timeline
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+
+        src0 = str(project_dir / "src0.mp4")
+        src1 = str(outside_dir / "secret.mp4")  # 境界外
+        Path(src0).touch()
+        Path(src1).touch()
+
+        tl_path = _make_multi_source_otio_file(
+            [(src0, 0.0, 3.0), (src1, 0.0, 2.0)],
+            project_dir,  # timeline は project_dir 下
+        )
+        output = str(project_dir / "out.mp4")
+
+        with patch(
+            "clipwright_render.render.inspect_media",
+            side_effect=lambda path: _make_media_info_with_video_stream(path),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(),
+            )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
+
+    def test_second_source_equals_output_raises_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """output == 2番目ソース → PATH_NOT_ALLOWED（DC-GP-001・非破壊原則）。
+
+        _check_path_not_allowed が先頭ソースだけでなく全ソースに適用されること。
+        先頭ソースとは異なるが2番目ソースが output と一致する場合に検出される。
+        """
+        from clipwright_render.render import render_timeline
+
+        src0 = str(tmp_path / "src0.mp4")
+        src1 = str(tmp_path / "src1.mp4")
+        Path(src0).touch()
+        Path(src1).touch()
+
+        tl_path = _make_multi_source_otio_file(
+            [(src0, 0.0, 3.0), (src1, 0.0, 2.0)],
+            tmp_path,
+        )
+        # output == src1（2番目ソース）
+        output = src1
+
+        with patch(
+            "clipwright_render.render.inspect_media",
+            side_effect=lambda path: _make_media_info_with_video_stream(path),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(),
+            )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
+
+    def test_second_source_not_found_returns_file_not_found(
+        self, tmp_path: Path
+    ) -> None:
+        """2番目ソースが存在しない → FILE_NOT_FOUND（ADR-C8）。"""
+        from clipwright_render.render import render_timeline
+
+        src0 = str(tmp_path / "src0.mp4")
+        src1 = str(tmp_path / "missing_src1.mp4")  # 存在しない
+        Path(src0).touch()
+        # src1 は作成しない
+
+        tl_path = _make_multi_source_otio_file(
+            [(src0, 0.0, 3.0), (src1, 0.0, 2.0)],
+            tmp_path,
+        )
+        output = str(tmp_path / "out.mp4")
+
+        with patch(
+            "clipwright_render.render.inspect_media",
+            side_effect=lambda path: _make_media_info_with_video_stream(path),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(),
+            )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
+
+    def test_second_source_not_found_basename_only_in_message(
+        self, tmp_path: Path
+    ) -> None:
+        """2番目ソース不在エラーのメッセージに絶対パスが露出しない（CWE-209）。
+
+        basename のみ含まれ、ディレクトリ部分が含まれないことを確認する。
+        """
+        from clipwright_render.render import render_timeline
+
+        src0 = str(tmp_path / "src0.mp4")
+        src1 = str(tmp_path / "missing_src1.mp4")
+        Path(src0).touch()
+
+        tl_path = _make_multi_source_otio_file(
+            [(src0, 0.0, 3.0), (src1, 0.0, 2.0)],
+            tmp_path,
+        )
+        output = str(tmp_path / "out.mp4")
+
+        with patch(
+            "clipwright_render.render.inspect_media",
+            side_effect=lambda path: _make_media_info_with_video_stream(path),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(),
+            )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
+        error_message: str = result["error"]["message"]
+        # 絶対パス（ディレクトリ部分）が露出していない
+        assert str(tmp_path) not in error_message
+        # basename は含まれる
+        assert "missing_src1.mp4" in error_message
+
+
+class TestProbeAudioOnlyFpsNone:
+    """観点6: 音声のみソースで _probe が fps=None を返す（ADR-C2-r2）。
+
+    rate=1000.0 センチネルを fps として誤採用しないこと。
+    ProbeInfo.fps は「第1 video StreamInfo あり AND duration not None」のときのみ設定。
+    """
+
+    def test_audio_only_source_probe_fps_is_none(self, tmp_path: Path) -> None:
+        """音声のみソース（video stream なし）→ ProbeInfo.fps = None（ADR-C2-r2）。
+
+        duration.rate=1000.0（センチネル）があっても fps として採用しないこと。
+        """
+        from clipwright_render.render import _probe
+
+        source = str(tmp_path / "audio_only.mp4")
+        Path(source).touch()
+
+        # 音声のみ: rate=1000.0 センチネル・video stream なし
+        audio_only_info = _make_audio_only_media_info(source)
+
+        with patch(
+            "clipwright_render.render.inspect_media",
+            return_value=audio_only_info,
+        ):
+            info = _probe(source)
+
+        # video stream がないため fps は None
+        assert info.fps is None  # type: ignore[attr-defined]
+        # width/height も None（video stream なし）
+        assert info.width is None  # type: ignore[attr-defined]
+        assert info.height is None  # type: ignore[attr-defined]
+
+    def test_video_source_with_duration_none_fps_is_none(self, tmp_path: Path) -> None:
+        """video stream ありだが duration=None → ProbeInfo.fps = None（ADR-C2-r2）。
+
+        duration が None のとき duration.rate へのアクセスで AttributeError が発生しない。
+        """
+        from clipwright_render.render import _probe
+
+        source = str(tmp_path / "no_duration.mp4")
+        Path(source).touch()
+
+        # video stream あり・duration=None（format.duration が取得不能なケース）
+        info_no_duration = MediaInfo(
+            path=source,
+            container="mov,mp4,m4a,3gp,3g2,mj2",
+            duration=None,  # duration が None
+            streams=[
+                StreamInfo(
+                    index=0,
+                    codec_type="video",
+                    codec_name="h264",
+                    width=1920,
+                    height=1080,
+                )
+            ],
+            bit_rate=8_000_000,
+        )
+
+        with patch(
+            "clipwright_render.render.inspect_media",
+            return_value=info_no_duration,
+        ):
+            info = _probe(source)
+
+        # duration=None のとき fps は None（AttributeError にならないこと）
+        assert info.fps is None  # type: ignore[attr-defined]
+        # width/height は第1 video StreamInfo から取得される
+        assert info.width == 1920  # type: ignore[attr-defined]
+        assert info.height == 1080  # type: ignore[attr-defined]
+
+    def test_video_source_with_valid_fps(self, tmp_path: Path) -> None:
+        """video stream あり・duration あり → fps が正しく設定される（ADR-C2-r2）。
+
+        rate=30.0 の duration を持つ video ソースで fps=30.0 が返ること。
+        """
+        from clipwright_render.render import _probe
+
+        source = str(tmp_path / "video.mp4")
+        Path(source).touch()
+
+        video_info = _make_media_info_with_video_stream(
+            source, width=1920, height=1080, fps_rate=30.0
+        )
+
+        with patch(
+            "clipwright_render.render.inspect_media",
+            return_value=video_info,
+        ):
+            info = _probe(source)
+
+        # fps は duration.rate から設定される
+        assert info.fps == 30.0  # type: ignore[attr-defined]
+        assert info.width == 1920  # type: ignore[attr-defined]
+        assert info.height == 1080  # type: ignore[attr-defined]
+
+
+class TestSingleSourceBackwardCompat:
+    """観点7: 単一ソース timeline での後方互換確認。
+
+    probe 1回・-i 1つ・summary フォーマットが現行と不変であること。
+    """
+
+    def test_single_source_probe_called_once(self, tmp_path: Path) -> None:
+        """単一ソース timeline で inspect_media が1回のみ呼ばれる（後方互換）。"""
+        from clipwright_render.render import render_timeline
+
+        src0 = str(tmp_path / "src0.mp4")
+        Path(src0).touch()
+
+        tl_path = _make_multi_source_otio_file(
+            [(src0, 0.0, 3.0), (src0, 5.0, 2.0)],
+            tmp_path,
+        )
+        output = str(tmp_path / "out.mp4")
+
+        probe_calls: list[str] = []
+
+        def _fake_inspect(path: str) -> MediaInfo:
+            probe_calls.append(path)
+            return _make_media_info(path=path)
+
+        with (
+            patch("clipwright_render.render.inspect_media", side_effect=_fake_inspect),
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
+            patch(
+                "clipwright_render.render.run",
+                return_value=CompletedProcess(
+                    args=[], returncode=0, stdout="", stderr=""
+                ),
+            ),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(),
+                dry_run=True,
+            )
+
+        assert result["ok"] is True, f"失敗: {result.get('error')}"
+        # ユニークソース1個 → probe 1回
+        assert len(probe_calls) == 1
+
+    def test_single_source_summary_contains_segment_count(self, tmp_path: Path) -> None:
+        """単一ソース dry_run summary に segment_count が含まれる（後方互換）。"""
+        from clipwright_render.render import render_timeline
+
+        src0 = str(tmp_path / "src0.mp4")
+        Path(src0).touch()
+
+        tl_path = _make_multi_source_otio_file(
+            [(src0, 0.0, 3.0), (src0, 5.0, 2.0)],
+            tmp_path,
+        )
+        output = str(tmp_path / "out.mp4")
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=src0, bit_rate=8_000_000),
+            ),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(),
+                dry_run=True,
+            )
+
+        assert result["ok"] is True, f"失敗: {result.get('error')}"
+        assert "segment_count" in result["data"]
+        assert result["data"]["segment_count"] == 2
+        assert "total_duration_seconds" in result["data"]
+        assert abs(result["data"]["total_duration_seconds"] - 5.0) < 0.01
+
+
+class TestMultiSourceDryRun:
+    """観点8: dry_run 複数ソース → ok_result に連結予定情報が返り run 非呼び出し。
+
+    ADR-C10: total_duration = 各クリップ source_range duration 合計。
+    """
+
+    def test_dry_run_multi_source_no_run_called(self, tmp_path: Path) -> None:
+        """dry_run=True の複数ソース timeline で ffmpeg run が呼ばれない。"""
+        from clipwright_render.render import render_timeline
+
+        src0 = str(tmp_path / "src0.mp4")
+        src1 = str(tmp_path / "src1.mp4")
+        Path(src0).touch()
+        Path(src1).touch()
+
+        tl_path = _make_multi_source_otio_file(
+            [(src0, 0.0, 3.0), (src1, 0.0, 2.0)],
+            tmp_path,
+        )
+        output = str(tmp_path / "out.mp4")
+
+        run_called = False
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            nonlocal run_called
+            run_called = True
+            return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                side_effect=lambda path: _make_media_info_with_video_stream(path),
+            ),
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
+            patch("clipwright_render.render.run", side_effect=_fake_run),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(),
+                dry_run=True,
+            )
+
+        assert result["ok"] is True, f"失敗: {result.get('error')}"
+        assert run_called is False
+
+    def test_dry_run_multi_source_returns_segment_count_and_duration(
+        self, tmp_path: Path
+    ) -> None:
+        """dry_run 複数ソース結果に segment_count と total_duration が含まれる。
+
+        3秒+2秒=5秒の timeline で segment_count=2・total_duration=5.0 が返ること。
+        """
+        from clipwright_render.render import render_timeline
+
+        src0 = str(tmp_path / "src0.mp4")
+        src1 = str(tmp_path / "src1.mp4")
+        Path(src0).touch()
+        Path(src1).touch()
+
+        tl_path = _make_multi_source_otio_file(
+            [(src0, 0.0, 3.0), (src1, 0.0, 2.0)],
+            tmp_path,
+        )
+        output = str(tmp_path / "out.mp4")
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                side_effect=lambda path: _make_media_info_with_video_stream(path),
+            ),
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(),
+                dry_run=True,
+            )
+
+        assert result["ok"] is True, f"失敗: {result.get('error')}"
+        assert "segment_count" in result["data"]
+        assert result["data"]["segment_count"] == 2
+        assert "total_duration_seconds" in result["data"]
+        assert abs(result["data"]["total_duration_seconds"] - 5.0) < 0.01

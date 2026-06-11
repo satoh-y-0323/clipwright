@@ -11,6 +11,10 @@ ffprobe による probe と ffmpeg による再エンコードを統合し、
 - PROBE_FAILED 等のエラーは inspect_media が送出するものをそのまま伝播する。
 - ffmpeg stderr 生文字列・内部パスは summary/data/error に露出しない。
   core の process.run が先頭 200 文字要約のみ message に含めることで実現する。
+- 全ユニークソースの境界検証・存在確認・probe を行う（ADR-C8）。
+- ffmpeg コマンドの -i 並びは RenderPlan.input_sources をそのまま使う（ADR-C9-r2）。
+- _probe は fps = 「第1 video StreamInfo あり AND duration not None」のときのみ設定し
+  音声のみソースの rate=1000.0 センチネルを fps に誤採用しない（ADR-C2-r2）。
 """
 
 from __future__ import annotations
@@ -25,7 +29,12 @@ from clipwright.media import inspect_media
 from clipwright.otio_utils import get_clipwright_metadata, load_timeline
 from clipwright.process import resolve_tool, run
 
-from clipwright_render.plan import ProbeInfo, build_plan, resolve_kept_ranges
+from clipwright_render.plan import (
+    ProbeInfo,
+    build_plan,
+    resolve_kept_ranges,
+    unique_sources_in_order,
+)
 from clipwright_render.schemas import RenderOptions
 
 # 出力拡張子ホワイトリスト（DC-AM-003）
@@ -33,7 +42,7 @@ _ALLOWED_EXTENSIONS = frozenset({".mp4", ".mkv", ".mov", ".webm"})
 
 
 def _probe(source: str) -> ProbeInfo:
-    """inspect_media を呼び出して ProbeInfo を返す（AD-3）。
+    """inspect_media を呼び出して ProbeInfo を返す（AD-3 / ADR-C2-r2）。
 
     core の inspect_media に ffprobe 実行を委譲し、返された MediaInfo を
     plan.py が必要とする ProbeInfo 形式に変換する純粋なアダプタ。
@@ -41,11 +50,16 @@ def _probe(source: str) -> ProbeInfo:
     OTIO target_url の絶対パスを露出しない（Sec M-1）。
     PROBE_FAILED 等、FILE_NOT_FOUND 以外のエラーはそのまま伝播する。
 
+    fps は「第1 video StreamInfo あり AND MediaInfo.duration not None」の
+    ときのみ MediaInfo.duration.rate を採用する。
+    音声のみソースは duration.rate=1000.0 センチネルを fps に誤採用しないため、
+    video stream なしのときは fps=None を返す（ADR-C2-r2）。
+
     Args:
         source: probe 対象のメディアファイルパス。
 
     Returns:
-        ProbeInfo(has_video, audio_count, bit_rate)。
+        ProbeInfo(has_video, audio_count, bit_rate, width, height, fps)。
 
     Raises:
         ClipwrightError: PROBE_FAILED / DEPENDENCY_MISSING / SUBPROCESS_FAILED /
@@ -65,8 +79,31 @@ def _probe(source: str) -> ProbeInfo:
         raise
     has_video = any(s.codec_type == "video" for s in info.streams)
     audio_count = sum(1 for s in info.streams if s.codec_type == "audio")
+
+    # 解像度・fps は第1 video StreamInfo から取得（ADR-C2-r2）
+    width: int | None = None
+    height: int | None = None
+    fps: float | None = None
+
+    if has_video:
+        # 第1 video StreamInfo を取得
+        first_video = next((s for s in info.streams if s.codec_type == "video"), None)
+        if first_video is not None:
+            width = first_video.width
+            height = first_video.height
+
+        # fps: video stream あり AND duration not None のときのみ採用（ADR-C2-r2）
+        # 音声のみソースは rate=1000.0 センチネルのため、video stream なしは fps=None。
+        if info.duration is not None:
+            fps = float(info.duration.rate)
+
     return ProbeInfo(
-        has_video=has_video, audio_count=audio_count, bit_rate=info.bit_rate
+        has_video=has_video,
+        audio_count=audio_count,
+        bit_rate=info.bit_rate,
+        width=width,
+        height=height,
+        fps=fps,
     )
 
 
@@ -105,10 +142,33 @@ def _check_source_within_timeline_dir(timeline_path: Path, source: str) -> None:
     except ClipwrightError:
         raise
     except OSError:
-        # resolve() 失敗（パス不存在・PermissionError・極端に長いパス等）は
-        # best-effort 境界検証としてスキップする。実際にアクセス不能な source は
-        # 後続の存在確認で FILE_NOT_FOUND として顕在化するため握りつぶしではない。
-        pass
+        # resolve() 失敗（ネットワークパス・超長パス・シンボリックリンクループ等）は
+        # absolute() ベースの best-effort 比較にフォールバックする（SR L-1）。
+        # これにより境界検証が完全にスキップされるリスクを低減し、
+        # resolve() 失敗のような極端なケースでも境界外 probe を防ぐ。
+        # absolute() も失敗した場合のみスキップし、後続の存在確認に委ねる
+        # （_check_path_not_allowed の既存フォールバック作法に倣う）。
+        try:
+            allowed_base_abs = str(timeline_path.parent.absolute())
+            source_abs = str(Path(source).absolute())
+            if not (
+                source_abs == allowed_base_abs
+                or source_abs.startswith(allowed_base_abs + "/")
+                or source_abs.startswith(allowed_base_abs + "\\")
+            ):
+                raise ClipwrightError(
+                    code=ErrorCode.PATH_NOT_ALLOWED,
+                    message="source ファイルがプロジェクト境界外を指しています。",
+                    hint=(
+                        "OTIO タイムラインと同じディレクトリ配下の"
+                        "ソースファイルを使用してください。"
+                    ),
+                )
+        except ClipwrightError:
+            raise
+        except OSError:
+            # absolute() も失敗した場合のみスキップ（本当に解決不能なパスのみ）
+            pass
 
 
 def _check_path_not_allowed(output_path: Path, source: str) -> None:
@@ -163,11 +223,10 @@ def render_timeline(
 
     フロー:
       1. 入力検証（timeline/output の存在・拡張子・上書き・パス衝突）
-      2. load_timeline → resolve_kept_ranges → source 存在確認
-      3. _probe(source)
-      4. build_plan(ranges, probe_info, options)
-      5a. dry_run=True  → 計画要約を ok_result（ffmpeg は呼ばない）
-      5b. dry_run=False → ffmpeg を1回 run → output 存在確認 → ok_result
+      2. load_timeline → resolve_kept_ranges → 全ユニークソースの検証・probe
+      3. build_plan(ranges, probe_info, options, source_probes=source_probes)
+      4a. dry_run=True  → 計画要約を ok_result（ffmpeg は呼ばない）
+      4b. dry_run=False → ffmpeg を1回 run → output 存在確認 → ok_result
 
     Args:
         timeline: 入力 OTIO タイムラインファイルパス。
@@ -234,26 +293,31 @@ def _render_inner(
             hint="出力先ディレクトリを先に作成してから再実行してください。",
         )
 
-    # output == source の場合は PATH_NOT_ALLOWED（DC-AM-002）
-    # この時点では source がまだ不明なため、OTIO 解析後に行う。
-    # ただし output == timeline を防ぐため resolved 比較
-    # （source パスは OTIO 解析後に確認する）
-
-    # --- 2. OTIO 解析（source パスを取得して PATH_NOT_ALLOWED を先に検証する）---
+    # --- 2. OTIO 解析 ---
     tl = load_timeline(timeline)
     ranges = resolve_kept_ranges(tl)
 
-    # source パスを取得（resolve_kept_ranges が単一ソースであることを保証済み）
-    source = ranges[0].source
+    # 全ユニークソースを出現順で取得する（ADR-C9-r2）
+    # unique_sources_in_order は plan.py の単一情報源（ADR-C9-r2）
+    unique_sources = unique_sources_in_order(ranges)
 
-    # source がタイムラインと同一ディレクトリ配下にあることを検証する（Sec M-2）。
-    # OTIO target_url に任意パスが埋め込まれた悪意ある OTIO への対策。
-    # 単一 source は OTIO と同一ディレクトリ配下前提（設計上の制約）。
-    _check_source_within_timeline_dir(timeline_path, source)
+    # 全ユニークソースに境界検証・存在確認・パス衝突確認を適用する（ADR-C8）
+    for src in unique_sources:
+        # source がタイムラインと同一ディレクトリ配下にあることを検証する（Sec M-2）
+        _check_source_within_timeline_dir(timeline_path, src)
 
-    # output == source チェック（PATH_NOT_ALLOWED・DC-AM-002）
-    # overwrite チェックより前に行うことで適切なエラーコードを返す
-    _check_path_not_allowed(output_path, source)
+        # output == source チェック（PATH_NOT_ALLOWED・DC-AM-002）
+        _check_path_not_allowed(output_path, src)
+
+        # source ファイル存在確認（DC-GP-005）
+        if not Path(src).exists():
+            raise ClipwrightError(
+                code=ErrorCode.FILE_NOT_FOUND,
+                message=f"ソースメディアファイルが見つかりません: {Path(src).name}",
+                hint=(
+                    "OTIO タイムラインに記録されているソースファイルを配置してください。"  # noqa: E501
+                ),
+            )
 
     # output 既存 + overwrite=False → INVALID_INPUT（DC-AM-002）
     if output_path.exists() and not options.overwrite:
@@ -263,16 +327,14 @@ def _render_inner(
             hint=("既存ファイルを上書きする場合は overwrite=True を指定してください。"),
         )
 
-    # source ファイル存在確認（DC-GP-005）
-    if not Path(source).exists():
-        raise ClipwrightError(
-            code=ErrorCode.FILE_NOT_FOUND,
-            message=f"ソースメディアファイルが見つかりません: {Path(source).name}",
-            hint="OTIO タイムラインに記録されているソースファイルを配置してください。",
-        )
+    # --- 3. 全ユニークソースを probe して source_probes を構築（ADR-C8 / ADR-C2-r2）---
+    source_probes: dict[str, ProbeInfo] = {}
+    for src in unique_sources:
+        source_probes[src] = _probe(src)
 
-    # --- 3. probe ---
-    probe_info = _probe(source)
+    # 先頭ソースの ProbeInfo を probe_info として渡す（単一ソース経路の後方互換）
+    first_source = unique_sources[0]
+    probe_info = source_probes[first_source]
 
     # --- 4. denoise / loudness メタデータ読み出し ---
     # timeline-level metadata["clipwright"] から denoise / loudness を読み出す。
@@ -284,8 +346,14 @@ def _render_inner(
     raw_loudness = clipwright_meta.get("loudness")
 
     # --- 5. build_plan ---
+    # source_probes を渡して複数ソース経路を有効にする（ADR-C2-r2 / ADR-C9-r2）
     plan = build_plan(
-        ranges, probe_info, options, denoise=raw_denoise, loudness=raw_loudness
+        ranges,
+        probe_info,
+        options,
+        denoise=raw_denoise,
+        loudness=raw_loudness,
+        source_probes=source_probes,
     )
 
     # --- 6a. dry_run ---
@@ -319,8 +387,13 @@ def _render_inner(
     # overwrite フラグ（-y / -n）
     overwrite_flag = ["-y"] if options.overwrite else ["-n"]
 
-    # plan.ffmpeg_args は list[str] のため変換不要（M-1）
-    cmd = [ffmpeg] + overwrite_flag + ["-i", source] + plan.ffmpeg_args + [str(output)]
+    # -i 並びは plan.input_sources をそのまま使う（ADR-C9-r2）
+    # render.py で順序を再計算しない（二重実装排除）
+    inputs: list[str] = []
+    for src in plan.input_sources:
+        inputs += ["-i", src]
+
+    cmd = [ffmpeg] + overwrite_flag + inputs + plan.ffmpeg_args + [str(output)]
 
     run(cmd, timeout=float(timeout))
 
