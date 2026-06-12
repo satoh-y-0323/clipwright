@@ -1,6 +1,6 @@
 [project]
 name = "clipwright-wrap"
-version = "0.1.0"
+version = "0.1.1"
 description = "MCP tool to format subtitle file (SRT/VTT) text at phrase boundaries with line wrapping using BudouX."
 readme = "README.md"
 license = { text = "MIT" }
@@ -10,7 +10,7 @@ authors = [
 requires-python = ">=3.11"
 dependencies = [
     "budoux",
-    "clipwright>=0.1.0",
+    "clipwright>=0.1.1",
     "mcp[cli]>=1.27.2",
     "pydantic>=2",
 ]

@@ -1,6 +1,6 @@
 [project]
 name = "clipwright-silence"
-version = "0.1.0"
+version = "0.1.1"
 description = "MCP tool for silence detection and OTIO timeline generation. Detects silence with ffmpeg silencedetect and generates timeline.otio with clip sequence for regions to keep."
 readme = "README.md"
 license = { text = "MIT" }
@@ -9,7 +9,7 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "clipwright>=0.1.0",
+    "clipwright>=0.1.1",
     "mcp[cli]>=1.27.2",
     "opentimelineio>=0.18",
     "pydantic>=2",
