@@ -34,7 +34,7 @@ from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.media import inspect_media
 from clipwright.otio_utils import add_clip, add_marker, new_timeline, save_timeline
-from clipwright.process import resolve_tool, run
+from clipwright.process import resolve_tool, run, safe_subprocess_message
 from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
 
 import clipwright_transcribe
@@ -51,9 +51,6 @@ LANG_AUTO_FLAG: list[str] = ["-l", "auto"]
 # Maximum display length for marker name (excess is truncated; full text kept in
 # metadata.text; DC-GP-003).
 _MARKER_NAME_MAX = 40
-# Sanitised message for SUBPROCESS_FAILED/TIMEOUT (prevents stderr/path leakage;
-# TR-AD-09).
-_SUBPROCESS_SAFE_MESSAGE = "internal subprocess failed"
 # Hint shown when the whisper model cannot be resolved (actionable; TR-AD-05).
 _MODEL_MISSING_HINT = (
     "Specify the ggml model file path via options.model_path or "
@@ -90,7 +87,7 @@ def _sanitize_subprocess_error(exc: ClipwrightError) -> ClipwrightError:
     if exc.code in (ErrorCode.SUBPROCESS_FAILED, ErrorCode.SUBPROCESS_TIMEOUT):
         return ClipwrightError(
             code=exc.code,
-            message=f"{_SUBPROCESS_SAFE_MESSAGE} (code: {exc.code})",
+            message=safe_subprocess_message(exc),
             hint=exc.hint,
         )
     return exc
@@ -220,13 +217,13 @@ def _run_whisper(
         try:
             _extract_wav(ffmpeg, media, wav_path, ffmpeg_timeout)
         except ClipwrightError as exc:
-            raise _sanitize_subprocess_error(exc) from exc
+            raise _sanitize_subprocess_error(exc) from None
 
         cmd = _build_whisper_cmd(whisper, model_path, wav_path, prefix, options)
         try:
             run(cmd, timeout=whisper_timeout)
         except ClipwrightError as exc:
-            raise _sanitize_subprocess_error(exc) from exc
+            raise _sanitize_subprocess_error(exc) from None
 
         # whisper `-oj -of <prefix>` produces <prefix>.json (DC-AM-003).
         json_path = prefix + ".json"

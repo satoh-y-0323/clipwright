@@ -25,6 +25,22 @@ from clipwright.errors import ErrorCode
 # OSS installation hint. Replace __TOOL__ with actual OSS package name.
 _INSTALL_HINT = "Install dependencies with `pip install <your-oss>`."
 
+
+def _force_utf8_io() -> None:
+    """Pin stdin/stdout to UTF-8 so this CLI is correct regardless of host
+    locale or inherited PYTHONIOENCODING (cp932 on JP Windows otherwise).
+
+    MUST be called before the first read from stdin: TextIOWrapper.reconfigure
+    raises once buffered reading has begun. Calling it at the very top of main()
+    (before sys.stdin.read()) satisfies this. Safe to call even on a CLI that
+    never reads stdin (reconfigure before any read is a no-op there).
+    """
+    for stream in (sys.stdin, sys.stdout):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8")
+
+
 # External OSS imported at module top (separate process so no server leak).
 # If not installed, set _OSS to None and main() returns DEPENDENCY_MISSING.
 try:
@@ -42,6 +58,8 @@ def _error_output(code: str, message: str, hint: str) -> None:
 
 def main(argv: list[str] | None = None) -> int:  # noqa: ARG001
     """CLI entry point. Catch all exceptions, output stdout JSON, return 0."""
+    _force_utf8_io()
+
     try:
         try:
             payload: dict[str, Any] = json.loads(sys.stdin.read())

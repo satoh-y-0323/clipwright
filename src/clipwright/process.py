@@ -16,6 +16,42 @@ from clipwright.errors import ClipwrightError, ErrorCode
 
 _INSTALL_HINT = "On Windows, install via `winget install Gyan.FFmpeg` or equivalent."
 
+# ---------------------------------------------------------------------------
+# Subprocess-error sanitisation helpers (SR I-1 [SR-NEW])
+# ---------------------------------------------------------------------------
+
+SUBPROCESS_SAFE_MESSAGE = "internal subprocess failed"
+"""Generic safe message substituted for SUBPROCESS_FAILED/TIMEOUT error messages.
+
+Core run() builds SUBPROCESS_FAILED messages from raw child-process stderr, which
+can embed absolute input paths. All subprocess seams (silencedetect, VAD, wrap)
+must replace the raw message with this constant before it reaches the MCP error
+envelope, so callers obtain only a non-sensitive generic token.
+
+The value is kept stable so that downstream consumers and cross-package tests can
+rely on this string as a stable contract.
+"""
+
+
+def safe_subprocess_message(exc: ClipwrightError) -> str:
+    """Generic message for a subprocess failure, hiding raw child stderr.
+
+    Raw child-process stderr (which may embed absolute input paths) must not
+    surface in MCP error envelopes. This helper returns a sanitised string that
+    includes the error code for diagnostic context while omitting any path or
+    stderr detail from the original exception.
+
+    Mirrors the value used on every subprocess seam so the silencedetect / VAD /
+    wrap paths stay in sync.
+
+    Args:
+        exc: ClipwrightError whose message may contain sensitive path information.
+
+    Returns:
+        Safe message string: ``f"{SUBPROCESS_SAFE_MESSAGE} (code: {exc.code})"``.
+    """
+    return f"{SUBPROCESS_SAFE_MESSAGE} (code: {exc.code})"
+
 
 def resolve_tool(name: str, env_var: str | None = None) -> str:
     """Resolve and return the executable path of an external tool.
@@ -81,6 +117,8 @@ def run(
 
     Runs with shell=False and an argument list (command injection prevention).
     Always enforces timeout, collects stderr, and checks the return code (§6.5).
+    stdout/stderr are decoded as UTF-8 regardless of host locale (errors="replace"
+    for robustness against unexpected bytes in external tool output).
 
     Args:
         cmd: Command and arguments as a list (not a concatenated string).
@@ -100,6 +138,8 @@ def run(
             shell=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             cwd=cwd,
         )

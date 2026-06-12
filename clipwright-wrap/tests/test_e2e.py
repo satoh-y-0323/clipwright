@@ -9,23 +9,13 @@ Test categories:
 - e2e_zero_srt / e2e_zero_vtt : 0-cue e2e (DC-GP-004)
 - e2e_overflow          : overflow warnings (WR-AD-15/DC-AM-003)
 
-On Windows (cp932 terminal), if PYTHONIOENCODING=utf-8 is not set, the wrap_cli
-subprocess decodes stdin as cp932 and phrase splitting fails. conftest.py sets this
-at session start via an autouse fixture (MINGW64/pytest environment).
-This file also sets it at module load time.
+wrap_cli now self-configures UTF-8 I/O at main() entry, so no env setup is needed.
 """
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
-
-# Ensure the subprocess can read UTF-8 correctly on Windows.
-# subprocess.run in wrap.py inherits PYTHONIOENCODING, so set it
-# before pytest starts (at module load time).
-os.environ.setdefault("PYTHONIOENCODING", "utf-8")
-
 
 from clipwright_wrap.captions import parse_captions
 from clipwright_wrap.schemas import WrapCaptionsOptions

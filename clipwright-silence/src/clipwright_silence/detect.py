@@ -12,7 +12,11 @@ Design decisions:
 - source_range rate is taken from inspect_media MediaInfo.duration.rate,
   and value = seconds * rate (DC-AS-003).
 - output is only permitted in the same directory as media (DC-AS-001).
-- Error messages do not expose full paths or raw ffmpeg stderr (basename only, M-1).
+- Error messages do not expose full paths or raw ffmpeg stderr: FILE_NOT_FOUND
+  uses basename only (M-1 / SR L-2). SUBPROCESS_FAILED/TIMEOUT from both the
+  silencedetect run() seam and the VAD CLI spawn run() seam are replaced with
+  SUBPROCESS_SAFE_MESSAGE from clipwright.process (SR L-1 [SR-R-001]), so core
+  subprocess stderr never reaches the MCP error envelope on either path.
 """
 
 from __future__ import annotations
@@ -28,7 +32,7 @@ from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.media import inspect_media
 from clipwright.otio_utils import add_clip, new_timeline, save_timeline
-from clipwright.process import resolve_tool, run
+from clipwright.process import resolve_tool, run, safe_subprocess_message
 from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
 
 import clipwright_silence
@@ -143,7 +147,21 @@ def _detect_silence_intervals(
         "null",
         "-",
     ]
-    result = run(cmd, timeout=float(timeout))
+    try:
+        result = run(cmd, timeout=float(timeout))
+    except ClipwrightError as exc:
+        # SR L-1 [SR-R-001]: core run() builds SUBPROCESS_FAILED/TIMEOUT messages
+        # from raw ffmpeg stderr, which can embed absolute input paths. Replace
+        # with a generic message before it reaches the MCP error envelope,
+        # mirroring the VAD branch (vad_cli.py:265). exc.code and exc.hint are
+        # preserved so callers retain the failure category and remediation hint.
+        if exc.code in (ErrorCode.SUBPROCESS_FAILED, ErrorCode.SUBPROCESS_TIMEOUT):
+            raise ClipwrightError(
+                code=exc.code,
+                message=safe_subprocess_message(exc),
+                hint=exc.hint,
+            ) from exc
+        raise
     return _parse_silence_intervals(result.stderr, total_duration_sec)
 
 
@@ -187,7 +205,21 @@ def _detect_vad_silence_intervals(
         # vad_cli uses ceil(total*2); float precision has no practical impact (NF-L-1)
         f"{total_duration_sec}",
     ]
-    result = run(cmd, timeout=timeout)
+    try:
+        result = run(cmd, timeout=timeout)
+    except ClipwrightError as exc:
+        # SR L-1 [SR-R-001] symmetry: the VAD CLI spawn run() can raise
+        # SUBPROCESS_FAILED/TIMEOUT on catastrophic spawn failure (before
+        # vad_cli.main() starts). Sanitise with the shared helper so raw
+        # subprocess stderr never reaches the MCP error envelope, mirroring
+        # the silencedetect seam above. exc.code and exc.hint are preserved.
+        if exc.code in (ErrorCode.SUBPROCESS_FAILED, ErrorCode.SUBPROCESS_TIMEOUT):
+            raise ClipwrightError(
+                code=exc.code,
+                message=safe_subprocess_message(exc),
+                hint=exc.hint,
+            ) from exc
+        raise
 
     try:
         payload: dict[str, Any] = json.loads(result.stdout)

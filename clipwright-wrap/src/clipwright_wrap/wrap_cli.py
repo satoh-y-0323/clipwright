@@ -19,10 +19,12 @@ import sys
 import traceback
 from typing import Any
 
+from clipwright.cli_io import force_utf8_io
 from clipwright.errors import ErrorCode
 
 # pip install hint string
 _WRAP_INSTALL_HINT = "Install clipwright-wrap with `pip install clipwright-wrap`."
+
 
 # Mapping of language → parser load function (DC-AS-002: target for test monkeypatching)
 # budoux is imported at module top level. Because this CLI runs in a separate process,
@@ -69,6 +71,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: ARG001
     Returns:
         Exit code (always 0).
     """
+    force_utf8_io()
+
     try:
         # --- Read JSON from stdin ---
         try:

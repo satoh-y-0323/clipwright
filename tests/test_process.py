@@ -508,3 +508,159 @@ class TestRunShellFalseInvariant:
         # Must not be a joined string — must still be a list
         assert not isinstance(first_arg, str)
         assert isinstance(first_arg, list)
+
+
+# ===========================================================================
+# A-1: UTF-8 encoding in subprocess.run() kwargs (category A, ADR-1)
+# ===========================================================================
+
+
+class TestRunUTF8EncodingKwargs:
+    """[Red] Verify that run() passes encoding="utf-8" and errors="replace"
+    to subprocess.run().
+
+    Category A: core subprocess output decode (cp932 デコード対策).
+    This test ensures that stdout/stderr from external tools (ffmpeg, ffprobe,
+    whisper, vad_cli) are decoded as UTF-8, not as the host locale (cp932 on
+    JP Windows). The errors="replace" flag makes decoding tolerant of invalid
+    bytes (external tool output may be garbled).
+
+    [ADR-1] subprocess.run(..., encoding="utf-8", errors="replace")
+    """
+
+    def test_subprocess_run_called_with_encoding_utf8(self, mocker: MagicMock) -> None:
+        """[Red] subprocess.run is called with encoding='utf-8' keyword argument.
+
+        Arrange: Mock subprocess.run to return success.
+        Act: Call run(["echo", "test"]).
+        Assert: subprocess.run was called with encoding="utf-8" in kwargs.
+        """
+        mock_cp = CompletedProcess(
+            args=["echo", "test"], returncode=0, stdout="test", stderr=""
+        )
+        mock_run = mocker.patch("subprocess.run", return_value=mock_cp)
+
+        run(["echo", "test"])
+
+        call_kwargs = mock_run.call_args.kwargs
+        assert call_kwargs.get("encoding") == "utf-8", (
+            "subprocess.run must be called with encoding='utf-8' "
+            "(ADR-1: cp932 デコード対策)"
+        )
+
+    def test_subprocess_run_called_with_errors_replace(self, mocker: MagicMock) -> None:
+        """[Red] subprocess.run is called with errors='replace' keyword argument.
+
+        Arrange: Mock subprocess.run to return success.
+        Act: Call run(["echo", "test"]).
+        Assert: subprocess.run was called with errors="replace" in kwargs.
+        """
+        mock_cp = CompletedProcess(
+            args=["echo", "test"], returncode=0, stdout="test", stderr=""
+        )
+        mock_run = mocker.patch("subprocess.run", return_value=mock_cp)
+
+        run(["echo", "test"])
+
+        call_kwargs = mock_run.call_args.kwargs
+        assert call_kwargs.get("errors") == "replace", (
+            "subprocess.run must be called with errors='replace' "
+            "(ADR-1: invalid bytes are replaced, not raising UnicodeDecodeError)"
+        )
+
+
+# ===========================================================================
+# A-2: UTF-8 stdout round-trip with Japanese text (category A, positive guard)
+# ===========================================================================
+
+
+class TestRunUTF8StdoutRoundTrip:
+    """[Red] Verify that run() successfully decodes UTF-8 stdout with Japanese text.
+
+    Category A: core subprocess output decode.
+    This test spawns a real child process that writes UTF-8 Japanese to stdout,
+    ensuring run() does not raise UnicodeDecodeError and returns the text intact.
+
+    Success condition: Japanese text in stdout is correctly decoded.
+    """
+
+    def test_run_decodes_utf8_japanese_stdout_without_error(self) -> None:
+        """[Red] run() successfully decodes UTF-8 Japanese characters from stdout.
+
+        Arrange: Prepare a child command that outputs UTF-8 Japanese.
+        Act: Call run() with the command.
+        Assert: stdout is decoded correctly and contains the Japanese text.
+        """
+        # Arrange: Use sys.executable to spawn a child that outputs UTF-8 Japanese.
+        cmd = [
+            os.environ.get("PYTHON", "python"),
+            "-c",
+            (
+                "import sys; sys.stdout.buffer.write('日本語'.encode('utf-8')); "
+                "sys.stdout.flush()"
+            ),
+        ]
+
+        # Act: This should not raise UnicodeDecodeError even on cp932 locale.
+        result = run(cmd, timeout=10.0)
+
+        # Assert: The Japanese text is preserved in stdout.
+        assert "日本語" in result.stdout, (
+            "UTF-8 Japanese text must be correctly decoded from stdout "
+            "(ADR-1: encoding='utf-8')"
+        )
+        assert result.returncode == 0
+
+
+# ===========================================================================
+# A-3: stderr round-trip with Japanese + non-zero exit (category A, DC-GP-003)
+# ===========================================================================
+
+
+class TestRunUTF8StderrRegression:
+    """[Red] Verify stderr_summary preserves UTF-8 Japanese text in error messages.
+
+    Category A: core subprocess output decode (DC-GP-003: stderr mojibake fix).
+    This test reproduces the actual reported bug: a child process writes UTF-8
+    Japanese to stderr AND exits non-zero. The run() function collects stderr
+    and includes a summary in the error message. Before the fix, this stderr
+    summary would suffer from cp932 decode errors or mojibake. After the fix,
+    it must preserve Japanese text.
+
+    Success condition: ClipwrightError.message includes the Japanese text from
+    stderr without raising UnicodeDecodeError.
+    """
+
+    def test_run_preserves_utf8_japanese_in_stderr_on_failure(self) -> None:
+        """[Red] run() preserves UTF-8 Japanese in error message when child fails.
+
+        Arrange: Child command that writes UTF-8 Japanese to stderr and exits non-zero.
+        Act: Call run() (which will raise ClipwrightError(SUBPROCESS_FAILED)).
+        Assert: The error message contains the Japanese text from stderr.
+
+        This guards against the reported bug (DC-GP-003) where stderr_summary
+        was mojibake or raised UnicodeDecodeError on JP Windows (cp932 locale).
+        """
+        # Arrange: Child writes UTF-8 Japanese to stderr and exits with code 1.
+        cmd = [
+            os.environ.get("PYTHON", "python"),
+            "-c",
+            (
+                "import sys; sys.stderr.buffer.write('失敗の理由'.encode('utf-8')); "
+                "sys.stderr.flush(); sys.exit(1)"
+            ),
+        ]
+
+        # Act: This should raise ClipwrightError with the message containing stderr.
+        with pytest.raises(ClipwrightError) as exc_info:
+            run(cmd, timeout=10.0)
+
+        # Assert: The error code is SUBPROCESS_FAILED.
+        assert exc_info.value.code == ErrorCode.SUBPROCESS_FAILED
+
+        # Assert: The error message includes the Japanese text from stderr.
+        error_msg = exc_info.value.message
+        assert "失敗の理由" in error_msg, (
+            "stderr_summary must preserve UTF-8 Japanese text in error message "
+            "(ADR-1: encoding='utf-8', DC-GP-003: mojibake fix)"
+        )

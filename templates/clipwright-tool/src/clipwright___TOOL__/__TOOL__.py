@@ -25,7 +25,7 @@ from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright___TOOL__.schemas import __Action__Options
 
 # Sanitized message on subprocess failure/timeout (prevents stderr path/secret leaks, CWE-209)
-_SUBPROCESS_SAFE_MESSAGE = "Internal subprocess failed"
+_SUBPROCESS_SAFE_MESSAGE = "internal subprocess failed"
 
 # OSS invocation timeout (seconds). If linking to input size, calculate from cue count etc.
 _TIMEOUT_SECONDS = 60.0

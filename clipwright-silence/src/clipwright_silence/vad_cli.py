@@ -24,8 +24,9 @@ import tempfile
 import wave
 from typing import Any
 
+from clipwright.cli_io import force_utf8_io
 from clipwright.errors import ClipwrightError, ErrorCode
-from clipwright.process import resolve_tool, run
+from clipwright.process import resolve_tool, run, safe_subprocess_message
 
 # Fixed sample rate (§7.3)
 _SAMPLE_RATE = 16000
@@ -33,9 +34,6 @@ _SAMPLE_RATE = 16000
 _VAD_INSTALL_HINT = (
     "Install VAD dependencies with `pip install 'clipwright-silence[vad]'`."
 )
-# Sanitized generic message for SUBPROCESS_FAILED/TIMEOUT
-# (SR M-1: prevents ffmpeg stderr leakage)
-_SUBPROCESS_SAFE_MESSAGE = "internal subprocess failed"
 
 
 def _error_output(code: str, message: str, hint: str) -> None:
@@ -87,7 +85,9 @@ def _load_audio_as_float32(
     Precondition: This function must always be called via main().
     main() lazily imports numpy and registers it in sys.modules, so the import
     inside this function is effectively a cache lookup (NF-M-2: document precondition).
-    Calling directly from tests or utilities breaks the loose-coupling intent of CR L-2.
+    Calling directly from tests or utilities breaks the loose-coupling intent
+    (numpy is kept out of the server process; only the separate vad_cli subprocess
+    imports it).
     """
     import numpy as np  # See docstring (cached in sys.modules by main())
 
@@ -113,9 +113,12 @@ def main(argv: list[str] | None = None) -> int:
     Returns:
         Exit code (always 0).
     """
-    # Lazily import numpy inside main (CR L-2: avoid top-level import to keep
-    # server process loosely coupled. Separate process via sys.executable -m).
-    # Pre-import to cache in sys.modules (referenced by _load_audio_as_float32).
+    force_utf8_io()
+
+    # Lazily import numpy inside main to keep the server process loosely coupled
+    # (numpy is only needed inside this separate subprocess; the MCP server never
+    # imports it). Pre-import here to cache in sys.modules so that
+    # _load_audio_as_float32 finds it without a redundant reimport.
     # noqa: F401 = suppress lint warning for not referencing directly (NF-L-2).
     import numpy as np  # noqa: F401
 
@@ -245,7 +248,7 @@ def main(argv: list[str] | None = None) -> int:
         # SR M-1: SUBPROCESS_FAILED/TIMEOUT may embed ffmpeg stderr in message;
         # replace with generic message to prevent path leakage
         if exc.code in (ErrorCode.SUBPROCESS_FAILED, ErrorCode.SUBPROCESS_TIMEOUT):
-            safe_message = f"{_SUBPROCESS_SAFE_MESSAGE} (code: {exc.code})"
+            safe_message = safe_subprocess_message(exc)
         else:
             safe_message = exc.message
         _error_output(

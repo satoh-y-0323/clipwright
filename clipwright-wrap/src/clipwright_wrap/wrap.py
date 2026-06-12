@@ -7,7 +7,7 @@ greedy line-filling and re-serialisation via captions → output write → envel
 Design decisions:
 - wrap_cli is launched as sys.executable -m clipwright_wrap.wrap_cli (WR-AD-01).
 - wrap_cli error detection is based on the "error" key in stdout JSON (DC-AS-007).
-- subprocess failure/timeout uses the sanitised message in _SUBPROCESS_SAFE_MESSAGE.
+- subprocess failure/timeout uses the sanitised message in SUBPROCESS_SAFE_MESSAGE.
 - FILE_NOT_FOUND message contains only the basename (no full path exposure; WR-AD-09).
 - Overflow detection covers both line-count excess (a) and line-width excess (b)
   (WR-AD-15(1)).
@@ -28,6 +28,7 @@ from typing import Any
 
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
+from clipwright.process import SUBPROCESS_SAFE_MESSAGE
 
 from clipwright_wrap.captions import (
     check_overflow,
@@ -36,9 +37,6 @@ from clipwright_wrap.captions import (
     wrap_cue_lines,
 )
 from clipwright_wrap.schemas import WrapCaptionsOptions
-
-# Sanitised message for subprocess failure/timeout (prevents stderr path leakage)
-_SUBPROCESS_SAFE_MESSAGE = "internal subprocess failed"
 
 # Timeout coefficient proportional to cue count (WR-AD-11/WR-AD-15(2))
 _TIMEOUT_COEFFICIENT = 0.05
@@ -196,7 +194,7 @@ def _wrap_inner(
         except subprocess.TimeoutExpired:
             raise ClipwrightError(
                 code=ErrorCode.SUBPROCESS_TIMEOUT,
-                message=f"{_SUBPROCESS_SAFE_MESSAGE} (timeout)",
+                message=f"{SUBPROCESS_SAFE_MESSAGE} (timeout)",
                 hint=(
                     "The subtitle file may contain too many cues. "
                     "Try again or reduce the number of cues."
@@ -205,7 +203,7 @@ def _wrap_inner(
         except OSError:
             raise ClipwrightError(
                 code=ErrorCode.SUBPROCESS_FAILED,
-                message=_SUBPROCESS_SAFE_MESSAGE,
+                message=SUBPROCESS_SAFE_MESSAGE,
                 hint=(
                     "Failed to launch wrap_cli. "
                     "Check that clipwright-wrap is correctly installed."
@@ -218,7 +216,7 @@ def _wrap_inner(
         except (json.JSONDecodeError, ValueError):
             raise ClipwrightError(
                 code=ErrorCode.SUBPROCESS_FAILED,
-                message=_SUBPROCESS_SAFE_MESSAGE,
+                message=SUBPROCESS_SAFE_MESSAGE,
                 hint="Failed to parse wrap_cli output JSON. Please run again.",
             ) from None
 
