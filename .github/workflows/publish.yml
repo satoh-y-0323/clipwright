@@ -56,3 +56,6 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
+          # Skip versions already on PyPI so a partial-failure rerun (or a
+          # dispatch on an already-released tag) succeeds instead of erroring.
+          skip-existing: true
