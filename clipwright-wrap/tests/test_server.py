@@ -19,8 +19,11 @@ DC-GP-001 language responsibility verification policy (important):
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
 from unittest.mock import patch
+
+import pytest
+from clipwright.schemas import Artifact, ToolError, ToolResult
 
 from clipwright_wrap.schemas import WrapCaptionsOptions
 from clipwright_wrap.server import (
@@ -33,23 +36,22 @@ from clipwright_wrap.server import main, mcp
 # ---------------------------------------------------------------------------
 
 
-def _ok_envelope(**kwargs: Any) -> dict[str, Any]:
-    base: dict[str, Any] = {
-        "ok": True,
-        "summary": "ok",
-        "data": {},
-        "artifacts": [],
-        "warnings": [],
-    }
-    base.update(kwargs)
-    return base
+def _ok_envelope(**kwargs: object) -> ToolResult:
+    base = ToolResult(
+        ok=True,
+        summary="ok",
+        data={},
+        artifacts=[],
+        warnings=[],
+    )
+    return base.model_copy(update=kwargs)
 
 
-def _error_envelope(code: str) -> dict[str, Any]:
-    return {
-        "ok": False,
-        "error": {"code": code, "message": "error", "hint": "hint"},
-    }
+def _error_envelope(code: str) -> ToolResult:
+    return ToolResult(
+        ok=False,
+        error=ToolError(code=code, message="error", hint="hint"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +62,7 @@ def _error_envelope(code: str) -> dict[str, Any]:
 class TestMcpAnnotations:
     """Verify the MCP annotations of the clipwright_wrap_captions tool."""
 
-    def _get_annotations(self) -> Any:
+    def _get_annotations(self) -> object:
         # No public API exists in FastMCP to retrieve tool info, so
         # the private API (_tool_manager) is used here (same policy as transcribe/silence).
         tool = mcp._tool_manager.get_tool("clipwright_wrap_captions")  # noqa: SLF001
@@ -101,7 +103,7 @@ class TestDelegation:
                 input="in.srt", output="out.srt", options=None
             )
         mock_w.assert_called_once()
-        assert result["ok"] is True
+        assert result.ok is True
 
     def test_failure_passthrough(self) -> None:
         expected = _error_envelope("FILE_NOT_FOUND")
@@ -112,8 +114,9 @@ class TestDelegation:
             result = server_wrap_captions(
                 input="missing.srt", output="out.srt", options=None
             )
-        assert result["ok"] is False
-        assert result["error"]["code"] == "FILE_NOT_FOUND"
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == "FILE_NOT_FOUND"
 
     def test_error_envelope_has_code_message_hint(self) -> None:
         expected = _error_envelope("DEPENDENCY_MISSING")
@@ -124,10 +127,10 @@ class TestDelegation:
             result = server_wrap_captions(
                 input="in.srt", output="out.srt", options=None
             )
-        error = result["error"]
-        assert "code" in error
-        assert "message" in error
-        assert "hint" in error
+        assert result.error is not None
+        assert result.error.code
+        assert result.error.message
+        assert result.error.hint
 
     def test_options_none_uses_default(self) -> None:
         """When options=None, WrapCaptionsOptions() defaults are passed to the delegate.
@@ -175,9 +178,47 @@ class TestDelegation:
                 input="in.srt", output="out.srt", options=opts
             )
         # server returns the result as-is (no conversion)
-        assert result["ok"] is True
-        assert result["summary"] == "no double conversion"
+        assert result.ok is True
+        assert result.summary == "no double conversion"
         mock_w.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# MCP boundary: outputSchema and structuredContent
+# ---------------------------------------------------------------------------
+
+
+class TestMcpBoundary:
+    def test_outputschema_is_typed(self) -> None:
+        tools = asyncio.run(mcp.list_tools())
+        tool = next(t for t in tools if t.name == "clipwright_wrap_captions")
+        schema = tool.outputSchema or {}
+        assert "ok" in schema.get("properties", {}), (
+            "outputSchema must expose 'ok' property"
+        )
+
+    def test_structuredcontent_top_level_ok(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "clipwright_wrap.server.wrap_captions",
+            lambda **kw: ToolResult(
+                ok=True,
+                summary="Wrap completed.",
+                data={},
+                artifacts=[Artifact(role="subtitle", path="out.srt", format="srt")],
+                warnings=[],
+            ),
+        )
+        result = asyncio.run(
+            mcp.call_tool(
+                "clipwright_wrap_captions", {"input": "in.srt", "output": "out.srt"}
+            )
+        )
+        content, structured = result
+        assert structured is not None
+        assert "ok" in structured
+        assert structured["ok"] is True
 
 
 # ---------------------------------------------------------------------------

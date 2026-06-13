@@ -59,6 +59,40 @@ uv sync
 
 ---
 
+## MCP Client Registration
+
+Add the following to your MCP client configuration (e.g. `.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "clipwright-render": {
+      "command": "clipwright-render",
+      "args": []
+    }
+  }
+}
+```
+
+If `ffmpeg` / `ffprobe` are not on PATH, pass them as environment variables:
+
+```json
+{
+  "mcpServers": {
+    "clipwright-render": {
+      "command": "clipwright-render",
+      "args": [],
+      "env": {
+        "CLIPWRIGHT_FFMPEG": "/path/to/ffmpeg",
+        "CLIPWRIGHT_FFPROBE": "/path/to/ffprobe"
+      }
+    }
+  }
+}
+```
+
+---
+
 ## Usage
 
 ### MCP Tool (`clipwright_render`)
@@ -170,45 +204,6 @@ Main error codes:
 | `SUBPROCESS_FAILED` | FFmpeg exit code non-zero |
 | `SUBPROCESS_TIMEOUT` | FFmpeg timeout (`max(300, duration_sec × 10)` seconds) |
 | `DEPENDENCY_MISSING` | ffmpeg / ffprobe not found in PATH or environment variables |
-
----
-
-### CLI (`clipwright-render`)
-
-Can be run directly from command line. Shares same logic as MCP tool.
-
-```bash
-clipwright-render <timeline> <output> [options]
-```
-
-**Arguments**
-
-```
-clipwright-render <timeline> <output>
-    [--dry-run]
-    [--video-codec C]
-    [--audio-codec C]
-    [--width W --height H]
-    [--fps F]
-    [--crf N]
-    [--overwrite]
-```
-
-**Example: Verify plan with dry_run before rendering**
-
-```bash
-# Verify plan first
-clipwright-render timeline.otio out.mp4 --dry-run
-
-# Render if OK
-clipwright-render timeline.otio out.mp4 --video-codec libx264 --crf 23
-```
-
-**Example: Render with specified resolution**
-
-```bash
-clipwright-render timeline.otio out.mp4 --width 1280 --height 720 --fps 29.97
-```
 
 ---
 

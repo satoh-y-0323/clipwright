@@ -1,6 +1,6 @@
 [project]
 name = "clipwright-loudness"
-version = "0.1.1"
+version = "0.2.0"
 description = "MCP tool for audio loudness normalization detection and OTIO timeline annotation generation. Measures loudness with ffmpeg loudnorm/volumedetect and writes loudness instructions to timeline-level metadata."
 readme = "README.md"
 license = { text = "MIT" }
@@ -9,7 +9,7 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "clipwright>=0.1.1",
+    "clipwright>=0.2.0",
     "mcp[cli]>=1.27.2",
     "pydantic>=2",
 ]

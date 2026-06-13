@@ -9,7 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.0] - 2026-06-13
 
+### Removed
+
+- Removed argparse CLI from `server.py`; the `clipwright-render` console script now
+  starts the MCP server directly over stdio. Pass all arguments via the MCP tool
+  interface instead of the command line.
+
 ### Added
+
+- Typed output schema: `clipwright_render` tool now returns `ToolResult` (a Pydantic
+  model). FastMCP emits a typed `outputSchema` so MCP clients receive schema-validated
+  structured output with null/empty defaults on all fields.
+- `structuredContent` and `content` now include all `ToolResult` fields (`ok`, `summary`,
+  `data`, `artifacts`, `warnings`, `error`) with null/empty defaults.
 
 - `RenderOptions.fit` option (`"contain"` | `"cover"` | `"stretch"`), default `"contain"`.
   Controls how the source frame is fitted into the target resolution when both `width`

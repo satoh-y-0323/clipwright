@@ -29,6 +29,7 @@ from typing import Any
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.process import SUBPROCESS_SAFE_MESSAGE
+from clipwright.schemas import ToolResult
 
 from clipwright_wrap.captions import (
     check_overflow,
@@ -55,7 +56,7 @@ def wrap_captions(
     input: str,
     output: str,
     options: WrapCaptionsOptions,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Insert phrase-boundary line breaks into a subtitle file (WR-AD-04).
 
     Non-destructive: the input subtitle file is never modified.
@@ -79,7 +80,7 @@ def _wrap_inner(
     input: str,
     output: str,
     options: WrapCaptionsOptions,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Internal implementation of wrap_captions. Raises ClipwrightError directly."""
     input_path = Path(input)
     output_path = Path(output)

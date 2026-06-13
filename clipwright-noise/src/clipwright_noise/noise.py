@@ -32,7 +32,7 @@ from clipwright.otio_utils import (
     save_timeline,
     set_clipwright_metadata,
 )
-from clipwright.schemas import RationalTimeModel
+from clipwright.schemas import RationalTimeModel, ToolResult
 
 import clipwright_noise
 from clipwright_noise.analyze import measure_noise
@@ -44,7 +44,7 @@ def detect_noise(
     output: str,
     options: DetectNoiseOptions,
     timeline: str | None,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Public API for noise detection. Converts ClipwrightError to ok=False.
 
     Args:
@@ -54,7 +54,7 @@ def detect_noise(
         timeline: Existing timeline path (None = create new).
 
     Returns:
-        ok_result or error_result envelope dict.
+        ToolResult envelope (ok=True on success, ok=False on error).
     """
     try:
         return _detect_noise_inner(media, output, options, timeline)
@@ -67,7 +67,7 @@ def _detect_noise_inner(
     output: str,
     options: DetectNoiseOptions,
     timeline: str | None,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Internal implementation of detect_noise. Raises ClipwrightError directly."""
     media_path = Path(media)
     output_path = Path(output)

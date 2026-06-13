@@ -144,12 +144,11 @@ class TestErrorResult:
         assert result["ok"] is False
         assert type(result["ok"]) is bool
 
-    def test_no_extra_top_level_keys(self) -> None:
-        """No unexpected top-level keys (ok / error only per ToolErrorResult spec)."""
+    def test_required_top_level_keys_present(self) -> None:
+        """Unified ToolResult envelope must contain ok and error keys."""
         result = error_result("FILE_NOT_FOUND", "msg", "hint")
-        # Keys other than ok and error are outside the ToolErrorResult spec
-        extra_keys = set(result.keys()) - {"ok", "error"}
-        assert not extra_keys, f"Unexpected keys found: {extra_keys}"
+        keys = set(result.model_dump().keys())
+        assert {"ok", "error"}.issubset(keys), f"Required keys missing from: {keys}"
 
     @pytest.mark.parametrize(
         "code",

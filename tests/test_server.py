@@ -51,25 +51,25 @@ pytestmark = pytest.mark.xfail(
 
 def _assert_tool_result(result: Any) -> None:
     """Verify the ToolResult envelope contract (§6.3)."""
-    assert isinstance(result, dict), "Return value must be a dict"
-    assert result.get("ok") is True, "ok must be True on success"
-    assert "summary" in result, "summary key is required"
-    assert isinstance(result["summary"], str), "summary must be str"
-    assert len(result["summary"]) > 0, "summary must not be empty"
-    assert "data" in result, "data key is required"
-    assert isinstance(result["data"], dict), "data must be dict"
-    assert "artifacts" in result, "artifacts key is required"
-    assert isinstance(result["artifacts"], list), "artifacts must be list"
-    assert "warnings" in result, "warnings key is required"
-    assert isinstance(result["warnings"], list), "warnings must be list"
+    d = result.model_dump() if hasattr(result, "model_dump") else result
+    assert d.get("ok") is True, "ok must be True on success"
+    assert "summary" in d, "summary key is required"
+    assert isinstance(d["summary"], str), "summary must be str"
+    assert len(d["summary"]) > 0, "summary must not be empty"
+    assert "data" in d, "data key is required"
+    assert isinstance(d["data"], dict), "data must be dict"
+    assert "artifacts" in d, "artifacts key is required"
+    assert isinstance(d["artifacts"], list), "artifacts must be list"
+    assert "warnings" in d, "warnings key is required"
+    assert isinstance(d["warnings"], list), "warnings must be list"
 
 
 def _assert_tool_error_result(result: Any, expected_code: str) -> None:
-    """Verify the ToolErrorResult envelope contract (§6.4)."""
-    assert isinstance(result, dict), "Return value must be a dict"
-    assert result.get("ok") is False, "ok must be False on failure"
-    assert "error" in result, "error key is required"
-    error = result["error"]
+    """Verify the ToolResult failure envelope contract (§6.4)."""
+    d = result.model_dump() if hasattr(result, "model_dump") else result
+    assert d.get("ok") is False, "ok must be False on failure"
+    assert "error" in d, "error key is required"
+    error = d["error"]
     assert isinstance(error, dict), "error must be dict"
     assert "code" in error, "error.code is required"
     assert "message" in error, "error.message is required"

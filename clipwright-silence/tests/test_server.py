@@ -12,6 +12,7 @@ Target:
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from unittest.mock import patch
 
@@ -142,7 +143,7 @@ class TestMcpToolDelegation:
             )
 
         mock_detect.assert_called_once()
-        assert result["ok"] is True
+        assert result.ok is True
 
     def test_failure_returns_error_envelope(self) -> None:
         """When detect_silence returns an error envelope, server must return it as-is."""
@@ -158,8 +159,9 @@ class TestMcpToolDelegation:
                 options=None,
             )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == "FILE_NOT_FOUND"
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == "FILE_NOT_FOUND"
 
     def test_error_result_passthrough(self) -> None:
         """When detect returns error_result, it must be returned as-is (no double conversion)."""
@@ -175,11 +177,11 @@ class TestMcpToolDelegation:
                 options=None,
             )
 
-        assert result["ok"] is False
-        error = result["error"]
-        assert error["code"] == "DEPENDENCY_MISSING"
-        assert "message" in error
-        assert "hint" in error
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == "DEPENDENCY_MISSING"
+        assert result.error.message
+        assert result.error.hint
 
     def test_error_envelope_has_code_message_hint(self) -> None:
         """Error envelope must contain code / message / hint."""
@@ -202,11 +204,11 @@ class TestMcpToolDelegation:
                 options=None,
             )
 
-        assert result["ok"] is False
-        error = result["error"]
-        assert "code" in error
-        assert "message" in error
-        assert "hint" in error
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code
+        assert result.error.message
+        assert result.error.hint
 
     def test_options_passed_to_detect_silence(self) -> None:
         """options content must be passed to detect_silence."""
@@ -256,11 +258,11 @@ class TestMcpToolDelegation:
                 options=None,
             )
 
-        assert result["ok"] is True
-        assert "summary" in result
-        assert "data" in result
-        assert "artifacts" in result
-        assert "warnings" in result
+        assert result.ok is True
+        assert result.summary is not None
+        assert result.data is not None
+        assert result.artifacts is not None
+        assert result.warnings is not None
 
 
 # ---------------------------------------------------------------------------
@@ -296,3 +298,47 @@ class TestCliMain:
         assert kwargs.get("transport") == "stdio" or (
             len(_args) >= 1 and _args[0] == "stdio"
         )
+
+
+# ---------------------------------------------------------------------------
+# MCP boundary tests: outputSchema typing and structuredContent
+# ---------------------------------------------------------------------------
+
+
+class TestMcpBoundary:
+    """Validate MCP wire contract: typed outputSchema and structuredContent."""
+
+    def test_outputschema_is_typed(self) -> None:
+        """outputSchema must expose 'ok' property (typed ToolResult via FastMCP)."""
+        tools = asyncio.run(mcp.list_tools())
+        tool = next(t for t in tools if t.name == "clipwright_detect_silence")
+        schema = tool.outputSchema or {}
+        assert "ok" in schema.get("properties", {}), (
+            "outputSchema must expose 'ok' property"
+        )
+
+    def test_structuredcontent_top_level_ok(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """call_tool must return structuredContent with top-level 'ok' key."""
+        monkeypatch.setattr(
+            "clipwright_silence.server.detect_silence",
+            lambda **kw: {
+                "ok": True,
+                "summary": "Silence detected.",
+                "data": {},
+                "artifacts": [
+                    {"role": "timeline", "path": "out.otio", "format": "otio"}
+                ],
+                "warnings": [],
+            },
+        )
+        result = asyncio.run(
+            mcp.call_tool(
+                "clipwright_detect_silence", {"media": "m.mp4", "output": "out.otio"}
+            )
+        )
+        content, structured = result
+        assert structured is not None
+        assert "ok" in structured
+        assert structured["ok"] is True

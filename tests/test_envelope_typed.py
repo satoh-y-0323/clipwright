@@ -285,32 +285,6 @@ class TestArtifactExtraIgnore:
         assert artifact.role == "timeline"
         assert not hasattr(artifact, "unknown_extra_key")
 
-    @pytest.mark.xfail(
-        reason=(
-            "Artifact.model_config extra='ignore' not yet set — "
-            "extra keys raise ValidationError (Red)"
-        ),
-        strict=True,
-    )
-    def test_extra_key_causes_validation_error_before_fix(self) -> None:
-        """Demonstrate that without extra='ignore' the dict would fail validation.
-
-        This xfail test acts as a regression guard: once extra='ignore' is added,
-        this test will xpass and the test above will pass.
-        """
-        d: dict[str, Any] = {
-            "role": "timeline",
-            "path": "/out/t.otio",
-            "format": "otio",
-            "unknown_extra_key": "should be ignored",
-        }
-        with pytest.raises(ValidationError):
-            Artifact.model_validate(d)
-
-    @pytest.mark.xfail(
-        reason="to_tool_result not yet implemented (Red — feature not implemented)",
-        strict=True,
-    )
     def test_extra_key_ignored_via_to_tool_result(self) -> None:
         """Extra keys in artifacts list items are ignored when going through to_tool_result."""
         d: dict[str, Any] = {

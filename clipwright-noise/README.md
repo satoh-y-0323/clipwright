@@ -65,3 +65,31 @@ Or install directly:
 uv add clipwright-noise
 clipwright-noise
 ```
+
+## MCP Configuration (.mcp.json)
+
+Register `clipwright-noise` in your MCP host configuration to expose `clipwright_detect_noise` as a tool.
+
+```json
+{
+  "mcpServers": {
+    "clipwright-noise": {
+      "command": "clipwright-noise",
+      "env": {
+        "CLIPWRIGHT_FFMPEG": "/path/to/ffmpeg",
+        "CLIPWRIGHT_FFPROBE": "/path/to/ffprobe"
+      }
+    }
+  }
+}
+```
+
+**Environment variables:**
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `CLIPWRIGHT_FFMPEG` | Optional | Full path to `ffmpeg` binary. If omitted, `ffmpeg` must be on PATH. |
+| `CLIPWRIGHT_FFPROBE` | Optional | Full path to `ffprobe` binary. If omitted, `ffprobe` must be on PATH. |
+
+The console script `clipwright-noise` (registered in `[project.scripts]`) launches the MCP server over stdio.
+No CLI argument parsing is required — all inputs are passed via MCP tool calls.

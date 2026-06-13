@@ -35,7 +35,7 @@ from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.media import inspect_media
 from clipwright.otio_utils import add_clip, add_marker, new_timeline, save_timeline
 from clipwright.process import resolve_tool, run, safe_subprocess_message
-from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
+from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel, ToolResult
 
 import clipwright_transcribe
 from clipwright_transcribe.captions import Segment, normalize_segments, to_srt, to_vtt
@@ -253,7 +253,7 @@ def transcribe_media(
     media: str,
     output: str,
     options: TranscribeOptions,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Transcribe audio and produce SRT/VTT captions and an OTIO timeline (TR-AD-04).
 
     Non-destructive: the input media file is never modified.
@@ -265,7 +265,7 @@ def transcribe_media(
         options: TranscribeOptions.
 
     Returns:
-        ok_result or error_result envelope dict.
+        ToolResult envelope (ok_result or error_result).
     """
     try:
         return _transcribe_inner(media, output, options)
@@ -277,7 +277,7 @@ def _transcribe_inner(
     media: str,
     output: str,
     options: TranscribeOptions,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Internal implementation of transcribe_media. Raises ClipwrightError directly."""
     output_path = Path(output)
     media_path = Path(media)

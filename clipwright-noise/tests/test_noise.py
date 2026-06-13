@@ -28,13 +28,19 @@ from unittest.mock import patch
 import opentimelineio as otio
 import pytest
 from clipwright.errors import ErrorCode
-from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo
+from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo, ToolResult
 
 from clipwright_noise.schemas import DetectNoiseOptions
 
 # ===========================================================================
 # Helpers
 # ===========================================================================
+
+
+def _d(result: ToolResult) -> dict:  # type: ignore[type-arg]
+    """Convert a ToolResult to a plain dict for legacy assertion compatibility."""
+    return result.model_dump()
+
 
 FPS = 30.0
 _FAKE_MEASURE_RESULT = {
@@ -162,7 +168,7 @@ class TestNewTimeline:
                 timeline=None,
             )
 
-        assert result["ok"] is True
+        assert _d(result)["ok"] is True
 
     def test_new_timeline_otio_file_created(self, tmp_path: Path) -> None:
         """An .otio file must be created at the output path."""
@@ -297,14 +303,9 @@ class TestNewTimeline:
                 str(media), str(output), DetectNoiseOptions(), timeline=None
             )
 
-        artifacts = result.get("artifacts", [])
+        artifacts = _d(result).get("artifacts", [])
         timeline_arts = [
-            a
-            for a in artifacts
-            if (
-                (isinstance(a, dict) and a.get("role") == "timeline")
-                or (hasattr(a, "role") and a.role == "timeline")
-            )
+            a for a in artifacts if isinstance(a, dict) and a.get("role") == "timeline"
         ]
         assert len(timeline_arts) >= 1
 
@@ -349,7 +350,7 @@ class TestExistingTimeline:
                 timeline=str(timeline_path),
             )
 
-        assert result["ok"] is True
+        assert _d(result)["ok"] is True
         out_tl = load_timeline(str(output))
         meta = get_clipwright_metadata(out_tl)
         assert "denoise" in meta
@@ -422,8 +423,9 @@ class TestInvalidExtension:
             str(media), str(output), DetectNoiseOptions(), timeline=None
         )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        d = _d(result)
+        assert d["ok"] is False
+        assert d["error"]["code"] == ErrorCode.INVALID_INPUT
 
 
 # ===========================================================================
@@ -445,8 +447,9 @@ class TestMediaNotFound:
             str(media), str(output), DetectNoiseOptions(), timeline=None
         )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
+        d = _d(result)
+        assert d["ok"] is False
+        assert d["error"]["code"] == ErrorCode.FILE_NOT_FOUND
 
     def test_missing_media_message_contains_only_basename(self, tmp_path: Path) -> None:
         """FILE_NOT_FOUND message must not contain a directory path (DC-GP-005)."""
@@ -461,9 +464,10 @@ class TestMediaNotFound:
             str(media), str(output), DetectNoiseOptions(), timeline=None
         )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
-        error_msg = result["error"]["message"]
+        d = _d(result)
+        assert d["ok"] is False
+        assert d["error"]["code"] == ErrorCode.FILE_NOT_FOUND
+        error_msg = d["error"]["message"]
         assert full_dir not in error_msg, (
             f"DC-GP-005: Absolute directory path '{full_dir}' is present in the message."
         )
@@ -490,8 +494,9 @@ class TestOutputConflict:
             str(media), str(media), DetectNoiseOptions(), timeline=None
         )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        d = _d(result)
+        assert d["ok"] is False
+        assert d["error"]["code"] == ErrorCode.INVALID_INPUT
 
     def test_output_equals_timeline_returns_invalid_input(self, tmp_path: Path) -> None:
         from clipwright_noise.noise import detect_noise
@@ -510,8 +515,9 @@ class TestOutputConflict:
             timeline=str(timeline_path),
         )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        d = _d(result)
+        assert d["ok"] is False
+        assert d["error"]["code"] == ErrorCode.INVALID_INPUT
 
 
 # ===========================================================================
@@ -540,8 +546,9 @@ class TestOutputDifferentDir:
             str(media), str(output), DetectNoiseOptions(), timeline=None
         )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        d = _d(result)
+        assert d["ok"] is False
+        assert d["error"]["code"] == ErrorCode.INVALID_INPUT
 
     def test_output_different_dir_hint_does_not_contain_absolute_path(
         self, tmp_path: Path
@@ -562,8 +569,9 @@ class TestOutputDifferentDir:
             str(media), str(output), DetectNoiseOptions(), timeline=None
         )
 
-        assert result["ok"] is False
-        hint = result["error"].get("hint", "")
+        d = _d(result)
+        assert d["ok"] is False
+        hint = d["error"].get("hint", "")
         # hint must not contain an absolute directory path (CWE-209)
         assert str(media_dir) not in hint, (
             f"SR-M-2: Absolute media directory path '{media_dir}' is present in the hint."
@@ -595,8 +603,9 @@ class TestStreamRequirements:
                 str(media), str(output), DetectNoiseOptions(), timeline=None
             )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.UNSUPPORTED_OPERATION
+        d = _d(result)
+        assert d["ok"] is False
+        assert d["error"]["code"] == ErrorCode.UNSUPPORTED_OPERATION
 
     def test_no_audio_stream_returns_unsupported(self, tmp_path: Path) -> None:
         from clipwright_noise.noise import detect_noise
@@ -612,8 +621,9 @@ class TestStreamRequirements:
                 str(media), str(output), DetectNoiseOptions(), timeline=None
             )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.UNSUPPORTED_OPERATION
+        d = _d(result)
+        assert d["ok"] is False
+        assert d["error"]["code"] == ErrorCode.UNSUPPORTED_OPERATION
 
 
 # ===========================================================================
@@ -649,8 +659,9 @@ class TestTimelineSourceMismatch:
                 timeline=str(timeline_path),
             )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        d = _d(result)
+        assert d["ok"] is False
+        assert d["error"]["code"] == ErrorCode.INVALID_INPUT
 
     def test_mismatch_message_contains_basename_only(self, tmp_path: Path) -> None:
         """The mismatch error message must not contain absolute paths (DC-GP-005)."""
@@ -678,8 +689,9 @@ class TestTimelineSourceMismatch:
                 timeline=str(timeline_path),
             )
 
-        assert result["ok"] is False
-        error_msg = result["error"]["message"]
+        d = _d(result)
+        assert d["ok"] is False
+        error_msg = d["error"]["message"]
         assert full_dir not in error_msg
 
 
@@ -724,9 +736,10 @@ class TestTimelineSourceMatchPositive:
                 timeline=str(timeline_path),
             )
 
-        assert result["ok"] is True, (
+        d = _d(result)
+        assert d["ok"] is True, (
             f"B-4: Same-media timeline produced a spurious INVALID_INPUT."
-            f" error={result.get('error')}"
+            f" error={d.get('error')}"
         )
 
 
@@ -766,9 +779,10 @@ class TestTimelineValidation:
                 timeline=str(timeline_path),
             )
 
-        assert result["ok"] is False
+        d = _d(result)
+        assert d["ok"] is False
         # Multiple sources → UNSUPPORTED_OPERATION or INVALID_INPUT
-        assert result["error"]["code"] in (
+        assert d["error"]["code"] in (
             ErrorCode.UNSUPPORTED_OPERATION,
             ErrorCode.INVALID_INPUT,
         )
@@ -796,8 +810,9 @@ class TestTimelineValidation:
                 timeline=str(timeline_path),
             )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        d = _d(result)
+        assert d["ok"] is False
+        assert d["error"]["code"] == ErrorCode.INVALID_INPUT
 
 
 # ===========================================================================
@@ -838,9 +853,9 @@ class TestV1A1TimelinePositive:
                 timeline=str(timeline_path),
             )
 
-        assert result["ok"] is True, (
-            f"B-5: V1+A1 normal timeline produced INVALID_INPUT."
-            f" error={result.get('error')}"
+        d = _d(result)
+        assert d["ok"] is True, (
+            f"B-5: V1+A1 normal timeline produced INVALID_INPUT. error={d.get('error')}"
         )
 
 
@@ -889,9 +904,9 @@ class TestEmptyV1Timeline:
                 timeline=str(timeline_path),
             )
 
-        assert result["ok"] is True, (
-            f"CR-M-1: Empty V1 timeline produced INVALID_INPUT."
-            f" error={result.get('error')}"
+        d = _d(result)
+        assert d["ok"] is True, (
+            f"CR-M-1: Empty V1 timeline produced INVALID_INPUT. error={d.get('error')}"
         )
 
         # V1 in the output timeline must have a clip appended
@@ -937,7 +952,7 @@ class TestDeepfilternetBackend:
                 timeline=None,
             )
 
-        assert result["ok"] is True
+        assert _d(result)["ok"] is True
         tl = load_timeline(str(output))
         meta = get_clipwright_metadata(tl)
         assert "denoise" in meta
@@ -971,7 +986,7 @@ class TestDeepfilternetBackend:
                 timeline=None,
             )
 
-        warnings = result.get("warnings", [])
+        warnings = _d(result).get("warnings", [])
         assert len(warnings) > 0, (
             "DC-GP-003: warnings must not be empty when deepfilternet is selected."
         )

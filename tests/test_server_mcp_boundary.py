@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -246,7 +246,9 @@ class TestToolResultUnification:
         This test is Red until ToolErrorResult is removed.
         """
         try:
-            from clipwright.schemas import ToolErrorResult  # type: ignore[attr-defined]
+            from clipwright.schemas import (
+                ToolErrorResult,  # type: ignore[attr-defined]  # noqa: F401
+            )
 
             pytest.fail(
                 "ToolErrorResult is still importable from clipwright.schemas. "

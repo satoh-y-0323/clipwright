@@ -1,6 +1,6 @@
 [project]
 name = "clipwright-silence"
-version = "0.1.1"
+version = "0.2.0"
 description = "MCP tool for silence detection and OTIO timeline generation. Detects silence with ffmpeg silencedetect and generates timeline.otio with clip sequence for regions to keep."
 readme = "README.md"
 license = { text = "MIT" }
@@ -9,7 +9,7 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "clipwright>=0.1.1",
+    "clipwright>=0.2.0",
     "mcp[cli]>=1.27.2",
     "opentimelineio>=0.18",
     "pydantic>=2",
@@ -82,6 +82,17 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "onnxruntime.*"
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "numpy.*"
+ignore_missing_imports = true
+
+# vad_cli imports numpy/silero_vad only when the optional [vad] extra is installed;
+# exclude from strict checking to avoid spurious import-not-found errors in CI
+[[tool.mypy.overrides]]
+module = "clipwright_silence.vad_cli"
+ignore_errors = true
+follow_imports = "skip"
 
 # --- pytest ---
 [tool.pytest.ini_options]

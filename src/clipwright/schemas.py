@@ -89,6 +89,10 @@ class ToolResult(BaseModel):
 
     Success: ok=True, summary set, error=None.
     Failure: ok=False, error populated, summary may be None.
+
+    Dict-like access (``result["ok"]``, ``result.get("key")``, ``"key" in result``)
+    is supported for backward compatibility with callers that treat the envelope as a
+    plain dict.  These methods delegate to ``model_dump()`` on each call.
     """
 
     ok: bool
@@ -97,6 +101,18 @@ class ToolResult(BaseModel):
     artifacts: list[Artifact] = []
     warnings: list[str] = []
     error: ToolError | None = None
+
+    def __getitem__(self, key: str) -> Any:
+        """Allow dict-style read access: ``result["ok"]``."""
+        return self.model_dump()[key]
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Allow dict-style ``.get()`` access: ``result.get("artifacts", [])``."""
+        return self.model_dump().get(key, default)
+
+    def __contains__(self, key: object) -> bool:
+        """Allow ``"key" in result`` membership tests."""
+        return key in self.model_dump()
 
 
 # ===========================================================================

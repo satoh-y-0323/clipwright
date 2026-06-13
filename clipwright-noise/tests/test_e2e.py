@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from clipwright.schemas import ToolResult
 
 # -------------------------------------------------------------------
 # ffmpeg presence check (e2e skip guard)
@@ -110,9 +111,10 @@ def _get_mean_volume(path: Path) -> float:
     return float(m.group(1))
 
 
-def _assert_ok(result: dict[str, Any], label: str) -> None:
+def _assert_ok(result: ToolResult | dict[str, Any], label: str) -> None:
     """Call pytest.fail if ok is not True."""
-    if not result.get("ok"):
+    ok = result.ok if isinstance(result, ToolResult) else result.get("ok")
+    if not ok:
         pytest.fail(f"{label} failed: {result}")
 
 
@@ -150,7 +152,8 @@ def test_render_processes_afftdn_directive(tmp_path: Path) -> None:
     rr = render_timeline(str(timeline_path), str(out_mp4), render_opts, dry_run=True)
     _assert_ok(rr, "render_timeline (dry_run)")
 
-    filter_complex: str = rr.get("data", {}).get("filter_complex", "")
+    rr_data = rr.data if isinstance(rr, ToolResult) else rr.get("data", {})
+    filter_complex: str = rr_data.get("filter_complex", "")
     assert "afftdn" in filter_complex, (
         f"filter_complex does not contain afftdn. filter_complex: {filter_complex!r}"
     )

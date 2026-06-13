@@ -35,6 +35,7 @@ from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.media import inspect_media
 from clipwright.otio_utils import get_clipwright_metadata, load_timeline
 from clipwright.process import resolve_tool, run
+from clipwright.schemas import ToolResult
 
 from clipwright_render.plan import (
     BgmClip,
@@ -293,7 +294,7 @@ def render_timeline(
     output: str,
     options: RenderOptions,
     dry_run: bool = False,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Materialise an OTIO timeline with FFmpeg (§3 data flow).
 
     Non-destructive: the input timeline file and source media are never
@@ -331,7 +332,7 @@ def _render_inner(
     output: str,
     options: RenderOptions,
     dry_run: bool,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Internal implementation of render. Raises ClipwrightError directly.
 
     BGM orchestration extension (§7 ADR-B4-r2/B5-r2/B6-r2/B8):

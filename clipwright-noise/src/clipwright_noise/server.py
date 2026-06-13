@@ -8,8 +8,9 @@ Transport defaults to stdio (mcp.run(transport="stdio")).
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated
 
+from clipwright.schemas import ToolResult
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
@@ -67,7 +68,7 @@ def clipwright_detect_noise(
             )
         ),
     ] = None,
-) -> dict[str, Any]:
+) -> ToolResult:
     """MCP tool: analyzes audio noise and generates a denoise-annotated OTIO timeline.
 
     The input media file is never modified (non-destructive / readOnly).

@@ -8,8 +8,9 @@ Transport defaults to stdio (mcp.run(transport="stdio")).
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated
 
+from clipwright.schemas import ToolResult
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
@@ -68,7 +69,7 @@ def clipwright_add_bgm(
             )
         ),
     ] = None,
-) -> dict[str, Any]:
+) -> ToolResult:
     """MCP tool to add a BGM clip to an OTIO timeline.
 
     Not read-only because a new output OTIO file is created, but the input OTIO

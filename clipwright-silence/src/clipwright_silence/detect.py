@@ -316,7 +316,7 @@ def detect_silence(
     try:
         return _detect_inner(media, output, options)
     except ClipwrightError as exc:
-        return error_result(exc.code, exc.message, exc.hint)
+        return error_result(exc.code, exc.message, exc.hint).model_dump()
 
 
 def _detect_inner(
@@ -552,4 +552,4 @@ def _detect_inner(
         },
         artifacts=[{"role": "timeline", "path": str(output_path), "format": "otio"}],
         warnings=warnings,
-    )
+    ).model_dump()

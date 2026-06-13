@@ -8,10 +8,12 @@ Test scope:
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from unittest.mock import patch
 
 import pytest
+from clipwright.schemas import Artifact, ToolError, ToolResult
 
 from clipwright_bgm.server import clipwright_add_bgm as server_action
 from clipwright_bgm.server import main, mcp
@@ -21,17 +23,15 @@ from clipwright_bgm.server import main, mcp
 # ===========================================================================
 
 
-def _ok_envelope(**kwargs: Any) -> dict[str, Any]:
-    """Helper to generate a test ok envelope."""
-    base: dict[str, Any] = {
-        "ok": True,
-        "summary": "BGM added.",
-        "data": {},
-        "artifacts": [{"role": "timeline", "path": "output.otio", "format": "otio"}],
-        "warnings": [],
-    }
-    base.update(kwargs)
-    return base
+def _ok_envelope(**kwargs: object) -> ToolResult:
+    """Helper to generate a test ok ToolResult."""
+    return ToolResult(
+        ok=True,
+        summary="BGM added.",
+        data={},
+        artifacts=[Artifact(role="timeline", path="output.otio", format="otio")],
+        warnings=[],
+    )
 
 
 def _get_tool_annotations() -> Any:
@@ -110,19 +110,19 @@ class TestDelegation:
             )
 
         mock_fn.assert_called_once()
-        assert result["ok"] is True
-        assert "BGM" in result["summary"]
+        assert result.model_dump()["ok"] is True
+        assert "BGM" in result.model_dump()["summary"]
 
     def test_error_result_propagates(self) -> None:
         """When add_bgm returns an error envelope, it must be propagated as-is."""
-        error_envelope: dict[str, Any] = {
-            "ok": False,
-            "error": {
-                "code": "INVALID_INPUT",
-                "message": "A BGM clip already exists.",
-                "hint": "Check the existing BGM clip.",
-            },
-        }
+        error_envelope = ToolResult(
+            ok=False,
+            error=ToolError(
+                code="INVALID_INPUT",
+                message="A BGM clip already exists.",
+                hint="Check the existing BGM clip.",
+            ),
+        )
         with patch(
             "clipwright_bgm.server.add_bgm",
             return_value=error_envelope,
@@ -134,8 +134,9 @@ class TestDelegation:
                 options=None,
             )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == "INVALID_INPUT"
+        dumped = result.model_dump()
+        assert dumped["ok"] is False
+        assert dumped["error"]["code"] == "INVALID_INPUT"
 
     def test_timeline_and_bgm_and_output_forwarded(self) -> None:
         """timeline / bgm / output arguments must be correctly forwarded to add_bgm."""
@@ -193,6 +194,49 @@ class TestDelegation:
         assert passed is custom_opts or (
             isinstance(passed, BgmOptions) and passed.volume_db == pytest.approx(-12.0)
         )
+
+
+# ===========================================================================
+# Test scope 15: MCP outputSchema and structuredContent
+# ===========================================================================
+
+
+class TestMcpBoundary:
+    """FastMCP must expose a typed outputSchema and return structuredContent."""
+
+    def test_outputschema_is_typed(self) -> None:
+        """outputSchema must expose 'ok' property when return type is ToolResult."""
+        tools = asyncio.run(mcp.list_tools())
+        tool = next(t for t in tools if t.name == "clipwright_add_bgm")
+        schema = tool.outputSchema or {}
+        assert "ok" in schema.get("properties", {}), (
+            "outputSchema must expose 'ok' property"
+        )
+
+    def test_structuredcontent_top_level_ok(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """call_tool must return structuredContent with top-level 'ok'."""
+        monkeypatch.setattr(
+            "clipwright_bgm.server.add_bgm",
+            lambda **kw: ToolResult(
+                ok=True,
+                summary="BGM added.",
+                data={},
+                artifacts=[Artifact(role="timeline", path="out.otio", format="otio")],
+                warnings=[],
+            ),
+        )
+        result = asyncio.run(
+            mcp.call_tool(
+                "clipwright_add_bgm",
+                {"timeline": "t.otio", "bgm": "b.mp3", "output": "out.otio"},
+            )
+        )
+        content, structured = result
+        assert structured is not None, "structuredContent must not be None"
+        assert "ok" in structured, "structuredContent must have top-level 'ok'"
+        assert structured["ok"] is True
 
 
 # ===========================================================================

@@ -24,13 +24,13 @@ Design decisions:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import opentimelineio as otio
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.media import inspect_media
 from clipwright.otio_utils import load_timeline, save_timeline
+from clipwright.schemas import ToolResult
 
 import clipwright_bgm
 from clipwright_bgm.schemas import BgmDirective, BgmOptions, DuckingDirective
@@ -48,7 +48,7 @@ def add_bgm(
     bgm: str,
     output: str,
     options: BgmOptions | None = None,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Public API to add a BGM clip to an OTIO timeline.
 
     Converts ClipwrightError to an ok=False envelope.
@@ -62,7 +62,7 @@ def add_bgm(
         options: BGM options. When None, BgmOptions(volume_db=-6.0) is used.
 
     Returns:
-        Envelope dict from ok_result or error_result.
+        ToolResult from ok_result or error_result.
     """
     try:
         return _add_bgm_inner(timeline, bgm, output, options)
@@ -75,7 +75,7 @@ def _add_bgm_inner(
     bgm: str,
     output: str,
     options: BgmOptions | None,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Internal implementation of add_bgm. Propagates ClipwrightError as-is."""
     resolved_options = options if options is not None else BgmOptions(volume_db=-6.0)
 

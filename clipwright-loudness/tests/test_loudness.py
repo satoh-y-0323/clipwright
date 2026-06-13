@@ -176,7 +176,7 @@ class TestNewTimeline:
                 timeline=None,
             )
 
-        assert result["ok"] is True
+        assert result.ok is True
 
     def test_new_timeline_otio_file_created(self, tmp_path: Path) -> None:
         """An .otio file must be created at the output path."""
@@ -288,15 +288,8 @@ class TestNewTimeline:
                 str(media), str(output), DetectLoudnessOptions(), timeline=None
             )
 
-        artifacts = result.get("artifacts", [])
-        timeline_arts = [
-            a
-            for a in artifacts
-            if (
-                (isinstance(a, dict) and a.get("role") == "timeline")
-                or (hasattr(a, "role") and a.role == "timeline")
-            )
-        ]
+        artifacts = result.artifacts
+        timeline_arts = [a for a in artifacts if a.role == "timeline"]
         assert len(timeline_arts) >= 1
 
 
@@ -340,7 +333,7 @@ class TestExistingTimeline:
                 timeline=str(timeline_path),
             )
 
-        assert result["ok"] is True
+        assert result.ok is True
         out_tl = load_timeline(str(output))
         meta = get_clipwright_metadata(out_tl)
         assert "loudness" in meta
@@ -424,8 +417,9 @@ class TestInvalidExtension:
             str(media), str(output), DetectLoudnessOptions(), timeline=None
         )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.INVALID_INPUT
 
 
 # ===========================================================================
@@ -449,9 +443,10 @@ class TestOutputParentDirNotFound:
             str(media), str(output), DetectLoudnessOptions(), timeline=None
         )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
-        assert "output directory" in result["error"]["message"]
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.INVALID_INPUT
+        assert "output directory" in result.error.message
 
 
 # ===========================================================================
@@ -472,8 +467,9 @@ class TestMediaNotFound:
             str(media), str(output), DetectLoudnessOptions(), timeline=None
         )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.FILE_NOT_FOUND
 
     def test_missing_media_message_contains_only_basename(self, tmp_path: Path) -> None:
         """FILE_NOT_FOUND message must not contain a directory path (DC-GP-005)."""
@@ -487,9 +483,10 @@ class TestMediaNotFound:
             str(media), str(output), DetectLoudnessOptions(), timeline=None
         )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
-        error_msg = result["error"]["message"]
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.FILE_NOT_FOUND
+        error_msg = result.error.message
         assert full_dir not in error_msg, (
             f"DC-GP-005: absolute directory path '{full_dir}' found in message."
         )
@@ -514,8 +511,9 @@ class TestOutputConflict:
             str(media), str(media), DetectLoudnessOptions(), timeline=None
         )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.INVALID_INPUT
 
     def test_output_equals_timeline_returns_invalid_input(self, tmp_path: Path) -> None:
         from clipwright_loudness.loudness import detect_loudness
@@ -532,8 +530,9 @@ class TestOutputConflict:
             timeline=str(timeline_path),
         )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.INVALID_INPUT
 
 
 # ===========================================================================
@@ -562,8 +561,9 @@ class TestOutputDifferentDir:
             str(media), str(output), DetectLoudnessOptions(), timeline=None
         )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.INVALID_INPUT
 
     def test_output_different_dir_hint_no_absolute_path(self, tmp_path: Path) -> None:
         """The same-dir error hint must not contain an absolute path (CWE-209)."""
@@ -582,8 +582,9 @@ class TestOutputDifferentDir:
             str(media), str(output), DetectLoudnessOptions(), timeline=None
         )
 
-        assert result["ok"] is False
-        hint = result["error"].get("hint", "")
+        assert result.ok is False
+        assert result.error is not None
+        hint = result.error.hint
         assert str(media_dir) not in hint
         assert str(tmp_path) not in hint
 
@@ -611,8 +612,9 @@ class TestStreamRequirements:
                 str(media), str(output), DetectLoudnessOptions(), timeline=None
             )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.UNSUPPORTED_OPERATION
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.UNSUPPORTED_OPERATION
 
     def test_no_audio_stream_returns_unsupported(self, tmp_path: Path) -> None:
         from clipwright_loudness.loudness import detect_loudness
@@ -629,8 +631,9 @@ class TestStreamRequirements:
                 str(media), str(output), DetectLoudnessOptions(), timeline=None
             )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.UNSUPPORTED_OPERATION
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.UNSUPPORTED_OPERATION
 
 
 # ===========================================================================
@@ -666,8 +669,9 @@ class TestTimelineSourceMismatch:
                 timeline=str(timeline_path),
             )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.INVALID_INPUT
 
     def test_mismatch_message_contains_basename_only(self, tmp_path: Path) -> None:
         """Mismatch error message must not contain an absolute path (DC-GP-005)."""
@@ -696,8 +700,9 @@ class TestTimelineSourceMismatch:
                 timeline=str(timeline_path),
             )
 
-        assert result["ok"] is False
-        error_msg = result["error"]["message"]
+        assert result.ok is False
+        assert result.error is not None
+        error_msg = result.error.message
         assert full_dir not in error_msg
 
 
@@ -739,9 +744,9 @@ class TestTimelineSourceMatchPositive:
                 timeline=str(timeline_path),
             )
 
-        assert result["ok"] is True, (
+        assert result.ok is True, (
             f"Same-media timeline incorrectly returned INVALID_INPUT."
-            f" error={result.get('error')}"
+            f" error={result.error}"
         )
 
     def test_v1_a1_timeline_passes_validation(self, tmp_path: Path) -> None:
@@ -774,8 +779,8 @@ class TestTimelineSourceMatchPositive:
                 timeline=str(timeline_path),
             )
 
-        assert result["ok"] is True, (
-            f"V1+A1 normal timeline returned INVALID_INPUT. error={result.get('error')}"
+        assert result.ok is True, (
+            f"V1+A1 normal timeline returned INVALID_INPUT. error={result.error}"
         )
 
 
@@ -815,8 +820,9 @@ class TestTimelineValidation:
                 timeline=str(timeline_path),
             )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] in (
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code in (
             ErrorCode.UNSUPPORTED_OPERATION,
             ErrorCode.INVALID_INPUT,
         )
@@ -845,8 +851,9 @@ class TestTimelineValidation:
                 timeline=str(timeline_path),
             )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.INVALID_INPUT
 
 
 # ===========================================================================
@@ -1037,7 +1044,7 @@ class TestU1MeasuredNone:
             )
 
         # ok=True (detect itself succeeds)
-        assert result["ok"] is True, (
+        assert result.ok is True, (
             "U-1: detect must succeed (ok=True) even when measured=None."
         )
 
@@ -1078,7 +1085,7 @@ class TestU1MeasuredNone:
                 timeline=None,
             )
 
-        warnings = result.get("warnings", [])
+        warnings = result.warnings
         assert len(warnings) > 0, (
             "U-1: result.warnings must contain a warning when measured=None (DC-AM-003)."
         )
@@ -1143,6 +1150,7 @@ class TestTimelineSourceBoundaryCheck:
                 timeline=str(timeline_path),
             )
 
-        assert result["ok"] is False
+        assert result.ok is False
+        assert result.error is not None
         # Out-of-boundary path: expect PATH_NOT_ALLOWED as in render.py (SR-r2 L-1)
-        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
+        assert result.error.code == ErrorCode.PATH_NOT_ALLOWED

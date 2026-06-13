@@ -3,7 +3,7 @@
 Target API:
   clipwright_transcribe.transcribe.transcribe_media(
       media: str, output: str, options: TranscribeOptions,
-  ) -> dict
+  ) -> ToolResult
 
 Mock strategy:
   - Patch transcribe.inspect_media to supply MediaInfo.
@@ -34,7 +34,7 @@ from unittest.mock import patch
 import opentimelineio as otio
 import pytest
 from clipwright.errors import ClipwrightError, ErrorCode
-from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo
+from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo, ToolResult
 
 from clipwright_transcribe.captions import Segment
 from clipwright_transcribe.schemas import TranscribeOptions
@@ -117,23 +117,26 @@ class TestOutputValidation:
         media = tmp_path / "video.mp4"
         media.write_bytes(b"x")
         result = transcribe_media(str(media), str(tmp_path / "out.srt"), _opts())
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.INVALID_INPUT
 
     def test_missing_parent_dir_rejected(self, tmp_path: Path) -> None:
         media = tmp_path / "video.mp4"
         media.write_bytes(b"x")
         out = tmp_path / "nope" / "out.otio"
         result = transcribe_media(str(media), str(out), _opts())
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.INVALID_INPUT
 
     def test_output_equals_media_rejected(self, tmp_path: Path) -> None:
         media = tmp_path / "same.otio"
         media.write_bytes(b"x")
         result = transcribe_media(str(media), str(media), _opts())
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.INVALID_INPUT
 
     def test_output_different_dir_rejected(self, tmp_path: Path) -> None:
         media = tmp_path / "a" / "video.mp4"
@@ -147,8 +150,9 @@ class TestOutputValidation:
             return_value=_make_media_info(str(media)),
         ):
             result = transcribe_media(str(media), str(out), _opts())
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.INVALID_INPUT
 
 
 # ===========================================================================
@@ -164,8 +168,9 @@ class TestInputValidation:
             return_value=_make_media_info(media, has_audio=False, has_video=True),
         ):
             result = transcribe_media(media, output, _opts())
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.UNSUPPORTED_OPERATION
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.UNSUPPORTED_OPERATION
 
     def test_audio_only_is_accepted(self, tmp_path: Path) -> None:
         """Video-less, audio-only sources are accepted (TR-AD-03)."""
@@ -181,7 +186,7 @@ class TestInputValidation:
             ),
         ):
             result = transcribe_media(media, output, _opts(model_path=model))
-        assert result["ok"] is True
+        assert result.ok is True
 
     def test_file_not_found_basename_only(self, tmp_path: Path) -> None:
         """FILE_NOT_FOUND message exposes only the basename, not the full path
@@ -196,11 +201,12 @@ class TestInputValidation:
             ),
         ):
             result = transcribe_media(media, output, _opts())
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.FILE_NOT_FOUND
         # Full path must not appear; basename must appear.
-        assert media not in result["error"]["message"]
-        assert "video.mp4" in result["error"]["message"]
+        assert media not in result.error.message
+        assert "video.mp4" in result.error.message
 
     def test_inspect_media_other_error_reraised(self, tmp_path: Path) -> None:
         """Non-FILE_NOT_FOUND errors from inspect_media propagate unchanged (L321)."""
@@ -214,8 +220,9 @@ class TestInputValidation:
             ),
         ):
             result = transcribe_media(media, output, _opts())
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.PROBE_FAILED
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.PROBE_FAILED
 
     def test_duration_none_probe_failed(self, tmp_path: Path) -> None:
         media, output, model = _make_paths(tmp_path)
@@ -224,8 +231,9 @@ class TestInputValidation:
             return_value=_make_media_info(media, duration_sec=None),
         ):
             result = transcribe_media(media, output, _opts(model_path=model))
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.PROBE_FAILED
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.PROBE_FAILED
 
 
 # ===========================================================================
@@ -248,8 +256,9 @@ class TestDependencyResolution:
         ):
             os.environ.pop("CLIPWRIGHT_WHISPER_MODEL", None)
             result = transcribe_media(str(media), str(output), _opts())
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.DEPENDENCY_MISSING
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.DEPENDENCY_MISSING
 
     def test_ffmpeg_missing_dependency_missing(self, tmp_path: Path) -> None:
         """ffmpeg absent -> DEPENDENCY_MISSING (raised by resolve_tool; DC-AS-004)."""
@@ -269,8 +278,9 @@ class TestDependencyResolution:
             ),
         ):
             result = transcribe_media(media, output, _opts(model_path=model))
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.DEPENDENCY_MISSING
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.DEPENDENCY_MISSING
 
     def test_resolve_model_path_param_priority(self, tmp_path: Path) -> None:
         """model_path (param) is returned when the file exists."""
@@ -304,7 +314,7 @@ class TestDependencyResolution:
 class TestOtioConstruction:
     def _run(
         self, tmp_path: Path, segments: list[Segment], language: str = "en"
-    ) -> tuple[dict[str, Any], otio.schema.Timeline]:
+    ) -> tuple[ToolResult, otio.schema.Timeline]:
         media, output, model = _make_paths(tmp_path)
         with (
             patch(
@@ -324,7 +334,7 @@ class TestOtioConstruction:
         """V1 contains a full-length single clip (kind=transcript-source,
         start_time=0)."""
         result, timeline = self._run(tmp_path, [_seg(0.0, 1.0, "hi")])
-        assert result["ok"] is True
+        assert result.ok is True
         v1 = timeline.tracks[0]
         clips = [c for c in v1 if isinstance(c, otio.schema.Clip)]
         assert len(clips) == 1
@@ -423,9 +433,9 @@ class TestZeroSegments:
             ),
         ):
             result = transcribe_media(media, output, _opts(model_path=model))
-        assert result["ok"] is True
-        assert result["warnings"]  # zero-segment warning present
-        assert result["data"]["segment_count"] == 0
+        assert result.ok is True
+        assert result.warnings  # zero-segment warning present
+        assert result.data["segment_count"] == 0
         timeline = otio.adapters.read_from_file(output)
         v1 = timeline.tracks[0]
         # 0 markers, but the full-length clip is present
@@ -444,7 +454,7 @@ class TestZeroSegments:
 
 
 class TestEnvelopeAndOutputs:
-    def _run(self, tmp_path: Path) -> tuple[dict[str, Any], str, str]:
+    def _run(self, tmp_path: Path) -> tuple[ToolResult, str, str]:
         media, output, model = _make_paths(tmp_path)
         segs = [_seg(0.0, 1.2, "Hello"), _seg(1.5, 2.8, "World")]
         with (
@@ -470,21 +480,22 @@ class TestEnvelopeAndOutputs:
 
     def test_artifacts_three(self, tmp_path: Path) -> None:
         result, output, _media = self._run(tmp_path)
-        roles = {(a["role"], a["format"]) for a in result["artifacts"]}
+        roles = {(a.role, a.format) for a in result.artifacts}
         assert ("timeline", "otio") in roles
         assert ("captions", "srt") in roles
         assert ("captions", "vtt") in roles
-        assert len(result["artifacts"]) == 3
+        assert len(result.artifacts) == 3
 
     def test_summary_contains_language_count_duration(self, tmp_path: Path) -> None:
         result, _output, _media = self._run(tmp_path)
-        summary = result["summary"]
+        summary = result.summary
+        assert summary is not None
         assert "en" in summary
         assert "2" in summary  # segment count
 
     def test_data_lightweight(self, tmp_path: Path) -> None:
         result, _output, _media = self._run(tmp_path)
-        data = result["data"]
+        data = result.data
         assert data["segment_count"] == 2
         assert data["language"] == "en"
         assert "total_duration_seconds" in data

@@ -8,8 +8,9 @@ Transport defaults to stdio (mcp.run(transport="stdio")).
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated
 
+from clipwright.schemas import ToolResult
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
@@ -55,7 +56,7 @@ def clipwright_transcribe(
             )
         ),
     ] = None,
-) -> dict[str, Any]:
+) -> ToolResult:
     """MCP tool: transcribe audio and produce SRT/VTT captions and an OTIO timeline.
 
     Non-destructive (readOnly): the input media file is never modified.

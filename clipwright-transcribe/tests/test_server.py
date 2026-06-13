@@ -9,12 +9,16 @@ Target:
   - Success and error envelope pass-through
   - options=None uses TranscribeOptions() defaults
   - main() calls mcp.run(transport="stdio")
+  - outputSchema is typed ToolResult (MCP boundary)
 """
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+import json
 from unittest.mock import patch
+
+from clipwright.schemas import ToolError, ToolResult
 
 from clipwright_transcribe.schemas import TranscribeOptions
 from clipwright_transcribe.server import (
@@ -27,23 +31,22 @@ from clipwright_transcribe.server import main, mcp
 # ---------------------------------------------------------------------------
 
 
-def _ok_envelope(**kwargs: Any) -> dict[str, Any]:
-    base: dict[str, Any] = {
-        "ok": True,
-        "summary": "ok",
-        "data": {},
-        "artifacts": [],
-        "warnings": [],
-    }
-    base.update(kwargs)
-    return base
+def _ok_result(**kwargs: object) -> ToolResult:
+    base = ToolResult(
+        ok=True,
+        summary="ok",
+        data={},
+        artifacts=[],
+        warnings=[],
+    )
+    return base.model_copy(update=dict(kwargs))
 
 
-def _error_envelope(code: str) -> dict[str, Any]:
-    return {
-        "ok": False,
-        "error": {"code": code, "message": "error", "hint": "hint"},
-    }
+def _error_result(code: str) -> ToolResult:
+    return ToolResult(
+        ok=False,
+        error=ToolError(code=code, message="error", hint="hint"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +57,7 @@ def _error_envelope(code: str) -> dict[str, Any]:
 class TestMcpAnnotations:
     """Verify MCP annotations for the clipwright_transcribe tool."""
 
-    def _get_annotations(self) -> Any:
+    def _get_annotations(self) -> object:
         # CR L-1: No public FastMCP API exists to retrieve tool info, so the private
         # _tool_manager API is used (same approach as the silence package).
         tool = mcp._tool_manager.get_tool("clipwright_transcribe")  # noqa: SLF001
@@ -66,17 +69,17 @@ class TestMcpAnnotations:
         assert tool is not None
 
     def test_read_only_hint_is_true(self) -> None:
-        assert self._get_annotations().readOnlyHint is True
+        assert self._get_annotations().readOnlyHint is True  # type: ignore[union-attr]
 
     def test_destructive_hint_is_false(self) -> None:
-        assert self._get_annotations().destructiveHint is False
+        assert self._get_annotations().destructiveHint is False  # type: ignore[union-attr]
 
     def test_idempotent_hint_is_true(self) -> None:
-        assert self._get_annotations().idempotentHint is True
+        assert self._get_annotations().idempotentHint is True  # type: ignore[union-attr]
 
     def test_open_world_hint_is_false(self) -> None:
         """openWorldHint=False (fully offline, no network dependency; TR-AD-11)."""
-        assert self._get_annotations().openWorldHint is False
+        assert self._get_annotations().openWorldHint is False  # type: ignore[union-attr]
 
 
 # ---------------------------------------------------------------------------
@@ -86,17 +89,17 @@ class TestMcpAnnotations:
 
 class TestDelegation:
     def test_success_delegates(self) -> None:
-        expected = _ok_envelope(summary="transcribed")
+        expected = _ok_result(summary="transcribed")
         with patch(
             "clipwright_transcribe.server.transcribe_media",
             return_value=expected,
         ) as mock_t:
             result = server_transcribe(media="v.mp4", output="o.otio", options=None)
         mock_t.assert_called_once()
-        assert result["ok"] is True
+        assert result.ok is True
 
     def test_failure_passthrough(self) -> None:
-        expected = _error_envelope("FILE_NOT_FOUND")
+        expected = _error_result("FILE_NOT_FOUND")
         with patch(
             "clipwright_transcribe.server.transcribe_media",
             return_value=expected,
@@ -104,27 +107,28 @@ class TestDelegation:
             result = server_transcribe(
                 media="missing.mp4", output="o.otio", options=None
             )
-        assert result["ok"] is False
-        assert result["error"]["code"] == "FILE_NOT_FOUND"
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == "FILE_NOT_FOUND"
 
     def test_error_envelope_has_code_message_hint(self) -> None:
-        expected = _error_envelope("DEPENDENCY_MISSING")
+        expected = _error_result("DEPENDENCY_MISSING")
         with patch(
             "clipwright_transcribe.server.transcribe_media",
             return_value=expected,
         ):
             result = server_transcribe(media="v.mp4", output="o.otio", options=None)
-        error = result["error"]
-        assert "code" in error
-        assert "message" in error
-        assert "hint" in error
+        assert result.error is not None
+        assert result.error.code
+        assert result.error.message
+        assert result.error.hint
 
     def test_options_none_uses_default(self) -> None:
         """When options=None, TranscribeOptions() defaults are passed to the
         delegate."""
         with patch(
             "clipwright_transcribe.server.transcribe_media",
-            return_value=_ok_envelope(),
+            return_value=_ok_result(),
         ) as mock_t:
             server_transcribe(media="v.mp4", output="o.otio", options=None)
         _args, kwargs = mock_t.call_args
@@ -137,11 +141,60 @@ class TestDelegation:
         opts = TranscribeOptions(language="ja", initial_prompt="clipwright")
         with patch(
             "clipwright_transcribe.server.transcribe_media",
-            return_value=_ok_envelope(),
+            return_value=_ok_result(),
         ) as mock_t:
             server_transcribe(media="v.mp4", output="o.otio", options=opts)
         _args, kwargs = mock_t.call_args
         assert kwargs.get("options") is opts
+
+
+# ---------------------------------------------------------------------------
+# MCP boundary: outputSchema and structuredContent
+# ---------------------------------------------------------------------------
+
+
+class TestMcpBoundary:
+    def test_outputschema_is_typed(self) -> None:
+        """outputSchema must expose typed ToolResult fields (ok, summary, etc.)."""
+        tools = asyncio.run(mcp.list_tools())
+        target = next((t for t in tools if t.name == "clipwright_transcribe"), None)
+        assert target is not None, "clipwright_transcribe tool must be listed"
+        schema = target.outputSchema or {}
+        props = schema.get("properties") or {}
+        assert "ok" in props, (
+            f"outputSchema must be typed ToolResult with 'ok' property; got: {props}"
+        )
+
+    def test_structuredcontent_top_level_ok(self) -> None:
+        """call_tool response must expose 'ok' at top level (no wrapping).
+
+        FastMCP call_tool returns a tuple (content_list, structured_dict).
+        The text content must contain 'ok' at the top level (not wrapped).
+        """
+        with patch(
+            "clipwright_transcribe.server.transcribe_media",
+            return_value=ToolResult(
+                ok=True,
+                summary="ok",
+                data={},
+                artifacts=[],
+                warnings=[],
+            ),
+        ):
+            result = asyncio.run(
+                mcp.call_tool(
+                    "clipwright_transcribe",
+                    {"media": "/fake.mp4", "output": "/fake.otio"},
+                )
+            )
+        assert result, "call_tool must return non-empty result"
+        # result is a tuple: (list[TextContent], structured_dict)
+        content_list = result[0]
+        assert content_list, "content list must be non-empty"
+        content = json.loads(content_list[0].text)
+        assert "ok" in content, (
+            f"structuredContent must not be wrapped; top-level keys: {list(content.keys())}"
+        )
 
 
 # ---------------------------------------------------------------------------

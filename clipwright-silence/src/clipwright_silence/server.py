@@ -9,8 +9,10 @@ Transport defaults to stdio (mcp.run(transport="stdio")).
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated
 
+from clipwright.envelope import to_tool_result
+from clipwright.schemas import ToolResult
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
@@ -53,7 +55,7 @@ def clipwright_detect_silence(
             )
         ),
     ] = None,
-) -> dict[str, Any]:
+) -> ToolResult:
     """MCP tool: detect silence intervals and generate a KEEP interval OTIO timeline.
 
     Does not modify the input media file (non-destructive, readOnly).
@@ -63,10 +65,12 @@ def clipwright_detect_silence(
     Uses default DetectSilenceOptions() when options is None.
     """
     resolved_options = options if options is not None else DetectSilenceOptions()
-    return detect_silence(
-        media=media,
-        output=output,
-        options=resolved_options,
+    return to_tool_result(
+        detect_silence(
+            media=media,
+            output=output,
+            options=resolved_options,
+        )
     )
 
 

@@ -2,7 +2,7 @@
 
 Covers:
 - RationalTimeModel / TimeRangeModel
-- MediaRef / Artifact / ToolResult / ToolError / ToolErrorResult
+- MediaRef / Artifact / ToolResult / ToolError
 - StreamInfo / MediaInfo
 - OperationError / ValidationReport (§13.1 DC-AM-003)
 - to_otio_time / from_otio_time (§13.1 DC-GP-005)
@@ -11,7 +11,6 @@ Covers:
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
 
 # --- Import ---
 from clipwright.schemas import (
@@ -23,7 +22,6 @@ from clipwright.schemas import (
     StreamInfo,
     TimeRangeModel,
     ToolError,
-    ToolErrorResult,
     ToolResult,
     ValidationReport,
     from_otio_time,
@@ -161,13 +159,13 @@ class TestToolResult:
     """Basic contract for ToolResult (success envelope)."""
 
     def test_ok_is_true(self) -> None:
-        """The ok field is always True."""
-        result = ToolResult(summary="Done")
+        """The ok field can be set to True (unified model requires explicit ok)."""
+        result = ToolResult(ok=True, summary="Done")
         assert result.ok is True
 
     def test_defaults(self) -> None:
         """data / artifacts / warnings default to empty values."""
-        result = ToolResult(summary="ok")
+        result = ToolResult(ok=True, summary="ok")
         assert result.data == {}
         assert result.artifacts == []
         assert result.warnings == []
@@ -176,6 +174,7 @@ class TestToolResult:
         """data, artifacts, and warnings can be set."""
         art = Artifact(role="timeline", path="/out/t.otio", format="otio")
         result = ToolResult(
+            ok=True,
             summary="Media inspected",
             data={"fps": 30.0},
             artifacts=[art],
@@ -185,14 +184,14 @@ class TestToolResult:
         assert len(result.artifacts) == 1
         assert result.warnings[0] == "Note"
 
-    def test_ok_cannot_be_false(self) -> None:
-        """ok=False cannot be set (Literal[True])."""
-        with pytest.raises(ValidationError):
-            ToolResult(ok=False, summary="should fail")  # type: ignore[arg-type]
+    def test_ok_can_be_false(self) -> None:
+        """Unified ToolResult accepts ok=False (not Literal[True] anymore)."""
+        result = ToolResult(ok=False)
+        assert result.ok is False
 
 
 # ===========================================================================
-# ToolError / ToolErrorResult
+# ToolError / ToolResult failure path
 # ===========================================================================
 
 
@@ -211,27 +210,22 @@ class TestToolError:
         assert err.hint == "Check the path"
 
 
-class TestToolErrorResult:
-    """Basic contract for ToolErrorResult (failure envelope)."""
+class TestToolResultFailure:
+    """Basic contract for ToolResult failure path (ok=False, unified model)."""
 
     def test_ok_is_false(self) -> None:
-        """The ok field is always False."""
+        """ToolResult(ok=False) must have ok=False."""
         err = ToolError(code="INVALID_INPUT", message="Invalid input", hint="Fix it")
-        result = ToolErrorResult(error=err)
+        result = ToolResult(ok=False, error=err)
         assert result.ok is False
-
-    def test_ok_cannot_be_true(self) -> None:
-        """ok=True cannot be set (Literal[False])."""
-        err = ToolError(code="INVALID_INPUT", message="x", hint="y")
-        with pytest.raises(ValidationError):
-            ToolErrorResult(ok=True, error=err)  # type: ignore[arg-type]
 
     def test_error_structure(self) -> None:
         """The error field stores a ToolError."""
         err = ToolError(
             code="PROBE_FAILED", message="Parse failed", hint="Check ffprobe"
         )
-        result = ToolErrorResult(error=err)
+        result = ToolResult(ok=False, error=err)
+        assert result.error is not None
         assert result.error.code == "PROBE_FAILED"
 
 

@@ -89,7 +89,7 @@ def _load_audio_as_float32(
     (numpy is kept out of the server process; only the separate vad_cli subprocess
     imports it).
     """
-    import numpy as np  # See docstring (cached in sys.modules by main())
+    import numpy as np  # type: ignore[import-not-found]  # optional VAD extra
 
     with wave.open(pcm_path, "rb") as wf:
         n_frames = wf.getnframes()
@@ -176,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         # --- Lazy import of silero_vad (keep out of server process, §2.4) ---
         try:
-            import silero_vad
+            import silero_vad  # type: ignore[import-not-found]  # optional VAD extra
         except ImportError:
             # SR L-2: str(exc) may contain internal paths; use fixed message
             _error_output(

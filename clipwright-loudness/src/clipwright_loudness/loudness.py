@@ -38,7 +38,7 @@ from clipwright.otio_utils import (
     save_timeline,
     set_clipwright_metadata,
 )
-from clipwright.schemas import RationalTimeModel
+from clipwright.schemas import RationalTimeModel, ToolResult
 from pydantic import ValidationError
 
 import clipwright_loudness
@@ -58,7 +58,7 @@ def detect_loudness(
     output: str,
     options: DetectLoudnessOptions,
     timeline: str | None,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Public API for loudness detection. Converts ClipwrightError to ok=False envelope.
 
     Args:
@@ -68,7 +68,7 @@ def detect_loudness(
         timeline: Existing timeline path (None = create new).
 
     Returns:
-        ok_result or error_result envelope dict.
+        ok_result or error_result ToolResult.
     """
     try:
         return _detect_loudness_inner(media, output, options, timeline)
@@ -81,7 +81,7 @@ def _detect_loudness_inner(
     output: str,
     options: DetectLoudnessOptions,
     timeline: str | None,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Internal implementation of detect_loudness. Raises ClipwrightError directly."""
     media_path = Path(media)
     output_path = Path(output)
