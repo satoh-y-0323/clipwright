@@ -33,7 +33,7 @@ from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.media import inspect_media
 from clipwright.otio_utils import add_clip, new_timeline, save_timeline
 from clipwright.process import resolve_tool, run, safe_subprocess_message
-from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
+from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel, ToolResult
 
 import clipwright_silence
 from clipwright_silence.plan import derive_keep_ranges
@@ -291,7 +291,7 @@ def detect_silence(
     media: str,
     output: str,
     options: DetectSilenceOptions,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Detect silence intervals and generate a KEEP interval OTIO timeline (AD-2/AD-5).
 
     Non-destructive: does not modify the input media file in any way.
@@ -311,19 +311,19 @@ def detect_silence(
         options: DetectSilenceOptions.
 
     Returns:
-        Envelope dict from ok_result or error_result.
+        ToolResult from ok_result or error_result.
     """
     try:
         return _detect_inner(media, output, options)
     except ClipwrightError as exc:
-        return error_result(exc.code, exc.message, exc.hint).model_dump()
+        return error_result(exc.code, exc.message, exc.hint)
 
 
 def _detect_inner(
     media: str,
     output: str,
     options: DetectSilenceOptions,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Internal implementation of detect_silence. Raises ClipwrightError directly."""
     output_path = Path(output)
     media_path = Path(media)
@@ -552,4 +552,4 @@ def _detect_inner(
         },
         artifacts=[{"role": "timeline", "path": str(output_path), "format": "otio"}],
         warnings=warnings,
-    ).model_dump()
+    )

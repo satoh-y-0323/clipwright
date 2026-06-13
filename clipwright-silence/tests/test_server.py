@@ -17,6 +17,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from clipwright.schemas import ToolError, ToolResult
 
 # ---------------------------------------------------------------------------
 # Attempt to import server.py (_SERVER_AVAILABLE = False if not implemented)
@@ -45,29 +46,25 @@ pytestmark = pytest.mark.xfail(
 # ---------------------------------------------------------------------------
 
 
-def _ok_envelope(**kwargs: Any) -> dict[str, Any]:
-    """Return a success envelope template."""
-    base: dict[str, Any] = {
+def _ok_tool_result(**kwargs: Any) -> ToolResult:
+    """Return a success ToolResult template."""
+    defaults: dict[str, Any] = {
         "ok": True,
         "summary": "ok",
         "data": {},
         "artifacts": [],
         "warnings": [],
     }
-    base.update(kwargs)
-    return base
+    defaults.update(kwargs)
+    return ToolResult.model_validate(defaults)
 
 
-def _error_envelope(code: str) -> dict[str, Any]:
-    """Return an error envelope template."""
-    return {
-        "ok": False,
-        "error": {
-            "code": code,
-            "message": "error",
-            "hint": "hint",
-        },
-    }
+def _error_tool_result(code: str) -> ToolResult:
+    """Return an error ToolResult template."""
+    return ToolResult(
+        ok=False,
+        error=ToolError(code=code, message="error", hint="hint"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +127,7 @@ class TestMcpToolDelegation:
 
     def test_success_delegates_to_detect_silence(self) -> None:
         """On success, must call and delegate to detect.detect_silence."""
-        expected = _ok_envelope(summary="detected ok")
+        expected = _ok_tool_result(summary="detected ok")
 
         with patch(
             "clipwright_silence.server.detect_silence",
@@ -145,9 +142,9 @@ class TestMcpToolDelegation:
         mock_detect.assert_called_once()
         assert result.ok is True
 
-    def test_failure_returns_error_envelope(self) -> None:
+    def test_failure_returns_error_tool_result(self) -> None:
         """When detect_silence returns an error envelope, server must return it as-is."""
-        expected = _error_envelope("FILE_NOT_FOUND")
+        expected = _error_tool_result("FILE_NOT_FOUND")
 
         with patch(
             "clipwright_silence.server.detect_silence",
@@ -165,7 +162,7 @@ class TestMcpToolDelegation:
 
     def test_error_result_passthrough(self) -> None:
         """When detect returns error_result, it must be returned as-is (no double conversion)."""
-        expected = _error_envelope("DEPENDENCY_MISSING")
+        expected = _error_tool_result("DEPENDENCY_MISSING")
 
         with patch(
             "clipwright_silence.server.detect_silence",
@@ -183,16 +180,16 @@ class TestMcpToolDelegation:
         assert result.error.message
         assert result.error.hint
 
-    def test_error_envelope_has_code_message_hint(self) -> None:
+    def test_error_tool_result_has_code_message_hint(self) -> None:
         """Error envelope must contain code / message / hint."""
-        expected: dict[str, Any] = {
-            "ok": False,
-            "error": {
-                "code": "UNSUPPORTED_OPERATION",
-                "message": "Cannot detect silence: no audio stream",
-                "hint": "Specify a media source that contains an audio stream",
-            },
-        }
+        expected = ToolResult(
+            ok=False,
+            error=ToolError(
+                code="UNSUPPORTED_OPERATION",
+                message="Cannot detect silence: no audio stream",
+                hint="Specify a media source that contains an audio stream",
+            ),
+        )
 
         with patch(
             "clipwright_silence.server.detect_silence",
@@ -220,7 +217,7 @@ class TestMcpToolDelegation:
 
         with patch(
             "clipwright_silence.server.detect_silence",
-            return_value=_ok_envelope(),
+            return_value=_ok_tool_result(),
         ) as mock_detect:
             server_detect_silence(
                 media="video.mp4",
@@ -232,9 +229,9 @@ class TestMcpToolDelegation:
         call_args = mock_detect.call_args
         assert call_args is not None
 
-    def test_ok_envelope_structure(self) -> None:
+    def test_ok_tool_result_structure(self) -> None:
         """Success envelope must contain ok/summary/data/artifacts/warnings."""
-        expected = _ok_envelope(
+        expected = _ok_tool_result(
             summary=(
                 "Detected 3 silence interval(s) from a 60s source. "
                 "Generated timeline.otio with 4 interval(s) to keep."
@@ -323,15 +320,13 @@ class TestMcpBoundary:
         """call_tool must return structuredContent with top-level 'ok' key."""
         monkeypatch.setattr(
             "clipwright_silence.server.detect_silence",
-            lambda **kw: {
-                "ok": True,
-                "summary": "Silence detected.",
-                "data": {},
-                "artifacts": [
-                    {"role": "timeline", "path": "out.otio", "format": "otio"}
-                ],
-                "warnings": [],
-            },
+            lambda **kw: ToolResult(
+                ok=True,
+                summary="Silence detected.",
+                data={},
+                artifacts=[],
+                warnings=[],
+            ),
         )
         result = asyncio.run(
             mcp.call_tool(

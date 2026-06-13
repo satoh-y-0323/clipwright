@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from clipwright.envelope import to_tool_result
 from clipwright.schemas import ToolResult
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
@@ -65,12 +64,10 @@ def clipwright_detect_silence(
     Uses default DetectSilenceOptions() when options is None.
     """
     resolved_options = options if options is not None else DetectSilenceOptions()
-    return to_tool_result(
-        detect_silence(
-            media=media,
-            output=output,
-            options=resolved_options,
-        )
+    return detect_silence(
+        media=media,
+        output=output,
+        options=resolved_options,
     )
 
 
@@ -88,5 +85,5 @@ def main() -> None:
     mcp.run(transport="stdio")
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()
