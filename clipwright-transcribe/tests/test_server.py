@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Any
 from unittest.mock import patch
 
 from clipwright.schemas import ToolError, ToolResult
@@ -31,7 +32,7 @@ from clipwright_transcribe.server import main, mcp
 # ---------------------------------------------------------------------------
 
 
-def _ok_result(**kwargs: object) -> ToolResult:
+def _ok_tool_result(**kwargs: Any) -> ToolResult:
     base = ToolResult(
         ok=True,
         summary="ok",
@@ -39,10 +40,10 @@ def _ok_result(**kwargs: object) -> ToolResult:
         artifacts=[],
         warnings=[],
     )
-    return base.model_copy(update=dict(kwargs))
+    return base.model_copy(update=kwargs)
 
 
-def _error_result(code: str) -> ToolResult:
+def _error_tool_result(code: str) -> ToolResult:
     return ToolResult(
         ok=False,
         error=ToolError(code=code, message="error", hint="hint"),
@@ -89,7 +90,7 @@ class TestMcpAnnotations:
 
 class TestDelegation:
     def test_success_delegates(self) -> None:
-        expected = _ok_result(summary="transcribed")
+        expected = _ok_tool_result(summary="transcribed")
         with patch(
             "clipwright_transcribe.server.transcribe_media",
             return_value=expected,
@@ -99,7 +100,7 @@ class TestDelegation:
         assert result.ok is True
 
     def test_failure_passthrough(self) -> None:
-        expected = _error_result("FILE_NOT_FOUND")
+        expected = _error_tool_result("FILE_NOT_FOUND")
         with patch(
             "clipwright_transcribe.server.transcribe_media",
             return_value=expected,
@@ -112,7 +113,7 @@ class TestDelegation:
         assert result.error.code == "FILE_NOT_FOUND"
 
     def test_error_envelope_has_code_message_hint(self) -> None:
-        expected = _error_result("DEPENDENCY_MISSING")
+        expected = _error_tool_result("DEPENDENCY_MISSING")
         with patch(
             "clipwright_transcribe.server.transcribe_media",
             return_value=expected,
@@ -128,7 +129,7 @@ class TestDelegation:
         delegate."""
         with patch(
             "clipwright_transcribe.server.transcribe_media",
-            return_value=_ok_result(),
+            return_value=_ok_tool_result(),
         ) as mock_t:
             server_transcribe(media="v.mp4", output="o.otio", options=None)
         _args, kwargs = mock_t.call_args
@@ -141,7 +142,7 @@ class TestDelegation:
         opts = TranscribeOptions(language="ja", initial_prompt="clipwright")
         with patch(
             "clipwright_transcribe.server.transcribe_media",
-            return_value=_ok_result(),
+            return_value=_ok_tool_result(),
         ) as mock_t:
             server_transcribe(media="v.mp4", output="o.otio", options=opts)
         _args, kwargs = mock_t.call_args
