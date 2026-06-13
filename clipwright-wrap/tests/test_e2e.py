@@ -7,7 +7,11 @@ Test categories:
 - e2e_1_srt / e2e_1_vtt : real budoux phrase-boundary wrapping (success condition 1/2)
 - e2e_2_transcribe      : transcribe→wrap integration (DC-AM-004 primary)
 - e2e_zero_srt / e2e_zero_vtt : 0-cue e2e (DC-GP-004)
-- e2e_overflow          : overflow warnings (WR-AD-15/DC-AM-003)
+- e2e_overflow          : front-merge and width overflow (WR-AD-15 revised / DC-AM-003 / ADR-W2)
+
+  Line-count excess is resolved by front-merge (_merge_to_max_lines) before overflow
+  detection; line-count overflow is no longer an overflow condition (ADR-W2 / W1).
+  Overflow detection covers only line-width excess after merge (WR-AD-15(1) revised).
 
 wrap_cli now self-configures UTF-8 I/O at main() entry, so no env setup is needed.
 """
@@ -440,17 +444,21 @@ def test_spike_budoux_parser_loaders_dict() -> None:
 
 
 # ============================================================
-# WR-AD-15/DC-AM-003: overflow warnings
+# WR-AD-15/DC-AM-003: front-merge and width overflow (ADR-W2 / DC-AS-001)
 # ============================================================
 
 
-def test_e2e_overflow_line_count_warning(tmp_path: Path) -> None:
-    """WR-AD-15(1)(a): max_chars=4 causes line-count overflow → single aggregated warning in warnings, overflow_cue_indices recorded.
+def test_e2e_merge_collapses_to_max_lines(tmp_path: Path) -> None:
+    """ADR-W2 / DC-AS-001: line-count excess is resolved by front-merge, not overflow.
 
-    Wrapping '今日はとてもいい天気なので' with max_chars=4 yields
-    segments ['今日は', 'とても', 'いい', '天気なので'] → 4 lines (> max_lines=2).
+    Wrapping '今日はとてもいい天気なので' with max_chars=4 / max_lines=2 yields
+    segments ['今日は', 'とても', 'いい', '天気なので'] (4 lines), which front-merge
+    collapses to at most 2 lines.  This is convergence, not an overflow condition:
+    - cue[0] must appear in merged_cue_indices (merge was applied)
+    - output lines per cue must not exceed max_lines
+    - warnings must NOT contain "max_lines" (line-count overflow no longer emitted)
+    - full text is preserved (no truncation; WR-AD-04)
     """
-    # Force overflow with max_chars=4
     text = "今日はとてもいい天気なので"
     in_srt = tmp_path / "overflow.srt"
     in_srt.write_text(
@@ -463,18 +471,25 @@ def test_e2e_overflow_line_count_warning(tmp_path: Path) -> None:
 
     assert result["ok"] is True
 
-    # cue[0] is recorded in overflow_cue_indices
-    assert 0 in result["data"]["overflow_cue_indices"], (
-        f"Expected cue[0] in overflow_cue_indices: {result['data']['overflow_cue_indices']}"
+    # (i) output cue lines must not exceed max_lines
+    cues = parse_captions(out_srt.read_text(encoding="utf-8"), "srt")
+    assert len(cues) == 1
+    assert len(cues[0].text.split("\n")) <= opts.max_lines, (
+        f"Cue has more than {opts.max_lines} lines after merge: {cues[0].text!r}"
     )
 
-    # warnings contains a single aggregated sentence
+    # (ii) cue[0] is recorded in merged_cue_indices (merge was applied)
+    assert 0 in result["data"]["merged_cue_indices"], (
+        f"Expected cue[0] in merged_cue_indices: {result['data']['merged_cue_indices']}"
+    )
+
+    # (iii) warnings must NOT contain "max_lines" (line-count overflow no longer emitted)
     warnings = result.get("warnings", [])
-    assert any("max_lines" in w for w in warnings), (
-        f"Expected max_lines warning, got: {warnings}"
+    assert not any("max_lines" in w for w in warnings), (
+        f"'max_lines' warning must not be emitted after front-merge: {warnings}"
     )
 
-    # no truncation (text is preserved)
+    # (iv) original text is preserved in the output (no truncation; WR-AD-04)
     content = out_srt.read_text(encoding="utf-8")
     assert text in content.replace("\n", ""), (
         "Original text should be preserved (no truncation)"
@@ -482,9 +497,12 @@ def test_e2e_overflow_line_count_warning(tmp_path: Path) -> None:
 
 
 def test_e2e_overflow_line_width_warning(tmp_path: Path) -> None:
-    """WR-AD-15(1)(b): single oversized segment (line-width overflow) → single aggregated warning in warnings, overflow_width_cue_indices recorded.
+    """WR-AD-15(1) revised (width axis / ADR-W4): oversized segment triggers width overflow.
 
-    '天気なので' (5 chars) is a single segment longer than max_chars=4 → line-width overflow.
+    '天気なので' (5 chars) is a single budoux segment longer than max_chars=4.
+    Even after front-merge collapses 4 lines to max_lines=2, the merged line containing
+    '天気なので' still exceeds max_chars → line-width overflow is recorded.
+    Expected: overflow_width_cue_indices contains cue[0] and warnings contain "max_chars".
     """
     text = "今日はとてもいい天気なので"
     in_srt = tmp_path / "overflow_width.srt"
@@ -511,9 +529,10 @@ def test_e2e_overflow_line_width_warning(tmp_path: Path) -> None:
 
 
 def test_e2e_overflow_no_truncation(tmp_path: Path) -> None:
-    """WR-AD-15(1): no truncation even on overflow (avoid information loss; WR-AD-04).
+    """WR-AD-15(1) / FR-1: no truncation after front-merge + full text preserved (WR-AD-04).
 
-    All segments of the original text are preserved in the output even on line-count/line-width overflow.
+    Front-merge collapses excess lines to max_lines (FR-1 convergence), but must never
+    drop any text.  Verifies both round-trip text fidelity and line-count convergence.
     """
     text = "今日はとてもいい天気なので"
     in_srt = tmp_path / "no_truncation.srt"
@@ -526,8 +545,14 @@ def test_e2e_overflow_no_truncation(tmp_path: Path) -> None:
     _run_wrap(in_srt, out_srt, opts)
 
     content = out_srt.read_text(encoding="utf-8")
-    # rejoining the output text matches the original
     cues = parse_captions(content, "srt")
     assert len(cues) == 1
+
+    # round-trip: rejoining lines must equal the original text (no truncation; WR-AD-04)
     rejoined = cues[0].text.replace("\n", "")
     assert rejoined == text, f"Expected '{text}', got '{rejoined}'"
+
+    # FR-1 convergence: front-merge must have brought line count within max_lines
+    assert len(cues[0].text.split("\n")) <= opts.max_lines, (
+        f"Cue has more than {opts.max_lines} lines after front-merge: {cues[0].text!r}"
+    )

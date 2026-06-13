@@ -1,4 +1,4 @@
-"""test_wrap.py — Red tests for the wrap.py orchestration layer.
+"""test_wrap.py — Tests for the wrap.py orchestration layer.
 
 Target API:
   clipwright_wrap.wrap.wrap_captions(
@@ -17,10 +17,12 @@ Verification aspects (WR-AD-02/07/08/09/11/13/14/15):
   ③ DC-GP-001 language responsibility: WrapCaptionsOptions(language='xx') → ValidationError
   ④ wrap_cli launch (WR-AD-02; DC-AS-007): sys.executable -m wrap_cli, stdin JSON, error key detection
   ⑤ Formatting flow: parse→wrap_cli→wrap_cue_lines→serialize→output write (input unchanged)
-  ⑥ WR-AD-15(1)/DC-AM-003 overflow: both line_count(a) and line_width(b) identified; no truncation
-  ⑦ WR-AD-13(2)/DC-AM-002 warnings aggregation: single aggregated sentence + overflow_cue_indices/overflow_width_cue_indices in data
+  ⑥ WR-AD-15(1) revised / ADR-W1/W2: front-merge convergence; line-count overflow replaced by
+     merged_cue_indices; line-width overflow (overflow_width_cue_indices) detected post-merge
+  ⑦ WR-AD-13(2)/DC-AM-002 warnings aggregation: line-count warning removed; width-overflow warning
+     only; merged_cue_indices and overflow_width_cue_indices in data
   ⑧ WR-AD-13(1)/DC-AS-005 artifacts: dict format, no OTIO generated
-  ⑨ Envelope: summary contains cue count/wrapped count/overflow count/language; lightweight data
+  ⑨ Envelope: summary contains cue count/merged count/width-overflow count/language; lightweight data
   ⑩ 0-cue (empty subtitle) defence: ok:True, empty output
 """
 
@@ -563,12 +565,12 @@ class TestWrapFlow:
 
 
 # ===========================================================================
-# ⑥ Overflow detection (WR-AD-15(1)/DC-AM-003)
+# ⑥ Front-merge and overflow detection (WR-AD-15(1) revised / ADR-W1/W2)
 # ===========================================================================
 
 
 class TestOverflow:
-    """Overflow identifies both line_count(a) and line_width(b) (WR-AD-15(1))."""
+    """Front-merge replaces line-count overflow; width overflow detected post-merge (WR-AD-15(1) revised)."""
 
     def _run_with_segments(
         self,
@@ -594,14 +596,15 @@ class TestOverflow:
         )
         return result
 
-    def test_overflow_line_count_sets_overflow_cue_indices(
+    def test_merge_sets_merged_cue_indices(
         self, tmp_path: Path, mocker: Any
     ) -> None:
-        """Cue with line-count excess (a) is recorded in data.overflow_cue_indices (WR-AD-15(1)/DC-AM-002).
+        """Cue exceeding max_lines is front-merged and recorded in data.merged_cue_indices (ADR-W1/W2).
 
-        max_lines=2, 3 segments (each within max_chars) → 3 lines → line-count overflow.
+        max_lines=2, 3 segments (each within max_chars) → 3 lines → front-merge is applied.
+        The cue index must appear in merged_cue_indices (FR-2).
         """
-        # With max_chars=5, ['今日は', 'いい', '天気です'] each fits within 3 chars → 3 lines
+        # With max_chars=5, ['今日は', 'いい', '天気です'] each fits within chars → 3 lines > max_lines=2
         segments = [["今日は", "いい", "天気です"]]
         result = self._run_with_segments(
             tmp_path,
@@ -612,8 +615,9 @@ class TestOverflow:
         )
         assert result["ok"] is True
         data = result["data"]
-        # A line-count overflow cue exists
-        assert "overflow_cue_indices" in data
+        # Cue was merged; index 0 must appear in merged_cue_indices
+        assert "merged_cue_indices" in data
+        assert 0 in data["merged_cue_indices"]
 
     def test_overflow_line_width_sets_overflow_width_cue_indices(
         self, tmp_path: Path, mocker: Any
@@ -640,8 +644,8 @@ class TestOverflow:
     def test_no_overflow_empty_overflow_indices(
         self, tmp_path: Path, mocker: Any
     ) -> None:
-        """When there is no overflow, overflow_cue_indices/overflow_width_cue_indices are empty lists."""
-        # max_chars=16, max_lines=2, 1 segment → no overflow
+        """When there is no overflow or merge, overflow_width_cue_indices and merged_cue_indices are empty."""
+        # max_chars=16, max_lines=2, 1 segment → no overflow, no merge
         segments = [["今日はいい天気です。"]]
         result = self._run_with_segments(
             tmp_path,
@@ -652,13 +656,13 @@ class TestOverflow:
         )
         assert result["ok"] is True
         data = result["data"]
-        assert data.get("overflow_cue_indices", []) == []
         assert data.get("overflow_width_cue_indices", []) == []
+        assert data.get("merged_cue_indices", []) == []
 
     def test_no_overflow_no_max_lines_warning(
         self, tmp_path: Path, mocker: Any
     ) -> None:
-        """When overflow count is 0, warnings do not contain a max_lines-related message (DC-AM-002)."""
+        """When overflow count is 0, warnings do not contain a max_lines-related message (DC-GP-002)."""
         segments = [["今日は"]]
         result = self._run_with_segments(
             tmp_path,
@@ -675,7 +679,8 @@ class TestOverflow:
     def test_overflow_not_cut_off(self, tmp_path: Path, mocker: Any) -> None:
         """Overflow cues are not truncated; all text is present in the output file (WR-AD-15(1)).
 
-        max_lines=1, 3 segments → 3 lines, but all text must appear in the output.
+        max_lines=1, 3 segments → front-merge collapses to 1 line, but all text must appear.
+        Output cue must have len(text.split('\\n')) <= max_lines=1 (FR-1 convergence pin).
         """
         wrap_captions = _import_wrap_captions()
         text = "今日はいい天気です。"
@@ -697,6 +702,17 @@ class TestOverflow:
         assert "今日は" in content
         assert "いい" in content
         assert "天気です。" in content
+        # FR-1 convergence pin: output cue text fits within max_lines=1
+        # Extract the cue text block from the SRT (after "1\ntimecode\n")
+        lines_in_file = content.strip().splitlines()
+        # SRT structure: index, timecode, text line(s), empty line
+        # Skip index (line 0) and timecode (line 1); collect text lines
+        cue_text_lines = [
+            ln for ln in lines_in_file[2:] if ln.strip()
+        ]
+        assert len(cue_text_lines) <= 1, (
+            f"Expected at most 1 text line after front-merge (max_lines=1), got: {cue_text_lines!r}"
+        )
 
 
 # ===========================================================================
@@ -705,62 +721,7 @@ class TestOverflow:
 
 
 class TestWarningsAggregation:
-    """Overflow warnings use a single aggregated sentence + index arrays in data (not one per cue)."""
-
-    def test_overflow_line_count_warning_is_single_sentence(
-        self, tmp_path: Path, mocker: Any
-    ) -> None:
-        """Line-count overflow warnings consist of a single sentence regardless of cue count (DC-AM-002).
-
-        Even when all 3 cues overflow, the warnings list has at most a small number of elements.
-        """
-        wrap_captions = _import_wrap_captions()
-        # 3 cues, each with 3 segments (max_chars=3, max_lines=1 → all cues overflow on line count)
-        srt_text = _srt_ncues(3)
-        inp = tmp_path / "input.srt"
-        inp.write_text(srt_text, encoding="utf-8")
-        out = str(tmp_path / "output.srt")
-        mocker.patch(
-            "clipwright_wrap.wrap.subprocess.run",
-            return_value=MagicMock(
-                stdout=_wrap_cli_ok([["A", "B", "C"] for _ in range(3)]),
-                returncode=0,
-            ),
-        )
-        result: dict[str, Any] = wrap_captions(
-            str(inp), out, _opts(max_chars=2, max_lines=1)
-        )
-        assert result["ok"] is True
-        # warnings should be few (not one per cue)
-        overflow_warnings = [
-            w
-            for w in result.get("warnings", [])
-            if "max_lines" in w or "overflow" in w or "exceeded" in w
-        ]
-        # Aggregated: even with 3 overflowing cues, warnings should be at most ~1-2 sentences
-        assert len(overflow_warnings) <= 3
-
-    def test_overflow_data_has_overflow_cue_indices_list(
-        self, tmp_path: Path, mocker: Any
-    ) -> None:
-        """data contains overflow_cue_indices as list[int] (WR-AD-13(2))."""
-        wrap_captions = _import_wrap_captions()
-        inp = _make_input_srt(tmp_path, _srt_ncues(2))
-        out = str(tmp_path / "output.srt")
-        mocker.patch(
-            "clipwright_wrap.wrap.subprocess.run",
-            return_value=MagicMock(
-                stdout=_wrap_cli_ok([["A", "B", "C"], ["D", "E"]]),
-                returncode=0,
-            ),
-        )
-        result: dict[str, Any] = wrap_captions(
-            str(inp), out, _opts(max_chars=1, max_lines=1)
-        )
-        assert result["ok"] is True
-        data = result["data"]
-        assert isinstance(data.get("overflow_cue_indices"), list)
-        assert all(isinstance(i, int) for i in data["overflow_cue_indices"])
+    """Width-overflow warnings only; no line-count warning; index arrays in data (DC-AM-002)."""
 
     def test_overflow_data_has_overflow_width_cue_indices_list(
         self, tmp_path: Path, mocker: Any
@@ -780,6 +741,42 @@ class TestWarningsAggregation:
         assert result["ok"] is True
         data = result["data"]
         assert isinstance(data.get("overflow_width_cue_indices"), list)
+
+    def test_no_line_count_warning_multi_cue(
+        self, tmp_path: Path, mocker: Any
+    ) -> None:
+        """Multi-cue input with line-count excess emits no 'max_lines' warning; all cues in merged_cue_indices (FR-3/DC-GP-002).
+
+        3 cues, each with 3 segments, max_lines=1 → all cues front-merged.
+        warnings must not contain any 'max_lines' string.
+        All 3 cue indices must appear in merged_cue_indices.
+        """
+        wrap_captions = _import_wrap_captions()
+        srt_text = _srt_ncues(3)
+        inp = tmp_path / "input.srt"
+        inp.write_text(srt_text, encoding="utf-8")
+        out = str(tmp_path / "output.srt")
+        mocker.patch(
+            "clipwright_wrap.wrap.subprocess.run",
+            return_value=MagicMock(
+                stdout=_wrap_cli_ok([["A", "B", "C"] for _ in range(3)]),
+                returncode=0,
+            ),
+        )
+        result: dict[str, Any] = wrap_captions(
+            str(inp), out, _opts(max_chars=2, max_lines=1)
+        )
+        assert result["ok"] is True
+        # No max_lines warning (DC-GP-002: line-count warning removed)
+        for w in result.get("warnings", []):
+            assert "max_lines" not in w, (
+                f"Unexpected max_lines warning found: {w!r}"
+            )
+        # All 3 cues are merged (FR-3)
+        data = result["data"]
+        assert set(data.get("merged_cue_indices", [])) == {0, 1, 2}, (
+            f"Expected all 3 cue indices in merged_cue_indices, got: {data.get('merged_cue_indices')!r}"
+        )
 
 
 # ===========================================================================
@@ -916,11 +913,11 @@ class TestEnvelope:
         result = self._run(tmp_path, mocker)
         assert "wrapped_count" in result["data"]
 
-    def test_data_has_overflow_cue_indices(self, tmp_path: Path, mocker: Any) -> None:
-        """data contains overflow_cue_indices (list[int]) (§4)."""
+    def test_data_has_merged_cue_indices(self, tmp_path: Path, mocker: Any) -> None:
+        """data contains merged_cue_indices (list[int]) replacing overflow_cue_indices (ADR-W2/§4)."""
         result = self._run(tmp_path, mocker)
-        assert "overflow_cue_indices" in result["data"]
-        assert isinstance(result["data"]["overflow_cue_indices"], list)
+        assert "merged_cue_indices" in result["data"]
+        assert isinstance(result["data"]["merged_cue_indices"], list)
 
     def test_data_has_overflow_width_cue_indices(
         self, tmp_path: Path, mocker: Any
@@ -1177,36 +1174,27 @@ class TestSubprocessTextMode:
 
 
 class TestOverflowSummaryDeduplication:
-    """Verify that when 1 cue satisfies both line-count overflow (a) and line-width overflow (b),
-    the overflow cue count in summary uses set union (no duplicates) (CR M-4).
+    """Verify that when 1 cue satisfies both merge (ADR-W1) and line-width overflow (b),
+    the counts in summary are reported independently without double-counting (CR M-4 revised).
 
-    The current implementation uses len(overflow_cue_indices) + len(overflow_width_cue_indices),
-    resulting in double-counting; this test is Red.
+    Under the front-merge design:
+    - merged_cue_indices tracks cues that were front-merged (line-count excess resolved).
+    - overflow_width_cue_indices tracks cues with width overflow post-merge.
+    A cue can appear in both lists simultaneously.
+    The summary must report these counts without confusion.
     """
 
     def test_both_overflow_cue_counted_once_in_summary(
         self, tmp_path: Path, mocker: Any
     ) -> None:
-        """The same cue satisfying both (a) and (b) must be counted as 1 in summary (CR M-4).
+        """A cue satisfying both merge and width-overflow must appear in both index lists (CR M-4 revised).
 
-        max_chars=3, max_lines=1, 1 cue (3 segments) → (a) 3 lines > 1 (overflow); (b) 3 chars = max_chars (no overflow).
-        For a more reliable setup, use a single oversized segment (20 chars) on 1 line + max_lines=0 to satisfy both conditions simultaneously.
+        max_chars=3, max_lines=1, segments=['あいうえおかきく', 'けこさしすせそ']:
+        - 2 segments → 2 lines > max_lines=1 → front-merge applied → merged_cue_indices=[0]
+        - Each merged segment > max_chars=3 → width overflow → overflow_width_cue_indices=[0]
+        - summary must not double-count (e.g. '2 cue(s) exceeded limits' must not appear).
         """
         wrap_captions = _import_wrap_captions()
-        # Single oversized segment: line count = 1 > max_lines=0 is not settable.
-        # Case: max_chars=3, max_lines=1, 3 segments (each 1 char):
-        # wrap_cue_lines(['あ','い','う'], max_chars=3) → ['あいう'] (3 chars = max_chars, no overflow)
-        # → 1 line = max_lines=1 (no overflow)
-        # Alternative: oversized segment (20 chars), max_chars=3, max_lines=1
-        # wrap_cue_lines(['あ'*20], max_chars=3) → ['あ'*20] (20 chars > 3 = line-width overflow)
-        # 1 line = max_lines=1 (no overflow) → both conditions cannot fail simultaneously
-        # Reliable case: 3 segments, max_chars=1, max_lines=1
-        # wrap_cue_lines(['あ','い','う'], max_chars=1) → ['あ','い','う'] (3 lines > 1 = overflow; each 1 char = max_chars, no width overflow)
-        # → (a) only
-        # Both simultaneously: 2 oversized segments, max_chars=3, max_lines=1
-        # wrap_cue_lines(['あ'*10,'い'*10], max_chars=3)
-        #   → ['あ'*10] (10 > 3 = line-width overflow on 1 line), then next segment → ['あ'*10,'い'*10] (2 lines > 1 = line-count overflow AND each 10 > 3 = line-width overflow)
-        # Both conditions occur simultaneously → 1 cue double-counted for (a) and (b)
         inp = _make_input_srt(tmp_path, _srt_1cue("あいうえおかきくけこさしすせそ"))
         out = str(tmp_path / "output.srt")
         mocker.patch(
@@ -1216,54 +1204,140 @@ class TestOverflowSummaryDeduplication:
                 returncode=0,
             ),
         )
-        # max_chars=3 → each segment is 8 chars / 7 chars → cannot be split → 1 line each
-        # → 2 lines > max_lines=1 (line-count overflow) and 8 chars > max_chars=3 (line-width overflow) → both conditions simultaneously
         result: dict[str, Any] = wrap_captions(
             str(inp), out, _opts(max_chars=3, max_lines=1)
         )
         assert result["ok"] is True
         data = result["data"]
-        # Both overflow_cue_indices and overflow_width_cue_indices must contain index 0
-        assert 0 in data["overflow_cue_indices"]
+        # Both index arrays must contain index 0
+        assert 0 in data["merged_cue_indices"]
         assert 0 in data["overflow_width_cue_indices"]
-        # Summary overflow cue count must be set union (no duplicates) = 1
-        # Current implementation gives 1 + 1 = 2 → Red
+        # summary must not use the obsolete "exceeded limits" phrasing (DC-AS-002)
         summary = result["summary"]
-        # Confirm count is 1; "2 cue(s) exceeded" (double-counting) must not appear
-        assert "2 cue(s) exceeded" not in summary, (
-            f"summary contains double-counted overflow (2 cues): {summary!r}"
+        assert "exceeded limits" not in summary, (
+            f"summary must not contain obsolete 'exceeded limits' phrasing: {summary!r}"
         )
 
-    def test_overflow_summary_count_uses_set_union(
-        self, tmp_path: Path, mocker: Any
-    ) -> None:
-        """summary overflow cue count is calculated using set union (CR M-4 numeric verification).
 
-        When 1 cue satisfies both (a) and (b), total_overflow must be 1.
-        Current implementation gives len(a_list) + len(b_list) = 2 → Red.
-        """
+# ===========================================================================
+# New tests: FR-2, DC-AS-003, DC-AS-005 (front-merge design)
+# ===========================================================================
+
+
+class TestFrontMerge:
+    """Additional tests for front-merge behaviour (FR-2, DC-AS-003, DC-AS-005)."""
+
+    def _run_with_segments(
+        self,
+        tmp_path: Path,
+        mocker: Any,
+        srt_content: str,
+        segments: list[list[str]],
+        max_chars: int = 16,
+        max_lines: int = 2,
+    ) -> dict[str, Any]:
+        """Helper: run wrap_captions with given SRT and mocked segments."""
         wrap_captions = _import_wrap_captions()
-        inp = _make_input_srt(tmp_path, _srt_1cue("テスト"))
+        inp = _make_input_srt(tmp_path, srt_content)
         out = str(tmp_path / "output.srt")
         mocker.patch(
             "clipwright_wrap.wrap.subprocess.run",
             return_value=MagicMock(
-                stdout=_wrap_cli_ok([["あいうえおかきく", "けこさしすせそ"]]),
+                stdout=_wrap_cli_ok(segments),
                 returncode=0,
             ),
         )
-        result: dict[str, Any] = wrap_captions(
-            str(inp), out, _opts(max_chars=3, max_lines=1)
+        return wrap_captions(inp, out, _opts(max_chars=max_chars, max_lines=max_lines))
+
+    def test_merged_cue_indices_populated(self, tmp_path: Path, mocker: Any) -> None:
+        """FR-2: merged_cue_indices contains 0-based indices of merged cues; [] when no merge occurs.
+
+        Case A: 1 cue, 3 segments, max_lines=2 → 3 lines > 2 → merged; index 0 in merged_cue_indices.
+        Case B: 1 cue, 1 segment, max_lines=2 → 1 line <= 2 → not merged; merged_cue_indices=[].
+        """
+        # Case A: merge occurs
+        result_a = self._run_with_segments(
+            tmp_path,
+            mocker,
+            _srt_1cue("今日はいい天気です。"),
+            segments=[["今日は", "いい", "天気です"]],
+            max_chars=10,
+            max_lines=2,
+        )
+        assert result_a["ok"] is True
+        assert 0 in result_a["data"]["merged_cue_indices"], (
+            f"Expected index 0 in merged_cue_indices: {result_a['data']['merged_cue_indices']!r}"
+        )
+
+        # Case B: no merge (reuse tmp_path with a fresh output name)
+        wrap_captions = _import_wrap_captions()
+        inp_b = tmp_path / "input_b.srt"
+        inp_b.write_text(_srt_1cue("今日は"), encoding="utf-8")
+        out_b = str(tmp_path / "output_b.srt")
+        mocker.patch(
+            "clipwright_wrap.wrap.subprocess.run",
+            return_value=MagicMock(
+                stdout=_wrap_cli_ok([["今日は"]]),
+                returncode=0,
+            ),
+        )
+        result_b = wrap_captions(str(inp_b), out_b, _opts(max_chars=10, max_lines=2))
+        assert result_b["ok"] is True
+        assert result_b["data"]["merged_cue_indices"] == [], (
+            f"Expected empty merged_cue_indices when no merge, got: {result_b['data']['merged_cue_indices']!r}"
+        )
+
+    def test_wrapped_count_zero_on_max_lines_1_full_collapse(
+        self, tmp_path: Path, mocker: Any
+    ) -> None:
+        """DC-AS-003: max_lines=1 full-collapse cue where front-merge produces unchanged text.
+
+        When 3 segments ['A', 'B', 'C'] with max_chars=2 are collapsed to 1 line by front-merge,
+        the resulting single line is 'ABC' (length 3 > max_chars=2 → width overflow).
+        The cue index must appear in merged_cue_indices.
+
+        Note: wrapped_count may be > 0 because text changes from 'テキスト1' to 'ABC'.
+        The key assertion is that merged_cue_indices contains the cue index.
+        """
+        result = self._run_with_segments(
+            tmp_path,
+            mocker,
+            _srt_1cue("テキスト"),
+            segments=[["A", "B", "C"]],
+            max_chars=2,
+            max_lines=1,
         )
         assert result["ok"] is True
-        # Both index arrays must contain the same cue (both conditions simultaneously)
         data = result["data"]
-        assert data["overflow_cue_indices"] == [0]
-        assert data["overflow_width_cue_indices"] == [0]
-        # summary must show overflow count as 1 (not 2)
-        # Current implementation gives "2 cue(s) exceeded" → this assert is Red
-        assert "1 cue(s) exceeded limits" in result["summary"], (
-            f"summary overflow count is not 1 (possible double-counting): {result['summary']!r}"
+        # Cue was merged (3 lines → 1 line)
+        assert 0 in data["merged_cue_indices"], (
+            f"Expected index 0 in merged_cue_indices: {data['merged_cue_indices']!r}"
+        )
+
+    def test_merge_induces_width_overflow(self, tmp_path: Path, mocker: Any) -> None:
+        """DC-AS-005: max_lines=1 with each segment within max_chars, but merged line exceeds max_chars.
+
+        Segments: ['あいう', 'えおか'] each has 3 chars = max_chars=3 (no individual overflow).
+        After front-merge to 1 line: 'あいうえおか' (6 chars > max_chars=3) → width overflow.
+        The cue must appear in overflow_width_cue_indices.
+        """
+        result = self._run_with_segments(
+            tmp_path,
+            mocker,
+            _srt_1cue("あいうえおか"),
+            segments=[["あいう", "えおか"]],
+            max_chars=3,
+            max_lines=1,
+        )
+        assert result["ok"] is True
+        data = result["data"]
+        # Merge occurred (2 lines → 1 line)
+        assert 0 in data["merged_cue_indices"], (
+            f"Expected index 0 in merged_cue_indices: {data['merged_cue_indices']!r}"
+        )
+        # Merged line 'あいうえおか' (6 chars) > max_chars=3 → width overflow
+        assert 0 in data["overflow_width_cue_indices"], (
+            f"Expected index 0 in overflow_width_cue_indices: {data['overflow_width_cue_indices']!r}"
         )
 
 
