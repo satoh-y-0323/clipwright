@@ -18,8 +18,10 @@ class WrapCaptionsOptions(BaseModel):
     All 4 languages confirmed loadable in spike-budoux (DC-AM-005).
     max_chars is the maximum number of characters per line
     (each character counts as 1; len() check).
-    max_lines is the maximum number of lines per cue
-    (excess is subject to warnings; WR-AD-15(1)).
+    max_lines is the maximum number of lines per cue; when a cue exceeds
+    the limit, excess lines are collapsed via greedy front-merge until
+    len(lines) <= max_lines, and the indices of merged cues are recorded
+    in data.merged_cue_indices (text is never truncated; WR-AD-15(1)).
     """
 
     language: Annotated[
@@ -62,9 +64,11 @@ class WrapCaptionsOptions(BaseModel):
             default=2,
             gt=0,
             description=(
-                "Maximum number of lines per cue. Excess is recorded in warnings. "
-                "The original text is preserved without truncation"
-                " (WR-AD-15(1); requirement §2). "
+                "Maximum number of lines per cue. "
+                "Excess is collapsed via greedy front-merge until"
+                " len(lines) <= max_lines;"
+                " merged cue indices are recorded in data.merged_cue_indices"
+                " (text is never truncated; WR-AD-15(1)). "
                 "gt=0 constraint: 0 or below is rejected with INVALID_INPUT."
             ),
         ),

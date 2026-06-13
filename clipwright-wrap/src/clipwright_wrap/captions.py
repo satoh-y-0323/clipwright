@@ -8,15 +8,15 @@ Design decisions:
 - Timecode strings are preserved as-is without float conversion (WR-AD-06).
 - SRT/VTT byte structure conforms to the WR-AD-12 specification.
 - No delimiter is inserted when joining phrase-boundary tokens (WR-AD-14).
-- Overflow detection covers both line-count excess (a) and line-width excess (b)
-  (WR-AD-15(1)).
+- Line-count excess is resolved by greedy front-merge (_merge_to_max_lines)
+  rather than detected as an overflow condition.  Overflow detection covers
+  only line-width excess (ADR-W2 / WR-AD-15(1) revised).
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import TypedDict
 
 from clipwright.errors import ClipwrightError, ErrorCode
 
@@ -52,13 +52,6 @@ class Cue:
     start: str
     end: str
     text: str
-
-
-class _OverflowResult(TypedDict):
-    """Return type of check_overflow."""
-
-    line_count_overflow: bool
-    line_width_overflow: bool
 
 
 def _parse_srt(text: str) -> list[Cue]:
@@ -293,6 +286,40 @@ def wrap_cue_lines(segments: list[str], max_chars: int) -> list[str]:
     return lines
 
 
+def _merge_to_max_lines(lines: list[str], max_lines: int) -> tuple[list[str], bool]:
+    """Reduce *lines* to at most *max_lines* by greedy front-merge.
+
+    Adjacent lines are concatenated from the front (index 0 + index 1 → index 0)
+    with an empty-string separator "" until ``len(lines) <= max_lines``.
+    This preserves the original text under WR-AD-14: joining all resulting lines
+    with "" restores the source text identical to joining *lines* with "".
+
+    The algorithm is deterministic: identical inputs always produce identical
+    outputs.  When ``max_lines == 1`` every line is folded into a single string.
+
+    Args:
+        lines: Lines to merge.  May be empty.
+        max_lines: Target upper bound on the number of lines (gt=0).
+
+    Returns:
+        A 2-tuple ``(merged_lines, merged)`` where:
+
+        - ``merged_lines``: Result list with ``len(merged_lines) <= max_lines``.
+        - ``merged`` (DC-AM-001 predicate): ``True`` when at least one adjacent-line
+          concatenation occurred, ``False`` otherwise (i.e. when
+          ``len(lines) <= max_lines`` on entry, including the empty-list case).
+    """
+    if len(lines) <= max_lines:
+        return (lines, False)
+
+    result = list(lines)
+    while len(result) > max_lines:
+        result[0] = result[0] + result[1]
+        del result[1]
+
+    return (result, True)
+
+
 def _serialize_srt(cues: list[Cue]) -> str:
     """Convert a list of Cues into an SRT string.
 
@@ -357,27 +384,22 @@ def serialize_captions(cues: list[Cue], fmt: str) -> str:
         )
 
 
-def check_overflow(lines: list[str], max_chars: int, max_lines: int) -> _OverflowResult:
-    """Detect overflow (line-count excess and line-width excess) in a list of lines.
+def check_overflow(lines: list[str], max_chars: int) -> bool:
+    """Return True when any line exceeds *max_chars* characters (width overflow).
 
-    Overflow detection specification (WR-AD-15(1)):
-    - (a) len(lines) > max_lines → line_count_overflow: True
-    - (b) any line's len() > max_chars → line_width_overflow: True
-    A single oversized segment (1 line, width excess) is also covered by (b).
-    lines is not modified (avoids information loss).
+    This function detects line-width excess only (ADR-W2 / WR-AD-15(1) revised).
+    Line-count excess is no longer an overflow condition; it is resolved upstream
+    by :func:`_merge_to_max_lines` before this check is applied.
+
+    Because the check is applied after merge, a queue that becomes width-excess
+    as a result of front-merging is also reported here (DC-AS-005 — intended
+    behaviour: merged lines that exceed max_chars surface as width overflow).
 
     Args:
         lines: List of lines to inspect (each line must not contain '\\n').
         max_chars: Maximum number of characters per line.
-        max_lines: Maximum number of lines.
 
     Returns:
-        Dict with line_count_overflow and line_width_overflow keys.
+        True if at least one line has ``len(line) > max_chars``, False otherwise.
     """
-    line_count_overflow = len(lines) > max_lines
-    line_width_overflow = any(len(line) > max_chars for line in lines)
-
-    return {
-        "line_count_overflow": line_count_overflow,
-        "line_width_overflow": line_width_overflow,
-    }
+    return any(len(line) > max_chars for line in lines)

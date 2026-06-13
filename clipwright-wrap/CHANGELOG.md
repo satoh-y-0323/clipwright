@@ -20,6 +20,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server via `server:main()`. No CLI command interface is provided.
 - **Dependency bump**: requires `clipwright>=0.2.0` for the updated `ToolResult` /
   `to_tool_result` envelope helpers.
+- **`max_lines` overflow resolved by deterministic greedy front-merge**: when the wrapped
+  line count exceeds `max_lines`, adjacent lines are collapsed from the front (empty
+  separator, no truncation) until `len(lines) <= max_lines`. This replaces the previous
+  warning-only behavior that left the overflow unresolved.
+- **`data.merged_cue_indices`**: reports the cue indices that were collapsed during
+  front-merge.
+- **Overflow warning model simplified**: line-count overflow warnings and
+  `data.overflow_cue_indices` are removed. Width-overflow detection
+  (`data.overflow_width_cue_indices` + `max_chars` warnings) is unchanged and now runs on
+  post-merge lines; a cue widened past `max_chars` by merging is reported.
+- **Summary string updated**: the summary now reports collapsed/`max_chars` counts instead
+  of "exceeded limits".
 
 ## [0.1.1] - 2026-06-09
 
