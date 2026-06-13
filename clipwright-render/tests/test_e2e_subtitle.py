@@ -787,15 +787,21 @@ class TestSubtitleStyle:
             f"force_style missing from filter_complex for SRT (ADR-S6-r2 violation):\n"
             f"  filter_complex: {fc}"
         )
-        assert "FontSize=24" in fc, (
-            f"font_size=24 not reflected in force_style:\n  filter_complex: {fc}"
+        # ADR-F3 (revised): dimension-style values are counter-scaled by 288/frame_h.
+        # The main video is 320x240, so frame_h=240.
+        # FontSize=24 -> round(24 * 288 / 240) = round(28.8) = 29
+        # MarginV=20  -> round(20 * 288 / 240) = round(24.0) = 24
+        assert "FontSize=29" in fc, (
+            f"font_size=24 counter-scaled to 29 (frame_h=240) not in force_style:\n"
+            f"  filter_complex: {fc}"
         )
         assert "Alignment=2" in fc, (
             f"alignment=2 not reflected in force_style (ADR-S6-r3):\n"
             f"  filter_complex: {fc}"
         )
-        assert "MarginV=20" in fc, (
-            f"margin_v=20 not reflected in force_style:\n  filter_complex: {fc}"
+        assert "MarginV=24" in fc, (
+            f"margin_v=20 counter-scaled to 24 (frame_h=240) not in force_style:\n"
+            f"  filter_complex: {fc}"
         )
 
     def test_ass_no_force_style_in_filter_complex(self, tmp_path: Path) -> None:

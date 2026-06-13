@@ -528,6 +528,37 @@ def resolve_bgm(timeline: otio.schema.Timeline) -> BgmClip | None:
 # ===========================================================================
 
 
+# ---------------------------------------------------------------------------
+# ADR-F3 (revised): counter-scale constant and helper
+# ---------------------------------------------------------------------------
+
+# Default PlayResY used by ffmpeg when converting SRT/VTT to ASS internally.
+# libass scales ASS script coordinates by frame_H / PLAYRES_Y_SRT_DEFAULT when
+# compositing, so dimension-style values written to force_style are multiplied
+# by that ratio at render time. Counter-scale by the inverse (288 / frame_H) to
+# make API pixel values render at their intended output-pixel size.
+# Pinned by e2e regression; see ADR-F3. Update this constant (and the regression
+# test) if a future ffmpeg changes the default PlayResY.
+PLAYRES_Y_SRT_DEFAULT: int = 288
+
+
+def _counter_scale(px_value: int, frame_h: int) -> int:
+    """Inverse of libass's frame_h / PLAYRES_Y_SRT_DEFAULT upscale.
+
+    Computes the ASS script-coordinate value that, after libass multiplies it
+    by frame_h / PLAYRES_Y_SRT_DEFAULT, yields approximately px_value output
+    pixels. Round-trip rounding error is at most ±0.5 px.
+
+    Args:
+        px_value: desired dimension in output pixels (e.g. FontSize, MarginV).
+        frame_h: height of the frame entering the subtitle stage (output height).
+
+    Returns:
+        Script-coordinate integer to pass in force_style.
+    """
+    return round(px_value * PLAYRES_Y_SRT_DEFAULT / frame_h)
+
+
 def _escape_filtergraph(path: str) -> str:
     """Escape a path for use in filtergraph filename= / fontsdir= options.
 
@@ -564,11 +595,28 @@ def _rgb_to_ass_colour(hex_color: str) -> str:
     return f"&H00{b:02X}{g:02X}{r:02X}"
 
 
-def _build_force_style(subtitle: SubtitleOptions, is_ass: bool) -> str | None:
+def _build_force_style(
+    subtitle: SubtitleOptions,
+    is_ass: bool,
+    frame_h: int | None = None,
+) -> str | None:
     """Build the force_style string for the filtergraph from SubtitleOptions.
 
     Returns None for ASS input (force_style not applied; ADR-S6-r2 / DC-AS-002).
     Returns None when all style fields are None (omit force_style= entirely).
+
+    When frame_h is provided, dimension-style fields (FontSize, MarginV, Outline)
+    are counter-scaled via _counter_scale so that libass's frame_h/288 upscale
+    results in output-pixel-accurate rendering (ADR-F3 revised). Non-dimension
+    fields (FontName, Alignment, PrimaryColour) are emitted unchanged.
+    When frame_h is None, raw values are emitted (legacy PlayResY=288-based
+    behaviour; backward compatible).
+
+    Args:
+        subtitle: SubtitleOptions with style fields.
+        is_ass: True when the subtitle file is ASS (force_style not applied).
+        frame_h: height of the output frame entering the subtitle stage.
+            None means no counter-scaling (legacy fallback).
 
     Returns:
         String in 'FontName=...,FontSize=...' format, or None when not needed.
@@ -579,19 +627,37 @@ def _build_force_style(subtitle: SubtitleOptions, is_ass: bool) -> str | None:
 
     parts: list[str] = []
     if subtitle.font_name is not None:
+        # FontName is a string identifier; not a dimension field.
         parts.append(f"FontName={subtitle.font_name}")
     if subtitle.font_size is not None:
-        parts.append(f"FontSize={subtitle.font_size}")
+        # FontSize is a dimension field: counter-scale when frame_h is known.
+        if frame_h is not None:
+            fs = _counter_scale(subtitle.font_size, frame_h)
+        else:
+            fs = subtitle.font_size
+        parts.append(f"FontSize={fs}")
     if subtitle.font_color is not None:
+        # PrimaryColour is a colour value; not a dimension field.
         ass_colour = _rgb_to_ass_colour(subtitle.font_color)
         parts.append(f"PrimaryColour={ass_colour}")
     if subtitle.outline is not None:
-        # :g format removes trailing decimal zeros
-        parts.append(f"Outline={subtitle.outline:g}")
+        # Outline is a dimension field: counter-scale when frame_h is known.
+        if frame_h is not None:
+            outline_val = _counter_scale(int(subtitle.outline), frame_h)
+            parts.append(f"Outline={outline_val}")
+        else:
+            # :g format removes trailing decimal zeros
+            parts.append(f"Outline={subtitle.outline:g}")
     if subtitle.alignment is not None:
+        # Alignment is an enumeration (numpad 1–9); not a dimension field.
         parts.append(f"Alignment={subtitle.alignment}")
     if subtitle.margin_v is not None:
-        parts.append(f"MarginV={subtitle.margin_v}")
+        # MarginV is a dimension field: counter-scale when frame_h is known.
+        if frame_h is not None:
+            mv = _counter_scale(subtitle.margin_v, frame_h)
+        else:
+            mv = subtitle.margin_v
+        parts.append(f"MarginV={mv}")
 
     if not parts:
         return None
@@ -602,6 +668,7 @@ def _append_subtitle_filter(
     filter_parts: list[str],
     video_map_label: str,
     subtitle: SubtitleOptions,
+    frame_h: int | None = None,
 ) -> str:
     """Append the subtitle stage (subtitles filter) to filter_parts and return
     the new video label.
@@ -618,11 +685,18 @@ def _append_subtitle_filter(
     (DC-AS-002). SRT/VTT input: charenc=UTF-8 and force_style are added
     (M2 truth table).
 
+    Note: original_size is NOT injected. spike-original-size confirmed that
+    original_size does not affect force_style-overridden dimensions on
+    ffmpeg 8.1.1 (ADR-F3 revised). Counter-scaling via frame_h is used instead.
+
     Args:
         filter_parts: list of filter_complex segments (mutated in place).
         video_map_label: terminal label of the video chain (e.g. '[outv]').
         subtitle: SubtitleOptions with path already resolved to absolute
             (ADR-S5-r2).
+        frame_h: height of the frame entering the subtitle stage. When set,
+            dimension-style fields are counter-scaled in _build_force_style
+            (ADR-F3 revised). None means no counter-scaling (legacy fallback).
 
     Returns:
         New video_map_label '[outvsub]'.
@@ -643,8 +717,9 @@ def _append_subtitle_filter(
         esc_dir = _escape_filtergraph(subtitle.fonts_dir)
         filter_str += f":fontsdir='{esc_dir}'"
 
-    # Add force_style (SRT/VTT only; ASS uses its embedded styles)
-    force_style = _build_force_style(subtitle, is_ass)
+    # Add force_style (SRT/VTT only; ASS uses its embedded styles).
+    # Pass frame_h through for counter-scaling (ADR-F3 revised).
+    force_style = _build_force_style(subtitle, is_ass, frame_h)
     if force_style is not None:
         filter_str += f":force_style='{force_style}'"
 
@@ -861,6 +936,7 @@ def _build_filter_complex(
     denoise_directive: DenoiseDirective | None,
     loudness_directive: LoudnessDirective | None,
     options: RenderOptions,
+    probe_info: ProbeInfo | None = None,
 ) -> tuple[str, str, str, bool, bool]:
     """Build the filter_complex string, video_map_label, and audio_map_label
     (M-2).
@@ -868,6 +944,11 @@ def _build_filter_complex(
     Responsibility: constructs the filter_complex string for trim/atrim → concat
     → denoise afftdn → loudness → scale, and determines the terminal label for
     each chain. Single-source path only (maintains backward compatibility; ADR-C3).
+
+    When width/height are both specified, the scale stage uses fit-based branching
+    (ADR-F2) with even-rounding applied to W/H (ADR-F4). probe_info is used to
+    determine frame_h for subtitle counter-scaling when width/height are not
+    specified (ADR-F3 revised).
 
     Returns:
         (filter_complex, video_map_label, audio_map_label, use_afftdn,
@@ -922,18 +1003,43 @@ def _build_filter_complex(
     # (ADR-1 compliant). -vf and -filter_complex cannot be used simultaneously
     # (ffmpeg error), so scale is chained after concat output [outv] to produce
     # [outvscaled], and -map [outvscaled] is used instead.
+    # Even-rounding applied to W/H (ADR-F4; yuv420p even constraint).
+    # fit-based branching: contain / cover / stretch (ADR-F2).
     use_scale = options.width is not None and options.height is not None
+    frame_h: int | None = None
     if use_scale:
-        filter_parts.append(f"[outv]scale={options.width}:{options.height}[outvscaled]")
+        raw_w: int = options.width  # type: ignore[assignment]
+        raw_h: int = options.height  # type: ignore[assignment]
+        W = (raw_w // 2) * 2
+        H = (raw_h // 2) * 2
+        frame_h = H
+        fit = options.fit
+        if fit == "contain":
+            filter_parts.append(
+                f"[outv]scale={W}:{H}:force_original_aspect_ratio=decrease,"
+                f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1[outvscaled]"
+            )
+        elif fit == "cover":
+            filter_parts.append(
+                f"[outv]scale={W}:{H}:force_original_aspect_ratio=increase,"
+                f"crop={W}:{H},setsar=1[outvscaled]"
+            )
+        else:
+            # stretch: scale exactly to W:H, no aspect-ratio preservation
+            filter_parts.append(f"[outv]scale={W}:{H},setsar=1[outvscaled]")
         video_map_label = "[outvscaled]"
     else:
         video_map_label = "[outv]"
+        # No scale stage: use probe height as frame_h for subtitle counter-scale
+        # (ADR-F3 revised §5.3). Falls back to None when probe height unavailable.
+        if probe_info is not None:
+            frame_h = probe_info.height  # may be None → counter-scale skipped
 
     # Inject subtitle stage after video_map_label is finalised (ADR-S4-r3).
     # When subtitle=None, nothing is done (backward compatible; ADR-S8).
     if options.subtitle is not None:
         video_map_label = _append_subtitle_filter(
-            filter_parts, video_map_label, options.subtitle
+            filter_parts, video_map_label, options.subtitle, frame_h
         )
 
     filter_complex = ";".join(filter_parts)
@@ -1021,12 +1127,18 @@ def _build_clip_filters(
     target_w: int,
     target_h: int,
     target_fps: float,
+    fit: str = "contain",
 ) -> tuple[list[str], list[str], list[str]]:
     """Generate video/audio filter strings for each clip (ADR-C5-r2/C7-r2).
 
     Helper extracted from _build_multi_source_filter_complex.
     Handles per-clip spec normalisation (fps/scale/pad/setsar) and silent audio
     padding (anullsrc) for audio-less clips.
+
+    fit controls the per-clip frame fitting strategy (ADR-F4):
+    - 'contain': scale:decrease + pad (letterbox/pillarbox, default).
+    - 'cover': scale:increase + crop (fill and clip overflow).
+    - 'stretch': scale only (no aspect-ratio preservation).
 
     Returns:
         Tuple of (filter_parts, video_labels, audio_labels).
@@ -1041,15 +1153,27 @@ def _build_clip_filters(
         dur = _to_seconds(r.source_range.duration)
         end = round(start + dur, 6)
         vl = f"v{i}"
-        # Per-clip video: trim → setpts → fps → scale(decrease) → pad → setsar.
-        # fps written with at least 5 decimal places (ADR-C2-r2; NTSC fps
-        # precision)
-        filter_parts.append(
+        # Per-clip video: trim → setpts → fps → scale/pad/crop/setsar (fit-based).
+        # fps written with at least 5 decimal places (ADR-C2-r2; NTSC fps precision)
+        base = (
             f"[{k}:v]trim=start={start}:end={end},setpts=PTS-STARTPTS,"
             f"fps={target_fps:.5f},"
-            f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,"
-            f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2,setsar=1[{vl}]"
         )
+        if fit == "cover":
+            filter_parts.append(
+                base
+                + f"scale={target_w}:{target_h}:force_original_aspect_ratio=increase,"
+                f"crop={target_w}:{target_h},setsar=1[{vl}]"
+            )
+        elif fit == "stretch":
+            filter_parts.append(base + f"scale={target_w}:{target_h},setsar=1[{vl}]")
+        else:
+            # contain (default): scale:decrease + pad + setsar
+            filter_parts.append(
+                base
+                + f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,"
+                f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2,setsar=1[{vl}]"
+            )
         video_labels.append(f"[{vl}]")
 
         if has_audio_overall:
@@ -1107,7 +1231,7 @@ def _build_multi_source_filter_complex(
         source_probes, first_source, options
     )
 
-    # Generate per-clip video/audio filter strings
+    # Generate per-clip video/audio filter strings (fit propagated; ADR-F4)
     clip_filter_parts, video_labels, audio_labels = _build_clip_filters(
         ranges,
         source_index,
@@ -1116,6 +1240,7 @@ def _build_multi_source_filter_complex(
         target_w,
         target_h,
         target_fps,
+        fit=options.fit,
     )
     # Carry forward as local variable to append concat filter and audio pipe.
     filter_parts: list[str] = clip_filter_parts
@@ -1149,9 +1274,11 @@ def _build_multi_source_filter_complex(
 
     # Inject subtitle stage after video_map_label is finalised (ADR-S4-r3).
     # When subtitle=None, nothing is done (backward compatible; ADR-S8).
+    # frame_h = target_h (subtitle stage follows per-clip normalisation to target
+    # size; ADR-F3 revised §5.3).
     if options.subtitle is not None:
         video_map_label = _append_subtitle_filter(
-            filter_parts, video_map_label, options.subtitle
+            filter_parts, video_map_label, options.subtitle, target_h
         )
 
     filter_complex = ";".join(filter_parts)
@@ -1465,7 +1592,12 @@ def build_plan(
 
         filter_complex, video_map_label, audio_map_label, use_afftdn, use_loudness = (
             _build_filter_complex(
-                ranges, has_audio, denoise_directive, loudness_directive, options
+                ranges,
+                has_audio,
+                denoise_directive,
+                loudness_directive,
+                options,
+                probe_info,
             )
         )
 
