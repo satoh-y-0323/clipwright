@@ -95,6 +95,9 @@ class ToolResult(BaseModel):
     plain dict.  These methods delegate to ``model_dump()`` on each call.
     """
 
+    # allow_inf_nan=False prevents Infinity/NaN from leaking into the JSON wire format.
+    model_config = ConfigDict(extra="ignore", allow_inf_nan=False)
+
     ok: bool
     summary: str | None = None
     data: dict[str, Any] = {}
@@ -103,15 +106,25 @@ class ToolResult(BaseModel):
     error: ToolError | None = None
 
     def __getitem__(self, key: str) -> Any:
-        """Allow dict-style read access: ``result["ok"]``."""
+        """Backward-compatibility shim for dict-style read access (``result["ok"]``).
+
+        Will be removed after all callers migrate to attribute access.
+        """
         return self.model_dump()[key]
 
     def get(self, key: str, default: Any = None) -> Any:
-        """Allow dict-style ``.get()`` access: ``result.get("artifacts", [])``."""
+        """Backward-compatibility shim for dict-style ``.get()`` access.
+
+        Example: ``result.get("artifacts", [])``.
+        Will be removed after all callers migrate to attribute access.
+        """
         return self.model_dump().get(key, default)
 
     def __contains__(self, key: object) -> bool:
-        """Allow ``"key" in result`` membership tests."""
+        """Backward-compatibility shim for ``"key" in result`` membership tests.
+
+        Will be removed after all callers migrate to attribute access.
+        """
         return key in self.model_dump()
 
 

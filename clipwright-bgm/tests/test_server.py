@@ -23,7 +23,7 @@ from clipwright_bgm.server import main, mcp
 # ===========================================================================
 
 
-def _ok_envelope(**kwargs: object) -> ToolResult:
+def _ok_tool_result(**kwargs: object) -> ToolResult:
     """Helper to generate a test ok ToolResult."""
     return ToolResult(
         ok=True,
@@ -100,7 +100,7 @@ class TestDelegation:
         """On success, add_bgm must be called and its result returned."""
         with patch(
             "clipwright_bgm.server.add_bgm",
-            return_value=_ok_envelope(summary="BGM added successfully"),
+            return_value=_ok_tool_result(summary="BGM added successfully"),
         ) as mock_fn:
             result = server_action(
                 timeline="timeline.otio",
@@ -142,7 +142,7 @@ class TestDelegation:
         """timeline / bgm / output arguments must be correctly forwarded to add_bgm."""
         with patch(
             "clipwright_bgm.server.add_bgm",
-            return_value=_ok_envelope(),
+            return_value=_ok_tool_result(),
         ) as mock_fn:
             server_action(
                 timeline="/path/to/timeline.otio",
@@ -160,7 +160,7 @@ class TestDelegation:
         """options=None must be forwarded to add_bgm (default when omitted)."""
         with patch(
             "clipwright_bgm.server.add_bgm",
-            return_value=_ok_envelope(),
+            return_value=_ok_tool_result(),
         ) as mock_fn:
             server_action(
                 timeline="timeline.otio",
@@ -180,7 +180,7 @@ class TestDelegation:
         custom_opts = BgmOptions(volume_db=-12.0, fade_in_sec=1.0)
         with patch(
             "clipwright_bgm.server.add_bgm",
-            return_value=_ok_envelope(),
+            return_value=_ok_tool_result(),
         ) as mock_fn:
             server_action(
                 timeline="timeline.otio",

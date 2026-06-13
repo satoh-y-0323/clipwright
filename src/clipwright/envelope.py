@@ -85,8 +85,8 @@ def to_tool_result(d: dict[str, Any]) -> ToolResult:
     - Success form: ``{ok: True, summary, data?, artifacts?, warnings?}``.
       Artifact dicts in ``artifacts`` are coerced via Pydantic (extra keys ignored).
     - Failure form: ``{ok: False, error: {code, message, hint}}``.
-    - Extra top-level keys are ignored (model_validate with extra="ignore" semantics
-      deferred to future Pydantic config if needed; currently raises for unknown keys).
+    - Extra top-level keys are silently ignored by Pydantic v2 model_validate
+      default behavior (no ConfigDict required).
 
     Args:
         d: Raw dict conforming to the ToolResult envelope shape.

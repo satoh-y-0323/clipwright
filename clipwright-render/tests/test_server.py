@@ -19,6 +19,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from clipwright.schemas import ToolError, ToolResult
 
 # ---------------------------------------------------------------------------
 # Attempt to import server.py (if not implemented, _SERVER_AVAILABLE = False)
@@ -47,8 +48,8 @@ pytestmark = pytest.mark.xfail(
 # ---------------------------------------------------------------------------
 
 
-def _ok_dict(**kwargs: Any) -> dict[str, Any]:
-    """Return a success envelope dict (used as mock return value for render_timeline)."""
+def _ok_tool_result(**kwargs: Any) -> ToolResult:
+    """Return a success ToolResult (used as mock return value for render_timeline)."""
     base: dict[str, Any] = {
         "ok": True,
         "summary": "ok",
@@ -57,23 +58,15 @@ def _ok_dict(**kwargs: Any) -> dict[str, Any]:
         "warnings": [],
     }
     base.update(kwargs)
-    return base
+    return ToolResult.model_validate(base)
 
 
-def _error_dict(code: str) -> dict[str, Any]:
-    """Return a failure envelope dict (used as mock return value for render_timeline)."""
-    return {
-        "ok": False,
-        "summary": None,
-        "data": {},
-        "artifacts": [],
-        "warnings": [],
-        "error": {
-            "code": code,
-            "message": "error",
-            "hint": "hint",
-        },
-    }
+def _error_tool_result(code: str) -> ToolResult:
+    """Return a failure ToolResult (used as mock return value for render_timeline)."""
+    return ToolResult(
+        ok=False,
+        error=ToolError(code=code, message="error", hint="hint"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +128,7 @@ class TestMcpToolDelegation:
 
     def test_success_delegates_to_render_timeline(self, tmp_path: Path) -> None:
         """On success, render.render_timeline is called and the result is delegated."""
-        expected = _ok_dict(summary="rendered ok")
+        expected = _ok_tool_result(summary="rendered ok")
 
         with patch(
             "clipwright_render.server.render_timeline",
@@ -154,7 +147,7 @@ class TestMcpToolDelegation:
 
     def test_failure_returns_error_envelope(self, tmp_path: Path) -> None:
         """When render_timeline returns a failure envelope, the server returns it unchanged."""
-        expected = _error_dict("FILE_NOT_FOUND")
+        expected = _error_tool_result("FILE_NOT_FOUND")
 
         with patch(
             "clipwright_render.server.render_timeline",
@@ -174,7 +167,7 @@ class TestMcpToolDelegation:
         """dry_run=True is passed to render_timeline."""
         with patch(
             "clipwright_render.server.render_timeline",
-            return_value=_ok_dict(),
+            return_value=_ok_tool_result(),
         ) as mock_render:
             server_clipwright_render(
                 timeline="tl.otio",
@@ -195,7 +188,7 @@ class TestMcpToolDelegation:
 
         with patch(
             "clipwright_render.server.render_timeline",
-            return_value=_ok_dict(),
+            return_value=_ok_tool_result(),
         ) as mock_render:
             server_clipwright_render(
                 timeline="tl.otio",
@@ -210,18 +203,14 @@ class TestMcpToolDelegation:
 
     def test_error_envelope_has_code_message_hint(self, tmp_path: Path) -> None:
         """The failure envelope contains code / message / hint."""
-        expected: dict[str, Any] = {
-            "ok": False,
-            "summary": None,
-            "data": {},
-            "artifacts": [],
-            "warnings": [],
-            "error": {
-                "code": "INVALID_INPUT",
-                "message": "invalid input",
-                "hint": "please fix it",
-            },
-        }
+        expected = ToolResult(
+            ok=False,
+            error=ToolError(
+                code="INVALID_INPUT",
+                message="invalid input",
+                hint="please fix it",
+            ),
+        )
 
         with patch(
             "clipwright_render.server.render_timeline",
@@ -269,13 +258,7 @@ class TestMcpBoundary:
         """
         monkeypatch.setattr(
             "clipwright_render.server.render_timeline",
-            lambda **kw: {
-                "ok": True,
-                "summary": "dry run ok",
-                "data": {},
-                "artifacts": [],
-                "warnings": [],
-            },
+            lambda **kw: ToolResult(ok=True, summary="dry run ok"),
         )
         call_result = asyncio.run(
             mcp.call_tool(

@@ -20,6 +20,7 @@ DC-GP-001 language responsibility verification policy (important):
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -36,7 +37,7 @@ from clipwright_wrap.server import main, mcp
 # ---------------------------------------------------------------------------
 
 
-def _ok_envelope(**kwargs: object) -> ToolResult:
+def _ok_tool_result(**kwargs: Any) -> ToolResult:
     base = ToolResult(
         ok=True,
         summary="ok",
@@ -47,7 +48,7 @@ def _ok_envelope(**kwargs: object) -> ToolResult:
     return base.model_copy(update=kwargs)
 
 
-def _error_envelope(code: str) -> ToolResult:
+def _error_tool_result(code: str) -> ToolResult:
     return ToolResult(
         ok=False,
         error=ToolError(code=code, message="error", hint="hint"),
@@ -94,7 +95,7 @@ class TestMcpAnnotations:
 
 class TestDelegation:
     def test_success_delegates(self) -> None:
-        expected = _ok_envelope(summary="wrapped")
+        expected = _ok_tool_result(summary="wrapped")
         with patch(
             "clipwright_wrap.server.wrap_captions",
             return_value=expected,
@@ -106,7 +107,7 @@ class TestDelegation:
         assert result.ok is True
 
     def test_failure_passthrough(self) -> None:
-        expected = _error_envelope("FILE_NOT_FOUND")
+        expected = _error_tool_result("FILE_NOT_FOUND")
         with patch(
             "clipwright_wrap.server.wrap_captions",
             return_value=expected,
@@ -118,8 +119,8 @@ class TestDelegation:
         assert result.error is not None
         assert result.error.code == "FILE_NOT_FOUND"
 
-    def test_error_envelope_has_code_message_hint(self) -> None:
-        expected = _error_envelope("DEPENDENCY_MISSING")
+    def test_error_tool_result_has_code_message_hint(self) -> None:
+        expected = _error_tool_result("DEPENDENCY_MISSING")
         with patch(
             "clipwright_wrap.server.wrap_captions",
             return_value=expected,
@@ -139,7 +140,7 @@ class TestDelegation:
         """
         with patch(
             "clipwright_wrap.server.wrap_captions",
-            return_value=_ok_envelope(),
+            return_value=_ok_tool_result(),
         ) as mock_w:
             server_wrap_captions(input="in.srt", output="out.srt", options=None)
         _args, kwargs = mock_w.call_args
@@ -154,7 +155,7 @@ class TestDelegation:
         opts = WrapCaptionsOptions(language="zh-hans", max_chars=20, max_lines=3)
         with patch(
             "clipwright_wrap.server.wrap_captions",
-            return_value=_ok_envelope(),
+            return_value=_ok_tool_result(),
         ) as mock_w:
             server_wrap_captions(input="in.srt", output="out.srt", options=opts)
         _args, kwargs = mock_w.call_args
@@ -168,7 +169,7 @@ class TestDelegation:
         the result must pass through unchanged (no double conversion).
         """
         # Mock wrap_captions to return ok:True and confirm server performs no conversion
-        expected = _ok_envelope(summary="no double conversion")
+        expected = _ok_tool_result(summary="no double conversion")
         opts = WrapCaptionsOptions(language="ja")  # valid language
         with patch(
             "clipwright_wrap.server.wrap_captions",

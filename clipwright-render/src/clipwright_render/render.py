@@ -36,6 +36,7 @@ from clipwright.media import inspect_media
 from clipwright.otio_utils import get_clipwright_metadata, load_timeline
 from clipwright.process import resolve_tool, run
 from clipwright.schemas import ToolResult
+from pydantic import ValidationError as PydanticValidationError
 
 from clipwright_render.plan import (
     BgmClip,
@@ -325,6 +326,12 @@ def render_timeline(
         return _render_inner(timeline, output, options, dry_run)
     except ClipwrightError as exc:
         return error_result(exc.code, exc.message, exc.hint)
+    except PydanticValidationError:
+        return error_result(
+            ErrorCode.INTERNAL,
+            "An internal schema error occurred during render.",
+            "Please report with reproduction steps.",
+        )
 
 
 def _render_inner(
@@ -617,6 +624,12 @@ def _render_inner(
             "total_duration_seconds": plan.total_duration_seconds,
             "output_size_bytes": output_size,
         },
-        artifacts=[{"path": str(output_path), "kind": "video"}],
+        artifacts=[
+            {
+                "role": "output",
+                "path": str(output_path),
+                "format": Path(output_path).suffix.lstrip("."),
+            }
+        ],
         warnings=plan.warnings,
     )

@@ -9,9 +9,8 @@ Default transport is stdio (mcp.run(transport="stdio")).
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated
 
-from clipwright.envelope import to_tool_result
 from clipwright.schemas import ToolResult
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
@@ -67,17 +66,15 @@ def clipwright_render(
 
     Business logic is delegated to render.render_timeline.
     When options is None, default RenderOptions() is used.
+    render_timeline always returns a ToolResult; no conversion is needed here.
     """
     resolved_options = options if options is not None else RenderOptions()
-    raw: Any = render_timeline(
+    return render_timeline(
         timeline=timeline,
         output=output,
         options=resolved_options,
         dry_run=dry_run,
     )
-    # Normalise: render_timeline returns ToolResult; to_tool_result accepts both
-    # ToolResult instances and legacy dicts (used in tests via mock return values).
-    return to_tool_result(raw.model_dump() if isinstance(raw, ToolResult) else raw)
 
 
 # ===========================================================================

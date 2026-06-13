@@ -7,12 +7,18 @@ Target:
   - timeline=None is the default
   - Delegates to noise.detect_noise
   - main() calls mcp.run(transport="stdio")
+  - outputSchema exposes 'ok' property (MCP boundary contract)
+  - structuredContent has top-level 'ok' (no FastMCP union wrapping)
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from unittest.mock import patch
+
+import pytest
+from clipwright.schemas import Artifact, ToolError, ToolResult
 
 from clipwright_noise.schemas import DetectNoiseOptions
 from clipwright_noise.server import clipwright_detect_noise as server_action
@@ -23,16 +29,15 @@ from clipwright_noise.server import main, mcp
 # ===========================================================================
 
 
-def _ok_envelope(**kwargs: Any) -> dict[str, Any]:
-    base: dict[str, Any] = {
-        "ok": True,
-        "summary": "ok",
-        "data": {},
-        "artifacts": [],
-        "warnings": [],
-    }
-    base.update(kwargs)
-    return base
+def _ok_tool_result(**kwargs: object) -> ToolResult:
+    """Helper to generate a test ok ToolResult."""
+    return ToolResult(
+        ok=True,
+        summary="Noise detected.",
+        data={},
+        artifacts=[Artifact(role="timeline", path="output.otio", format="otio")],
+        warnings=[],
+    )
 
 
 def _get_tool_annotations() -> Any:
@@ -94,42 +99,43 @@ class TestDelegation:
         """detect_noise must be called on success and the result must be returned."""
         with patch(
             "clipwright_noise.server.detect_noise",
-            return_value=_ok_envelope(summary="done"),
+            return_value=_ok_tool_result(summary="done"),
         ) as mock_fn:
             result = server_action(
                 media="in.mp4", output="out.otio", options=None, timeline=None
             )
 
         mock_fn.assert_called_once()
-        assert result["ok"] is True
-        assert result["summary"] == "done"
+        assert result.ok is True
+        assert result.summary == "Noise detected."
 
     def test_error_result_propagates(self) -> None:
         """When detect_noise returns an error envelope, it must propagate as-is."""
-        error_envelope: dict[str, Any] = {
-            "ok": False,
-            "error": {
-                "code": "INVALID_INPUT",
-                "message": "test error",
-                "hint": "test hint",
-            },
-        }
+        error_result = ToolResult(
+            ok=False,
+            error=ToolError(
+                code="INVALID_INPUT",
+                message="test error",
+                hint="test hint",
+            ),
+        )
         with patch(
             "clipwright_noise.server.detect_noise",
-            return_value=error_envelope,
+            return_value=error_result,
         ):
             result = server_action(
                 media="in.mp4", output="out.otio", options=None, timeline=None
             )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == "INVALID_INPUT"
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == "INVALID_INPUT"
 
     def test_media_and_output_forwarded(self) -> None:
         """media / output must be correctly forwarded to detect_noise."""
         with patch(
             "clipwright_noise.server.detect_noise",
-            return_value=_ok_envelope(),
+            return_value=_ok_tool_result(),
         ) as mock_fn:
             server_action(
                 media="/path/to/video.mp4",
@@ -146,7 +152,7 @@ class TestDelegation:
         """The timeline argument must be correctly forwarded to detect_noise."""
         with patch(
             "clipwright_noise.server.detect_noise",
-            return_value=_ok_envelope(),
+            return_value=_ok_tool_result(),
         ) as mock_fn:
             server_action(
                 media="in.mp4",
@@ -162,7 +168,7 @@ class TestDelegation:
         """timeline=None must be forwarded to detect_noise (default when omitted)."""
         with patch(
             "clipwright_noise.server.detect_noise",
-            return_value=_ok_envelope(),
+            return_value=_ok_tool_result(),
         ) as mock_fn:
             server_action(
                 media="in.mp4", output="out.otio", options=None, timeline=None
@@ -184,7 +190,7 @@ class TestOptionsDefault:
         """options=None → default backend=afftdn / strength=medium must be passed."""
         with patch(
             "clipwright_noise.server.detect_noise",
-            return_value=_ok_envelope(),
+            return_value=_ok_tool_result(),
         ) as mock_fn:
             server_action(
                 media="in.mp4", output="out.otio", options=None, timeline=None
@@ -203,7 +209,7 @@ class TestOptionsDefault:
         custom_opts = DetectNoiseOptions(backend="deepfilternet", strength="strong")
         with patch(
             "clipwright_noise.server.detect_noise",
-            return_value=_ok_envelope(),
+            return_value=_ok_tool_result(),
         ) as mock_fn:
             server_action(
                 media="in.mp4", output="out.otio", options=custom_opts, timeline=None
@@ -216,6 +222,49 @@ class TestOptionsDefault:
             and passed.backend == "deepfilternet"
             and passed.strength == "strong"
         )
+
+
+# ===========================================================================
+# Test scope: MCP outputSchema and structuredContent
+# ===========================================================================
+
+
+class TestMcpBoundary:
+    """FastMCP must expose a typed outputSchema and return structuredContent."""
+
+    def test_outputschema_is_typed(self) -> None:
+        """outputSchema must expose 'ok' property when return type is ToolResult."""
+        tools = asyncio.run(mcp.list_tools())
+        tool = next(t for t in tools if t.name == "clipwright_detect_noise")
+        schema = tool.outputSchema or {}
+        assert "ok" in schema.get("properties", {}), (
+            "outputSchema must expose 'ok' property"
+        )
+
+    def test_structuredcontent_top_level_ok(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """call_tool must return structuredContent with top-level 'ok'."""
+        monkeypatch.setattr(
+            "clipwright_noise.server.detect_noise",
+            lambda **kw: ToolResult(
+                ok=True,
+                summary="Noise detected.",
+                data={},
+                artifacts=[Artifact(role="timeline", path="out.otio", format="otio")],
+                warnings=[],
+            ),
+        )
+        result = asyncio.run(
+            mcp.call_tool(
+                "clipwright_detect_noise",
+                {"media": "in.mp4", "output": "out.otio"},
+            )
+        )
+        content, structured = result
+        assert structured is not None, "structuredContent must not be None"
+        assert "ok" in structured, "structuredContent must have top-level 'ok'"
+        assert structured["ok"] is True
 
 
 # ===========================================================================
