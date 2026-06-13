@@ -176,6 +176,34 @@ For details, see [docs/clipwright-spec.md](docs/clipwright-spec.md).
 
 ---
 
+## MCP Client Registration
+
+Each clipwright tool is a standalone MCP server. Register them in your MCP client configuration (`.mcp.json` / `claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "clipwright": {
+      "command": "clipwright-mcp",
+      "env": {
+        "CLIPWRIGHT_FFMPEG": "/path/to/ffmpeg",
+        "CLIPWRIGHT_FFPROBE": "/path/to/ffprobe"
+      }
+    },
+    "clipwright-render": {
+      "command": "clipwright-render",
+      "env": {
+        "CLIPWRIGHT_FFMPEG": "/path/to/ffmpeg"
+      }
+    }
+  }
+}
+```
+
+Set `CLIPWRIGHT_FFMPEG` and `CLIPWRIGHT_FFPROBE` environment variables if ffmpeg is not in `PATH`.
+
+---
+
 ## License
 
 MIT — See [LICENSE](LICENSE) for details.

@@ -12,7 +12,7 @@ requires-python = ">=3.11"
 dependencies = [
     # If wrapping external OSS via subprocess, add here as normal dependency (M4).
     # Example: "budoux",
-    "clipwright",
+    "clipwright>=0.2.0",
     "mcp[cli]>=1.27.2",
     "pydantic>=2",
 ]

@@ -8,12 +8,13 @@ Transport is stdio by default (mcp.run(transport="stdio"), M absent SHOULD §6.7
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
+from clipwright.schemas import ToolResult
 from clipwright___TOOL__.__TOOL__ import __ACTION__
 from clipwright___TOOL__.schemas import __Action__Options
 
@@ -54,7 +55,7 @@ def clipwright___ACTION__(
         __Action__Options | None,
         Field(description="Tool-specific options. Uses defaults if omitted."),
     ] = None,
-) -> dict[str, Any]:
+) -> ToolResult:
     """(TODO: Describe in 1-2 sentences tool purpose and input/output contract. Readable by AI.)
 
     Input file is not modified (non-destructive, readOnly).

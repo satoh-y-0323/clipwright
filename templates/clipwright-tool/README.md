@@ -45,3 +45,18 @@ uv run --package clipwright-__TOOL__ clipwright-__TOOL__
 
 - Python 3.11 or later
 - (If external OSS required, clarify PATH prerequisites here)
+
+## MCP Client Registration
+
+Register this tool in your MCP client configuration (`.mcp.json` / `claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "clipwright-__TOOL__": {
+      "command": "clipwright-__TOOL__",
+      "env": {}
+    }
+  }
+}
+```
