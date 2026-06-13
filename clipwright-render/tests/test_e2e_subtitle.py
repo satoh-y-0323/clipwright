@@ -788,19 +788,21 @@ class TestSubtitleStyle:
             f"  filter_complex: {fc}"
         )
         # ADR-F3 (revised): dimension-style values are counter-scaled by 288/frame_h.
-        # The main video is 320x240, so frame_h=240.
-        # FontSize=24 -> round(24 * 288 / 240) = round(28.8) = 29
-        # MarginV=20  -> round(20 * 288 / 240) = round(24.0) = 24
-        assert "FontSize=29" in fc, (
-            f"font_size=24 counter-scaled to 29 (frame_h=240) not in force_style:\n"
+        # The main video is {_WIDTH}x{_HEIGHT}, so frame_h={_HEIGHT}.
+        # FontSize=24 -> round(24 * 288 / _HEIGHT)
+        # MarginV=20  -> round(20 * 288 / _HEIGHT)
+        _expected_font_size = round(24 * 288 / _HEIGHT)
+        _expected_margin_v = round(20 * 288 / _HEIGHT)
+        assert f"FontSize={_expected_font_size}" in fc, (
+            f"font_size=24 counter-scaled to {_expected_font_size} (frame_h={_HEIGHT}) not in force_style:\n"
             f"  filter_complex: {fc}"
         )
         assert "Alignment=2" in fc, (
             f"alignment=2 not reflected in force_style (ADR-S6-r3):\n"
             f"  filter_complex: {fc}"
         )
-        assert "MarginV=24" in fc, (
-            f"margin_v=20 counter-scaled to 24 (frame_h=240) not in force_style:\n"
+        assert f"MarginV={_expected_margin_v}" in fc, (
+            f"margin_v=20 counter-scaled to {_expected_margin_v} (frame_h={_HEIGHT}) not in force_style:\n"
             f"  filter_complex: {fc}"
         )
 
@@ -1095,4 +1097,227 @@ class TestSubtitleBackwardCompat:
             f"  subtitle vs no-subtitle SSIM: {ssim_sub_vs_no:.6f} (expected: < {_SSIM_PIXEL_DIFF_THRESHOLD})\n"
             f"  no-subtitle pair SSIM: {ssim_no_vs_no:.6f} (reference)\n"
             f"  Control experiment to confirm the diff is caused solely by the subtitle"
+        )
+
+
+# ===========================================================================
+# Tests: assert-8 — counter-scale (ADR-F3): vertical output subtitle visibility
+# ===========================================================================
+
+# Dimensions for counter-scale tests: landscape source -> tall portrait output.
+# 1920x1080 -> 1080x1920 (fit=contain).  Using fit=contain so the scale stage runs.
+_CS_SRC_W = 1920
+_CS_SRC_H = 1080
+_CS_TARGET_W = 1080
+_CS_TARGET_H = 1920
+_CS_FRAME_H = 1920  # frame_h passed to counter-scale (= target H after even-rounding)
+# PLAYRES_Y_SRT_DEFAULT = 288 (ffmpeg SRT->ASS conversion fixed PlayResY, ADR-F3/§5.6)
+_CS_PLAYRES_Y = 288
+# margin_v chosen so it is clearly inside the canvas after counter-scale.
+# API value 100 px -> script_value = round(100 * 288 / 1920) = round(15.0) = 15.
+# libass renders at 15 * 1920/288 = 100 px from bottom => inside the 1080x1920 frame.
+_CS_MARGIN_V = 100  # output-pixel API value (will be counter-scaled)
+_CS_FONT_SIZE = 48  # output-pixel API value
+
+
+def _make_wide_video_for_cs(ffmpeg: str, output: Path) -> None:
+    """Generate a wide landscape source (1920x1080, 25 fps, no audio) for counter-scale tests."""
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"testsrc=size={_CS_SRC_W}x{_CS_SRC_H}:rate=25:duration=3",
+        "-t",
+        "3",
+        "-c:v",
+        "libx264",
+        "-an",
+        "-pix_fmt",
+        "yuv420p",
+        str(output),
+    ]
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=_E2E_TIMEOUT,
+    )
+    assert result.returncode == 0, (
+        f"Wide-video fixture generation failed: {result.stderr[:400]}"
+    )
+
+
+def _make_timeline_for_cs(source_path: Path) -> tuple[otio.schema.Timeline, Path]:
+    """Return an OTIO Timeline wrapping a 3-second clip from source_path.
+
+    Returns the timeline object (caller must write to file).
+    """
+    ref = otio.schema.ExternalReference(target_url=str(source_path.resolve()))
+    clip = otio.schema.Clip(
+        name=source_path.name,
+        media_reference=ref,
+        source_range=otio.opentime.TimeRange(
+            start_time=otio.opentime.RationalTime(0.0, 25.0),
+            duration=otio.opentime.RationalTime(75.0, 25.0),  # 3.0 s
+        ),
+    )
+    track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
+    track.append(clip)
+    timeline = otio.schema.Timeline(name="cs_test")
+    timeline.tracks.append(track)
+    return timeline, source_path
+
+
+@requires_ffmpeg
+class TestSubtitleCounterScaleE2E:
+    """e2e proof that counter-scale renders subtitles at the intended output-pixel position (assert-8).
+
+    Design (ADR-F3 revised):
+      - ffmpeg converts SRT to ASS with PlayResY=288.  libass scales all ASS
+        dimension values by frame_H/288 when compositing.  Without counter-scale
+        MarginV=100 becomes 100*1920/288 ≈ 667 px — completely outside a 1920 px frame.
+      - With counter-scale: script_value = round(100*288/1920) = 15.
+        libass renders at 15*1920/288 = 100 px from bottom — inside the frame.
+      - This test proves that counter-scale is actually applied by render_timeline,
+        and that the subtitle is visible in the output frame (pixel-level SSIM check).
+
+    288 regression guard (§5.6 / ADR-F3):
+      - The PLAYRES_Y_SRT_DEFAULT=288 constant is pinned here.  If a future ffmpeg
+        version changes the default PlayResY, the subtitle position will shift and
+        this test will fail, alerting maintainers to update the constant.
+    """
+
+    def test_counter_scale_values_in_filter_complex(self, tmp_path: Path) -> None:
+        """dry_run filter_complex contains counter-scaled FontSize and MarginV (ADR-F3, assert-8-dryrun).
+
+        For fit=contain, width=1080, height=1920:
+          font_size=48  -> round(48*288/1920)  = round(7.2)  = 7
+          margin_v=100  -> round(100*288/1920) = round(15.0) = 15
+        These are the script-coordinate values libass will upscale back to ~48/~100 px.
+        """
+        assert _FFMPEG is not None
+
+        src = tmp_path / "wide.mp4"
+        _make_wide_video_for_cs(_FFMPEG, src)
+        srt = tmp_path / "sub.srt"
+        _make_srt(srt)
+        tl, _ = _make_timeline_for_cs(src)
+        tl_path = tmp_path / "tl_cs_dry.otio"
+        _save_timeline(tl, tl_path)
+
+        result = render_timeline(
+            str(tl_path),
+            str(tmp_path / "out_cs_dry.mp4"),
+            RenderOptions(
+                width=_CS_TARGET_W,
+                height=_CS_TARGET_H,
+                fit="contain",
+                subtitle=SubtitleOptions(
+                    path=str(srt.resolve()),
+                    font_size=_CS_FONT_SIZE,
+                    margin_v=_CS_MARGIN_V,
+                ),
+            ),
+            dry_run=True,
+        )
+        assert result["ok"] is True, f"dry_run failed: {result}"
+        fc = result["data"]["filter_complex"]
+
+        # Expected counter-scale: round(48*288/1920)=7, round(100*288/1920)=15
+        expected_fs = round(_CS_FONT_SIZE * _CS_PLAYRES_Y / _CS_FRAME_H)  # 7
+        expected_mv = round(_CS_MARGIN_V * _CS_PLAYRES_Y / _CS_FRAME_H)  # 15
+        assert f"FontSize={expected_fs}" in fc, (
+            f"Counter-scaled FontSize={expected_fs} not found in filter_complex "
+            f"(font_size={_CS_FONT_SIZE}, frame_h={_CS_FRAME_H}, PlayResY={_CS_PLAYRES_Y}):\n"
+            f"  filter_complex: {fc}"
+        )
+        assert f"MarginV={expected_mv}" in fc, (
+            f"Counter-scaled MarginV={expected_mv} not found in filter_complex "
+            f"(margin_v={_CS_MARGIN_V}, frame_h={_CS_FRAME_H}, PlayResY={_CS_PLAYRES_Y}):\n"
+            f"  filter_complex: {fc}"
+        )
+        # Regression: original_size must NOT be injected (spike confirmed it is ineffective)
+        assert "original_size=" not in fc, (
+            f"original_size found in filter_complex — must be excluded (ADR-F3 regression):\n"
+            f"  filter_complex: {fc}"
+        )
+
+    def test_subtitle_visible_in_tall_output_after_counter_scale(
+        self, tmp_path: Path
+    ) -> None:
+        """Subtitle is visible in 1080x1920 contain output after counter-scale (assert-8, ADR-F3).
+
+        Landscape 1920x1080 -> portrait 1080x1920 with fit=contain + SRT subtitle.
+        The subtitle-burned output must differ significantly from the no-subtitle output
+        (SSIM < 0.999), proving that the subtitle rendered inside the visible frame.
+
+        This is also the 288 regression guard (§5.6 / ADR-F3): if ffmpeg's default
+        PlayResY changes from 288, the counter-scale formula produces wrong values,
+        the subtitle lands outside the frame, there is no pixel change, and SSIM >= 0.999
+        triggers a test failure.
+        """
+        assert _FFMPEG is not None
+
+        src = tmp_path / "wide.mp4"
+        _make_wide_video_for_cs(_FFMPEG, src)
+        srt = tmp_path / "sub.srt"
+        _make_srt(srt)
+
+        # Subtitle render
+        tl_sub, _ = _make_timeline_for_cs(src)
+        tl_sub_path = tmp_path / "tl_sub.otio"
+        _save_timeline(tl_sub, tl_sub_path)
+        out_sub = tmp_path / "out_sub.mp4"
+        result_sub = render_timeline(
+            str(tl_sub_path),
+            str(out_sub),
+            RenderOptions(
+                width=_CS_TARGET_W,
+                height=_CS_TARGET_H,
+                fit="contain",
+                subtitle=SubtitleOptions(
+                    path=str(srt.resolve()),
+                    font_size=_CS_FONT_SIZE,
+                    margin_v=_CS_MARGIN_V,
+                ),
+            ),
+            dry_run=False,
+        )
+        assert result_sub["ok"] is True, f"subtitle render failed: {result_sub}"
+
+        # No-subtitle render (negative control)
+        tl_nosub, _ = _make_timeline_for_cs(src)
+        tl_nosub_path = tmp_path / "tl_nosub.otio"
+        _save_timeline(tl_nosub, tl_nosub_path)
+        out_nosub = tmp_path / "out_nosub.mp4"
+        result_nosub = render_timeline(
+            str(tl_nosub_path),
+            str(out_nosub),
+            RenderOptions(
+                width=_CS_TARGET_W,
+                height=_CS_TARGET_H,
+                fit="contain",
+            ),
+            dry_run=False,
+        )
+        assert result_nosub["ok"] is True
+
+        # Frame extraction at subtitle display time (0.5–2.5 s; sample at 1.0 s)
+        frame_sub = tmp_path / "frame_sub.png"
+        frame_nosub = tmp_path / "frame_nosub.png"
+        _extract_frame(_FFMPEG, out_sub, _FRAME_SAMPLE_S, frame_sub)
+        _extract_frame(_FFMPEG, out_nosub, _FRAME_SAMPLE_S, frame_nosub)
+
+        ssim = _measure_ssim(_FFMPEG, frame_sub, frame_nosub)
+        assert ssim < _SSIM_PIXEL_DIFF_THRESHOLD, (
+            f"Subtitle not visible in 1080x1920 contain output after counter-scale "
+            f"(assert-8, 288 regression guard):\n"
+            f"  SSIM subtitle vs no-subtitle: {ssim:.6f} "
+            f"(expected < {_SSIM_PIXEL_DIFF_THRESHOLD})\n"
+            f"  If SSIM >= 0.999 the subtitle is outside the visible frame, suggesting\n"
+            f"  PLAYRES_Y_SRT_DEFAULT=288 (plan.py) no longer matches ffmpeg's default\n"
+            f"  PlayResY for SRT->ASS conversion. Update the constant and re-verify."
         )

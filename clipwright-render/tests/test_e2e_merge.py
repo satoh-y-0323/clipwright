@@ -1,4 +1,4 @@
-"""test_e2e_merge.py — Real e2e tests for multi-source concatenation (task_id: e2e-merge).
+"""test_e2e_merge.py — Real e2e tests for multi-source concatenation and fit framing (task_id: e2e-merge).
 
 Design rationale:
   - §7 v2
@@ -7,6 +7,8 @@ Design rationale:
   - ADR-C3: route by unique source count; preserve backward compatibility for single-source path
   - ADR-C9-r2: use input_sources as the single source of truth in plan.py for -i ordering
   - DC-AS-002/AM-005/GP-003: verify concatenation succeeds with mismatched sample_rate/channels
+  - ADR-F2: fit=contain (letterbox) / fit=cover (crop) / fit=stretch (distort) framing verification
+  - ADR-F4: odd width/height even-rounding regression (yuv420p encode guard)
 
 Test layout:
   1. Fixture generation (3 mismatched spec clips via ffmpeg lavfi)
@@ -20,6 +22,12 @@ Test layout:
      - assert4: 1 audio stream in output; concatenation succeeds despite spec mismatch
        (DC-AS-002/AM-005/GP-003)
   3. Negative control: single-source-only timeline outputs as before
+  4. Fit framing e2e (ADR-F2): landscape → portrait with contain/cover/stretch
+     - assert-fit-contain: black bars at top/bottom; output size 1080x1920
+     - assert-fit-cover: no black bars; full-frame content; output size 1080x1920
+     - assert-fit-stretch: distorted (aspect non-preserved); output size 1080x1920
+  5. Odd width/height even-rounding regression (ADR-F4):
+     - assert-odd-encode: 1081x1921 specified → 1080x1920 output, yuv420p encode succeeds
 
 How to run (skipped when ffmpeg is absent):
   uv run --package clipwright-render pytest -k e2e_merge
@@ -31,6 +39,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -698,4 +707,428 @@ class TestSingleSourceNegativeControl:
         assert "anullsrc" in fc, (
             f"Multi-source filter_complex does not contain anullsrc (ADR-C7-r2 violation):\n"
             f"  filter_complex: {fc}"
+        )
+
+
+# ===========================================================================
+# Helpers: frame extraction and pixel analysis (fit framing tests)
+# ===========================================================================
+
+# Source fixture dimensions for fit tests: landscape 1920x1080 -> target portrait 1080x1920.
+# Using a wider landscape so the aspect-ratio mismatch is significant (letterbox bars will
+# be large and clearly detectable via pixel statistics).
+_FIT_SRC_W = 1920
+_FIT_SRC_H = 1080
+_FIT_TARGET_W = 1080
+_FIT_TARGET_H = 1920
+_FIT_SRC_DUR = 3.0
+_FIT_SRC_RATE = 25.0
+_FIT_FRAME_SAMPLE_S = 1.5  # mid-clip timestamp for frame extraction
+
+
+def _make_landscape_wide_video(ffmpeg: str, output: Path) -> None:
+    """Generate a wide landscape fixture (1920x1080, 25 fps, no audio) for fit framing tests.
+
+    1920x1080 -> 1080x1920 produces a clearly visible letterbox (contain) or
+    heavy top/bottom crop (cover) or vertical stretch distortion (stretch).
+    """
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"testsrc=size={_FIT_SRC_W}x{_FIT_SRC_H}:rate={int(_FIT_SRC_RATE)}:duration={_FIT_SRC_DUR}",
+        "-t",
+        str(_FIT_SRC_DUR),
+        "-c:v",
+        "libx264",
+        "-an",
+        "-pix_fmt",
+        "yuv420p",
+        str(output),
+    ]
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=_E2E_TIMEOUT,
+    )
+    assert result.returncode == 0, (
+        f"Wide-landscape fixture generation failed: {result.stderr[:400]}"
+    )
+
+
+def _extract_frame(ffmpeg: str, video: Path, time_s: float, output_png: Path) -> None:
+    """Extract a single frame at the given timestamp from a video file.
+
+    Uses -ss / -frames:v 1 / -f image2 pattern (confirmed in existing e2e tests).
+    """
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-ss",
+        str(time_s),
+        "-i",
+        str(video),
+        "-frames:v",
+        "1",
+        "-f",
+        "image2",
+        str(output_png),
+    ]
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=_E2E_TIMEOUT,
+    )
+    assert result.returncode == 0, (
+        f"Frame extraction failed ({video.name} @ {time_s}s): {result.stderr[:200]}"
+    )
+    assert output_png.exists(), f"Frame PNG was not created: {output_png}"
+
+
+def _measure_ssim(ffmpeg: str, frame_a: Path, frame_b: Path) -> float:
+    """Return the SSIM All value comparing two frames (1.0 = identical).
+
+    Used to detect black-bar presence (contain vs cover: SSIM << 1.0) and
+    aspect-ratio distortion (stretch vs contain: SSIM < 1.0).
+    """
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-i",
+        str(frame_a),
+        "-i",
+        str(frame_b),
+        "-lavfi",
+        "ssim",
+        "-f",
+        "null",
+        "-",
+    ]
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=_E2E_TIMEOUT,
+    )
+    assert result.returncode == 0, f"SSIM measurement failed: {result.stderr[:200]}"
+    m = re.search(r"All:([\d.]+)", result.stderr)
+    assert m is not None, f"SSIM All not found:\n{result.stderr[-200:]}"
+    return float(m.group(1))
+
+
+def _get_mean_luma_top_strip(ffmpeg: str, frame_png: Path, strip_h: int = 80) -> float:
+    """Return mean luminance (0.0–255.0) of the topmost strip_h rows of a PNG frame.
+
+    For a contain (letterbox) output the top rows are pure black (luma ≈ 0).
+    For cover / stretch outputs the top rows contain image content (luma > 0).
+
+    Implementation: scale the top strip down to a single pixel (area-averaging), emit
+    as rawvideo gray and compute the average byte value.  This avoids audio-only filters
+    (astats) and signalstats quirks across ffmpeg versions.
+    """
+    # Scale the top strip to a small fixed width (16px x 1px) to average pixels.
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-i",
+        str(frame_png),
+        "-vf",
+        f"crop=iw:{strip_h}:0:0,scale=16:1:flags=area",
+        "-frames:v",
+        "1",
+        "-vcodec",
+        "rawvideo",
+        "-pix_fmt",
+        "gray",
+        "-f",
+        "rawvideo",
+        "-",
+    ]
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        timeout=_E2E_TIMEOUT,
+    )
+    if result.returncode != 0 or not result.stdout:
+        return 0.0
+    raw = result.stdout
+    return sum(raw) / len(raw)
+
+
+def _make_fit_timeline(source_path: Path) -> otio.schema.Timeline:
+    """Build an OTIO timeline wrapping a single clip for fit-framing tests."""
+    ref = otio.schema.ExternalReference(target_url=str(source_path))
+    clip = otio.schema.Clip(
+        name=source_path.name,
+        media_reference=ref,
+        source_range=otio.opentime.TimeRange(
+            start_time=otio.opentime.RationalTime(0.0, _FIT_SRC_RATE),
+            duration=otio.opentime.RationalTime(
+                _FIT_SRC_DUR * _FIT_SRC_RATE, _FIT_SRC_RATE
+            ),
+        ),
+    )
+    track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
+    track.append(clip)
+    timeline = otio.schema.Timeline(name="fit_framing_test")
+    timeline.tracks.append(track)
+    return timeline
+
+
+# ===========================================================================
+# Tests: fit framing e2e (ADR-F2, assert-fit-*)
+# ===========================================================================
+
+
+@requires_ffmpeg
+@requires_ffprobe
+class TestFitFramingE2E:
+    """Real e2e tests for fit=contain/cover/stretch framing (ADR-F2, ADR-F4).
+
+    Source: 1920x1080 landscape (wide aspect ratio) -> target: 1080x1920 portrait.
+    The extreme aspect-ratio mismatch (16:9 -> 9:16) makes letterbox bars large
+    and unambiguous; similarly, stretch distortion is visually obvious.
+
+    assert-fit-contain: Output 1080x1920; top-strip is black (letterbox bars present).
+    assert-fit-cover:   Output 1080x1920; top-strip is non-black (no letterbox bars);
+                        frame differs from contain (SSIM < 0.8 vs contain).
+    assert-fit-stretch: Output 1080x1920; full-frame content (top-strip non-black);
+                        frame differs from contain (SSIM < 0.8 vs contain).
+    assert-odd-encode:  1081x1921 odd input -> 1080x1920 encoded without error (yuv420p
+                        even-rounding, ADR-F4).
+    """
+
+    def test_fit_contain_output_size_and_black_bars(self, tmp_path: Path) -> None:
+        """fit=contain: output is 1080x1920 and top rows are black (letterbox, assert-fit-contain).
+
+        Landscape 1920x1080 -> portrait 1080x1920 with contain letterboxes top and bottom.
+        The top strip (first 80 rows) must be nearly pure black (mean luma < 5.0).
+        Output resolution must be exactly 1080x1920 (ffprobe check).
+        """
+        assert _FFMPEG is not None
+        assert _FFPROBE is not None
+
+        src = tmp_path / "wide.mp4"
+        _make_landscape_wide_video(_FFMPEG, src)
+
+        tl = _make_fit_timeline(src)
+        tl_path = tmp_path / "tl_contain.otio"
+        otio.adapters.write_to_file(tl, str(tl_path))
+
+        out = tmp_path / "out_contain.mp4"
+        result = render_timeline(
+            str(tl_path),
+            str(out),
+            RenderOptions(width=_FIT_TARGET_W, height=_FIT_TARGET_H, fit="contain"),
+            dry_run=False,
+        )
+        assert result["ok"] is True, f"fit=contain render failed: {result}"
+        assert out.exists(), "output file not created"
+
+        # Resolution check (ffprobe)
+        probe = _probe_media(_FFPROBE, out)
+        vs = _get_video_stream(probe)
+        assert vs is not None, "no video stream"
+        assert int(vs["width"]) == _FIT_TARGET_W, (
+            f"fit=contain width mismatch: expected {_FIT_TARGET_W}, got {vs['width']}"
+        )
+        assert int(vs["height"]) == _FIT_TARGET_H, (
+            f"fit=contain height mismatch: expected {_FIT_TARGET_H}, got {vs['height']}"
+        )
+
+        # Black-bar check: extract mid-clip frame, measure top-strip mean luma
+        frame = tmp_path / "frame_contain.png"
+        _extract_frame(_FFMPEG, out, _FIT_FRAME_SAMPLE_S, frame)
+        top_luma = _get_mean_luma_top_strip(_FFMPEG, frame, strip_h=80)
+        assert top_luma < 5.0, (
+            f"fit=contain top-strip mean luma {top_luma:.2f} >= 5.0 "
+            f"(expected near-black letterbox bars, assert-fit-contain)"
+        )
+
+    def test_fit_cover_no_black_bars_aspect_preserved(self, tmp_path: Path) -> None:
+        """fit=cover: output is 1080x1920; top-strip is non-black (no letterbox, assert-fit-cover).
+
+        Landscape 1920x1080 -> portrait 1080x1920 with cover crops top/bottom excess;
+        the entire 1080x1920 canvas is filled with image content (no black bars).
+        Top-strip mean luma must be > 5.0 (non-black content).
+        Output must differ significantly from the contain output (SSIM < 0.8).
+        """
+        assert _FFMPEG is not None
+        assert _FFPROBE is not None
+
+        src = tmp_path / "wide.mp4"
+        _make_landscape_wide_video(_FFMPEG, src)
+
+        # contain render (reference for SSIM comparison)
+        tl_contain = _make_fit_timeline(src)
+        tl_contain_path = tmp_path / "tl_contain.otio"
+        otio.adapters.write_to_file(tl_contain, str(tl_contain_path))
+        out_contain = tmp_path / "out_contain.mp4"
+        r_contain = render_timeline(
+            str(tl_contain_path),
+            str(out_contain),
+            RenderOptions(width=_FIT_TARGET_W, height=_FIT_TARGET_H, fit="contain"),
+            dry_run=False,
+        )
+        assert r_contain["ok"] is True
+
+        # cover render
+        tl_cover = _make_fit_timeline(src)
+        tl_cover_path = tmp_path / "tl_cover.otio"
+        otio.adapters.write_to_file(tl_cover, str(tl_cover_path))
+        out_cover = tmp_path / "out_cover.mp4"
+        result = render_timeline(
+            str(tl_cover_path),
+            str(out_cover),
+            RenderOptions(width=_FIT_TARGET_W, height=_FIT_TARGET_H, fit="cover"),
+            dry_run=False,
+        )
+        assert result["ok"] is True, f"fit=cover render failed: {result}"
+
+        # Resolution check
+        probe = _probe_media(_FFPROBE, out_cover)
+        vs = _get_video_stream(probe)
+        assert vs is not None, "no video stream"
+        assert int(vs["width"]) == _FIT_TARGET_W, (
+            f"fit=cover width: expected {_FIT_TARGET_W}, got {vs['width']}"
+        )
+        assert int(vs["height"]) == _FIT_TARGET_H, (
+            f"fit=cover height: expected {_FIT_TARGET_H}, got {vs['height']}"
+        )
+
+        # No black bars: top-strip luma must be non-black
+        frame_cover = tmp_path / "frame_cover.png"
+        _extract_frame(_FFMPEG, out_cover, _FIT_FRAME_SAMPLE_S, frame_cover)
+        top_luma = _get_mean_luma_top_strip(_FFMPEG, frame_cover, strip_h=80)
+        assert top_luma > 5.0, (
+            f"fit=cover top-strip mean luma {top_luma:.2f} <= 5.0 "
+            f"(expected non-black content — no letterbox, assert-fit-cover)"
+        )
+
+        # cover and contain produce different images (letterbox vs full-frame fill)
+        frame_contain = tmp_path / "frame_contain.png"
+        _extract_frame(_FFMPEG, out_contain, _FIT_FRAME_SAMPLE_S, frame_contain)
+        ssim = _measure_ssim(_FFMPEG, frame_cover, frame_contain)
+        assert ssim < 0.8, (
+            f"SSIM between cover and contain is {ssim:.4f} (expected < 0.8 — "
+            f"cover has no letterbox bars; contain has letterbox bars)"
+        )
+
+    def test_fit_stretch_distorts_aspect_ratio(self, tmp_path: Path) -> None:
+        """fit=stretch: output is 1080x1920; full-frame content; differs from contain (assert-fit-stretch).
+
+        Landscape 1920x1080 -> portrait 1080x1920 with stretch squashes the image
+        horizontally (the original 16:9 content fills the 9:16 frame, distorted).
+        No black bars expected; the image is uniformly distorted.
+        Output must differ significantly from the contain output (SSIM < 0.8).
+        """
+        assert _FFMPEG is not None
+        assert _FFPROBE is not None
+
+        src = tmp_path / "wide.mp4"
+        _make_landscape_wide_video(_FFMPEG, src)
+
+        # contain render (reference for SSIM)
+        tl_contain = _make_fit_timeline(src)
+        tl_contain_path = tmp_path / "tl_contain.otio"
+        otio.adapters.write_to_file(tl_contain, str(tl_contain_path))
+        out_contain = tmp_path / "out_contain.mp4"
+        r_contain = render_timeline(
+            str(tl_contain_path),
+            str(out_contain),
+            RenderOptions(width=_FIT_TARGET_W, height=_FIT_TARGET_H, fit="contain"),
+            dry_run=False,
+        )
+        assert r_contain["ok"] is True
+
+        # stretch render
+        tl_stretch = _make_fit_timeline(src)
+        tl_stretch_path = tmp_path / "tl_stretch.otio"
+        otio.adapters.write_to_file(tl_stretch, str(tl_stretch_path))
+        out_stretch = tmp_path / "out_stretch.mp4"
+        result = render_timeline(
+            str(tl_stretch_path),
+            str(out_stretch),
+            RenderOptions(width=_FIT_TARGET_W, height=_FIT_TARGET_H, fit="stretch"),
+            dry_run=False,
+        )
+        assert result["ok"] is True, f"fit=stretch render failed: {result}"
+
+        # Resolution check
+        probe = _probe_media(_FFPROBE, out_stretch)
+        vs = _get_video_stream(probe)
+        assert vs is not None, "no video stream"
+        assert int(vs["width"]) == _FIT_TARGET_W, (
+            f"fit=stretch width: expected {_FIT_TARGET_W}, got {vs['width']}"
+        )
+        assert int(vs["height"]) == _FIT_TARGET_H, (
+            f"fit=stretch height: expected {_FIT_TARGET_H}, got {vs['height']}"
+        )
+
+        # No black bars at top (stretch fills the entire canvas)
+        frame_stretch = tmp_path / "frame_stretch.png"
+        _extract_frame(_FFMPEG, out_stretch, _FIT_FRAME_SAMPLE_S, frame_stretch)
+        top_luma = _get_mean_luma_top_strip(_FFMPEG, frame_stretch, strip_h=80)
+        assert top_luma > 5.0, (
+            f"fit=stretch top-strip mean luma {top_luma:.2f} <= 5.0 "
+            f"(expected full-frame content — no letterbox, assert-fit-stretch)"
+        )
+
+        # stretch and contain produce different images (distorted vs letterboxed)
+        frame_contain = tmp_path / "frame_contain.png"
+        _extract_frame(_FFMPEG, out_contain, _FIT_FRAME_SAMPLE_S, frame_contain)
+        ssim = _measure_ssim(_FFMPEG, frame_stretch, frame_contain)
+        assert ssim < 0.8, (
+            f"SSIM between stretch and contain is {ssim:.4f} (expected < 0.8 — "
+            f"stretch distorts while contain letterboxes)"
+        )
+
+    def test_odd_dimensions_encode_successfully(self, tmp_path: Path) -> None:
+        """Odd width/height 1081x1921 is even-rounded to 1080x1920 and encodes OK (ADR-F4).
+
+        Previously, single-source renders with odd W/H would fail at yuv420p encoding
+        because scale=W:H was passed directly without even-rounding.  ADR-F4 adds
+        even-rounding in the single-source scale stage.  This test is a regression guard.
+        """
+        assert _FFMPEG is not None
+        assert _FFPROBE is not None
+
+        src = tmp_path / "wide.mp4"
+        _make_landscape_wide_video(_FFMPEG, src)
+
+        tl = _make_fit_timeline(src)
+        tl_path = tmp_path / "tl_odd.otio"
+        otio.adapters.write_to_file(tl, str(tl_path))
+
+        out = tmp_path / "out_odd.mp4"
+        # Odd values: 1081x1921 -> must be rounded to 1080x1920 (even).
+        result = render_timeline(
+            str(tl_path),
+            str(out),
+            RenderOptions(width=1081, height=1921, fit="contain"),
+            dry_run=False,
+        )
+        assert result["ok"] is True, (
+            f"Odd dimension render failed (ADR-F4 even-rounding regression): {result}"
+        )
+        assert out.exists(), "output file not created"
+
+        # Confirm resolution is even-rounded (1080x1920, not 1081x1921)
+        probe = _probe_media(_FFPROBE, out)
+        vs = _get_video_stream(probe)
+        assert vs is not None, "no video stream"
+        actual_w = int(vs["width"])
+        actual_h = int(vs["height"])
+        assert actual_w == _FIT_TARGET_W, (
+            f"Odd-rounded width: expected {_FIT_TARGET_W} (1081->1080), got {actual_w}"
+        )
+        assert actual_h == _FIT_TARGET_H, (
+            f"Odd-rounded height: expected {_FIT_TARGET_H} (1921->1920), got {actual_h}"
         )

@@ -120,11 +120,11 @@ def test_valid_codec_boundary_accepted(codec: str) -> None:
         (1920, 1080),
         (1280, 720),
         (3840, 2160),
-        (1, 1),
+        (2, 2),
     ],
 )
 def test_valid_resolution_pair_accepted(width: int, height: int) -> None:
-    """A pair of positive integers (both width and height specified) is accepted."""
+    """A pair of even integers >= 2 (both width and height specified) is accepted."""
     # Arrange / Act
     opts = RenderOptions(width=width, height=height)
 
@@ -641,3 +641,232 @@ class TestRenderOptionsSubtitleField:
             RenderOptions(
                 subtitle=SubtitleOptions(path="/sub.srt", font_size=0)  # type: ignore[call-arg]
             )
+
+
+# ===========================================================================
+# RenderOptions.fit — Red tests (ADR-F1 / fit: contain | cover | stretch)
+# ===========================================================================
+
+
+class TestRenderOptionsFitDefault:
+    """Verify that fit defaults to 'contain' when not specified (ADR-F1)."""
+
+    def test_fit_default_is_contain(self) -> None:
+        """RenderOptions() without fit argument must default to 'contain'."""
+        # Arrange / Act
+        opts = RenderOptions()
+
+        # Assert
+        assert opts.fit == "contain"
+
+    def test_fit_default_preserved_in_defaults_test(self) -> None:
+        """TestRenderOptionsDefaults.test_build_with_no_args complement:
+        fit must be 'contain' alongside all other defaults.
+        """
+        # Arrange / Act
+        opts = RenderOptions()
+
+        # Assert — all previously tested defaults still hold
+        assert opts.video_codec is None
+        assert opts.width is None
+        assert opts.height is None
+        assert opts.fit == "contain"
+
+
+class TestRenderOptionsFitValidValues:
+    """Verify that all three valid fit values are accepted (ADR-F1)."""
+
+    @pytest.mark.parametrize("fit", ["contain", "cover", "stretch"])
+    def test_valid_fit_values_accepted(self, fit: str) -> None:
+        """fit='contain', 'cover', and 'stretch' must all be accepted."""
+        # Arrange / Act
+        opts = RenderOptions(fit=fit)  # type: ignore[call-arg]
+
+        # Assert
+        assert opts.fit == fit
+
+
+class TestRenderOptionsFitInvalidValues:
+    """Verify that invalid fit values raise ValidationError (ADR-F1)."""
+
+    @pytest.mark.parametrize(
+        "invalid_fit",
+        [
+            "fill",  # common CSS value not in spec
+            "none",  # plausible but not in Literal
+            "CONTAIN",  # case-sensitive check
+            "Cover",  # case-sensitive check
+            "",  # empty string
+            "letterbox",  # descriptive but not in Literal
+        ],
+    )
+    def test_invalid_fit_value_raises_validation_error(self, invalid_fit: str) -> None:
+        """fit values outside Literal['contain','cover','stretch'] must raise ValidationError."""
+        # Arrange / Act / Assert
+        with pytest.raises(ValidationError):
+            RenderOptions(fit=invalid_fit)  # type: ignore[call-arg]
+
+
+class TestRenderOptionsFitWithResolution:
+    """Verify fit interaction with width/height (ADR-F1)."""
+
+    @pytest.mark.parametrize("fit", ["contain", "cover", "stretch"])
+    def test_fit_with_both_width_height_accepted(self, fit: str) -> None:
+        """fit with both width and height specified must be accepted."""
+        # Arrange / Act
+        opts = RenderOptions(width=1920, height=1080, fit=fit)  # type: ignore[call-arg]
+
+        # Assert
+        assert opts.width == 1920
+        assert opts.height == 1080
+        assert opts.fit == fit
+
+    @pytest.mark.parametrize("fit", ["contain", "cover", "stretch"])
+    def test_fit_without_width_height_accepted(self, fit: str) -> None:
+        """fit specified without width/height must NOT raise ValidationError (ADR-F1 case A).
+
+        fit is a modifier for the scale stage; when width/height are absent the
+        scale stage is skipped and fit is silently ignored.
+        """
+        # Arrange / Act — must not raise
+        opts = RenderOptions(fit=fit)  # type: ignore[call-arg]
+
+        # Assert
+        assert opts.fit == fit
+        assert opts.width is None
+        assert opts.height is None
+
+
+class TestRenderOptionsResolutionPairUnchanged:
+    """Verify that the existing _validate_resolution_pair constraint is unaffected by fit (ADR-F1)."""
+
+    @pytest.mark.parametrize(
+        "width,height",
+        [
+            (1920, None),  # width only — still invalid
+            (None, 1080),  # height only — still invalid
+        ],
+    )
+    def test_partial_resolution_still_raises_with_fit(
+        self, width: int | None, height: int | None
+    ) -> None:
+        """Specifying only one of width/height must still raise ValidationError even when fit is given.
+
+        fit addition must not change the behaviour of _validate_resolution_pair.
+        """
+        # Arrange / Act / Assert
+        with pytest.raises(ValidationError):
+            RenderOptions(width=width, height=height, fit="contain")  # type: ignore[call-arg]
+
+    def test_both_resolution_none_with_fit_accepted(self) -> None:
+        """width/height both None with explicit fit must be accepted (ADR-F1: fit is ignored)."""
+        # Arrange / Act
+        opts = RenderOptions(width=None, height=None, fit="cover")  # type: ignore[call-arg]
+
+        # Assert
+        assert opts.width is None
+        assert opts.height is None
+        assert opts.fit == "cover"
+
+
+# ===========================================================================
+# Security fixes: M-1 / L-1 / L-3 (SR-V-001)
+# ===========================================================================
+
+
+class TestRenderOptionsModelConfig:
+    """Verify model_config hardening on RenderOptions (SR-V-001 / M-1 / L-3)."""
+
+    def test_fps_inf_raises_validation_error(self) -> None:
+        """RenderOptions(fps=inf) must raise ValidationError (allow_inf_nan=False / M-1).
+
+        Without allow_inf_nan=False, inf passes gt=0 and '-r inf' reaches ffmpeg.
+        model_config must block inf at the Pydantic level (SR-V-001).
+        """
+        # Arrange / Act / Assert
+        with pytest.raises(ValidationError):
+            RenderOptions(fps=float("inf"))
+
+    def test_fps_nan_raises_validation_error(self) -> None:
+        """RenderOptions(fps=nan) must raise ValidationError (allow_inf_nan=False / M-1).
+
+        nan also passes gt=0 without allow_inf_nan=False.
+        """
+        # Arrange / Act / Assert
+        with pytest.raises(ValidationError):
+            RenderOptions(fps=float("nan"))
+
+    def test_fps_valid_value_accepted(self) -> None:
+        """A normal fps value (30.0) must still be accepted after model_config hardening."""
+        # Arrange / Act
+        opts = RenderOptions(fps=30.0)
+
+        # Assert
+        assert opts.fps == pytest.approx(30.0)
+
+    def test_unknown_field_raises_validation_error(self) -> None:
+        """RenderOptions with an unknown field must raise ValidationError (extra='forbid' / L-3).
+
+        Without extra='forbid', Pydantic v2 silently ignores unknown fields (default=ignore).
+        """
+        # Arrange / Act / Assert
+        with pytest.raises(ValidationError):
+            RenderOptions(unknown_field=1)  # type: ignore[call-arg]
+
+
+class TestRenderOptionsResolutionMinimum:
+    """Verify ge=2 minimum constraint on width/height (SR-V-001 / L-1).
+
+    width=1 or height=1 is rounded down to 0 by ffmpeg even-rounding ((v//2)*2),
+    causing ZeroDivisionError in _counter_scale when subtitles are present (CWE-209).
+    ge=2 ensures the minimum valid value is 2, which survives even-rounding as 2.
+    """
+
+    def test_width_1_raises_validation_error(self) -> None:
+        """width=1 must raise ValidationError (ge=2 constraint / L-1).
+
+        1 rounds down to 0 after even-rounding, causing _counter_scale ZeroDivisionError.
+        """
+        # Arrange / Act / Assert
+        with pytest.raises(ValidationError):
+            RenderOptions(width=1, height=1080)
+
+    def test_height_1_raises_validation_error(self) -> None:
+        """height=1 must raise ValidationError (ge=2 constraint / L-1).
+
+        Same even-rounding hazard as width=1.
+        """
+        # Arrange / Act / Assert
+        with pytest.raises(ValidationError):
+            RenderOptions(width=1920, height=1)
+
+    def test_width_1_height_1_raises_validation_error(self) -> None:
+        """width=1, height=1 must raise ValidationError (ge=2 / L-1)."""
+        # Arrange / Act / Assert
+        with pytest.raises(ValidationError):
+            RenderOptions(width=1, height=1)
+
+    def test_width_2_height_2_accepted(self) -> None:
+        """width=2, height=2 (minimum valid pair per ge=2) must be accepted (L-1 boundary)."""
+        # Arrange / Act
+        opts = RenderOptions(width=2, height=2)
+
+        # Assert
+        assert opts.width == 2
+        assert opts.height == 2
+
+    def test_width_2_boundary_accepted(self) -> None:
+        """width=2 with valid height must be accepted (boundary value for ge=2)."""
+        # Arrange / Act
+        opts = RenderOptions(width=2, height=1080)
+
+        # Assert
+        assert opts.width == 2
+
+    def test_height_2_boundary_accepted(self) -> None:
+        """height=2 with valid width must be accepted (boundary value for ge=2)."""
+        # Arrange / Act
+        opts = RenderOptions(width=1920, height=2)
+
+        # Assert
+        assert opts.height == 2

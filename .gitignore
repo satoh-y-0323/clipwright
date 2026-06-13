@@ -65,3 +65,6 @@ AGENTS.md
 # プロジェクト生成物（テスト用 tmp は pytest が管理）
 outputs/
 artifacts/
+
+# ドッグフーディング用スクラッチ（大容量素材・出力物・ドライバ・clipwright のテスト資産ではない）
+temp/

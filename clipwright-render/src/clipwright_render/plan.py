@@ -643,6 +643,8 @@ def _build_force_style(
     if subtitle.outline is not None:
         # Outline is a dimension field: counter-scale when frame_h is known.
         if frame_h is not None:
+            # Truncate float to int before counter-scaling; sub-pixel outline
+            # widths are not meaningful in ASS coordinates.
             outline_val = _counter_scale(int(subtitle.outline), frame_h)
             parts.append(f"Outline={outline_val}")
         else:
@@ -1140,6 +1142,11 @@ def _build_clip_filters(
     - 'cover': scale:increase + crop (fill and clip overflow).
     - 'stretch': scale only (no aspect-ratio preservation).
 
+    Note:
+        target_w and target_h must already be even (caller's responsibility;
+        _resolve_target_spec applies (v // 2) * 2 before calling this function).
+        Passing odd values may cause yuv420p encoding failures.
+
     Returns:
         Tuple of (filter_parts, video_labels, audio_labels).
     """
@@ -1172,7 +1179,7 @@ def _build_clip_filters(
             filter_parts.append(
                 base
                 + f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,"
-                f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2,setsar=1[{vl}]"
+                f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1[{vl}]"
             )
         video_labels.append(f"[{vl}]")
 

@@ -8,7 +8,7 @@ Use `from clipwright.schemas import ...` when needed.
 from __future__ import annotations
 
 import re
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -95,8 +95,12 @@ class SubtitleOptions(BaseModel):
             gt=0,
             le=_FONT_SIZE_MAX,
             description=(
-                "Font size in points. Must be a positive integer. When"
-                " unspecified, libass default is used. Upper limit is"
+                "Font size in output pixels. Must be a positive integer."
+                " The value is counter-scaled from the libass PlayResY coordinate"
+                " space to output-frame pixels before being written to force_style,"
+                " so the specified value corresponds to the actual rendered size in"
+                " the output frame (ADR-F3). When unspecified, libass default is"
+                " used. Upper limit is"
                 f" {_FONT_SIZE_MAX} (practical ceiling that libass does not"
                 " reject; effectively unlimited)."
             ),
@@ -153,8 +157,12 @@ class SubtitleOptions(BaseModel):
             ge=0,
             le=_MARGIN_V_MAX,
             description=(
-                "Vertical margin in pixels. Non-negative integer. When"
-                " unspecified, libass default is used. Upper limit is"
+                "Vertical margin in output pixels. Non-negative integer."
+                " The value is counter-scaled from the libass PlayResY coordinate"
+                " space to output-frame pixels before being written to force_style,"
+                " so the specified value corresponds to the actual rendered margin in"
+                " the output frame (ADR-F3). When unspecified, libass default is"
+                " used. Upper limit is"
                 f" {_MARGIN_V_MAX} (rejects values exceeding the maximum"
                 " vertical resolution of 8K)."
             ),
@@ -227,6 +235,19 @@ class RenderOptions(BaseModel):
     ValidationError.
     """  # noqa: E501
 
+    # model_config mirrors SubtitleOptions / DuckingDirective / BgmDirective for
+    # consistency (SR-V-001):
+    #   - extra="forbid": unknown fields raise ValidationError instead of being
+    #     silently dropped (L-3).
+    #   - allow_inf_nan=False: inf/nan are rejected for all float fields (fps,
+    #     etc.) before they can reach ffmpeg argument assembly (M-1).
+    #   - arbitrary_types_allowed=False: no non-Pydantic types accepted.
+    model_config = {
+        "extra": "forbid",
+        "arbitrary_types_allowed": False,
+        "allow_inf_nan": False,
+    }
+
     video_codec: Annotated[
         str | None,
         Field(
@@ -259,10 +280,11 @@ class RenderOptions(BaseModel):
         int | None,
         Field(
             default=None,
-            gt=0,
+            ge=2,
             description=(
                 "Output video width in pixels. Must be specified together with"
-                " height. Inherits source when unspecified."
+                " height; minimum 2 (value 1 rounds down to 0 after ffmpeg"
+                " even-rounding). Inherits source when unspecified."
             ),
         ),
     ] = None
@@ -271,10 +293,11 @@ class RenderOptions(BaseModel):
         int | None,
         Field(
             default=None,
-            gt=0,
+            ge=2,
             description=(
                 "Output video height in pixels. Must be specified together with"
-                " width. Inherits source when unspecified."
+                " width; minimum 2 (value 1 rounds down to 0 after ffmpeg"
+                " even-rounding). Inherits source when unspecified."
             ),
         ),
     ] = None
@@ -326,6 +349,22 @@ class RenderOptions(BaseModel):
             ),
         ),
     ] = None
+
+    fit: Annotated[
+        Literal["contain", "cover", "stretch"],
+        Field(
+            default="contain",
+            description=(
+                "How to fit the source frame into the target width/height when both"
+                " are specified. 'contain' (default): preserve aspect ratio and"
+                " letterbox/pillarbox with black bars (no distortion). 'cover':"
+                " preserve aspect ratio, fill the frame, and crop the overflow."
+                " 'stretch': scale to exactly width x height ignoring aspect ratio"
+                " (legacy pre-0.2 behaviour; may distort). Ignored when width/height"
+                " are not both specified (ADR-F1)."
+            ),
+        ),
+    ] = "contain"
 
     @model_validator(mode="after")
     def _validate_resolution_pair(self) -> Self:

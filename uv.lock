@@ -342,7 +342,7 @@ dev = [
 
 [[package]]
 name = "clipwright-render"
-version = "0.1.1"
+version = "0.2.0"
 source = { editable = "clipwright-render" }
 dependencies = [
     { name = "clipwright" },

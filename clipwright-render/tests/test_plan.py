@@ -3526,3 +3526,742 @@ class TestBuildPlanSubtitleAndBgmIndependence:
         assert outvsub_pos < outa_bgm_pos, (
             f"subtitle stage ({outvsub_pos}) appears after BGM stage ({outa_bgm_pos})"
         )
+
+
+# ===========================================================================
+# ADR-F1/F2/F3/F4: fit / even-rounding / counter-scale tests
+# Target: plan.py _build_filter_complex / _build_multi_source_filter_complex /
+#         _build_clip_filters / _build_force_style / _append_subtitle_filter /
+#         _counter_scale / PLAYRES_Y_SRT_DEFAULT
+#
+# Implementation summary (ADR-F3 revised, spike-original-size confirmed):
+#   - original_size injection was evaluated and dropped: it does not affect
+#     force_style-overridden dimensions on ffmpeg 8.1.1 (SSIM=1.000 with/without).
+#   - Counter-scale approach adopted: dimension-style fields (FontSize/MarginV/
+#     Outline/Margin*) are pre-scaled by 288/frame_h so that libass's frame_h/288
+#     upscale results in output-pixel-accurate rendering.
+#   - PLAYRES_Y_SRT_DEFAULT = 288  (ffmpeg SRT->ASS default PlayResY)
+#   - _counter_scale(px_value, frame_h) = round(px_value * 288 / frame_h)
+#   - _build_force_style(subtitle, is_ass, frame_h) applies counter-scale when
+#     frame_h is not None; emits raw values (legacy 288-based) when frame_h is None.
+#   - Scale stage fit-branched (contain/cover/stretch) with even-rounding in both
+#     single-source and multi-source paths (ADR-F2/F4).
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# ADR-F3: _counter_scale unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestCounterScale:
+    """Verify _counter_scale(px_value, frame_h) = round(px_value * 288 / frame_h).
+
+    ADR-F3 (revised): dimension-style values are counter-scaled by 288/frame_h
+    so that libass's frame_h/288 upscale results in output-pixel-accurate rendering.
+    """
+
+    def test_counter_scale_typical_font_size(self) -> None:
+        """frame_h=1920, FontSize=48 -> round(48 * 288 / 1920) = 7 (ADR-F3)."""
+        from clipwright_render.plan import _counter_scale  # type: ignore[attr-defined]
+
+        assert _counter_scale(48, 1920) == 7
+
+    def test_counter_scale_margin_v(self) -> None:
+        """frame_h=1920, MarginV=700 -> round(700 * 288 / 1920) = 105 (ADR-F3)."""
+        from clipwright_render.plan import _counter_scale  # type: ignore[attr-defined]
+
+        assert _counter_scale(700, 1920) == 105
+
+    def test_counter_scale_identity_at_playres_y(self) -> None:
+        """frame_h=288 (== PlayResY default) -> scale factor is 1 (identity, ADR-F3)."""
+        from clipwright_render.plan import _counter_scale  # type: ignore[attr-defined]
+
+        assert _counter_scale(72, 288) == 72
+
+    def test_counter_scale_small_frame(self) -> None:
+        """frame_h=576 (2x PlayResY), FontSize=36 -> round(36 * 288 / 576) = 18 (ADR-F3)."""
+        from clipwright_render.plan import _counter_scale  # type: ignore[attr-defined]
+
+        assert _counter_scale(36, 576) == 18
+
+    @pytest.mark.parametrize(
+        "px_value, frame_h, expected",
+        [
+            (72, 1920, round(72 * 288 / 1920)),  # FontSize typical tall
+            (700, 1920, round(700 * 288 / 1920)),  # MarginV typical tall
+            (72, 288, 72),  # identity
+            (48, 1080, round(48 * 288 / 1080)),  # 1080p
+            (60, 720, round(60 * 288 / 720)),  # 720p
+        ],
+    )
+    def test_counter_scale_formula_parametrized(
+        self, px_value: int, frame_h: int, expected: int
+    ) -> None:
+        """_counter_scale(px, h) == round(px * 288 / h) for representative pairs (ADR-F3)."""
+        from clipwright_render.plan import _counter_scale  # type: ignore[attr-defined]
+
+        assert _counter_scale(px_value, frame_h) == expected
+
+
+class TestPlayresYConstant:
+    """Verify PLAYRES_Y_SRT_DEFAULT constant is defined and equals 288 (ADR-F3)."""
+
+    def test_playres_y_constant_is_288(self) -> None:
+        """PLAYRES_Y_SRT_DEFAULT must be 288 (ffmpeg/libass SRT->ASS default, ADR-F3)."""
+        from clipwright_render.plan import (
+            PLAYRES_Y_SRT_DEFAULT,  # type: ignore[attr-defined]
+        )
+
+        assert PLAYRES_Y_SRT_DEFAULT == 288
+
+
+# ---------------------------------------------------------------------------
+# ADR-F3: _build_force_style counter-scale tests
+# ---------------------------------------------------------------------------
+
+
+class TestBuildForceStyleCounterScale:
+    """Verify _build_force_style(subtitle, is_ass, frame_h) counter-scales dimension fields.
+
+    New signature expected by impl: _build_force_style(subtitle, is_ass, frame_h: int | None).
+    When frame_h is None -> raw values emitted (legacy 288-based behaviour).
+    When frame_h is set -> FontSize / MarginV / Outline counter-scaled.
+    Alignment / PrimaryColour / Bold / FontName: NOT counter-scaled.
+    """
+
+    def test_force_style_fontsize_counter_scaled(self) -> None:
+        """FontSize=48, frame_h=1920 -> FontSize=7 in force_style string (ADR-F3)."""
+        from clipwright_render.plan import (
+            _build_force_style,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/proj/subs.srt", font_size=48)
+        result = _build_force_style(sub, is_ass=False, frame_h=1920)
+
+        assert result is not None
+        assert "FontSize=7" in result
+
+    def test_force_style_margin_v_counter_scaled(self) -> None:
+        """MarginV=700, frame_h=1920 -> MarginV=105 in force_style string (ADR-F3)."""
+        from clipwright_render.plan import (
+            _build_force_style,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/proj/subs.srt", margin_v=700)
+        result = _build_force_style(sub, is_ass=False, frame_h=1920)
+
+        assert result is not None
+        assert "MarginV=105" in result
+
+    def test_force_style_outline_counter_scaled(self) -> None:
+        """Outline=6, frame_h=1920 -> Outline=1 (round(6*288/1920)=1) in force_style (ADR-F3)."""
+        from clipwright_render.plan import (
+            _build_force_style,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/proj/subs.srt", outline=6.0)
+        result = _build_force_style(sub, is_ass=False, frame_h=1920)
+
+        assert result is not None
+        # round(6 * 288 / 1920) = round(0.9) = 1
+        assert "Outline=1" in result
+
+    def test_force_style_alignment_not_counter_scaled(self) -> None:
+        """Alignment is not a dimension field; its value must pass through unchanged (ADR-F3)."""
+        from clipwright_render.plan import (
+            _build_force_style,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/proj/subs.srt", alignment=2)
+        result = _build_force_style(sub, is_ass=False, frame_h=1920)
+
+        assert result is not None
+        assert "Alignment=2" in result
+
+    def test_force_style_font_color_not_counter_scaled(self) -> None:
+        """PrimaryColour is a colour field; it must not be scaled (ADR-F3)."""
+        from clipwright_render.plan import (
+            _build_force_style,  # type: ignore[attr-defined]
+        )
+
+        # red=#FF0000
+        sub = _make_subtitle_options(path="/proj/subs.srt", font_color="#FF0000")
+        result = _build_force_style(sub, is_ass=False, frame_h=1920)
+
+        assert result is not None
+        # ASS BGR order: PrimaryColour=&H000000FF (red in BGR)
+        assert "PrimaryColour=&H000000FF" in result
+
+    def test_force_style_frame_h_none_emits_raw_values(self) -> None:
+        """frame_h=None -> raw FontSize/MarginV values are emitted unchanged (legacy, ADR-F3)."""
+        from clipwright_render.plan import (
+            _build_force_style,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/proj/subs.srt", font_size=48, margin_v=700)
+        result = _build_force_style(sub, is_ass=False, frame_h=None)
+
+        assert result is not None
+        assert "FontSize=48" in result
+        assert "MarginV=700" in result
+
+    def test_force_style_ass_input_returns_none_regardless_of_frame_h(self) -> None:
+        """ASS input: force_style not applied regardless of frame_h (ADR-S6-r2)."""
+        from clipwright_render.plan import (
+            _build_force_style,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/proj/subs.ass", font_size=48, margin_v=700)
+        result = _build_force_style(sub, is_ass=True, frame_h=1920)
+
+        assert result is None
+
+    @pytest.mark.parametrize(
+        "font_size, frame_h, expected_fs",
+        [
+            (48, 1920, round(48 * 288 / 1920)),
+            (36, 1080, round(36 * 288 / 1080)),
+            (60, 720, round(60 * 288 / 720)),
+            (72, 288, 72),  # identity
+        ],
+    )
+    def test_force_style_fontsize_parametrized(
+        self, font_size: int, frame_h: int, expected_fs: int
+    ) -> None:
+        """FontSize counter-scaled for multiple frame_h values (ADR-F3)."""
+        from clipwright_render.plan import (
+            _build_force_style,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/proj/subs.srt", font_size=font_size)
+        result = _build_force_style(sub, is_ass=False, frame_h=frame_h)
+
+        assert result is not None
+        assert f"FontSize={expected_fs}" in result
+
+
+# ---------------------------------------------------------------------------
+# ADR-F3: _append_subtitle_filter with frame_h
+# ---------------------------------------------------------------------------
+
+
+class TestAppendSubtitleFilterFrameH:
+    """Verify _append_subtitle_filter accepts and applies frame_h for counter-scale.
+
+    New signature: _append_subtitle_filter(filter_parts, video_map_label, subtitle,
+                                           frame_h: int | None = None) -> str
+    When frame_h is set, the injected force_style contains counter-scaled values.
+    original_size must NOT appear in the filter output (ADR-F3 revised: spike confirmed
+    original_size does not affect force_style in ffmpeg 8.1.1).
+    """
+
+    def test_append_subtitle_frame_h_causes_counter_scale_in_force_style(self) -> None:
+        """frame_h=1920 + FontSize=48 -> FontSize=7 in the emitted filter string (ADR-F3)."""
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/proj/subs.srt", font_size=48)
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub, frame_h=1920)
+
+        assert len(filter_parts) == 1
+        assert "FontSize=7" in filter_parts[0]
+
+    def test_append_subtitle_no_original_size_in_output(self) -> None:
+        """original_size must NOT appear in the filter string (spike result: no effect on ffmpeg 8.1.1).
+
+        This is a regression guard: original_size was evaluated and dropped (ADR-F3 revised).
+        """
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/proj/subs.srt", font_size=48, margin_v=100)
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outvscaled]", sub, frame_h=1920)
+
+        assert "original_size" not in filter_parts[0]
+
+    def test_append_subtitle_frame_h_none_emits_raw_values(self) -> None:
+        """frame_h=None -> force_style contains raw px values (legacy fallback, ADR-F3)."""
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/proj/subs.srt", font_size=48, margin_v=700)
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub, frame_h=None)
+
+        assert len(filter_parts) == 1
+        assert "FontSize=48" in filter_parts[0]
+        assert "MarginV=700" in filter_parts[0]
+
+    def test_append_subtitle_margin_v_counter_scaled_with_frame_h(self) -> None:
+        """frame_h=1920, MarginV=700 -> MarginV=105 in emitted filter (ADR-F3)."""
+        from clipwright_render.plan import (
+            _append_subtitle_filter,  # type: ignore[attr-defined]
+        )
+
+        sub = _make_subtitle_options(path="/proj/subs.srt", margin_v=700)
+        filter_parts: list[str] = []
+        _append_subtitle_filter(filter_parts, "[outv]", sub, frame_h=1920)
+
+        assert "MarginV=105" in filter_parts[0]
+
+
+# ---------------------------------------------------------------------------
+# ADR-F2: Single-source path fit-branched scale stage
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPlanFitSingleSource:
+    """Verify that _build_filter_complex applies fit-based scale filters (ADR-F2).
+
+    _build_filter_complex produces contain/cover/stretch filtergraph branches when
+    width and height are both specified. Even-rounding ((v // 2) * 2) is applied
+    before the scale stage. All tests in this class are Green (impl complete).
+    """
+
+    def _build_single(
+        self,
+        width: int,
+        height: int,
+        fit: str = "contain",
+        audio_count: int = 0,
+        probe_height: int | None = None,
+    ) -> RenderPlan:
+        from clipwright_render.plan import build_plan, resolve_kept_ranges
+
+        tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(
+            has_video=True,
+            audio_count=audio_count,
+            bit_rate=None,
+            height=probe_height,
+        )
+        return build_plan(
+            ranges, probe, RenderOptions(width=width, height=height, fit=fit)
+        )
+
+    def test_fit_contain_scale_decrease_in_filter(self) -> None:
+        """fit=contain -> filter contains force_original_aspect_ratio=decrease (ADR-F2)."""
+        plan = self._build_single(1920, 1080, fit="contain")
+
+        assert "force_original_aspect_ratio=decrease" in plan.filter_complex
+
+    def test_fit_contain_pad_in_filter(self) -> None:
+        """fit=contain -> filter contains pad=W:H:... (letterbox, ADR-F2)."""
+        plan = self._build_single(1920, 1080, fit="contain")
+
+        assert "pad=1920:1080" in plan.filter_complex
+
+    def test_fit_contain_pad_color_black(self) -> None:
+        """fit=contain -> pad filter uses color=black (ADR-F2)."""
+        plan = self._build_single(1920, 1080, fit="contain")
+
+        assert "color=black" in plan.filter_complex
+
+    def test_fit_contain_setsar_1_in_filter(self) -> None:
+        """fit=contain -> setsar=1 is appended (ADR-F2)."""
+        plan = self._build_single(1920, 1080, fit="contain")
+
+        assert "setsar=1" in plan.filter_complex
+
+    def test_fit_cover_scale_increase_in_filter(self) -> None:
+        """fit=cover -> filter contains force_original_aspect_ratio=increase (ADR-F2)."""
+        plan = self._build_single(1920, 1080, fit="cover")
+
+        assert "force_original_aspect_ratio=increase" in plan.filter_complex
+
+    def test_fit_cover_crop_in_filter(self) -> None:
+        """fit=cover -> filter contains crop=W:H (ADR-F2)."""
+        plan = self._build_single(1920, 1080, fit="cover")
+
+        assert "crop=1920:1080" in plan.filter_complex
+
+    def test_fit_cover_setsar_1_in_filter(self) -> None:
+        """fit=cover -> setsar=1 is appended (ADR-F2)."""
+        plan = self._build_single(1920, 1080, fit="cover")
+
+        assert "setsar=1" in plan.filter_complex
+
+    def test_fit_stretch_no_force_original_aspect_ratio(self) -> None:
+        """fit=stretch -> force_original_aspect_ratio must NOT appear (ADR-F2)."""
+        plan = self._build_single(1920, 1080, fit="stretch")
+
+        assert "force_original_aspect_ratio" not in plan.filter_complex
+
+    def test_fit_stretch_setsar_1_in_filter(self) -> None:
+        """fit=stretch -> setsar=1 is appended (ADR-F2, changed from legacy no-setsar)."""
+        plan = self._build_single(1920, 1080, fit="stretch")
+
+        assert "setsar=1" in plan.filter_complex
+
+    def test_fit_contain_no_force_original_aspect_ratio_increase(self) -> None:
+        """fit=contain -> force_original_aspect_ratio=increase must NOT appear (ADR-F2)."""
+        plan = self._build_single(1920, 1080, fit="contain")
+
+        assert "force_original_aspect_ratio=increase" not in plan.filter_complex
+
+    def test_fit_cover_no_force_original_aspect_ratio_decrease(self) -> None:
+        """fit=cover -> force_original_aspect_ratio=decrease must NOT appear (ADR-F2)."""
+        plan = self._build_single(1920, 1080, fit="cover")
+
+        assert "force_original_aspect_ratio=decrease" not in plan.filter_complex
+
+
+# ---------------------------------------------------------------------------
+# ADR-F4: Even-rounding in single-source path
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPlanEvenRoundingSingleSource:
+    """Verify that odd width/height are even-rounded before entering the scale stage (ADR-F4).
+
+    _build_filter_complex applies (v // 2) * 2 to both width and height before the
+    scale stage to prevent yuv420p encoding failures with odd dimensions. All tests
+    in this class are Green (impl complete).
+    """
+
+    def test_odd_width_rounded_down_in_scale(self) -> None:
+        """width=1081 (odd) -> scale filter uses 1080 (even-rounded, ADR-F4)."""
+        from clipwright_render.plan import build_plan, resolve_kept_ranges
+
+        tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=0, bit_rate=None)
+        plan = build_plan(ranges, probe, RenderOptions(width=1081, height=720))
+
+        assert "scale=1080:720" in plan.filter_complex
+
+    def test_odd_height_rounded_down_in_scale(self) -> None:
+        """height=607 (odd) -> scale filter uses 606 (even-rounded, ADR-F4)."""
+        from clipwright_render.plan import build_plan, resolve_kept_ranges
+
+        tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=0, bit_rate=None)
+        plan = build_plan(ranges, probe, RenderOptions(width=1280, height=607))
+
+        assert "scale=1280:606" in plan.filter_complex
+
+    def test_odd_both_rounded_in_scale(self) -> None:
+        """width=1081, height=607 -> scale=1080:606 (both even-rounded, ADR-F4)."""
+        from clipwright_render.plan import build_plan, resolve_kept_ranges
+
+        tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=0, bit_rate=None)
+        plan = build_plan(ranges, probe, RenderOptions(width=1081, height=607))
+
+        assert "scale=1080:606" in plan.filter_complex
+
+    def test_even_width_height_unchanged(self) -> None:
+        """Even width/height are unchanged by even-rounding (ADR-F4)."""
+        from clipwright_render.plan import build_plan, resolve_kept_ranges
+
+        tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=0, bit_rate=None)
+        plan = build_plan(ranges, probe, RenderOptions(width=1920, height=1080))
+
+        # Even values must appear unchanged in scale
+        assert "1920" in plan.filter_complex
+        assert "1080" in plan.filter_complex
+
+
+# ---------------------------------------------------------------------------
+# ADR-F4: fit + counter-scale via build_plan (single-source) (Red)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPlanSubtitleCounterScaleSingleSource:
+    """Verify build_plan wires frame_h to subtitle counter-scale (ADR-F3/F4).
+
+    single-source + width/height both specified + subtitle -> force_style has
+    counter-scaled FontSize/MarginV based on even-rounded H.
+    single-source + width/height None + probe height set -> counter-scale uses probe height.
+    single-source + width/height None + probe height None -> raw values (no counter-scale).
+    """
+
+    def test_single_source_with_scale_subtitle_counter_scale(self) -> None:
+        """Single-source, width=1080, height=1920, subtitle with FontSize=48
+        -> FontSize=round(48*288/1920)=7 in filter_complex (ADR-F3)."""
+        from clipwright_render.plan import build_plan, resolve_kept_ranges
+
+        tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=0, bit_rate=None)
+        sub = _make_subtitle_options(path="/proj/subs.srt", font_size=48)
+        plan = build_plan(
+            ranges, probe, RenderOptions(width=1080, height=1920, subtitle=sub)
+        )
+
+        assert "FontSize=7" in plan.filter_complex
+
+    def test_single_source_with_scale_subtitle_margin_v_counter_scale(self) -> None:
+        """Single-source, width=1080, height=1920, subtitle with MarginV=700
+        -> MarginV=105 in filter_complex (ADR-F3)."""
+        from clipwright_render.plan import build_plan, resolve_kept_ranges
+
+        tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=0, bit_rate=None)
+        sub = _make_subtitle_options(path="/proj/subs.srt", margin_v=700)
+        plan = build_plan(
+            ranges, probe, RenderOptions(width=1080, height=1920, subtitle=sub)
+        )
+
+        assert "MarginV=105" in plan.filter_complex
+
+    def test_single_source_no_scale_probe_height_counter_scale(self) -> None:
+        """Single-source, no width/height, probe.height=1920
+        -> FontSize counter-scaled by 288/1920 (ADR-F3, §5.3)."""
+        from clipwright_render.plan import build_plan, resolve_kept_ranges
+
+        tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=0, bit_rate=None, height=1920)
+        sub = _make_subtitle_options(path="/proj/subs.srt", font_size=48)
+        plan = build_plan(ranges, probe, RenderOptions(subtitle=sub))
+
+        # frame_h = probe.height = 1920 -> FontSize=7
+        assert "FontSize=7" in plan.filter_complex
+
+    def test_single_source_no_scale_probe_height_none_raw_values(self) -> None:
+        """Single-source, no width/height, probe.height=None
+        -> no counter-scale, raw FontSize=48 (legacy fallback, ADR-F3 §5.5)."""
+        from clipwright_render.plan import build_plan, resolve_kept_ranges
+
+        tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=0, bit_rate=None, height=None)
+        sub = _make_subtitle_options(path="/proj/subs.srt", font_size=48)
+        plan = build_plan(ranges, probe, RenderOptions(subtitle=sub))
+
+        # frame_h unknown -> raw value
+        assert "FontSize=48" in plan.filter_complex
+
+    def test_single_source_no_original_size_in_filter(self) -> None:
+        """original_size must not appear in single-source filter_complex (spike regression guard)."""
+        from clipwright_render.plan import build_plan, resolve_kept_ranges
+
+        tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=0, bit_rate=None)
+        sub = _make_subtitle_options(path="/proj/subs.srt", font_size=48)
+        plan = build_plan(
+            ranges, probe, RenderOptions(width=1080, height=1920, subtitle=sub)
+        )
+
+        assert "original_size" not in plan.filter_complex
+
+    def test_single_source_subtitle_after_scale_stage(self) -> None:
+        """subtitle stage must follow the scale stage: [outvscaled] is the input to subtitles=.
+
+        This verifies stage ordering: scale -> subtitle (ADR-F2 §4.3).
+        """
+        from clipwright_render.plan import build_plan, resolve_kept_ranges
+
+        tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=0, bit_rate=None)
+        sub = _make_subtitle_options(path="/proj/subs.srt", font_size=48)
+        plan = build_plan(
+            ranges, probe, RenderOptions(width=1920, height=1080, subtitle=sub)
+        )
+        fc = plan.filter_complex
+        # [outvscaled] must appear as input to subtitles=
+        outvscaled_pos = fc.find("[outvscaled]subtitles=")
+        assert outvscaled_pos != -1, (
+            "[outvscaled]subtitles= not found; subtitle stage must consume scale output"
+        )
+
+
+# ---------------------------------------------------------------------------
+# ADR-F4: Multiple-source path fit propagation
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPlanFitMultiSource:
+    """Verify _build_multi_source_filter_complex propagates fit to per-clip normalisation (ADR-F4).
+
+    _build_clip_filters selects contain/cover/stretch filtergraph branches based on
+    the fit parameter. All three modes are implemented and tested. All tests confirm
+    correct per-clip filter selection; test_multi_source_fit_contain_pad_color_black
+    verifies that color=black is explicit in the contain pad filter (ADR-F2).
+    """
+
+    def _build_multi_fit(
+        self,
+        fit: str = "contain",
+        width: int | None = None,
+        height: int | None = None,
+    ) -> RenderPlan:
+        from clipwright_render.plan import build_plan, resolve_kept_ranges
+
+        clips = [
+            _make_clip("/src/a.mp4", 0.0, 3.0),
+            _make_clip("/src/b.mp4", 0.0, 2.0),
+        ]
+        tl = _make_timeline_with_clips(clips)
+        ranges = resolve_kept_ranges(tl)
+        source_probes = {
+            "/src/a.mp4": _make_probe(width=1920, height=1080, fps=30.0),
+            "/src/b.mp4": _make_probe(width=1280, height=720, fps=30.0),
+        }
+        opts_kwargs: dict = {"fit": fit}
+        if width is not None and height is not None:
+            opts_kwargs["width"] = width
+            opts_kwargs["height"] = height
+        opts = RenderOptions(**opts_kwargs)
+        return build_plan(
+            ranges,
+            source_probes["/src/a.mp4"],
+            opts,
+            source_probes=source_probes,
+        )
+
+    def test_multi_source_fit_contain_uses_decrease(self) -> None:
+        """Multi-source, fit=contain -> per-clip filter contains force_original_aspect_ratio=decrease (ADR-F4)."""
+        plan = self._build_multi_fit(fit="contain")
+
+        assert "force_original_aspect_ratio=decrease" in plan.filter_complex
+
+    def test_multi_source_fit_cover_uses_increase(self) -> None:
+        """Multi-source, fit=cover -> per-clip filter contains force_original_aspect_ratio=increase (ADR-F4)."""
+        plan = self._build_multi_fit(fit="cover")
+
+        assert "force_original_aspect_ratio=increase" in plan.filter_complex
+
+    def test_multi_source_fit_cover_uses_crop(self) -> None:
+        """Multi-source, fit=cover -> per-clip filter contains crop= (ADR-F4)."""
+        plan = self._build_multi_fit(fit="cover")
+
+        assert "crop=" in plan.filter_complex
+
+    def test_multi_source_fit_stretch_no_force_aspect(self) -> None:
+        """Multi-source, fit=stretch -> force_original_aspect_ratio must NOT appear (ADR-F4)."""
+        plan = self._build_multi_fit(fit="stretch")
+
+        assert "force_original_aspect_ratio" not in plan.filter_complex
+
+    def test_multi_source_fit_cover_no_decrease(self) -> None:
+        """Multi-source, fit=cover -> force_original_aspect_ratio=decrease must NOT appear (ADR-F4)."""
+        plan = self._build_multi_fit(fit="cover")
+
+        assert "force_original_aspect_ratio=decrease" not in plan.filter_complex
+
+    def test_multi_source_fit_stretch_no_pad(self) -> None:
+        """Multi-source, fit=stretch -> pad= must NOT appear (ADR-F4)."""
+        plan = self._build_multi_fit(fit="stretch")
+
+        assert "pad=" not in plan.filter_complex
+
+    def test_multi_source_fit_contain_pad_color_black(self) -> None:
+        """Multi-source, fit=contain -> per-clip pad filter must include color=black (ADR-F2).
+
+        ADR-F2 §4.1 requires color=black to be explicit in the contain pad filter.
+        Both the single-source path (plan.py) and the multi-source per-clip
+        normalisation path (_build_clip_filters) include color=black.
+        """
+        plan = self._build_multi_fit(fit="contain")
+
+        assert "color=black" in plan.filter_complex
+
+
+# ---------------------------------------------------------------------------
+# ADR-F4: Multi-source counter-scale (Red: frame_h not wired)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPlanSubtitleCounterScaleMultiSource:
+    """Verify build_plan wires frame_h=target_h for subtitle counter-scale (multi-source, ADR-F4)."""
+
+    def test_multi_source_subtitle_counter_scale_uses_target_h(self) -> None:
+        """Multi-source, width=1080, height=1920, subtitle FontSize=48
+        -> FontSize=round(48*288/1920)=7 (frame_h=target_h, ADR-F4)."""
+        from clipwright_render.plan import build_plan, resolve_kept_ranges
+
+        clips = [
+            _make_clip("/src/a.mp4", 0.0, 3.0),
+            _make_clip("/src/b.mp4", 0.0, 2.0),
+        ]
+        tl = _make_timeline_with_clips(clips)
+        ranges = resolve_kept_ranges(tl)
+        source_probes = {
+            "/src/a.mp4": _make_probe(width=1920, height=1080, fps=30.0),
+            "/src/b.mp4": _make_probe(width=1920, height=1080, fps=30.0),
+        }
+        sub = _make_subtitle_options(path="/proj/subs.srt", font_size=48)
+        plan = build_plan(
+            ranges,
+            source_probes["/src/a.mp4"],
+            RenderOptions(width=1080, height=1920, subtitle=sub),
+            source_probes=source_probes,
+        )
+
+        assert "FontSize=7" in plan.filter_complex
+
+    def test_multi_source_no_original_size_in_filter(self) -> None:
+        """original_size must not appear in multi-source filter_complex (spike regression guard)."""
+        from clipwright_render.plan import build_plan, resolve_kept_ranges
+
+        clips = [
+            _make_clip("/src/a.mp4", 0.0, 3.0),
+            _make_clip("/src/b.mp4", 0.0, 2.0),
+        ]
+        tl = _make_timeline_with_clips(clips)
+        ranges = resolve_kept_ranges(tl)
+        source_probes = {
+            "/src/a.mp4": _make_probe(width=1920, height=1080, fps=30.0),
+            "/src/b.mp4": _make_probe(width=1920, height=1080, fps=30.0),
+        }
+        sub = _make_subtitle_options(path="/proj/subs.srt", font_size=48)
+        plan = build_plan(
+            ranges,
+            source_probes["/src/a.mp4"],
+            RenderOptions(width=1080, height=1920, subtitle=sub),
+            source_probes=source_probes,
+        )
+
+        assert "original_size" not in plan.filter_complex
+
+
+# ---------------------------------------------------------------------------
+# ADR-F1: backward compat — no scale stage when width/height not specified (Green)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPlanNoScaleWhenNoWidthHeight:
+    """Verify that fit is ignored and no scale stage is inserted when width/height unspecified (ADR-F1).
+
+    These tests should be Green even before impl, confirming backward compatibility is preserved.
+    """
+
+    def test_no_scale_stage_without_width_height(self) -> None:
+        """width/height both None -> no scale filter (ADR-F1)."""
+        from clipwright_render.plan import build_plan, resolve_kept_ranges
+
+        tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=0, bit_rate=None)
+        plan = build_plan(ranges, probe, RenderOptions(fit="contain"))
+
+        # No scale stage: [outvscaled] must not appear (scale was not triggered)
+        assert "[outvscaled]" not in plan.filter_complex
+
+    def test_fit_cover_without_width_height_no_scale_stage(self) -> None:
+        """fit=cover without width/height -> still no scale stage inserted (ADR-F1)."""
+        from clipwright_render.plan import build_plan, resolve_kept_ranges
+
+        tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=0, bit_rate=None)
+        plan = build_plan(ranges, probe, RenderOptions(fit="cover"))
+
+        assert "[outvscaled]" not in plan.filter_complex
+        assert "force_original_aspect_ratio" not in plan.filter_complex
