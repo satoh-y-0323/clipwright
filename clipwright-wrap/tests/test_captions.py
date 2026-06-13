@@ -13,7 +13,8 @@ Target API (all budoux-independent):
 WR-AD-06: timecode strings are preserved as-is (no float conversion).
 WR-AD-12: transcribe byte-structure spec (no trailing blank after last cue / WEBVTT\\n\\n / 0 cues).
 WR-AD-14: character count is uniformly 1 per character; no delimiter inserted; \\n not included in len(line).
-WR-AD-15(1): overflow detection = line-count excess (a) + line-width excess (b) both.
+WR-AD-15(1): overflow detection = line-width excess only (ADR-W2 revised).
+  Line-count excess is resolved upstream by _merge_to_max_lines, not detected as overflow.
 """
 
 from __future__ import annotations
@@ -666,99 +667,148 @@ class TestSerializeCaptionsRoundTrip:
 # Overflow detection (WR-AD-15(1) / DC-AM-003)
 # ===========================================================================
 
-# Overflow detection is expected to be implemented as a pure logic function in captions.py.
-# Function signature: is_overflow(lines: list[str], max_chars: int, max_lines: int)
-#   -> dict with "line_count_overflow": bool, "line_width_overflow": bool
-# (or Tuple / dataclass)
-# These tests verify the overflow detection logic combined with wrap_cue_lines output.
-# When is_overflow is available in captions.py, import and use it directly.
-# Otherwise, derive the result from wrap_cue_lines result metadata.
-
-# Note: overflow detection is expected to be exported from captions.py as is_overflow.
-# As a Red test: captions.py not present = ImportError → Red.
+# check_overflow(lines, max_chars) -> bool
+# Detects line-width excess only (ADR-W2 / WR-AD-15(1) revised).
+# Line-count excess is resolved upstream by _merge_to_max_lines.
 
 
 class TestOverflowDetection:
     """Verify boundary-value tests for overflow detection (WR-AD-15(1) / DC-AM-003).
 
-    Overflow detection:
-      (a) line count > max_lines → line-count overflow
-      (b) any line width > max_chars → line-width overflow (including single oversized segment)
+    Overflow detection covers width excess only (ADR-W2 revised):
+      (b) any line width > max_chars → width overflow (including single oversized segment)
+    Line-count excess is no longer an overflow condition; it is handled by
+    _merge_to_max_lines before check_overflow is applied.
     """
 
     def test_no_overflow_when_within_limits(self) -> None:
-        """No overflow when both line count and line width are within limits."""
+        """No overflow when all line widths are within max_chars."""
         from clipwright_wrap.captions import check_overflow
 
-        lines = ["あいうえ", "かきくけ"]  # 4 chars × 2 lines
-        result = check_overflow(lines, max_chars=5, max_lines=2)
-        assert result["line_count_overflow"] is False
-        assert result["line_width_overflow"] is False
-
-    def test_line_count_overflow_at_max_lines_plus_1(self) -> None:
-        """line_count_overflow is True when line count is max_lines + 1 (boundary value)."""
-        from clipwright_wrap.captions import check_overflow
-
-        lines = ["あ", "い", "う"]  # 3 lines, max_lines=2
-        result = check_overflow(lines, max_chars=10, max_lines=2)
-        assert result["line_count_overflow"] is True
-
-    def test_no_line_count_overflow_at_exactly_max_lines(self) -> None:
-        """line_count_overflow is False when line count equals exactly max_lines (boundary value)."""
-        from clipwright_wrap.captions import check_overflow
-
-        lines = ["あ", "い"]  # 2 lines, max_lines=2
-        result = check_overflow(lines, max_chars=10, max_lines=2)
-        assert result["line_count_overflow"] is False
+        lines = ["あいうえ", "かきくけ"]  # 4 chars each, max_chars=5
+        assert check_overflow(lines, max_chars=5) is False
 
     def test_line_width_overflow_at_max_chars_plus_1(self) -> None:
-        """line_width_overflow is True when any line width is max_chars + 1 (boundary value)."""
+        """Returns True when any line width is max_chars + 1 (boundary value)."""
         from clipwright_wrap.captions import check_overflow
 
         lines = ["あいうえおか"]  # 6 chars, max_chars=5
-        result = check_overflow(lines, max_chars=5, max_lines=2)
-        assert result["line_width_overflow"] is True
+        assert check_overflow(lines, max_chars=5) is True
 
     def test_no_line_width_overflow_at_exactly_max_chars(self) -> None:
-        """line_width_overflow is False when line width equals exactly max_chars (boundary value)."""
+        """Returns False when line width equals exactly max_chars (boundary value)."""
         from clipwright_wrap.captions import check_overflow
 
         lines = ["あいうえお"]  # 5 chars, max_chars=5
-        result = check_overflow(lines, max_chars=5, max_lines=2)
-        assert result["line_width_overflow"] is False
+        assert check_overflow(lines, max_chars=5) is False
 
     def test_single_oversized_segment_causes_width_overflow(self) -> None:
-        """A single oversized segment (1 line, line-width overflow) → line_width_overflow=True (WR-AD-15(1))."""
+        """A single oversized line → True (WR-AD-15(1))."""
         from clipwright_wrap.captions import check_overflow
 
-        # 1 line ≤ max_lines=2 but line-width overflow
         lines = ["歩きながら春の"]  # 8 chars, max_chars=5
-        result = check_overflow(lines, max_chars=5, max_lines=2)
-        assert result["line_count_overflow"] is False  # line count is OK
-        assert result["line_width_overflow"] is True  # line width overflows
+        assert check_overflow(lines, max_chars=5) is True
 
-    def test_both_overflow_simultaneously(self) -> None:
-        """Both line_count_overflow and line_width_overflow are True when both conditions are met."""
+    def test_both_lines_overflow(self) -> None:
+        """Returns True when at least one line exceeds max_chars."""
         from clipwright_wrap.captions import check_overflow
 
         lines = [
-            "あいうえおか",
-            "きくけこ",
-            "さしすせ",
-        ]  # 3 lines > max_lines=2 and line-width overflow
-        result = check_overflow(lines, max_chars=5, max_lines=2)
-        assert result["line_count_overflow"] is True
-        assert result["line_width_overflow"] is True
+            "あいうえおか",  # 6 chars, exceeds max_chars=5
+            "きくけこ",       # 4 chars, within limit
+            "さしすせ",       # 4 chars, within limit
+        ]
+        assert check_overflow(lines, max_chars=5) is True
 
     def test_overflow_does_not_truncate_content(self) -> None:
-        """Overflow detection does not truncate content (avoid information loss; WR-AD-15(1))."""
+        """check_overflow must not modify the input list (no information loss; WR-AD-15(1))."""
         from clipwright_wrap.captions import check_overflow
 
         lines = ["あいうえおか", "きくけこ", "さしすせ"]
-        # check_overflow must not modify lines
         original_lines = lines.copy()
-        check_overflow(lines, max_chars=5, max_lines=2)
+        check_overflow(lines, max_chars=5)
         assert lines == original_lines
+
+
+# ===========================================================================
+# _merge_to_max_lines (DC-AM-002 / ADR-W3)
+# ===========================================================================
+
+
+class TestMergeToMaxLines:
+    """Verify _merge_to_max_lines greedy front-merge logic (DC-AM-002 / ADR-W3)."""
+
+    def test_no_op_when_within_limit(self) -> None:
+        """Returns (lines, False) unchanged when len(lines) <= max_lines (DC-AM-003)."""
+        from clipwright_wrap.captions import _merge_to_max_lines
+
+        lines = ["あ", "い"]
+        result, merged = _merge_to_max_lines(lines, max_lines=3)
+        assert result == ["あ", "い"]
+        assert merged is False
+
+    def test_single_merge(self) -> None:
+        """3 lines with max_lines=2 produces 2 lines by front-merging the first two."""
+        from clipwright_wrap.captions import _merge_to_max_lines
+
+        lines = ["あ", "い", "う"]
+        result, merged = _merge_to_max_lines(lines, max_lines=2)
+        assert len(result) == 2
+        assert merged is True
+
+    def test_convergence_to_max_lines_1(self) -> None:
+        """Multiple lines with max_lines=1 reduces to exactly 1 line."""
+        from clipwright_wrap.captions import _merge_to_max_lines
+
+        lines = ["a", "b", "c", "d"]
+        result, merged = _merge_to_max_lines(lines, max_lines=1)
+        assert len(result) == 1
+        assert result[0] == "abcd"
+        assert merged is True
+
+    def test_merge_returns_true(self) -> None:
+        """merged is True when at least one concatenation occurred."""
+        from clipwright_wrap.captions import _merge_to_max_lines
+
+        lines = ["x", "y", "z"]
+        _, merged = _merge_to_max_lines(lines, max_lines=2)
+        assert merged is True
+
+    def test_no_op_returns_false(self) -> None:
+        """merged is False for a single-line list and for an empty list."""
+        from clipwright_wrap.captions import _merge_to_max_lines
+
+        _, merged_single = _merge_to_max_lines(["only"], max_lines=1)
+        assert merged_single is False
+
+        _, merged_empty = _merge_to_max_lines([], max_lines=2)
+        assert merged_empty is False
+
+    def test_language_agnostic(self) -> None:
+        """Algorithm is list-operation only; produces the same merge behaviour for ja and zh-hans strings."""
+        from clipwright_wrap.captions import _merge_to_max_lines
+
+        ja_lines = ["今日は", "いい", "天気"]
+        zh_lines = ["今天", "天气", "很好"]
+
+        ja_result, ja_merged = _merge_to_max_lines(ja_lines, max_lines=2)
+        zh_result, zh_merged = _merge_to_max_lines(zh_lines, max_lines=2)
+
+        # Both inputs have 3 lines > max_lines=2, so both must be merged
+        assert len(ja_result) == 2
+        assert len(zh_result) == 2
+        assert ja_merged is True
+        assert zh_merged is True
+
+    def test_roundtrip_identity(self) -> None:
+        """Joining merged_lines with '' equals joining the original lines with '' (ADR-W3)."""
+        from clipwright_wrap.captions import _merge_to_max_lines
+
+        lines = ["今日は", "とても", "いい", "天気です。"]
+        original_text = "".join(lines)
+
+        merged_lines, _ = _merge_to_max_lines(lines, max_lines=2)
+        assert "".join(merged_lines) == original_text
 
 
 # ===========================================================================

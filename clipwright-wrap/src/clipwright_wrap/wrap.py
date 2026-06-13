@@ -2,15 +2,18 @@
 
 Output validation → input existence check → subtitle parsing →
 wrap_cli launch (phrase segmentation) →
-greedy line-filling and re-serialisation via captions → output write → envelope return.
+greedy line-filling, front-merge convergence, and re-serialisation via captions →
+output write → envelope return.
 
 Design decisions:
 - wrap_cli is launched as sys.executable -m clipwright_wrap.wrap_cli (WR-AD-01).
 - wrap_cli error detection is based on the "error" key in stdout JSON (DC-AS-007).
 - subprocess failure/timeout uses the sanitised message in SUBPROCESS_SAFE_MESSAGE.
 - FILE_NOT_FOUND message contains only the basename (no full path exposure; WR-AD-09).
-- Overflow detection covers both line-count excess (a) and line-width excess (b)
-  (WR-AD-15(1)).
+- Line-count excess is resolved by front-merge (_merge_to_max_lines) before overflow
+  detection; line-count overflow is no longer an overflow condition (ADR-W2 / W1).
+- Overflow detection covers only line-width excess after merge (WR-AD-15(1) revised).
+  Merge-induced width overflow surfaces here as intended (DC-AS-005).
 - Warnings use a single aggregated sentence + index arrays in data
   (WR-AD-13(2); DC-AM-002).
 - artifacts are dicts (Artifact model not instantiated; DC-AS-005).
@@ -32,6 +35,7 @@ from clipwright.process import SUBPROCESS_SAFE_MESSAGE
 from clipwright.schemas import ToolResult
 
 from clipwright_wrap.captions import (
+    _merge_to_max_lines,
     check_overflow,
     parse_captions,
     serialize_captions,
@@ -237,9 +241,9 @@ def _wrap_inner(
     else:
         segments = []
 
-    # --- 6. Apply wrap_cue_lines to each cue → overflow detection ---
+    # --- 6. Apply wrap_cue_lines → front-merge → overflow detection pipeline ---
 
-    overflow_cue_indices: list[int] = []
+    merged_cue_indices: list[int] = []
     overflow_width_cue_indices: list[int] = []
     wrapped_count = 0
 
@@ -247,17 +251,20 @@ def _wrap_inner(
         seg = segments[i] if i < len(segments) else [cue.text]
         lines = wrap_cue_lines(seg, options.max_chars)
 
+        # Front-merge: collapse lines to at most max_lines (ADR-W1)
+        lines, merged = _merge_to_max_lines(lines, options.max_lines)
+        if merged:
+            merged_cue_indices.append(i)
+
+        # Width overflow detection applied after merge (WR-AD-15(1) revised; DC-AS-005:
+        # merge-induced width overflow is intentional — detection remains post-merge)
+        if check_overflow(lines, options.max_chars):
+            overflow_width_cue_indices.append(i)
+
         # Increment wrapped_count when the text has changed (line break inserted)
         new_text = "\n".join(lines)
         if new_text != cue.text:
             wrapped_count += 1
-
-        # Overflow detection (WR-AD-15(1))
-        overflow = check_overflow(lines, options.max_chars, options.max_lines)
-        if overflow["line_count_overflow"]:
-            overflow_cue_indices.append(i)
-        if overflow["line_width_overflow"]:
-            overflow_width_cue_indices.append(i)
 
         # Update cue.text to the formatted text (no truncation; full text preserved)
         cue.text = new_text
@@ -271,15 +278,6 @@ def _wrap_inner(
 
     warnings: list[str] = []
 
-    # Line-count overflow warnings (aggregated; omitted when 0 entries; DC-AM-002)
-    if overflow_cue_indices:
-        warnings.append(
-            f"{len(overflow_cue_indices)} cue(s) exceeded max_lines"
-            f" ({options.max_lines})"
-            " (see data.overflow_cue_indices for indices)."
-            " Output without truncation to avoid information loss."
-        )
-
     # Line-width overflow warnings (single aggregated sentence; omitted when 0 entries)
     if overflow_width_cue_indices:
         warnings.append(
@@ -289,11 +287,12 @@ def _wrap_inner(
             " Output without truncation to avoid information loss."
         )
 
-    total_overflow = len(set(overflow_cue_indices) | set(overflow_width_cue_indices))
+    merged_count = len(merged_cue_indices)
+    width_overflow_count = len(overflow_width_cue_indices)
     summary = (
         f"Phrase-boundary line breaks applied to {cue_count} cue(s)"
-        f" ({wrapped_count} cue(s) had line breaks inserted;"
-        f" {total_overflow} cue(s) exceeded limits)."
+        f" ({merged_count} cue(s) collapsed to max_lines;"
+        f" {width_overflow_count} cue(s) exceeded max_chars)."
         f" Language: {options.language}."
         f" Generated {output_path.name}."
     )
@@ -307,7 +306,7 @@ def _wrap_inner(
         data={
             "cue_count": cue_count,
             "wrapped_count": wrapped_count,
-            "overflow_cue_indices": overflow_cue_indices,
+            "merged_cue_indices": merged_cue_indices,
             "overflow_width_cue_indices": overflow_width_cue_indices,
             "language": options.language,
         },
