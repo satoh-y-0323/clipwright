@@ -29,7 +29,7 @@ from clipwright.operations import (
 )
 from clipwright.otio_utils import load_timeline, save_timeline, summarize_timeline
 from clipwright.project import init_project as _init_project
-from clipwright.schemas import Artifact, MediaInfo
+from clipwright.schemas import Artifact, MediaInfo, ToolResult
 
 # FastMCP instance (name = MCP server name)
 mcp = FastMCP("clipwright")
@@ -85,7 +85,7 @@ def clipwright_init_project(
             )
         ),
     ] = False,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Initialise a project directory.
 
     Creates the sources / artifacts / outputs subdirectories, a clipwright.json
@@ -136,7 +136,7 @@ def clipwright_init_project(
 )
 def clipwright_inspect_media(
     path: Annotated[str, Field(description="Path to the media file to probe.")],
-) -> dict[str, Any]:
+) -> ToolResult:
     """Probe a media file with ffprobe and return its information.
 
     ffprobe is located via CLIPWRIGHT_FFPROBE env var, then PATH (ADR-3).
@@ -213,7 +213,7 @@ def clipwright_read_timeline(
             )
         ),
     ] = None,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Load timeline.otio and return a summary.
 
     Exactly one of project_dir or timeline_path must be specified (mutually exclusive).
@@ -360,7 +360,7 @@ def clipwright_write_timeline(
             )
         ),
     ] = False,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Append a declarative operation list to timeline.otio.
 
     Appends to the existing timeline without discarding its contents
@@ -467,5 +467,10 @@ def clipwright_write_timeline(
 # ===========================================================================
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Entry point that starts the MCP server over stdio."""
     mcp.run(transport="stdio")
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()

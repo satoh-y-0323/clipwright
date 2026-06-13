@@ -91,7 +91,9 @@ class TestOutputSchemaTyped:
         )
 
     @pytest.mark.parametrize("tool_name", _TOOL_NAMES)
-    def test_output_schema_has_required_envelope_properties(self, tool_name: str) -> None:
+    def test_output_schema_has_required_envelope_properties(
+        self, tool_name: str
+    ) -> None:
         """outputSchema properties must include all ToolResult envelope fields.
 
         Required: ok / summary / data / artifacts / warnings / error
@@ -137,9 +139,7 @@ class TestCallToolStructuredContent:
         If ToolResult is a union (old design), FastMCP 1.27.2 wraps structuredContent
         as {"result": ...}, which breaks the wire contract.
         """
-        content_blocks, structured = _run(
-            mcp.call_tool("clipwright_read_timeline", {})
-        )
+        content_blocks, structured = _run(mcp.call_tool("clipwright_read_timeline", {}))
         assert isinstance(structured, dict), (
             f"structuredContent must be a dict, got {type(structured)}"
         )
@@ -151,9 +151,7 @@ class TestCallToolStructuredContent:
 
     def test_read_timeline_error_not_wrapped_in_result(self) -> None:
         """structuredContent must NOT be wrapped in a 'result' key (union wrapping regression)."""
-        content_blocks, structured = _run(
-            mcp.call_tool("clipwright_read_timeline", {})
-        )
+        content_blocks, structured = _run(mcp.call_tool("clipwright_read_timeline", {}))
         assert "result" not in structured, (
             "structuredContent is wrapped in {'result': ...} — "
             "this is the FastMCP union wrapping regression. "
@@ -162,18 +160,14 @@ class TestCallToolStructuredContent:
 
     def test_read_timeline_error_ok_is_false(self) -> None:
         """clipwright_read_timeline with no args returns ok=False in structuredContent."""
-        content_blocks, structured = _run(
-            mcp.call_tool("clipwright_read_timeline", {})
-        )
+        content_blocks, structured = _run(mcp.call_tool("clipwright_read_timeline", {}))
         assert structured.get("ok") is False, (
             f"Expected ok=False for error envelope, got: {structured.get('ok')}"
         )
 
     def test_read_timeline_error_has_error_key(self) -> None:
         """Error envelope structuredContent has an 'error' key."""
-        content_blocks, structured = _run(
-            mcp.call_tool("clipwright_read_timeline", {})
-        )
+        content_blocks, structured = _run(mcp.call_tool("clipwright_read_timeline", {}))
         assert "error" in structured, (
             f"Error envelope must have 'error' key. Got: {list(structured.keys())}"
         )

@@ -1,6 +1,6 @@
 [project]
 name = "clipwright"
-version = "0.1.1"
+version = "0.2.0"
 description = "MCP server group wrapping FFmpeg/OTIO. Provides primitives to manipulate video editing workflows from AI agents."
 readme = "README.md"
 license = { text = "MIT" }
@@ -13,6 +13,9 @@ dependencies = [
     "opentimelineio>=0.18",
     "pydantic>=2",
 ]
+
+[project.scripts]
+clipwright-mcp = "clipwright.server:main"
 
 [build-system]
 requires = ["uv_build>=0.11.19,<0.12.0"]

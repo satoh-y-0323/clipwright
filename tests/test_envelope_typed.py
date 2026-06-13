@@ -128,7 +128,9 @@ class TestErrorResultTyped:
         """error_result() stores code in error.code."""
         from clipwright.envelope import error_result
 
-        result = error_result("DEPENDENCY_MISSING", "ffprobe not found", "Install FFmpeg")
+        result = error_result(
+            "DEPENDENCY_MISSING", "ffprobe not found", "Install FFmpeg"
+        )
         assert result.error is not None  # type: ignore[union-attr]
         assert result.error.code == "DEPENDENCY_MISSING"  # type: ignore[union-attr]
 
@@ -182,7 +184,9 @@ class TestToToolResult:
             "ok": True,
             "summary": "Done",
             "data": {"count": 3},
-            "artifacts": [{"role": "timeline", "path": "/out/t.otio", "format": "otio"}],
+            "artifacts": [
+                {"role": "timeline", "path": "/out/t.otio", "format": "otio"}
+            ],
             "warnings": [],
         }
         result = to_tool_result(d)
@@ -361,7 +365,9 @@ class TestWireCompatibility:
         # Current ToolResult has ok: Literal[True], so this raises ValidationError.
         # After the redefinition to ok: bool, this must succeed.
         try:
-            result = ToolResult(ok=False, error=ToolError(code="X", message="m", hint="h"))
+            result = ToolResult(
+                ok=False, error=ToolError(code="X", message="m", hint="h")
+            )
             assert result.ok is False
         except (ValidationError, TypeError) as exc:
             pytest.fail(
@@ -380,7 +386,9 @@ class TestWireCompatibility:
         # Old ToolResult required summary: str (no default).
         # New definition: summary: str | None = None
         try:
-            result = ToolResult(ok=False, error=ToolError(code="X", message="m", hint="h"))
+            result = ToolResult(
+                ok=False, error=ToolError(code="X", message="m", hint="h")
+            )
             assert result.summary is None
         except (ValidationError, TypeError) as exc:
             pytest.fail(

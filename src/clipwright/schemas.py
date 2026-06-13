@@ -6,10 +6,10 @@ All tool input/output types share the vocabulary defined here; do not redefine p
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 import opentimelineio as otio
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 # ===========================================================================
 # Time models (equivalent to OTIO RationalTime / TimeRange)
@@ -53,7 +53,11 @@ class Artifact(BaseModel):
     """Reference to a tool output file.
 
     Large detail data should be stored here as a path rather than in data (§6.3).
+    Extra keys in input dicts are silently ignored so that satellite tool dicts
+    with additional metadata can be coerced without raising ValidationError (M-002).
     """
+
+    model_config = ConfigDict(extra="ignore")
 
     role: str
     """File role. E.g. "timeline" | "output" | "caption" | "analysis"."""
@@ -67,19 +71,6 @@ class Artifact(BaseModel):
 # ===========================================================================
 
 
-class ToolResult(BaseModel):
-    """Success envelope (§6.3).
-
-    ok is always True. summary must contain the key points an AI needs to decide next.
-    """
-
-    ok: Literal[True] = True
-    summary: str
-    data: dict[str, Any] = {}
-    artifacts: list[Artifact] = []
-    warnings: list[str] = []
-
-
 class ToolError(BaseModel):
     """Error detail. The three-part set: code / message / hint (§6.4)."""
 
@@ -88,14 +79,24 @@ class ToolError(BaseModel):
     hint: str
 
 
-class ToolErrorResult(BaseModel):
-    """Failure envelope (§6.4).
+class ToolResult(BaseModel):
+    """Unified return envelope for all Clipwright tools (§6.3 / §6.4).
 
-    ok is always False. error must include what happened (message) and next step (hint).
+    A single model carries both success and error responses; inspect ``ok`` to branch.
+    Using a union (ToolResult | ToolErrorResult) is intentionally avoided because
+    FastMCP 1.27.2 detects unions and activates ``wrap_output=True``, which wraps
+    ``structuredContent`` in a ``{"result": ...}`` object and breaks the wire contract.
+
+    Success: ok=True, summary set, error=None.
+    Failure: ok=False, error populated, summary may be None.
     """
 
-    ok: Literal[False] = False
-    error: ToolError
+    ok: bool
+    summary: str | None = None
+    data: dict[str, Any] = {}
+    artifacts: list[Artifact] = []
+    warnings: list[str] = []
+    error: ToolError | None = None
 
 
 # ===========================================================================
