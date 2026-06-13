@@ -1,0 +1,58 @@
+name: Publish to PyPI
+
+# Triggered when a tag matching v*.*.* is pushed (e.g. v0.1.2).
+# Publishes every workspace package (core + members) via PyPI Trusted
+# Publishing (OIDC) - no API token required.
+#
+# One-time setup per package on PyPI (Manage -> Publishing -> Add publisher):
+#   Owner:         satoh-y-0323
+#   Repository:    clipwright
+#   Workflow name: publish.yml
+#   Environment:   pypi
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+rc[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+a[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+b[0-9]+'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: Publish ${{ matrix.package }}
+    runs-on: ubuntu-latest
+    strategy:
+      # Keep publishing the remaining packages even if one fails, so a single
+      # already-uploaded version does not abort the whole release.
+      fail-fast: false
+      matrix:
+        package:
+          - clipwright
+          - clipwright-bgm
+          - clipwright-loudness
+          - clipwright-noise
+          - clipwright-render
+          - clipwright-silence
+          - clipwright-transcribe
+          - clipwright-wrap
+    environment:
+      name: pypi
+      url: https://pypi.org/p/${{ matrix.package }}
+    permissions:
+      id-token: write  # OIDC token for Trusted Publishing
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8
+
+      - name: Build ${{ matrix.package }}
+        # Build only this matrix package into a clean dist/ so the publish step
+        # uploads exactly one distribution set.
+        run: uv build --package ${{ matrix.package }} --out-dir dist
+
+      - name: Publish ${{ matrix.package }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
