@@ -715,8 +715,8 @@ class TestOverflowDetection:
 
         lines = [
             "あいうえおか",  # 6 chars, exceeds max_chars=5
-            "きくけこ",       # 4 chars, within limit
-            "さしすせ",       # 4 chars, within limit
+            "きくけこ",  # 4 chars, within limit
+            "さしすせ",  # 4 chars, within limit
         ]
         assert check_overflow(lines, max_chars=5) is True
 

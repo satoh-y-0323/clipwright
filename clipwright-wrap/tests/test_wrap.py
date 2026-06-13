@@ -596,9 +596,7 @@ class TestOverflow:
         )
         return result
 
-    def test_merge_sets_merged_cue_indices(
-        self, tmp_path: Path, mocker: Any
-    ) -> None:
+    def test_merge_sets_merged_cue_indices(self, tmp_path: Path, mocker: Any) -> None:
         """Cue exceeding max_lines is front-merged and recorded in data.merged_cue_indices (ADR-W1/W2).
 
         max_lines=2, 3 segments (each within max_chars) → 3 lines → front-merge is applied.
@@ -707,9 +705,7 @@ class TestOverflow:
         lines_in_file = content.strip().splitlines()
         # SRT structure: index, timecode, text line(s), empty line
         # Skip index (line 0) and timecode (line 1); collect text lines
-        cue_text_lines = [
-            ln for ln in lines_in_file[2:] if ln.strip()
-        ]
+        cue_text_lines = [ln for ln in lines_in_file[2:] if ln.strip()]
         assert len(cue_text_lines) <= 1, (
             f"Expected at most 1 text line after front-merge (max_lines=1), got: {cue_text_lines!r}"
         )
@@ -742,9 +738,7 @@ class TestWarningsAggregation:
         data = result["data"]
         assert isinstance(data.get("overflow_width_cue_indices"), list)
 
-    def test_no_line_count_warning_multi_cue(
-        self, tmp_path: Path, mocker: Any
-    ) -> None:
+    def test_no_line_count_warning_multi_cue(self, tmp_path: Path, mocker: Any) -> None:
         """Multi-cue input with line-count excess emits no 'max_lines' warning; all cues in merged_cue_indices (FR-3/DC-GP-002).
 
         3 cues, each with 3 segments, max_lines=1 → all cues front-merged.
@@ -769,9 +763,7 @@ class TestWarningsAggregation:
         assert result["ok"] is True
         # No max_lines warning (DC-GP-002: line-count warning removed)
         for w in result.get("warnings", []):
-            assert "max_lines" not in w, (
-                f"Unexpected max_lines warning found: {w!r}"
-            )
+            assert "max_lines" not in w, f"Unexpected max_lines warning found: {w!r}"
         # All 3 cues are merged (FR-3)
         data = result["data"]
         assert set(data.get("merged_cue_indices", [])) == {0, 1, 2}, (
