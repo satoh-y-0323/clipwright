@@ -236,7 +236,7 @@ def _wrap_inner(
             # future/compromised wrap_cli, message and hint are bounded in length
             # (SR-M-2). This also bounds the language hint enumeration leak (SR-L-2,
             # resolved by the same bound).
-            # bound chosen above current fixed-string length to avoid truncating known messages
+            # bound chosen above fixed-string length to avoid truncating known messages
             msg = msg[:500]
             hint = hint[:500]
             # Convert to ErrorCode (DEPENDENCY_MISSING propagated as-is)
@@ -306,8 +306,8 @@ def _wrap_inner(
         f" Generated {output_path.name}."
     )
 
-    # artifacts[path] intentionally returns the absolute output path so AI agents can
-    # chain it into the next tool; consistent with silence/render (SR-L-3, accepted design).
+    # artifacts[path] returns absolute path so agents can chain tools;
+    # consistent with silence/render (SR-L-3, accepted design).
     artifacts = [
         {"role": "captions", "path": str(output_path), "format": fmt},
     ]
