@@ -616,7 +616,7 @@ class TestRenderOptionsSubtitleField:
     def test_render_options_subtitle_default_none(self) -> None:
         """RenderOptions() defaults subtitle to None (backward compatible / ADR-S8)."""
         opts = RenderOptions()
-        assert opts.subtitle is None  # type: ignore[attr-defined]
+        assert opts.subtitle is None
 
     def test_render_options_subtitle_accepts_subtitle_options(self) -> None:
         """RenderOptions(subtitle=SubtitleOptions(...)) is accepted (ADR-S2-r2)."""
@@ -625,9 +625,9 @@ class TestRenderOptionsSubtitleField:
         opts = RenderOptions(
             subtitle=SubtitleOptions(path="/proj/subs.srt", font_size=24)  # type: ignore[call-arg]
         )
-        assert opts.subtitle is not None  # type: ignore[attr-defined]
-        assert opts.subtitle.path == "/proj/subs.srt"  # type: ignore[attr-defined]
-        assert opts.subtitle.font_size == 24  # type: ignore[attr-defined]
+        assert opts.subtitle is not None
+        assert opts.subtitle.path == "/proj/subs.srt"
+        assert opts.subtitle.font_size == 24
 
     def test_render_options_subtitle_nested_validation(self) -> None:
         """Nested SubtitleOptions validation is enforced through RenderOptions (ADR-S2-r2).
