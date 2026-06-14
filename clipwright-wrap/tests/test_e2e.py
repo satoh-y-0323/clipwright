@@ -6,6 +6,7 @@ phrase-boundary line-wrapping for Japanese SRT/VTT end-to-end.
 Test categories:
 - e2e_1_srt / e2e_1_vtt : real budoux phrase-boundary wrapping (success condition 1/2)
 - e2e_2_transcribe      : transcribe→wrap integration (DC-AM-004 primary)
+                          Skipped when clipwright-transcribe is not installed.
 - e2e_zero_srt / e2e_zero_vtt : 0-cue e2e (DC-GP-004)
 - e2e_overflow          : front-merge and width overflow (WR-AD-15 revised / DC-AM-003 / ADR-W2)
 
@@ -20,6 +21,8 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from clipwright_wrap.captions import parse_captions
 from clipwright_wrap.schemas import WrapCaptionsOptions
@@ -218,22 +221,10 @@ def test_e2e_1_vtt_artifacts_is_dict(tmp_path: Path) -> None:
 # e2e 2: transcribe→wrap integration (DC-AM-004 primary)
 # ============================================================
 #
-# Import to_srt/to_vtt from clipwright_transcribe.captions,
-# generate SRT/VTT from a Japanese Segment list, then pass to wrap.
-# When import succeeds, record as "transcribe path".
-# (clipwright-transcribe is added as a dev dependency in setup-wrap)
+# Import to_srt/to_vtt from clipwright_transcribe.captions via pytest.importorskip.
+# When clipwright-transcribe is not installed, all three tests are skipped.
+# (clipwright-transcribe is a dev dependency of clipwright-wrap, so CI always runs them.)
 
-try:
-    from clipwright_transcribe.captions import (
-        to_srt,
-        to_vtt,
-    )
-
-    _TRANSCRIBE_IMPORT_OK = True
-except ImportError:
-    _TRANSCRIBE_IMPORT_OK = False
-
-# Switch fixture SRT/VTT generation method depending on whether transcribe import succeeded
 _TRANSCRIBE_SEGMENTS = [
     {
         "start_sec": 0.0,
@@ -247,34 +238,20 @@ _TRANSCRIBE_SEGMENTS = [
     },
 ]
 
-if _TRANSCRIBE_IMPORT_OK:
-    _E2E2_SRT_CONTENT: str = to_srt(_TRANSCRIBE_SEGMENTS)  # type: ignore[arg-type]
-    _E2E2_VTT_CONTENT: str = to_vtt(_TRANSCRIBE_SEGMENTS)  # type: ignore[arg-type]
-else:
-    # Fallback: manually crafted fixture conforming to WR-AD-12 byte structure
-    _E2E2_SRT_CONTENT = (
-        "1\n00:00:00,000 --> 00:00:02,000\n今日はとてもいい天気なので公園に散歩に行きました。\n"
-        "\n"
-        "2\n00:00:02,500 --> 00:00:05,000\n桜の花びらが舞い散り、川沿いの遊歩道を歩きながら春の訪れを感じた。\n"
-    )
-    _E2E2_VTT_CONTENT = (
-        "WEBVTT\n"
-        "\n"
-        "00:00:00.000 --> 00:00:02.000\n今日はとてもいい天気なので公園に散歩に行きました。\n"
-        "\n"
-        "00:00:02.500 --> 00:00:05.000\n桜の花びらが舞い散り、川沿いの遊歩道を歩きながら春の訪れを感じた。\n"
-    )
-
 
 def test_e2e_2_transcribe_srt_ok(tmp_path: Path) -> None:
-    """e2e2-SRT: wrap transcribe to_srt output and get ok:True.
+    """e2e2-SRT: wrap transcribe to_srt output and get ok:True (DC-AM-004).
 
-    When _TRANSCRIBE_IMPORT_OK is True: transcribe path (primary).
-    When False: manually crafted fixture path (fallback).
+    Skipped when clipwright-transcribe is not installed.
     """
-    # Write the transcribe output to a file
+    transcribe_captions = pytest.importorskip(
+        "clipwright_transcribe.captions",
+        reason="clipwright-transcribe not installed",
+    )
+    to_srt = transcribe_captions.to_srt
+
     in_srt = tmp_path / "transcribe_out.srt"
-    in_srt.write_text(_E2E2_SRT_CONTENT, encoding="utf-8")
+    in_srt.write_text(to_srt(_TRANSCRIBE_SEGMENTS), encoding="utf-8")
 
     out_srt = tmp_path / "wrapped.srt"
     result = _run_wrap(
@@ -284,9 +261,18 @@ def test_e2e_2_transcribe_srt_ok(tmp_path: Path) -> None:
 
 
 def test_e2e_2_transcribe_vtt_ok(tmp_path: Path) -> None:
-    """e2e2-VTT: wrap transcribe to_vtt output and get ok:True."""
+    """e2e2-VTT: wrap transcribe to_vtt output and get ok:True (DC-AM-004).
+
+    Skipped when clipwright-transcribe is not installed.
+    """
+    transcribe_captions = pytest.importorskip(
+        "clipwright_transcribe.captions",
+        reason="clipwright-transcribe not installed",
+    )
+    to_vtt = transcribe_captions.to_vtt
+
     in_vtt = tmp_path / "transcribe_out.vtt"
-    in_vtt.write_text(_E2E2_VTT_CONTENT, encoding="utf-8")
+    in_vtt.write_text(to_vtt(_TRANSCRIBE_SEGMENTS), encoding="utf-8")
 
     out_vtt = tmp_path / "wrapped.vtt"
     result = _run_wrap(
@@ -296,9 +282,18 @@ def test_e2e_2_transcribe_vtt_ok(tmp_path: Path) -> None:
 
 
 def test_e2e_2_transcribe_srt_wrapped_output(tmp_path: Path) -> None:
-    """e2e2-SRT: the wrapped output SRT has ok:True and formatted cues."""
+    """e2e2-SRT: the wrapped output SRT has ok:True and formatted cues (DC-AM-004).
+
+    Skipped when clipwright-transcribe is not installed.
+    """
+    transcribe_captions = pytest.importorskip(
+        "clipwright_transcribe.captions",
+        reason="clipwright-transcribe not installed",
+    )
+    to_srt = transcribe_captions.to_srt
+
     in_srt = tmp_path / "transcribe_out.srt"
-    in_srt.write_text(_E2E2_SRT_CONTENT, encoding="utf-8")
+    in_srt.write_text(to_srt(_TRANSCRIBE_SEGMENTS), encoding="utf-8")
     out_srt = tmp_path / "wrapped.srt"
 
     result = _run_wrap(

@@ -297,6 +297,12 @@ def _merge_to_max_lines(lines: list[str], max_lines: int) -> tuple[list[str], bo
     The algorithm is deterministic: identical inputs always produce identical
     outputs.  When ``max_lines == 1`` every line is folded into a single string.
 
+    Precondition: max_lines >= 1. The MCP boundary enforces this via the
+    Pydantic ``gt=0`` constraint on WrapCaptionsOptions.max_lines, so this
+    function is only reached with max_lines >= 1. Calling it directly with
+    max_lines < 1 is undefined behaviour (the while-loop would not terminate
+    for a non-empty input).
+
     Args:
         lines: Lines to merge.  May be empty.
         max_lines: Target upper bound on the number of lines (gt=0).

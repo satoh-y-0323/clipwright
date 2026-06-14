@@ -230,6 +230,15 @@ def _wrap_inner(
             code_str: str = err.get("code", str(ErrorCode.INTERNAL))
             msg: str = err.get("message", "An error occurred in wrap_cli")
             hint: str = err.get("hint", "Please report with reproduction steps.")
+            # wrap_cli runs in a separate process and only emits fixed, path-free
+            # error message/hint strings (verified against wrap_cli.py). These are
+            # transcribed as-is into the envelope. As a defensive cap against a
+            # future/compromised wrap_cli, message and hint are bounded in length
+            # (SR-M-2). This also bounds the language hint enumeration leak (SR-L-2,
+            # resolved by the same bound).
+            # bound chosen above current fixed-string length to avoid truncating known messages
+            msg = msg[:500]
+            hint = hint[:500]
             # Convert to ErrorCode (DEPENDENCY_MISSING propagated as-is)
             try:
                 code = ErrorCode(code_str)
@@ -297,6 +306,8 @@ def _wrap_inner(
         f" Generated {output_path.name}."
     )
 
+    # artifacts[path] intentionally returns the absolute output path so AI agents can
+    # chain it into the next tool; consistent with silence/render (SR-L-3, accepted design).
     artifacts = [
         {"role": "captions", "path": str(output_path), "format": fmt},
     ]

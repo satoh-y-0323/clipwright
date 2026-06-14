@@ -64,7 +64,7 @@ disallow_any_generics = true
 
 # budoux has no stubs, ignored with mypy strict
 [[tool.mypy.overrides]]
-module = "budoux.*"
+module = ["budoux", "budoux.*"]
 ignore_missing_imports = true
 
 # --- pytest ---

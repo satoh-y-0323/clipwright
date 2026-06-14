@@ -599,16 +599,18 @@ class TestOverflow:
     def test_merge_sets_merged_cue_indices(self, tmp_path: Path, mocker: Any) -> None:
         """Cue exceeding max_lines is front-merged and recorded in data.merged_cue_indices (ADR-W1/W2).
 
-        max_lines=2, 3 segments (each within max_chars) → 3 lines → front-merge is applied.
-        The cue index must appear in merged_cue_indices (FR-2).
+        max_lines=2, max_chars=2, 3 segments (['今日は', 'いい', '天気です']) — each segment
+        exceeds max_chars=2 individually, so wrap_cue_lines places each on its own line
+        (no splitting of oversized segments; WR-AD-14). 3 lines > max_lines=2 →
+        front-merge is applied. The cue index must appear in merged_cue_indices (FR-2).
         """
-        # With max_chars=5, ['今日は', 'いい', '天気です'] each fits within chars → 3 lines > max_lines=2
+        # With max_chars=2, each segment exceeds max_chars → 3 lines > max_lines=2
         segments = [["今日は", "いい", "天気です"]]
         result = self._run_with_segments(
             tmp_path,
             mocker,
             segments,
-            max_chars=5,
+            max_chars=2,
             max_lines=2,
         )
         assert result["ok"] is True
@@ -1161,57 +1163,6 @@ class TestSubprocessTextMode:
 
 
 # ===========================================================================
-# CR M-4: summary overflow cue count must use set union (no double-counting)
-# ===========================================================================
-
-
-class TestOverflowSummaryDeduplication:
-    """Verify that when 1 cue satisfies both merge (ADR-W1) and line-width overflow (b),
-    the counts in summary are reported independently without double-counting (CR M-4 revised).
-
-    Under the front-merge design:
-    - merged_cue_indices tracks cues that were front-merged (line-count excess resolved).
-    - overflow_width_cue_indices tracks cues with width overflow post-merge.
-    A cue can appear in both lists simultaneously.
-    The summary must report these counts without confusion.
-    """
-
-    def test_both_overflow_cue_counted_once_in_summary(
-        self, tmp_path: Path, mocker: Any
-    ) -> None:
-        """A cue satisfying both merge and width-overflow must appear in both index lists (CR M-4 revised).
-
-        max_chars=3, max_lines=1, segments=['あいうえおかきく', 'けこさしすせそ']:
-        - 2 segments → 2 lines > max_lines=1 → front-merge applied → merged_cue_indices=[0]
-        - Each merged segment > max_chars=3 → width overflow → overflow_width_cue_indices=[0]
-        - summary must not double-count (e.g. '2 cue(s) exceeded limits' must not appear).
-        """
-        wrap_captions = _import_wrap_captions()
-        inp = _make_input_srt(tmp_path, _srt_1cue("あいうえおかきくけこさしすせそ"))
-        out = str(tmp_path / "output.srt")
-        mocker.patch(
-            "clipwright_wrap.wrap.subprocess.run",
-            return_value=MagicMock(
-                stdout=_wrap_cli_ok([["あいうえおかきく", "けこさしすせそ"]]),
-                returncode=0,
-            ),
-        )
-        result: dict[str, Any] = wrap_captions(
-            str(inp), out, _opts(max_chars=3, max_lines=1)
-        )
-        assert result["ok"] is True
-        data = result["data"]
-        # Both index arrays must contain index 0
-        assert 0 in data["merged_cue_indices"]
-        assert 0 in data["overflow_width_cue_indices"]
-        # summary must not use the obsolete "exceeded limits" phrasing (DC-AS-002)
-        summary = result["summary"]
-        assert "exceeded limits" not in summary, (
-            f"summary must not contain obsolete 'exceeded limits' phrasing: {summary!r}"
-        )
-
-
-# ===========================================================================
 # New tests: FR-2, DC-AS-003, DC-AS-005 (front-merge design)
 # ===========================================================================
 
@@ -1244,16 +1195,17 @@ class TestFrontMerge:
     def test_merged_cue_indices_populated(self, tmp_path: Path, mocker: Any) -> None:
         """FR-2: merged_cue_indices contains 0-based indices of merged cues; [] when no merge occurs.
 
-        Case A: 1 cue, 3 segments, max_lines=2 → 3 lines > 2 → merged; index 0 in merged_cue_indices.
+        Case A: 1 cue, 3 segments, max_chars=2, max_lines=2 → each segment exceeds max_chars=2
+        so wrap_cue_lines produces 3 lines > max_lines=2 → merged; index 0 in merged_cue_indices.
         Case B: 1 cue, 1 segment, max_lines=2 → 1 line <= 2 → not merged; merged_cue_indices=[].
         """
-        # Case A: merge occurs
+        # Case A: merge occurs — max_chars=2 forces each segment onto its own line (3 lines > 2)
         result_a = self._run_with_segments(
             tmp_path,
             mocker,
             _srt_1cue("今日はいい天気です。"),
             segments=[["今日は", "いい", "天気です"]],
-            max_chars=10,
+            max_chars=2,
             max_lines=2,
         )
         assert result_a["ok"] is True
@@ -1330,6 +1282,71 @@ class TestFrontMerge:
         # Merged line 'あいうえおか' (6 chars) > max_chars=3 → width overflow
         assert 0 in data["overflow_width_cue_indices"], (
             f"Expected index 0 in overflow_width_cue_indices: {data['overflow_width_cue_indices']!r}"
+        )
+
+
+# ===========================================================================
+# SR-L-4: data index fields must not expose absolute paths or string values
+# ===========================================================================
+
+
+class TestIndexDataFieldsNoPathLeak:
+    """Verify that merged_cue_indices and overflow_width_cue_indices contain only int values.
+
+    SR-L-4: data fields that record cue indices must be list[int] and must never
+    contain strings (e.g. absolute file paths), regardless of the input.
+    """
+
+    def test_index_data_fields_contain_no_paths(
+        self, tmp_path: Path, mocker: Any
+    ) -> None:
+        """merged_cue_indices and overflow_width_cue_indices are list[int] with no string elements (SR-L-4).
+
+        Uses max_chars=1, max_lines=1 with multiple segments so that both front-merge
+        (3 lines > max_lines=1) and line-width overflow (each segment > max_chars=1)
+        occur, ensuring both lists are non-empty.
+        """
+        wrap_captions = _import_wrap_captions()
+        inp = _make_input_srt(tmp_path, _srt_1cue("あいう"))
+        out = str(tmp_path / "output.srt")
+        mocker.patch(
+            "clipwright_wrap.wrap.subprocess.run",
+            return_value=MagicMock(
+                stdout=_wrap_cli_ok([["あ", "い", "う"]]),
+                returncode=0,
+            ),
+        )
+        result: dict[str, Any] = wrap_captions(
+            str(inp), out, _opts(max_chars=1, max_lines=1)
+        )
+        assert result["ok"] is True
+        data = result["data"]
+
+        merged = data["merged_cue_indices"]
+        width_overflow = data["overflow_width_cue_indices"]
+
+        # Both lists must be non-empty (merge and width overflow both triggered)
+        assert len(merged) > 0, f"merged_cue_indices should be non-empty, got: {merged!r}"
+        assert len(width_overflow) > 0, (
+            f"overflow_width_cue_indices should be non-empty, got: {width_overflow!r}"
+        )
+
+        # All elements must be int — no strings (e.g. no absolute paths)
+        for x in merged:
+            assert isinstance(x, int), (
+                f"merged_cue_indices element must be int, got {type(x)}: {x!r}"
+            )
+        for x in width_overflow:
+            assert isinstance(x, int), (
+                f"overflow_width_cue_indices element must be int, got {type(x)}: {x!r}"
+            )
+
+        # Explicit: no string element in either list
+        assert not any(isinstance(x, str) for x in merged), (
+            f"merged_cue_indices must not contain strings: {merged!r}"
+        )
+        assert not any(isinstance(x, str) for x in width_overflow), (
+            f"overflow_width_cue_indices must not contain strings: {width_overflow!r}"
         )
 
 

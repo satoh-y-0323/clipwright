@@ -998,7 +998,7 @@ class TestParseCaptionsUnsupportedFmt:
         assert "xml" in exc_info.value.message
 
     def test_unsupported_fmt_hint_mentions_valid_options(self) -> None:
-        """ClipwrightError の hint に有効なオプション（srt/vtt）が示されること。"""
+        """ClipwrightError hint contains valid options (srt/vtt)."""
         from clipwright.errors import ClipwrightError
 
         with pytest.raises(ClipwrightError) as exc_info:
@@ -1007,10 +1007,10 @@ class TestParseCaptionsUnsupportedFmt:
 
 
 class TestSerializeCaptionsUnsupportedFmt:
-    """L328: serialize_captions に未対応の fmt を渡すと ClipwrightError(INVALID_INPUT) が送出されること。"""
+    """L328: Passing an unsupported fmt to serialize_captions raises ClipwrightError(INVALID_INPUT)."""
 
     def test_unsupported_fmt_raises_clipwright_error(self) -> None:
-        """未対応の fmt → ClipwrightError(INVALID_INPUT) が送出されること。"""
+        """Unsupported fmt → ClipwrightError(INVALID_INPUT) is raised."""
         from clipwright.errors import ClipwrightError, ErrorCode
 
         cues = [Cue(index=1, start="00:00:00,000", end="00:00:01,000", text="テスト")]
@@ -1019,7 +1019,7 @@ class TestSerializeCaptionsUnsupportedFmt:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_unsupported_fmt_error_message_contains_fmt(self) -> None:
-        """ClipwrightError のメッセージに渡した fmt が含まれること。"""
+        """ClipwrightError message contains the passed fmt."""
         from clipwright.errors import ClipwrightError
 
         cues = [Cue(index=1, start="00:00:00,000", end="00:00:01,000", text="テスト")]
@@ -1028,7 +1028,7 @@ class TestSerializeCaptionsUnsupportedFmt:
         assert "xml" in exc_info.value.message
 
     def test_unsupported_fmt_hint_mentions_valid_options(self) -> None:
-        """ClipwrightError の hint に有効なオプション（srt/vtt）が示されること。"""
+        """ClipwrightError hint contains valid options (srt/vtt)."""
         from clipwright.errors import ClipwrightError
 
         cues = [Cue(index=1, start="00:00:00,000", end="00:00:01,000", text="テスト")]
@@ -1038,22 +1038,22 @@ class TestSerializeCaptionsUnsupportedFmt:
 
 
 # ===========================================================================
-# CR H-1: 不正 SRT タイムコードの拒否（R1 fix テスト）
-# _SRT_TIMELINE_RE を \d{2} に厳格化した後に pass する Red テスト群
+# CR H-1: Rejection of invalid SRT timecodes (R1 fix tests)
+# Red tests that pass after _SRT_TIMELINE_RE is tightened to \d{2}
 # ===========================================================================
 
 
 class TestSrtTimecodeValidation:
-    r"""CR H-1: _SRT_TIMELINE_RE が \d{2} 固定桁で不正タイムコードを拒否することを検証する。
+    r"""CR H-1: Verify that _SRT_TIMELINE_RE rejects invalid timecodes with fixed \d{2} digits.
 
-    以下の不正パターンが ValueError または ClipwrightError として拒否されること（impl 修正後に Green）。
-    現行 _SRT_TIMELINE_RE = \d+ はこれらを合法としてパースするため、本テストは Red になる。
+    The following malformed patterns must be rejected as ValueError or ClipwrightError (Green after impl fix).
+    The current _SRT_TIMELINE_RE = \d+ accepts them as valid, so these tests are Red.
     """
 
-    # --- 正常ケース（既存非回帰）---
+    # --- Valid cases (non-regression) ---
 
     def test_valid_srt_timecode_accepted(self) -> None:
-        """正常な 2桁/3桁ミリ秒固定の SRT タイムコードが受理されること（非回帰）。"""
+        """A well-formed SRT timecode with fixed 2-digit fields and 3-digit milliseconds is accepted (non-regression)."""
         srt = "1\n00:00:00,000 --> 00:00:01,000\nテキスト\n"
         cues = parse_captions(srt, "srt")
         assert len(cues) == 1
@@ -1061,31 +1061,31 @@ class TestSrtTimecodeValidation:
         assert cues[0].end == "00:00:01,000"
 
     def test_valid_srt_timecode_with_high_minutes_accepted(self) -> None:
-        """分が 59 以内の正常タイムコードが受理されること（非回帰）。"""
+        """A well-formed timecode with minutes within 59 is accepted (non-regression)."""
         srt = "1\n00:59:59,999 --> 01:00:00,000\nテキスト\n"
         cues = parse_captions(srt, "srt")
         assert len(cues) == 1
 
-    # --- CR H-1: 不正タイムコード拒否（impl 修正後に Green・現行は Red）---
+    # --- CR H-1: Invalid timecode rejection (Green after impl fix; currently Red) ---
 
     def test_invalid_srt_seconds_over_60_raises_exception(self) -> None:
-        """秒が 60 超の SRT タイムコードが例外送出されること（CR H-1）。
+        """SRT timecode with seconds > 60 raises an exception (CR H-1).
 
-        現行 _SRT_TIMELINE_RE = \\d+ は '00:00:60,000' を合法としてパースするため Red。
-        _SRT_TIMELINE_RE を \\d{2} に厳格化すると拒否されて Green になる。
+        The current _SRT_TIMELINE_RE = \\d+ accepts '00:00:60,000' as valid, so this test is Red.
+        Tightening _SRT_TIMELINE_RE to \\d{2} rejects it and turns this Green.
         """
         srt = "1\n00:00:60,000 --> 00:00:61,000\nテキスト\n"
         with pytest.raises((ValueError, Exception)) as exc_info:
             parse_captions(srt, "srt")
-        # ClipwrightError も許容（impl が ValueError→ClipwrightError 変換を選択した場合）
+        # ClipwrightError is also acceptable (when the impl wraps ValueError into ClipwrightError)
         from clipwright.errors import ClipwrightError
 
         assert isinstance(exc_info.value, (ValueError, ClipwrightError))
 
     def test_invalid_srt_seconds_three_digits_raises_exception(self) -> None:
-        """秒が 3 桁の SRT タイムコードが例外送出されること（CR H-1）。
+        """SRT timecode with 3-digit seconds raises an exception (CR H-1).
 
-        '00:00:100,000' は秒100で仕様違反。現行 \\d+ は受容するため Red。
+        '00:00:100,000' violates the spec (seconds = 100). The current \\d+ accepts it, so this test is Red.
         """
         srt = "1\n00:00:100,000 --> 00:00:101,000\nテキスト\n"
         with pytest.raises((ValueError, Exception)) as exc_info:
@@ -1095,10 +1095,10 @@ class TestSrtTimecodeValidation:
         assert isinstance(exc_info.value, (ValueError, ClipwrightError))
 
     def test_invalid_srt_timecode_digit_drop_raises_exception(self) -> None:
-        """桁落ち（1桁）の SRT タイムコードが例外送出されること（CR H-1）。
+        """SRT timecode with dropped digits (1-digit fields) raises an exception (CR H-1).
 
-        '0:0:0,0' は SRT 仕様外（HH:MM:SS,mmm の固定桁が要件）。
-        現行 \\d+ は受容するため Red。
+        '0:0:0,0' is outside the SRT spec (fixed HH:MM:SS,mmm digits are required).
+        The current \\d+ accepts it, so this test is Red.
         """
         srt = "1\n0:0:0,0 --> 0:0:1,0\nテキスト\n"
         with pytest.raises((ValueError, Exception)) as exc_info:
@@ -1109,64 +1109,64 @@ class TestSrtTimecodeValidation:
 
 
 # ===========================================================================
-# SR L-1: VTT インラインタグ処理の非回帰テスト
-# _VTT_INLINE_TAG_RE に上限（[^>]{0,200}）を導入後も正常タグが保持されること
+# SR L-1: Non-regression tests for VTT inline tag handling
+# Normal inline tags must still be preserved after adding the [^>]{0,200} upper bound
 # ===========================================================================
 
 
 class TestVttInlineTagHandling:
-    """SR L-1: _VTT_INLINE_TAG_RE 上限導入後も正常なインラインタグ cue が保持されること。
+    """SR L-1: Normal inline tag cues must be preserved after the _VTT_INLINE_TAG_RE upper bound is introduced.
 
-    captions.py SR L-1 推奨対応: [^>]* → [^>]{0,200}。
-    テストは「上限導入後も正常タグ込み cue が保持される」観点で書く（impl 修正後も Green）。
+    Recommended fix for captions.py SR L-1: [^>]* → [^>]{0,200}.
+    Tests are written from the perspective that normal tagged cues are preserved after the limit is added (Green after impl fix).
     """
 
     def test_normal_c_tag_cue_text_preserved(self) -> None:
-        """正常な <c> タグ込み cue テキストが原文保持されること（SR L-1 非回帰）。"""
+        """A cue with a normal <c> inline tag preserves the original text (SR L-1 non-regression)."""
         vtt = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n<c.yellow>テキスト</c>\n"
         cues = parse_captions(vtt, "vtt")
         assert len(cues) == 1
         assert cues[0].text == "<c.yellow>テキスト</c>"
 
     def test_normal_b_tag_cue_text_preserved(self) -> None:
-        """正常な <b> タグ込み cue テキストが原文保持されること（SR L-1 非回帰）。"""
+        """A cue with a normal <b> inline tag preserves the original text (SR L-1 non-regression)."""
         vtt = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n<b>重要テキスト</b>\n"
         cues = parse_captions(vtt, "vtt")
         assert len(cues) == 1
         assert cues[0].text == "<b>重要テキスト</b>"
 
     def test_normal_v_tag_cue_text_preserved(self) -> None:
-        """正常な <v> タグ（音声アクター）込み cue テキストが原文保持されること（SR L-1 非回帰）。"""
+        """A cue with a normal <v> voice-actor tag preserves the original text (SR L-1 non-regression)."""
         vtt = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n<v Speaker>こんにちは</v>\n"
         cues = parse_captions(vtt, "vtt")
         assert len(cues) == 1
         assert cues[0].text == "<v Speaker>こんにちは</v>"
 
     def test_large_inline_tag_like_string_does_not_crash(self) -> None:
-        """巨大インラインタグ風文字列（> なし）を含む VTT cue が例外なく処理されること（SR L-1）。
+        """A VTT cue containing a huge tag-like string (no '>') is processed without exception (SR L-1).
 
-        [^>]{0,200} の上限が導入されても、処理が正常に完了することを検証する。
+        Verifies that processing completes normally even after introducing the [^>]{0,200} upper bound.
         """
-        # > を含まない長い「開きタグ風」文字列（200文字超）
+        # A long 'opening-tag-like' string without '>' (over 200 chars)
         long_pseudo_tag = "<" + "a" * 210 + " テキスト"
         vtt = f"WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n{long_pseudo_tag}\n"
-        # 例外なく処理されること（結果の内容は問わない）
+        # Must complete without exception (content of result is not asserted)
         cues = parse_captions(vtt, "vtt")
         assert isinstance(cues, list)
 
 
 # ===========================================================================
-# WR-AD-12 整合: transcribe to_srt 由来構造の parse 非回帰テスト
-# 末尾空行なし EOF・2桁固定タイムコードの parse が成功すること
+# WR-AD-12 conformance: Non-regression tests for parsing transcribe to_srt output
+# Parsing must succeed for no-trailing-blank EOF and fixed 2-digit timecodes
 # ===========================================================================
 
 
 class TestWrAd12TranscribeCompatibility:
-    r"""WR-AD-12: transcribe to_srt 由来のバイト構造（末尾空行なし EOF）の parse 非回帰テスト。
+    r"""WR-AD-12: Non-regression tests for parsing byte structures from transcribe to_srt (no trailing blank EOF).
 
-    transcribe to_srt は末尾に空行を付けない（末尾単一改行 EOF）。
-    _SRT_TIMELINE_RE を \d{2} に厳格化した後でも、2桁固定タイムコードの
-    正常な transcribe 出力が引き続き受理されることを確認する。
+    transcribe to_srt produces no trailing blank line (single newline at EOF).
+    Verifies that well-formed transcribe output with fixed 2-digit timecodes
+    is still accepted after tightening _SRT_TIMELINE_RE to \d{2}.
     """
 
     SRT_TRANSCRIBE_LIKE = (
@@ -1178,12 +1178,12 @@ class TestWrAd12TranscribeCompatibility:
     )
 
     def test_transcribe_like_srt_all_cues_parsed(self) -> None:
-        """transcribe to_srt 由来の 2桁固定タイムコード SRT が全 cue parse されること（WR-AD-12）。"""
+        """All cues in a transcribe to_srt SRT with fixed 2-digit timecodes are parsed (WR-AD-12)."""
         cues = parse_captions(self.SRT_TRANSCRIBE_LIKE, "srt")
         assert len(cues) == 3
 
     def test_transcribe_like_srt_timecodes_preserved(self) -> None:
-        """parse された全 cue のタイムコードが不変保持されること（WR-AD-06）。"""
+        """Timecodes of all parsed cues are preserved unchanged (WR-AD-06)."""
         cues = parse_captions(self.SRT_TRANSCRIBE_LIKE, "srt")
         assert cues[0].start == "00:00:00,000"
         assert cues[0].end == "00:00:05,123"
@@ -1191,17 +1191,17 @@ class TestWrAd12TranscribeCompatibility:
         assert cues[2].end == "00:01:00,000"
 
     def test_transcribe_like_srt_texts_correct(self) -> None:
-        """parse された全 cue のテキストが正しいこと。"""
+        """Text of all parsed cues is correct."""
         cues = parse_captions(self.SRT_TRANSCRIBE_LIKE, "srt")
         assert cues[0].text == "こんにちは世界。"
         assert cues[1].text == "これはテストです。"
         assert cues[2].text == "最後の cue（末尾空行なし）"
 
     def test_two_digit_fixed_timecode_accepted_after_regex_fix(self) -> None:
-        """HH:MM:SS,mmm の 2桁固定タイムコードが _SRT_TIMELINE_RE 修正後も受理されること。
+        """Fixed 2-digit HH:MM:SS,mmm timecodes are still accepted after the _SRT_TIMELINE_RE fix.
 
-        impl が _SRT_TIMELINE_RE を \\d{2}:\\d{2}:\\d{2},\\d{3} に修正した後も、
-        通常の transcribe 生成 SRT（2桁固定・ミリ秒3桁）が正常にパースされることを確認する。
+        Verifies that normal transcribe-generated SRT (fixed 2-digit fields, 3-digit milliseconds)
+        is parsed correctly after the impl changes _SRT_TIMELINE_RE to \\d{2}:\\d{2}:\\d{2},\\d{3}.
         """
         srt = "1\n00:01:30,500 --> 00:01:31,000\nテスト\n"
         cues = parse_captions(srt, "srt")
