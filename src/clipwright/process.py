@@ -136,6 +136,7 @@ def run(
         result = subprocess.run(
             cmd,
             shell=False,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             encoding="utf-8",
