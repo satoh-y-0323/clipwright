@@ -1326,7 +1326,9 @@ class TestIndexDataFieldsNoPathLeak:
         width_overflow = data["overflow_width_cue_indices"]
 
         # Both lists must be non-empty (merge and width overflow both triggered)
-        assert len(merged) > 0, f"merged_cue_indices should be non-empty, got: {merged!r}"
+        assert len(merged) > 0, (
+            f"merged_cue_indices should be non-empty, got: {merged!r}"
+        )
         assert len(width_overflow) > 0, (
             f"overflow_width_cue_indices should be non-empty, got: {width_overflow!r}"
         )
