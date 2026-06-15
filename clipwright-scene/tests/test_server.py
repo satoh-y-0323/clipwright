@@ -23,9 +23,6 @@ from clipwright.schemas import ToolError, ToolResult
 # ---------------------------------------------------------------------------
 
 try:
-    from clipwright_scene.server import (
-        clipwright_detect_scenes as server_detect_scenes,
-    )
     from clipwright_scene.server import main, mcp
 
     _SERVER_AVAILABLE = True
@@ -119,7 +116,7 @@ class TestDefaultOptions:
     """When options=None, DetectScenesOptions() defaults are used."""
 
     def test_options_none_uses_defaults(self) -> None:
-        """options=None -> detect_scenes called with DetectScenesOptions()."""
+        """options omitted -> detect_scenes called with DetectScenesOptions()."""
         from clipwright_scene.schemas import DetectScenesOptions
 
         captured_calls: list[dict[str, Any]] = []
@@ -129,10 +126,11 @@ class TestDefaultOptions:
             return _ok_tool_result()
 
         with patch("clipwright_scene.server.detect_scenes", side_effect=_capture):
-            server_detect_scenes(
-                media="video.mp4",
-                output="out.otio",
-                options=None,
+            asyncio.run(
+                mcp.call_tool(
+                    "clipwright_detect_scenes",
+                    {"media": "video.mp4", "output": "out.otio"},
+                )
             )
 
         assert len(captured_calls) == 1
@@ -145,14 +143,8 @@ class TestDefaultOptions:
         assert call_opts.backend == "ffmpeg"
 
     def test_options_provided_passed_through(self) -> None:
-        """Explicit options are forwarded to detect_scenes unchanged."""
+        """Explicit options dict is forwarded to detect_scenes as DetectScenesOptions."""
         from clipwright_scene.schemas import DetectScenesOptions
-
-        custom_opts = DetectScenesOptions(
-            threshold=0.5,
-            min_scene_duration=2.0,
-            backend="pyscenedetect",
-        )
 
         captured_calls: list[dict[str, Any]] = []
 
@@ -161,15 +153,25 @@ class TestDefaultOptions:
             return _ok_tool_result()
 
         with patch("clipwright_scene.server.detect_scenes", side_effect=_capture):
-            server_detect_scenes(
-                media="video.mp4",
-                output="out.otio",
-                options=custom_opts,
+            asyncio.run(
+                mcp.call_tool(
+                    "clipwright_detect_scenes",
+                    {
+                        "media": "video.mp4",
+                        "output": "out.otio",
+                        "options": {
+                            "threshold": 0.5,
+                            "min_scene_duration": 2.0,
+                            "backend": "pyscenedetect",
+                        },
+                    },
+                )
             )
 
         assert len(captured_calls) == 1
         call_opts = captured_calls[0].get("options")
         assert call_opts is not None
+        assert isinstance(call_opts, DetectScenesOptions)
         assert call_opts.threshold == pytest.approx(0.5)
         assert call_opts.backend == "pyscenedetect"
 
@@ -190,14 +192,15 @@ class TestMcpToolDelegation:
             "clipwright_scene.server.detect_scenes",
             return_value=expected,
         ) as mock_detect:
-            result = server_detect_scenes(
-                media="video.mp4",
-                output="out.otio",
-                options=None,
+            content, structured = asyncio.run(
+                mcp.call_tool(
+                    "clipwright_detect_scenes",
+                    {"media": "video.mp4", "output": "out.otio"},
+                )
             )
 
         mock_detect.assert_called_once()
-        assert result.ok is True
+        assert structured["ok"] is True
 
     def test_failure_envelope_returned_as_is(self) -> None:
         """When detect_scenes returns an error envelope, server returns it unchanged."""
@@ -207,15 +210,16 @@ class TestMcpToolDelegation:
             "clipwright_scene.server.detect_scenes",
             return_value=expected,
         ):
-            result = server_detect_scenes(
-                media="missing.mp4",
-                output="out.otio",
-                options=None,
+            content, structured = asyncio.run(
+                mcp.call_tool(
+                    "clipwright_detect_scenes",
+                    {"media": "missing.mp4", "output": "out.otio"},
+                )
             )
 
-        assert result.ok is False
-        assert result.error is not None
-        assert result.error.code == "FILE_NOT_FOUND"
+        assert structured["ok"] is False
+        assert structured.get("error") is not None
+        assert structured["error"]["code"] == "FILE_NOT_FOUND"
 
     def test_detect_scenes_called_with_media_and_output(self) -> None:
         """detect_scenes must be called with the media and output arguments."""
@@ -226,10 +230,11 @@ class TestMcpToolDelegation:
             return _ok_tool_result()
 
         with patch("clipwright_scene.server.detect_scenes", side_effect=_capture):
-            server_detect_scenes(
-                media="my_video.mp4",
-                output="my_output.otio",
-                options=None,
+            asyncio.run(
+                mcp.call_tool(
+                    "clipwright_detect_scenes",
+                    {"media": "my_video.mp4", "output": "my_output.otio"},
+                )
             )
 
         assert len(captured_calls) == 1

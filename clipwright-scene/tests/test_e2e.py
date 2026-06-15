@@ -10,6 +10,7 @@ writes a valid OTIO file with markers.
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 from pathlib import Path
 
@@ -17,11 +18,11 @@ import opentimelineio as otio
 import pytest
 
 # ---------------------------------------------------------------------------
-# Attempt to import server tool
+# Attempt to import mcp server
 # ---------------------------------------------------------------------------
 
 try:
-    from clipwright_scene.server import clipwright_detect_scenes
+    from clipwright_scene.server import mcp
 
     _SERVER_AVAILABLE = True
 except (ImportError, ModuleNotFoundError):
@@ -89,27 +90,30 @@ class TestE2eFfmpegBackend:
         self, tmp_path: Path, require_ffmpeg: str
     ) -> None:
         """Real ffmpeg detects the black->white scene boundary in a synthetic video."""
-        from clipwright_scene.schemas import DetectScenesOptions
-
         video_path = str(tmp_path / "test_video.mp4")
         output_path = str(tmp_path / "out.otio")
 
         _generate_black_white_video(require_ffmpeg, video_path)
 
-        opts = DetectScenesOptions(
-            threshold=0.1,  # low threshold: very sensitive to detect the obvious cut
-            min_scene_duration=0.5,
-            backend="ffmpeg",
-        )
-        result = clipwright_detect_scenes(
-            media=video_path,
-            output=output_path,
-            options=opts,
+        content, structured = asyncio.run(
+            mcp.call_tool(
+                "clipwright_detect_scenes",
+                {
+                    "media": video_path,
+                    "output": output_path,
+                    "options": {
+                        "threshold": 0.1,
+                        "min_scene_duration": 0.5,
+                        "backend": "ffmpeg",
+                    },
+                },
+            )
         )
 
-        assert result.ok is True, f"Expected ok=True but got ok=False: {result.error}"
-        assert result.data is not None
-        scene_count = result.data.get("scene_count", 0)
+        assert structured["ok"] is True, (
+            f"Expected ok=True but got ok=False: {structured.get('error')}"
+        )
+        scene_count = structured.get("data", {}).get("scene_count", 0)
         assert scene_count >= 1, (
             f"Expected at least 1 scene boundary, got {scene_count}"
         )
@@ -120,25 +124,29 @@ class TestE2eFfmpegBackend:
         """After detection, the OTIO output file is loadable and contains markers."""
         from clipwright.otio_utils import load_timeline
 
-        from clipwright_scene.schemas import DetectScenesOptions
-
         video_path = str(tmp_path / "test_video.mp4")
         output_path = str(tmp_path / "out.otio")
 
         _generate_black_white_video(require_ffmpeg, video_path)
 
-        opts = DetectScenesOptions(
-            threshold=0.1,
-            min_scene_duration=0.5,
-            backend="ffmpeg",
-        )
-        result = clipwright_detect_scenes(
-            media=video_path,
-            output=output_path,
-            options=opts,
+        content, structured = asyncio.run(
+            mcp.call_tool(
+                "clipwright_detect_scenes",
+                {
+                    "media": video_path,
+                    "output": output_path,
+                    "options": {
+                        "threshold": 0.1,
+                        "min_scene_duration": 0.5,
+                        "backend": "ffmpeg",
+                    },
+                },
+            )
         )
 
-        assert result.ok is True, f"Expected ok=True but got ok=False: {result.error}"
+        assert structured["ok"] is True, (
+            f"Expected ok=True but got ok=False: {structured.get('error')}"
+        )
         assert Path(output_path).exists(), "Output OTIO file was not created"
 
         tl = load_timeline(output_path)
