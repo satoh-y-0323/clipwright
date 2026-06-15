@@ -75,7 +75,7 @@ def require_ffmpeg(ffmpeg_path: str | None) -> str:
 def scenedetect_path() -> str | None:
     """Path to the scenedetect CLI executable. None if not found."""
     try:
-        return resolve_tool("scenedetect", None)
+        return resolve_tool("scenedetect", env_var=None)
     except ClipwrightError:
         return None
 

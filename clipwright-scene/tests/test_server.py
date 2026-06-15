@@ -1,13 +1,12 @@
-"""test_server.py — Red tests for clipwright-scene server.py MCP boundary.
+"""test_server.py — Tests for clipwright-scene server.py MCP boundary.
 
 Target:
   - clipwright_detect_scenes tool registered in MCP, delegates to detect.detect_scenes
-  - MCP annotations (detect type):
-    readOnlyHint=True / destructiveHint=False / idempotentHint=True
+  - MCP annotations:
+    readOnlyHint=False / destructiveHint=False / idempotentHint=True
+    (readOnlyHint=False because the tool writes a new OTIO timeline to output)
   - options=None -> DetectScenesOptions() default is used
   - detect_scenes is called with the correct arguments
-
-All tests are marked xfail until server.py is implemented.
 """
 
 from __future__ import annotations
@@ -75,7 +74,8 @@ def _error_tool_result(code: str) -> ToolResult:
 class TestMcpAnnotations:
     """Validate MCP annotations for the clipwright_detect_scenes tool.
 
-    detect type: readOnlyHint=True / destructiveHint=False / idempotentHint=True
+    readOnlyHint=False (writes a new OTIO timeline to output; input media is never
+    modified) / destructiveHint=False / idempotentHint=True.
     """
 
     def _get_annotations(self) -> Any:
@@ -94,10 +94,10 @@ class TestMcpAnnotations:
         )
         assert tool is not None
 
-    def test_read_only_hint_is_true(self) -> None:
-        """readOnlyHint=True (does not modify the media file; detect type convention)."""
+    def test_read_only_hint_is_false(self) -> None:
+        """readOnlyHint=False (writes a new OTIO timeline to output)."""
         ann = self._get_annotations()
-        assert ann.readOnlyHint is True
+        assert ann.readOnlyHint is False
 
     def test_destructive_hint_is_false(self) -> None:
         """destructiveHint=False (input media and OTIO remain unchanged)."""
@@ -291,7 +291,7 @@ class TestMcpBoundary:
         """call_tool must return structuredContent with top-level 'ok' key."""
         monkeypatch.setattr(
             "clipwright_scene.server.detect_scenes",
-            lambda **kw: ToolResult(
+            lambda media, output, options, timeline=None: ToolResult(
                 ok=True,
                 summary="Scene boundaries detected.",
                 data={},

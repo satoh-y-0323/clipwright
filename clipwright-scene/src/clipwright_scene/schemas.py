@@ -9,10 +9,11 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class DetectScenesOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     """Options for scene boundary detection.
 
     Controls the behaviour of the underlying backend and post-processing

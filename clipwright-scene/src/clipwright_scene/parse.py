@@ -36,7 +36,9 @@ _SCDET_PATTERN_LEGACY = re.compile(r"pts_time=(\d+(?:\.\d+)?)\s+score=(\d+(?:\.\
 
 def parse_scdet_stderr(
     stderr: str | None,
-    total_duration_sec: float,  # noqa: ARG001 — reserved for future clipping
+    # noqa: ARG001 — Currently unused; reserved for future boundary clipping.
+    # Kept in the signature to avoid an API break when clipping lands.
+    total_duration_sec: float,  # noqa: ARG001
 ) -> list[SceneBoundary]:
     """Parse FFmpeg scdet filter stderr and return sorted SceneBoundary list.
 
@@ -45,6 +47,7 @@ def parse_scdet_stderr(
             Accepts None gracefully (returns empty list).
         total_duration_sec: Duration of the source media in seconds.
             Currently unused; reserved for future boundary clipping.
+            Kept in the signature to avoid an API break when clipping lands.
 
     Returns:
         List of SceneBoundary sorted by timestamp_sec ascending.
@@ -166,6 +169,14 @@ def merge_close_boundaries(
     When two or more boundaries fall within min_duration_sec of each other,
     only the one with the highest confidence is retained.  Ties are broken by
     keeping the earlier boundary.
+
+    Algorithm: cluster-scan (cluster-start-anchored), NOT sliding-window.
+    The gap is measured from the first element of the current cluster, not from
+    the most-recently-retained boundary.  This means [1.0, 1.8, 2.7] with
+    min_duration=1.0 produces two clusters: {1.0, 1.8} (gap 0.8 < 1.0) and
+    {2.7} (gap from cluster start 1.7 >= 1.0), yielding two retained boundaries
+    instead of one.  A sliding-window approach would produce only one boundary
+    for the same input.
 
     Args:
         boundaries: List of SceneBoundary objects (may be unsorted).

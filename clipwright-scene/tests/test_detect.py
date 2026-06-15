@@ -1,4 +1,4 @@
-"""test_detect.py — Red tests for detect.py orchestration.
+"""test_detect.py — Tests for detect.py orchestration.
 
 Target API:
   clipwright_scene.detect.detect_scenes(
@@ -26,6 +26,9 @@ Verification aspects:
   (10) min_scene_duration merge: close boundaries reduced
   (11) Zero scenes: ok=True with warning
   (12) OTIO file generation: output path exists after call
+  (13) DetectScenesOptions model_config: extra fields and nan/inf rejected
+  (14) ffmpeg scdet filter argument locked by regex
+  (15) pyscenedetect --threshold argument locked by regex
 """
 
 from __future__ import annotations
@@ -745,7 +748,7 @@ class TestInputValidationErrors:
 
         assert result.ok is False
         assert result.error is not None
-        assert result.error.code in (ErrorCode.INVALID_INPUT, ErrorCode.FILE_NOT_FOUND)
+        assert result.error.code == ErrorCode.INVALID_INPUT
 
     def test_no_video_stream_returns_unsupported_operation(
         self, tmp_path: Path
@@ -1071,3 +1074,114 @@ class TestOtioFileGeneration:
             detect_scenes(str(media_path), output, _opts())
 
         assert media_path.read_bytes() == original
+
+
+# ===========================================================================
+# (13) DetectScenesOptions model_config: extra="forbid" and allow_inf_nan=False
+# ===========================================================================
+
+
+class TestDetectScenesOptionsModelConfig:
+    """DetectScenesOptions must reject unknown extra fields and inf/nan values."""
+
+    def test_extra_field_raises_validation_error(self) -> None:
+        """DetectScenesOptions(extra_field="x") must raise ValidationError."""
+        import pydantic
+
+        with pytest.raises(pydantic.ValidationError):
+            DetectScenesOptions(extra_field="x")  # type: ignore[call-arg]
+
+    def test_nan_threshold_raises_validation_error(self) -> None:
+        """DetectScenesOptions(threshold=float('nan')) must raise ValidationError."""
+        import pydantic
+
+        with pytest.raises(pydantic.ValidationError):
+            DetectScenesOptions(threshold=float("nan"))
+
+    def test_inf_threshold_raises_validation_error(self) -> None:
+        """DetectScenesOptions(threshold=float('inf')) must raise ValidationError."""
+        import pydantic
+
+        with pytest.raises(pydantic.ValidationError):
+            DetectScenesOptions(threshold=float("inf"))
+
+
+# ===========================================================================
+# (14) ffmpeg scdet filter argument locked by regex
+# ===========================================================================
+
+
+class TestFfmpegScdetArgumentFormat:
+    """The -vf value passed to ffmpeg must match the expected scdet filter pattern."""
+
+    def test_vf_argument_matches_scdet_pattern(self, tmp_path: Path) -> None:
+        """ffmpeg -vf argument must match r'^scdet=threshold=\\d+(?:\\.\\d+)?$'."""
+        import re
+
+        from clipwright_scene.detect import detect_scenes
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        captured_vf: list[str] = []
+
+        def _capture(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            for i, arg in enumerate(cmd):
+                if arg == "-vf" and i + 1 < len(cmd):
+                    captured_vf.append(cmd[i + 1])
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with (
+            patch("clipwright_scene.detect.inspect_media", return_value=media_info),
+            patch("clipwright_scene.detect.run", side_effect=_capture),
+        ):
+            detect_scenes(media, output, _opts())
+
+        assert len(captured_vf) == 1, "Expected exactly one -vf argument"
+        pattern = re.compile(r"^scdet=threshold=\d+(?:\.\d+)?$")
+        assert pattern.fullmatch(captured_vf[0]), (
+            f"ffmpeg -vf value {captured_vf[0]!r} does not match scdet filter pattern"
+        )
+
+
+# ===========================================================================
+# (15) pyscenedetect --threshold argument locked by regex
+# ===========================================================================
+
+
+class TestPyscenedetectThresholdArgumentFormat:
+    """The --threshold value passed to pyscenedetect must be a bare number."""
+
+    def test_threshold_argument_matches_numeric_pattern(self, tmp_path: Path) -> None:
+        """pyscenedetect --threshold next-arg must match r'^\\d+(?:\\.\\d+)?$'."""
+        import re
+
+        from clipwright_scene.detect import detect_scenes
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        captured_threshold: list[str] = []
+
+        def _capture(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            for i, arg in enumerate(cmd):
+                if arg == "--threshold" and i + 1 < len(cmd):
+                    captured_threshold.append(cmd[i + 1])
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with (
+            patch("clipwright_scene.detect.inspect_media", return_value=media_info),
+            patch("clipwright_scene.detect.run", side_effect=_capture),
+        ):
+            detect_scenes(media, output, _opts(backend="pyscenedetect"))
+
+        assert len(captured_threshold) == 1, "Expected exactly one --threshold argument"
+        pattern = re.compile(r"^\d+(?:\.\d+)?$")
+        assert pattern.fullmatch(captured_threshold[0]), (
+            f"pyscenedetect --threshold value {captured_threshold[0]!r} "
+            "does not match numeric pattern"
+        )

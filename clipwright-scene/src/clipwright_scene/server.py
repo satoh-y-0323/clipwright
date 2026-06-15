@@ -21,7 +21,7 @@ mcp = FastMCP("clipwright-scene")
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        readOnlyHint=True,
+        readOnlyHint=False,
         destructiveHint=False,
         idempotentHint=True,
         openWorldHint=False,
@@ -41,7 +41,10 @@ def clipwright_detect_scenes(
         Field(description="Existing OTIO timeline path to augment."),
     ] = None,
 ) -> ToolResult:
-    """Detect shot boundaries and record as OTIO markers."""
+    """Detect shot boundaries and record as OTIO markers.
+
+    Writes a new OTIO timeline to output; input media is never modified.
+    """
     resolved_options = options if options is not None else DetectScenesOptions()
     return detect_scenes(
         media=media,

@@ -18,6 +18,8 @@ Design decisions:
 from __future__ import annotations
 
 import math
+import os
+import shutil
 from pathlib import Path
 
 from clipwright.envelope import error_result, ok_result
@@ -64,6 +66,8 @@ def _detect_with_ffmpeg(
         "-i",
         media,
         "-vf",
+        # threshold is Pydantic-constrained (ge=0, le=1) and formatted as a bare number;
+        # no filtergraph metachars can appear. Locked by test below.
         f"scdet=threshold={options.threshold * 100:.1f}",
         "-f",
         "null",
@@ -106,8 +110,6 @@ def _detect_with_pyscenedetect(
         ClipwrightError: SUBPROCESS_FAILED / SUBPROCESS_TIMEOUT from run()
             when scenedetect is not installed or the command fails.
     """
-    import shutil
-
     scenedetect_path = shutil.which("scenedetect") or "scenedetect"
     cmd = [
         scenedetect_path,
@@ -115,6 +117,9 @@ def _detect_with_pyscenedetect(
         media,
         "detect-content",
         "--threshold",
+        # threshold is Pydantic-constrained (ge=0, le=1) and scaled to pyscenedetect
+        # range (0–27); formatted as a bare number; no shell metachars can appear.
+        # Locked by test below.
         f"{options.threshold * 27:.1f}",
         "list-scenes",
         "-c",
@@ -131,6 +136,69 @@ def _detect_with_pyscenedetect(
             ) from exc
         raise
     return parse_pyscenedetect_csv(result.stdout or "")
+
+
+def _check_within_boundary(base_dir: Path, target: Path, kind: str) -> None:
+    """Verify that target is within base_dir (path separator-aware prefix check).
+
+    Mirrors the _check_within_timeline_dir pattern from clipwright-render/render.py.
+    Falls back to absolute()-based best-effort comparison when resolve() raises OSError
+    (e.g. network paths, extremely long paths). Raises PATH_NOT_ALLOWED when the
+    target points outside the allowed boundary.
+
+    Args:
+        base_dir: Resolved allowed base directory (e.g. output_path.parent.resolve()).
+        target: Path to validate.
+        kind: Type label for error messages (e.g. "output file", "timeline file").
+
+    Raises:
+        ClipwrightError: PATH_NOT_ALLOWED when target is outside base_dir.
+    """
+    try:
+        target_resolved = target.resolve()
+        base_str = str(base_dir)
+        target_str = str(target_resolved)
+        if not (
+            target_str == base_str
+            or target_str.startswith(base_str + "/")
+            or target_str.startswith(base_str + os.sep)
+        ):
+            raise ClipwrightError(
+                code=ErrorCode.PATH_NOT_ALLOWED,
+                message=f"{kind} points outside the project boundary.",
+                hint=(
+                    f"Place the {kind.lower()} under the same directory"
+                    " as the output file."
+                ),
+            )
+    except ClipwrightError:
+        raise
+    except OSError:
+        # resolve() failure: fall back to absolute()-based best-effort comparison.
+        try:
+            base_abs = (
+                str(base_dir.absolute())
+                if not base_dir.is_absolute()
+                else str(base_dir)
+            )
+            target_abs = str(target.absolute())
+            if not (
+                target_abs == base_abs
+                or target_abs.startswith(base_abs + "/")
+                or target_abs.startswith(base_abs + os.sep)
+            ):
+                raise ClipwrightError(
+                    code=ErrorCode.PATH_NOT_ALLOWED,
+                    message=f"{kind} points outside the project boundary.",
+                    hint=(
+                        f"Place the {kind.lower()} under the same directory"
+                        " as the output file."
+                    ),
+                )
+        except ClipwrightError:
+            raise
+        except OSError:
+            pass
 
 
 def _detect_scenes_inner(
@@ -161,6 +229,16 @@ def _detect_scenes_inner(
             message="The output directory does not exist.",
             hint="Create the output directory first, then re-run.",
         )
+
+    # --- 1b. Output boundary check ---
+
+    # Use output_path.parent.resolve() as the allowed base (new-file mode: output
+    # itself does not yet exist, so we can only check its parent directory).
+    try:
+        output_base = output_path.parent.resolve()
+    except OSError:
+        output_base = output_path.parent.absolute()
+    _check_within_boundary(output_base, output_path, "output file")
 
     # --- 2. inspect_media -> MediaInfo ---
 
@@ -198,6 +276,7 @@ def _detect_scenes_inner(
             ),
         )
 
+    # float seconds for JSON-serialisable MCP data field (opentime kept internally).
     total_duration_sec = media_info.duration.value / media_info.duration.rate
     rate = media_info.duration.rate
 
@@ -218,6 +297,26 @@ def _detect_scenes_inner(
     # --- 5. Build OTIO timeline ---
 
     if timeline is not None:
+        # --- 5/17. timeline path validation (existence, extension, boundary) ---
+        timeline_path = Path(timeline)
+        if timeline_path.suffix.lower() != ".otio":
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message=(
+                    f"Invalid timeline file extension: {timeline_path.suffix!r}. "
+                    "Only .otio is allowed."
+                ),
+                hint="Change the timeline file path extension to .otio.",
+            )
+        if not timeline_path.exists():
+            raise ClipwrightError(
+                code=ErrorCode.FILE_NOT_FOUND,
+                message=f"Timeline file not found: {timeline_path.name}",
+                hint="Specify a valid .otio timeline file path.",
+            )
+        # Boundary check: timeline must reside within the same directory as output.
+        _check_within_boundary(output_base, timeline_path, "timeline file")
+
         # Augment mode: load existing OTIO and append markers to V1 track.
         timeline_obj = load_timeline(timeline)
         v1 = timeline_obj.tracks[0]
@@ -232,6 +331,8 @@ def _detect_scenes_inner(
             start_time=RationalTimeModel(value=b.timestamp_sec * rate, rate=rate),
             duration=RationalTimeModel(value=0.0, rate=rate),
         )
+        # add_marker() nests this dict under marker.metadata["clipwright"]
+        # (convention §命名規則).
         add_marker(
             v1,
             marked_range=marked_range,
@@ -258,6 +359,8 @@ def _detect_scenes_inner(
             "No scene boundaries detected. Consider lowering the threshold."
         )
 
+    # basename only (no absolute path); accepted disclosure surface consistent
+    # with other clipwright tools (see SR-R-001).
     summary = (
         f"Detected {scene_count} scene boundary(ies) using {options.backend} "
         f"in {media_path.name} "

@@ -1,4 +1,4 @@
-"""test_parse.py — Red tests for parse.py (pure logic).
+"""test_parse.py — Tests for parse.py (pure logic).
 
 Target module: clipwright_scene.parse
 
@@ -11,7 +11,6 @@ Dataclass under test:
   SceneBoundary(timestamp_sec: float, confidence: float, scene_index: int)
 
 parse.py is pure logic that never runs ffmpeg or scenedetect.
-All tests are expected to FAIL until parse.py is implemented (Red phase).
 
 Covers §4 (FFmpeg scdet) and §5 (PySceneDetect CSV) of architecture-report-20260615-222258.md.
 """
@@ -61,14 +60,16 @@ class TestSceneBoundary:
 # parse_scdet_stderr — §4 FFmpeg Backend
 # ===========================================================================
 
+# legacy format (pts_time=X score=Y); contrast with _SCDET_PATTERN_NEW (lavfi.scd.*)
 # Minimal scdet stderr sample with the bracketed format [scdet @ 0x...].
-_SCDET_BRACKETED = (
+_SCDET_LEGACY_BRACKETED = (
     "[scdet @ 0x7f1234ab5cd0] Scdet: frame=96 pts=96 "
     "pts_time=3.960000 score=45.2 prev_mafd=10.5 mafd=55.7\n"
 )
 
+# legacy format (pts_time=X score=Y); contrast with _SCDET_PATTERN_NEW (lavfi.scd.*)
 # Alternative format without brackets (scdet @ 0x...).
-_SCDET_BARE = (
+_SCDET_LEGACY_BARE = (
     "scdet @ 0x7f1234ab5cd0 Scdet: frame=96 pts=96 "
     "pts_time=3.960000 score=45.2 prev_mafd=10.5 mafd=55.7\n"
 )
@@ -118,7 +119,7 @@ class TestParseScdetStderrSingleBoundary:
 
     def test_single_boundary_bracketed_format(self) -> None:
         """Bracketed format: parses pts_time and score correctly."""
-        result = parse_scdet_stderr(_SCDET_BRACKETED, 60.0)
+        result = parse_scdet_stderr(_SCDET_LEGACY_BRACKETED, 60.0)
         assert len(result) == 1
         boundary = result[0]
         assert boundary.timestamp_sec == pytest.approx(3.96)
@@ -127,20 +128,20 @@ class TestParseScdetStderrSingleBoundary:
 
     def test_single_boundary_bare_format(self) -> None:
         """Bare format without brackets: same parse result as bracketed."""
-        result = parse_scdet_stderr(_SCDET_BARE, 60.0)
+        result = parse_scdet_stderr(_SCDET_LEGACY_BARE, 60.0)
         assert len(result) == 1
         assert result[0].timestamp_sec == pytest.approx(3.96)
 
     def test_pts_is_ignored_pts_time_is_used(self) -> None:
         """pts (integer) is ignored; pts_time (float seconds) is used for timestamp."""
         # pts=96 is a frame counter, pts_time=3.960000 is what we want.
-        result = parse_scdet_stderr(_SCDET_BRACKETED, 60.0)
+        result = parse_scdet_stderr(_SCDET_LEGACY_BRACKETED, 60.0)
         # timestamp must be the float pts_time value, not pts integer
         assert result[0].timestamp_sec == pytest.approx(3.960000)
 
     def test_score_45_2_normalizes_to_0_452(self) -> None:
         """score=45.2 -> confidence = 45.2 / 100.0 = 0.452."""
-        result = parse_scdet_stderr(_SCDET_BRACKETED, 60.0)
+        result = parse_scdet_stderr(_SCDET_LEGACY_BRACKETED, 60.0)
         assert result[0].confidence == pytest.approx(45.2 / 100.0)
 
 
@@ -601,3 +602,44 @@ class TestMergeCloseBoundariesMixed:
         # Re-indexed: must be [0, 1] for 2 surviving boundaries
         indices = [b.scene_index for b in result]
         assert indices == list(range(len(result)))
+
+
+class TestMergeCloseBoundariesClusterScanEdge:
+    """Edge cases that distinguish cluster-scan from sliding-window behaviour.
+
+    cluster-scan measures the gap from the FIRST element of the current cluster,
+    not from the most-recently-retained boundary.  This test pins that contract so
+    a refactor cannot silently switch to sliding-window semantics.
+    """
+
+    def test_cluster_scan_vs_sliding_window_three_boundaries(self) -> None:
+        """[1.0(conf=0.9), 1.8(conf=0.5), 2.7(conf=0.8)], min_duration=1.0.
+
+        cluster-scan logic:
+          - Start cluster with 1.0.
+          - 1.8: gap from cluster start (1.0) = 0.8 < 1.0 -> same cluster {1.0, 1.8}.
+          - 2.7: gap from cluster start (1.0) = 1.7 >= 1.0 -> flush cluster, winner=1.0
+            (conf=0.9 > 0.5). Start new cluster {2.7}.
+          - End: flush {2.7}.
+          Result: [1.0, 2.7] -> 2 boundaries.
+
+        A sliding-window implementation would instead measure gaps between consecutive
+        retained boundaries; it would retain 1.0, then see gap(2.7-1.0)=1.7 >= 1.0
+        and also retain 2.7 -- but would handle 1.8 differently depending on pivot.
+        The key assertion here is that the winner of the first cluster is 1.0 (conf=0.9),
+        not 1.8 (conf=0.5), confirming cluster-start-anchored merging.
+        """
+        boundaries = [
+            _make_boundary(1.0, 0.9, 0),
+            _make_boundary(1.8, 0.5, 1),
+            _make_boundary(2.7, 0.8, 2),
+        ]
+        result = merge_close_boundaries(boundaries, 1.0)
+        # cluster-scan: 2 boundaries retained
+        assert len(result) == 2
+        # First retained boundary is the winner of cluster {1.0, 1.8}: conf=0.9 at t=1.0
+        assert result[0].timestamp_sec == pytest.approx(1.0)
+        assert result[0].confidence == pytest.approx(0.9)
+        # Second retained boundary is 2.7
+        assert result[1].timestamp_sec == pytest.approx(2.7)
+        assert result[1].confidence == pytest.approx(0.8)
