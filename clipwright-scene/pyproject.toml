@@ -79,6 +79,9 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--strict-markers -q"
+# SR-NEW: Prevent unintended auto mode if pytest-asyncio is added in future.
+# Has no effect unless pytest-asyncio is installed (warning is benign without it).
+asyncio_mode = "strict"
 markers = [
     "integration: integration test requiring actual ffmpeg/ffprobe binaries",
     "slow: test with long execution time",

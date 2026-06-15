@@ -76,8 +76,10 @@ class TestMcpAnnotations:
     """
 
     def _get_annotations(self) -> Any:
-        # CR L-1: relying on private _tool_manager API.
-        # This may break if FastMCP changes its internals.
+        # CR L-1: No public API available in FastMCP to retrieve tool info,
+        # so relying on the private API (_tool_manager).
+        # This test may break if _tool_manager is changed or removed in a FastMCP upgrade.
+        # Migrate to a public API once one is available.
         tool = mcp._tool_manager.get_tool(  # noqa: SLF001
             "clipwright_detect_scenes"
         )
@@ -86,6 +88,7 @@ class TestMcpAnnotations:
 
     def test_tool_is_registered(self) -> None:
         """clipwright_detect_scenes must be registered in mcp."""
+        # CR L-1: _tool_manager is a private API. Risk of breaking on FastMCP updates.
         tool = mcp._tool_manager.get_tool(  # noqa: SLF001
             "clipwright_detect_scenes"
         )
@@ -222,7 +225,11 @@ class TestMcpToolDelegation:
         assert structured["error"]["code"] == "FILE_NOT_FOUND"
 
     def test_detect_scenes_called_with_media_and_output(self) -> None:
-        """detect_scenes must be called with the media and output arguments."""
+        """detect_scenes must be called with the media and output arguments.
+
+        options type/value verified in TestDefaultOptions; here only media/output
+        passthrough is checked.
+        """
         captured_calls: list[dict[str, Any]] = []
 
         def _capture(**kwargs: Any) -> ToolResult:
@@ -240,6 +247,49 @@ class TestMcpToolDelegation:
         assert len(captured_calls) == 1
         assert captured_calls[0].get("media") == "my_video.mp4"
         assert captured_calls[0].get("output") == "my_output.otio"
+
+
+# ---------------------------------------------------------------------------
+# MCP boundary input validation
+# ---------------------------------------------------------------------------
+
+
+class TestMcpInputValidation:
+    """MCP boundary input validation tests.
+
+    These tests pass path traversal and invalid inputs directly to MCP
+    without mocking detect_scenes, so the real input validation in detect.py
+    is exercised. The test asserts ok=False is returned regardless of the
+    specific error code.
+    """
+
+    def test_path_traversal_media_returns_error(self) -> None:
+        """Path traversal input via MCP must return ok=False."""
+        content, structured = asyncio.run(
+            mcp.call_tool(
+                "clipwright_detect_scenes",
+                {
+                    "media": "../../../etc/passwd",
+                    "output": "/tmp/out.otio",
+                },
+            )
+        )
+        assert structured["ok"] is False
+        assert structured.get("error") is not None
+
+    def test_nonexistent_media_returns_error(self) -> None:
+        """Nonexistent media path via MCP must return ok=False."""
+        content, structured = asyncio.run(
+            mcp.call_tool(
+                "clipwright_detect_scenes",
+                {
+                    "media": "nonexistent_file_that_does_not_exist.mp4",
+                    "output": "/tmp/out.otio",
+                },
+            )
+        )
+        assert structured["ok"] is False
+        assert structured.get("error") is not None
 
 
 # ---------------------------------------------------------------------------
@@ -296,7 +346,7 @@ class TestMcpBoundary:
         """call_tool must return structuredContent with top-level 'ok' key."""
         monkeypatch.setattr(
             "clipwright_scene.server.detect_scenes",
-            lambda media, output, options, timeline=None: ToolResult(
+            lambda **kw: ToolResult(
                 ok=True,
                 summary="Scene boundaries detected.",
                 data={},

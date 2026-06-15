@@ -74,7 +74,7 @@ def _generate_black_white_video(ffmpeg: str, output_path: str) -> None:
     if result.returncode != 0:
         raise RuntimeError(
             f"ffmpeg failed to generate test video (exit {result.returncode}):\n"
-            f"{result.stderr[:500]}"
+            f"{result.stderr[:200]}"
         )
 
 
