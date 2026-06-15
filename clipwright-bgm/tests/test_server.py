@@ -15,7 +15,6 @@ from unittest.mock import patch
 import pytest
 from clipwright.schemas import Artifact, ToolError, ToolResult
 
-from clipwright_bgm.server import clipwright_add_bgm as server_action
 from clipwright_bgm.server import main, mcp
 
 # ===========================================================================
@@ -102,16 +101,20 @@ class TestDelegation:
             "clipwright_bgm.server.add_bgm",
             return_value=_ok_tool_result(summary="BGM added successfully"),
         ) as mock_fn:
-            result = server_action(
-                timeline="timeline.otio",
-                bgm="bgm.mp3",
-                output="output.otio",
-                options=None,
+            _content, structured = asyncio.run(
+                mcp.call_tool(
+                    "clipwright_add_bgm",
+                    {
+                        "timeline": "timeline.otio",
+                        "bgm": "bgm.mp3",
+                        "output": "output.otio",
+                    },
+                )
             )
 
         mock_fn.assert_called_once()
-        assert result.model_dump()["ok"] is True
-        assert "BGM" in result.model_dump()["summary"]
+        assert structured["ok"] is True
+        assert "BGM" in structured.get("summary", "")
 
     def test_error_result_propagates(self) -> None:
         """When add_bgm returns an error envelope, it must be propagated as-is."""
@@ -127,16 +130,19 @@ class TestDelegation:
             "clipwright_bgm.server.add_bgm",
             return_value=error_envelope,
         ):
-            result = server_action(
-                timeline="timeline.otio",
-                bgm="bgm.mp3",
-                output="output.otio",
-                options=None,
+            _content, structured = asyncio.run(
+                mcp.call_tool(
+                    "clipwright_add_bgm",
+                    {
+                        "timeline": "timeline.otio",
+                        "bgm": "bgm.mp3",
+                        "output": "output.otio",
+                    },
+                )
             )
 
-        dumped = result.model_dump()
-        assert dumped["ok"] is False
-        assert dumped["error"]["code"] == "INVALID_INPUT"
+        assert structured["ok"] is False
+        assert structured["error"]["code"] == "INVALID_INPUT"
 
     def test_timeline_and_bgm_and_output_forwarded(self) -> None:
         """timeline / bgm / output arguments must be correctly forwarded to add_bgm."""
@@ -144,11 +150,15 @@ class TestDelegation:
             "clipwright_bgm.server.add_bgm",
             return_value=_ok_tool_result(),
         ) as mock_fn:
-            server_action(
-                timeline="/path/to/timeline.otio",
-                bgm="/path/to/bgm.mp3",
-                output="/path/to/output.otio",
-                options=None,
+            asyncio.run(
+                mcp.call_tool(
+                    "clipwright_add_bgm",
+                    {
+                        "timeline": "/path/to/timeline.otio",
+                        "bgm": "/path/to/bgm.mp3",
+                        "output": "/path/to/output.otio",
+                    },
+                )
             )
 
         _args, kwargs = mock_fn.call_args
@@ -162,11 +172,15 @@ class TestDelegation:
             "clipwright_bgm.server.add_bgm",
             return_value=_ok_tool_result(),
         ) as mock_fn:
-            server_action(
-                timeline="timeline.otio",
-                bgm="bgm.mp3",
-                output="output.otio",
-                options=None,
+            asyncio.run(
+                mcp.call_tool(
+                    "clipwright_add_bgm",
+                    {
+                        "timeline": "timeline.otio",
+                        "bgm": "bgm.mp3",
+                        "output": "output.otio",
+                    },
+                )
             )
 
         _args, kwargs = mock_fn.call_args
@@ -177,21 +191,25 @@ class TestDelegation:
         """When options is explicitly specified, it must be passed through as-is."""
         from clipwright_bgm.schemas import BgmOptions
 
-        custom_opts = BgmOptions(volume_db=-12.0, fade_in_sec=1.0)
         with patch(
             "clipwright_bgm.server.add_bgm",
             return_value=_ok_tool_result(),
         ) as mock_fn:
-            server_action(
-                timeline="timeline.otio",
-                bgm="bgm.mp3",
-                output="output.otio",
-                options=custom_opts,
+            asyncio.run(
+                mcp.call_tool(
+                    "clipwright_add_bgm",
+                    {
+                        "timeline": "timeline.otio",
+                        "bgm": "bgm.mp3",
+                        "output": "output.otio",
+                        "options": {"volume_db": -12.0, "fade_in_sec": 1.0},
+                    },
+                )
             )
 
         _args, kwargs = mock_fn.call_args
         passed = kwargs.get("options")
-        assert passed is custom_opts or (
+        assert passed is not None and (
             isinstance(passed, BgmOptions) and passed.volume_db == pytest.approx(-12.0)
         )
 

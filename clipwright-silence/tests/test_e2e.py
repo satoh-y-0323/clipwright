@@ -21,6 +21,7 @@ Note: e2e tests call real binaries (ffmpeg/ffprobe/flite TTS etc.) directly via 
 
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
 from pathlib import Path
@@ -31,8 +32,8 @@ import pytest
 from clipwright_render.render import render_timeline
 from clipwright_render.schemas import RenderOptions
 
-from clipwright_silence.detect import detect_silence
 from clipwright_silence.schemas import DetectSilenceOptions
+from clipwright_silence.server import mcp
 
 # ===========================================================================
 # Helpers
@@ -209,10 +210,15 @@ def test_silence_detect_to_render_e2e(
         padding=0.05,
         min_keep_duration=0.0,
     )
-    detect_result = detect_silence(
-        media=str(source),
-        output=str(otio_path),
-        options=options,
+    _content, detect_result = asyncio.run(
+        mcp.call_tool(
+            "clipwright_detect_silence",
+            {
+                "media": str(source),
+                "output": str(otio_path),
+                "options": options.model_dump(),
+            },
+        )
     )
 
     assert detect_result["ok"] is True, f"detect_silence failed: {detect_result}"
@@ -608,10 +614,15 @@ def test_vad_backend_e2e(
         padding=0.05,
         min_keep_duration=0.1,
     )
-    vad_result = detect_silence(
-        media=str(source),
-        output=str(otio_vad),
-        options=vad_options,
+    _content, vad_result = asyncio.run(
+        mcp.call_tool(
+            "clipwright_detect_silence",
+            {
+                "media": str(source),
+                "output": str(otio_vad),
+                "options": vad_options.model_dump(),
+            },
+        )
     )
 
     assert vad_result["ok"] is True, f"VAD backend detect_silence failed: {vad_result}"
@@ -654,10 +665,15 @@ def test_vad_backend_e2e(
         padding=0.05,
         min_keep_duration=0.1,
     )
-    sd_result = detect_silence(
-        media=str(source),
-        output=str(otio_sd),
-        options=sd_options,
+    _content, sd_result = asyncio.run(
+        mcp.call_tool(
+            "clipwright_detect_silence",
+            {
+                "media": str(source),
+                "output": str(otio_sd),
+                "options": sd_options.model_dump(),
+            },
+        )
     )
 
     assert sd_result["ok"] is True, (

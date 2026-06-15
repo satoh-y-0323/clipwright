@@ -26,6 +26,7 @@ Note: e2e tests call subprocess directly to invoke real binaries. This is an
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -39,7 +40,7 @@ import pytest
 from clipwright_render.render import render_timeline
 from clipwright_render.schemas import RenderOptions
 
-from clipwright_transcribe.server import clipwright_transcribe as _clipwright_transcribe
+from clipwright_transcribe.server import mcp
 from clipwright_transcribe.transcribe import LANG_AUTO_FLAG, WHISPER_BINARY_NAME
 
 # ===========================================================================
@@ -313,9 +314,14 @@ def test_transcribe_e2e(tmp_path: Path) -> None:
     otio_path = tmp_path / "out.otio"
 
     # ② Transcribe (success condition 1)
-    result = _clipwright_transcribe(
-        media=str(source),
-        output=str(otio_path),
+    _content, result = asyncio.run(
+        mcp.call_tool(
+            "clipwright_transcribe",
+            {
+                "media": str(source),
+                "output": str(otio_path),
+            },
+        )
     )
 
     assert result["ok"] is True, f"clipwright_transcribe failed: {result}"

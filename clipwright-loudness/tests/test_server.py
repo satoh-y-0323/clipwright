@@ -19,7 +19,6 @@ from unittest.mock import patch
 from clipwright.schemas import Artifact, ToolResult
 
 from clipwright_loudness.schemas import DetectLoudnessOptions
-from clipwright_loudness.server import clipwright_detect_loudness as server_action
 from clipwright_loudness.server import main, mcp
 
 # ===========================================================================
@@ -98,13 +97,16 @@ class TestDelegation:
             "clipwright_loudness.server.detect_loudness",
             return_value=_ok_tool_result(summary="done"),
         ) as mock_fn:
-            result = server_action(
-                media="in.mp4", output="out.otio", options=None, timeline=None
+            _content, structured = asyncio.run(
+                mcp.call_tool(
+                    "clipwright_detect_loudness",
+                    {"media": "in.mp4", "output": "out.otio"},
+                )
             )
 
         mock_fn.assert_called_once()
-        assert result.ok is True
-        assert result.summary == "done"
+        assert structured["ok"] is True
+        assert structured.get("summary") == "done"
 
     def test_error_result_propagates(self) -> None:
         """An error ToolResult returned by detect_loudness must propagate as-is."""
@@ -122,13 +124,16 @@ class TestDelegation:
             "clipwright_loudness.server.detect_loudness",
             return_value=error_tr,
         ):
-            result = server_action(
-                media="in.mp4", output="out.otio", options=None, timeline=None
+            _content, structured = asyncio.run(
+                mcp.call_tool(
+                    "clipwright_detect_loudness",
+                    {"media": "in.mp4", "output": "out.otio"},
+                )
             )
 
-        assert result.ok is False
-        assert result.error is not None
-        assert result.error.code == "INVALID_INPUT"
+        assert structured["ok"] is False
+        assert structured.get("error") is not None
+        assert structured["error"]["code"] == "INVALID_INPUT"
 
     def test_media_and_output_forwarded(self) -> None:
         """media / output must be correctly forwarded to detect_loudness."""
@@ -136,11 +141,14 @@ class TestDelegation:
             "clipwright_loudness.server.detect_loudness",
             return_value=_ok_tool_result(),
         ) as mock_fn:
-            server_action(
-                media="/path/to/video.mp4",
-                output="/path/to/out.otio",
-                options=None,
-                timeline=None,
+            asyncio.run(
+                mcp.call_tool(
+                    "clipwright_detect_loudness",
+                    {
+                        "media": "/path/to/video.mp4",
+                        "output": "/path/to/out.otio",
+                    },
+                )
             )
 
         _args, kwargs = mock_fn.call_args
@@ -153,11 +161,15 @@ class TestDelegation:
             "clipwright_loudness.server.detect_loudness",
             return_value=_ok_tool_result(),
         ) as mock_fn:
-            server_action(
-                media="in.mp4",
-                output="out.otio",
-                options=None,
-                timeline="existing.otio",
+            asyncio.run(
+                mcp.call_tool(
+                    "clipwright_detect_loudness",
+                    {
+                        "media": "in.mp4",
+                        "output": "out.otio",
+                        "timeline": "existing.otio",
+                    },
+                )
             )
 
         _args, kwargs = mock_fn.call_args
@@ -169,8 +181,11 @@ class TestDelegation:
             "clipwright_loudness.server.detect_loudness",
             return_value=_ok_tool_result(),
         ) as mock_fn:
-            server_action(
-                media="in.mp4", output="out.otio", options=None, timeline=None
+            asyncio.run(
+                mcp.call_tool(
+                    "clipwright_detect_loudness",
+                    {"media": "in.mp4", "output": "out.otio"},
+                )
             )
 
         _args, kwargs = mock_fn.call_args
@@ -191,8 +206,11 @@ class TestOptionsDefault:
             "clipwright_loudness.server.detect_loudness",
             return_value=_ok_tool_result(),
         ) as mock_fn:
-            server_action(
-                media="in.mp4", output="out.otio", options=None, timeline=None
+            asyncio.run(
+                mcp.call_tool(
+                    "clipwright_detect_loudness",
+                    {"media": "in.mp4", "output": "out.otio"},
+                )
             )
 
         _args, kwargs = mock_fn.call_args
@@ -205,20 +223,24 @@ class TestOptionsDefault:
 
     def test_options_explicit_is_forwarded(self) -> None:
         """An explicitly specified options value must be forwarded as-is."""
-        custom_opts = DetectLoudnessOptions(mode="peak", scope="track")
         with patch(
             "clipwright_loudness.server.detect_loudness",
             return_value=_ok_tool_result(),
         ) as mock_fn:
-            server_action(
-                media="in.mp4", output="out.otio", options=custom_opts, timeline=None
+            asyncio.run(
+                mcp.call_tool(
+                    "clipwright_detect_loudness",
+                    {
+                        "media": "in.mp4",
+                        "output": "out.otio",
+                        "options": {"mode": "peak", "scope": "track"},
+                    },
+                )
             )
 
         _args, kwargs = mock_fn.call_args
         passed = kwargs.get("options")
-        assert passed is custom_opts or (
-            isinstance(passed, DetectLoudnessOptions) and passed.mode == "peak"
-        )
+        assert isinstance(passed, DetectLoudnessOptions) and passed.mode == "peak"
 
 
 # ===========================================================================
