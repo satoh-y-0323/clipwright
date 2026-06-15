@@ -52,7 +52,8 @@ class DetectScenesOptions(BaseModel):
             default="ffmpeg",
             description=(
                 "Detection backend. 'ffmpeg' uses built-in scdet filter. "
-                "'pyscenedetect' uses scenedetect CLI (more accurate, requires install)."
+                "'pyscenedetect' uses scenedetect CLI "
+                "(more accurate, requires install)."
             ),
         ),
     ] = "ffmpeg"

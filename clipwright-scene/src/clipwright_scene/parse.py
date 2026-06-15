@@ -20,14 +20,12 @@ class SceneBoundary:
 
     timestamp_sec: float
     confidence: float  # 0.0–1.0 normalized
-    scene_index: int   # 0-based
+    scene_index: int  # 0-based
 
 
 # Matches both "[scdet @ 0x...]" and bare "scdet @ 0x..." formats.
 # Captures pts_time and score values from the scdet filter output line.
-_SCDET_PATTERN = re.compile(
-    r"pts_time=(\d+(?:\.\d+)?)\s+score=(\d+(?:\.\d+)?)"
-)
+_SCDET_PATTERN = re.compile(r"pts_time=(\d+(?:\.\d+)?)\s+score=(\d+(?:\.\d+)?)")
 
 
 def parse_scdet_stderr(
