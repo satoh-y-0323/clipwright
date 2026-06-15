@@ -49,10 +49,14 @@ jobs:
         run: choco install ffmpeg --no-progress -y
 
       # -----------------------------------------------------------------------
-      # Install all workspace packages (shared .venv at repo root).
+      # Install all workspace packages + all optional extras.
+      # --all-extras installs [vad] (numpy/onnxruntime/silero-vad) for
+      # clipwright-silence and [pyscenedetect] for clipwright-scene.
+      # clipwright-silence vad tests require numpy to be importable; without
+      # it the mocks that call numpy.frombuffer etc. cannot work.
       # -----------------------------------------------------------------------
       - name: Sync workspace
-        run: uv sync --all-packages --dev
+        run: uv sync --all-packages --all-extras --dev
 
       # -----------------------------------------------------------------------
       # Quality gate: run ruff + mypy + pytest for every package.
