@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-16
+
+### Added
+
+- **`clipwright-scene` package (v0.1.0)**: New MCP tool `clipwright_detect_scenes` for shot
+  boundary detection. Detects scene transitions via FFmpeg's `scdet` filter (default) or
+  PySceneDetect (optional backend) and writes detected boundaries as OTIO markers into a new
+  or existing timeline. Supports configurable `threshold` (0–1), `min_scene_duration` (seconds),
+  and `backend` (`ffmpeg` | `pyscenedetect`).
+- **FFmpeg 8.x `scdet` output format support** (`clipwright-scene`): Added dual-regex parsing
+  for the new `lavfi.scd.score: X, lavfi.scd.time: Y` format introduced in FFmpeg 8.x alongside
+  the legacy `pts_time=X score=Y` format. The parser tries the new format first and falls back
+  to the legacy format automatically.
+
+### Changed
+
+- **MCP `call_tool()` test protocol**: All package test suites (`clipwright-scene`,
+  `clipwright-silence`, `clipwright-loudness`, `clipwright-noise`, `clipwright-transcribe`,
+  `clipwright-bgm`, `clipwright-wrap`) now invoke tools via `mcp.call_tool()` (FastMCP test
+  client) instead of calling Python functions directly. Tests now exercise the full MCP wire
+  path including input validation, schema coercion, and `structuredContent` serialization.
+
 ## [0.2.0] - 2026-06-14
 
 ### Added
