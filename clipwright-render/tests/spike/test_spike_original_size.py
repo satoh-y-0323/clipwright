@@ -39,6 +39,9 @@ from pathlib import Path
 
 import pytest
 
+# Skip all spike tests when ffmpeg subtitles filter (libass) is unavailable.
+pytestmark = pytest.mark.usefixtures("require_subtitles_filter")
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

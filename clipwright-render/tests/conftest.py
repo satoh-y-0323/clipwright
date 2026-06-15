@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -60,3 +61,30 @@ def require_ffmpeg(ffmpeg_path: str | None) -> str:
             "Add ffmpeg to PATH or set the CLIPWRIGHT_FFMPEG environment variable."
         )
     return ffmpeg_path
+
+
+@pytest.fixture(scope="session")
+def subtitles_filter_available(ffmpeg_path: str | None) -> bool:
+    """Return True when ffmpeg's subtitles filter (libass) is compiled in."""
+    if ffmpeg_path is None:
+        return False
+    try:
+        result = subprocess.run(
+            [ffmpeg_path, "-hide_banner", "-filters"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return any("subtitles" in line for line in result.stdout.splitlines())
+    except Exception:
+        return False
+
+
+@pytest.fixture
+def require_subtitles_filter(subtitles_filter_available: bool) -> None:
+    """Skip tests when ffmpeg subtitles filter (libass) is unavailable."""
+    if not subtitles_filter_available:
+        pytest.skip(
+            "ffmpeg subtitles filter not available (libass not compiled in). "
+            "Install an ffmpeg build with libass support."
+        )

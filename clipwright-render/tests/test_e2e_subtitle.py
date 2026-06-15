@@ -74,7 +74,10 @@ def _find_binary(name: str, env_var: str) -> str | None:
 _FFMPEG = _find_binary("ffmpeg", "CLIPWRIGHT_FFMPEG")
 _FFPROBE = _find_binary("ffprobe", "CLIPWRIGHT_FFPROBE")
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.usefixtures("require_subtitles_filter"),
+]
 
 requires_ffmpeg = pytest.mark.skipif(
     _FFMPEG is None,
