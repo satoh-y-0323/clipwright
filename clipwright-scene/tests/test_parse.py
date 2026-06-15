@@ -254,6 +254,60 @@ class TestParseScdetStderrPrecision:
 
 
 # ===========================================================================
+# parse_scdet_stderr — FFmpeg 8.x new format (lavfi.scd.score / lavfi.scd.time)
+# ===========================================================================
+
+
+class TestParseScdetStderrNewFormat:
+    """FFmpeg 8.x format: lavfi.scd.score: X, lavfi.scd.time: Y"""
+
+    def test_single_boundary_new_format(self) -> None:
+        """FFmpeg 8.x format is parsed correctly."""
+        stderr = "[Parsed_scdet_0 @ 0000027a583e2980] lavfi.scd.score: 85.547, lavfi.scd.time: 2\n"
+        result = parse_scdet_stderr(stderr, 4.0)
+        assert len(result) == 1
+        assert result[0].timestamp_sec == pytest.approx(2.0, abs=1e-6)
+        assert result[0].confidence == pytest.approx(0.85547, abs=1e-4)
+        assert result[0].scene_index == 0
+
+    def test_multiple_boundaries_new_format(self) -> None:
+        """Multiple boundaries in new format."""
+        stderr = (
+            "[Parsed_scdet_0 @ 0x1234] lavfi.scd.score: 90.0, lavfi.scd.time: 2\n"
+            "[Parsed_scdet_0 @ 0x1234] lavfi.scd.score: 50.0, lavfi.scd.time: 5\n"
+        )
+        result = parse_scdet_stderr(stderr, 10.0)
+        assert len(result) == 2
+        assert result[0].timestamp_sec == pytest.approx(2.0)
+        assert result[1].timestamp_sec == pytest.approx(5.0)
+
+    def test_new_format_confidence_normalization(self) -> None:
+        """Score 100+ clips to confidence 1.0."""
+        stderr = "[Parsed_scdet_0 @ 0x1234] lavfi.scd.score: 100.0, lavfi.scd.time: 3\n"
+        result = parse_scdet_stderr(stderr, 10.0)
+        assert result[0].confidence == pytest.approx(1.0)
+
+    def test_new_format_takes_priority_over_legacy(self) -> None:
+        """If new format is present, legacy format lines are ignored."""
+        stderr = (
+            "[Parsed_scdet_0 @ 0x1234] lavfi.scd.score: 85.0, lavfi.scd.time: 2\n"
+            "[scdet @ 0xold] Scdet: pts_time=5.0 score=60.0 prev_mafd=0 mafd=60\n"
+        )
+        result = parse_scdet_stderr(stderr, 10.0)
+        # Only new format match (1 boundary at 2s), legacy line is ignored
+        assert len(result) == 1
+        assert result[0].timestamp_sec == pytest.approx(2.0)
+
+    def test_legacy_format_still_works(self) -> None:
+        """Legacy pts_time=X score=Y still works when new format absent."""
+        stderr = "[scdet @ 0xaabb] Scdet: frame=3 pts=3 pts_time=3.960000 score=45.2\n"
+        result = parse_scdet_stderr(stderr, 60.0)
+        assert len(result) == 1
+        assert result[0].timestamp_sec == pytest.approx(3.96, abs=1e-6)
+        assert result[0].confidence == pytest.approx(0.452, abs=1e-4)
+
+
+# ===========================================================================
 # parse_pyscenedetect_csv — §5 PySceneDetect Backend
 # ===========================================================================
 
@@ -368,8 +422,7 @@ class TestParsePyscenedetectCsvMalformed:
     def test_non_numeric_start_time_is_skipped(self) -> None:
         """A row with non-numeric 'Start Time (seconds)' is skipped."""
         csv_text = (
-            _CSV_HEADER
-            + "1,1,00:00:00.000,invalid,120,00:00:04.000,4.000,"
+            _CSV_HEADER + "1,1,00:00:00.000,invalid,120,00:00:04.000,4.000,"
             "119,00:00:03.967,3.967\n"
         )
         result = parse_pyscenedetect_csv(csv_text)

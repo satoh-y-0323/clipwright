@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import Any
 
 import opentimelineio as otio
 import pytest
@@ -108,9 +107,7 @@ class TestE2eFfmpegBackend:
             options=opts,
         )
 
-        assert result.ok is True, (
-            f"Expected ok=True but got ok=False: {result.error}"
-        )
+        assert result.ok is True, f"Expected ok=True but got ok=False: {result.error}"
         assert result.data is not None
         scene_count = result.data.get("scene_count", 0)
         assert scene_count >= 1, (
@@ -141,9 +138,7 @@ class TestE2eFfmpegBackend:
             options=opts,
         )
 
-        assert result.ok is True, (
-            f"Expected ok=True but got ok=False: {result.error}"
-        )
+        assert result.ok is True, f"Expected ok=True but got ok=False: {result.error}"
         assert Path(output_path).exists(), "Output OTIO file was not created"
 
         tl = load_timeline(output_path)

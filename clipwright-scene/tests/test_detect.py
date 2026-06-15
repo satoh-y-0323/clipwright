@@ -172,9 +172,7 @@ class TestFfmpegBackendNormal:
         assert result.data is not None
         assert result.data.get("scene_count") == 1
 
-    def test_multiple_boundaries_produce_multiple_markers(
-        self, tmp_path: Path
-    ) -> None:
+    def test_multiple_boundaries_produce_multiple_markers(self, tmp_path: Path) -> None:
         """Multiple scdet lines -> multiple markers."""
         from clipwright_scene.detect import detect_scenes
 
@@ -742,9 +740,7 @@ class TestInputValidationErrors:
         output = str(tmp_path / "out.mp4")  # wrong extension
         media_info = _make_media_info(path=media, duration_sec=10.0)
 
-        with patch(
-            "clipwright_scene.detect.inspect_media", return_value=media_info
-        ):
+        with patch("clipwright_scene.detect.inspect_media", return_value=media_info):
             result = detect_scenes(media, output, _opts())
 
         assert result.ok is False
@@ -764,9 +760,7 @@ class TestInputValidationErrors:
             path=media, duration_sec=10.0, has_video=False, audio_streams=1
         )
 
-        with patch(
-            "clipwright_scene.detect.inspect_media", return_value=media_info
-        ):
+        with patch("clipwright_scene.detect.inspect_media", return_value=media_info):
             result = detect_scenes(media, output, _opts())
 
         assert result.ok is False
@@ -782,18 +776,14 @@ class TestInputValidationErrors:
         output = str(tmp_path / "out.otio")
         media_info = _make_media_info(path=media, duration_sec=None)
 
-        with patch(
-            "clipwright_scene.detect.inspect_media", return_value=media_info
-        ):
+        with patch("clipwright_scene.detect.inspect_media", return_value=media_info):
             result = detect_scenes(media, output, _opts())
 
         assert result.ok is False
         assert result.error is not None
         assert result.error.code == ErrorCode.PROBE_FAILED
 
-    def test_error_message_does_not_expose_directory_path(
-        self, tmp_path: Path
-    ) -> None:
+    def test_error_message_does_not_expose_directory_path(self, tmp_path: Path) -> None:
         """Error message must contain only the basename, not the full directory path."""
         from clipwright_scene.detect import detect_scenes
 
@@ -891,9 +881,7 @@ class TestSubprocessFailure:
 class TestMinSceneDurationMerge:
     """Boundaries closer than min_scene_duration are merged."""
 
-    def test_close_boundaries_merged_reduces_marker_count(
-        self, tmp_path: Path
-    ) -> None:
+    def test_close_boundaries_merged_reduces_marker_count(self, tmp_path: Path) -> None:
         """Two boundaries within min_scene_duration=2.0s -> merged to one."""
         from clipwright.otio_utils import load_timeline
 

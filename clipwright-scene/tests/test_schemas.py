@@ -12,7 +12,6 @@ from pydantic import ValidationError
 
 from clipwright_scene.schemas import DetectScenesOptions
 
-
 # ===========================================================================
 # Default construction
 # ===========================================================================
@@ -205,7 +204,9 @@ class TestFieldDescriptions:
     def test_min_scene_duration_description_is_non_empty(self) -> None:
         """min_scene_duration field must have a non-empty description."""
         field_info = DetectScenesOptions.model_fields["min_scene_duration"]
-        assert field_info.description, "min_scene_duration field must have a description"
+        assert field_info.description, (
+            "min_scene_duration field must have a description"
+        )
 
     def test_backend_description_is_non_empty(self) -> None:
         """backend field must have a non-empty description."""

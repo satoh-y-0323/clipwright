@@ -23,9 +23,15 @@ class SceneBoundary:
     scene_index: int  # 0-based
 
 
-# Matches both "[scdet @ 0x...]" and bare "scdet @ 0x..." formats.
-# Captures pts_time and score values from the scdet filter output line.
-_SCDET_PATTERN = re.compile(r"pts_time=(\d+(?:\.\d+)?)\s+score=(\d+(?:\.\d+)?)")
+# FFmpeg 8.x format: "[Parsed_scdet_0 @ 0x...] lavfi.scd.score: X, lavfi.scd.time: Y"
+# group(1) = score, group(2) = timestamp_sec
+_SCDET_PATTERN_NEW = re.compile(
+    r"lavfi\.scd\.score:\s*(\d+(?:\.\d+)?),\s*lavfi\.scd\.time:\s*(\d+(?:\.\d+)?)"
+)
+
+# Legacy format (ffmpeg < 7.x): "pts_time=X score=Y"
+# group(1) = pts_time, group(2) = score
+_SCDET_PATTERN_LEGACY = re.compile(r"pts_time=(\d+(?:\.\d+)?)\s+score=(\d+(?:\.\d+)?)")
 
 
 def parse_scdet_stderr(
@@ -48,17 +54,33 @@ def parse_scdet_stderr(
         return []
 
     boundaries: list[SceneBoundary] = []
-    for match in _SCDET_PATTERN.finditer(stderr):
-        pts_time = float(match.group(1))
-        score = float(match.group(2))
+
+    # Try FFmpeg 8.x format first (lavfi.scd.score/lavfi.scd.time).
+    for match in _SCDET_PATTERN_NEW.finditer(stderr):
+        score = float(match.group(1))
+        timestamp_sec = float(match.group(2))
         confidence = min(score / 100.0, 1.0)
         boundaries.append(
             SceneBoundary(
-                timestamp_sec=pts_time,
+                timestamp_sec=timestamp_sec,
                 confidence=confidence,
                 scene_index=0,  # re-assigned below
             )
         )
+
+    # Fall back to legacy format (pts_time=X score=Y) for older ffmpeg.
+    if not boundaries:
+        for match in _SCDET_PATTERN_LEGACY.finditer(stderr):
+            pts_time = float(match.group(1))
+            score = float(match.group(2))
+            confidence = min(score / 100.0, 1.0)
+            boundaries.append(
+                SceneBoundary(
+                    timestamp_sec=pts_time,
+                    confidence=confidence,
+                    scene_index=0,  # re-assigned below
+                )
+            )
 
     boundaries.sort(key=lambda b: b.timestamp_sec)
     for idx, boundary in enumerate(boundaries):

@@ -22,7 +22,6 @@ import shutil
 from pathlib import Path
 
 import pytest
-
 from clipwright.errors import ClipwrightError
 from clipwright.process import resolve_tool
 
