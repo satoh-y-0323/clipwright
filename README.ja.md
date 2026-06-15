@@ -37,6 +37,35 @@ export CLIPWRIGHT_FFMPEG="C:/Users/<user>/AppData/Local/Microsoft/WinGet/Package
 
 ---
 
+## 前提: clipwright-transcribe（whisper-cli）
+
+`clipwright-transcribe` は **whisper.cpp** バイナリ（`whisper-cli`）と ggml モデルファイルを必要とする。pip ではインストールされないため別途取得すること。
+
+### whisper-cli バイナリ
+
+| プラットフォーム | 取得方法 |
+|---|---|
+| **Windows** | [whisper.cpp Releases](https://github.com/ggerganov/whisper.cpp/releases) からビルド済みバイナリをダウンロード → `whisper-bin-x64.zip`（CPU）または `whisper-cublas-*-bin-x64.zip`（CUDA）。展開して `whisper-cli.exe` を PATH の通ったディレクトリに配置するか、`CLIPWRIGHT_WHISPER` 環境変数で指定する。 |
+| **macOS** | `brew install whisper-cpp` — `whisper-cli` が PATH に自動登録される。 |
+| **Linux** | ソースからビルド: `git clone https://github.com/ggerganov/whisper.cpp && cd whisper.cpp && cmake -B build && cmake --build build -j --config Release` — バイナリは `build/bin/whisper-cli` に生成される。 |
+
+```bash
+# whisper-cli が PATH 上にない場合はフルパスで指定する
+export CLIPWRIGHT_WHISPER=/path/to/whisper-cli
+```
+
+### ggml モデルファイル
+
+[Hugging Face](https://huggingface.co/ggerganov/whisper.cpp) からモデル（例: `ggml-base.bin`）をダウンロードする。
+
+```bash
+export CLIPWRIGHT_WHISPER_MODEL=/path/to/ggml-base.bin
+```
+
+`CLIPWRIGHT_WHISPER` の指定もなく PATH 上にも `whisper-cli` が見つからない場合、`clipwright_transcribe` ツールは `DEPENDENCY_MISSING` を返し、統合テストは自動的にスキップされる。
+
+---
+
 ## 開発環境のセットアップ
 
 ```bash

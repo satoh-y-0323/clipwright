@@ -1,0 +1,88 @@
+name: Test
+
+# Run quality gate (ruff + mypy + pytest) on all workspace packages
+# across Linux, macOS, and Windows.
+#
+# FFmpeg is installed via each platform's package manager.
+# whisper-cli (clipwright-transcribe) and scenedetect CLI (clipwright-scene
+# pyscenedetect backend) are not installed; those e2e tests auto-skip when
+# the binaries are absent.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      # -----------------------------------------------------------------------
+      # FFmpeg — required by most packages (silence / loudness / noise /
+      # transcribe / render / scene).  Each platform installs the system package.
+      # -----------------------------------------------------------------------
+      - name: Install FFmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install FFmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+
+      - name: Install FFmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg --no-progress -y
+
+      # -----------------------------------------------------------------------
+      # Install all workspace packages (shared .venv at repo root).
+      # -----------------------------------------------------------------------
+      - name: Sync workspace
+        run: uv sync --all-packages --dev
+
+      # -----------------------------------------------------------------------
+      # Quality gate: run ruff + mypy + pytest for every package.
+      # Runs in a bash subshell per package so cd does not affect siblings.
+      # On Windows, GitHub Actions provides Git Bash when shell: bash is set.
+      # -----------------------------------------------------------------------
+      - name: Quality gate — all packages
+        shell: bash
+        run: |
+          set -e
+          PACKAGES=(
+            "."
+            "clipwright-silence"
+            "clipwright-loudness"
+            "clipwright-noise"
+            "clipwright-transcribe"
+            "clipwright-bgm"
+            "clipwright-render"
+            "clipwright-wrap"
+            "clipwright-scene"
+          )
+          for pkg in "${PACKAGES[@]}"; do
+            echo "======================================================="
+            echo "Package: $pkg"
+            echo "======================================================="
+            (
+              cd "$pkg"
+              uv run ruff format --check .
+              uv run ruff check .
+              uv run mypy src
+              uv run pytest
+            )
+          done

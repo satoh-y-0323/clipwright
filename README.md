@@ -37,6 +37,38 @@ export CLIPWRIGHT_FFMPEG="C:/Users/<user>/AppData/Local/Microsoft/WinGet/Package
 
 ---
 
+## Prerequisite: clipwright-transcribe (whisper-cli)
+
+`clipwright-transcribe` requires the **whisper.cpp** binary (`whisper-cli`) and a ggml
+model file. They are not installed via pip — obtain them separately.
+
+### whisper-cli Binary
+
+| Platform | How to install |
+|---|---|
+| **Windows** | Download the pre-built binary from [whisper.cpp Releases](https://github.com/ggerganov/whisper.cpp/releases) → `whisper-bin-x64.zip` (CPU) or `whisper-cublas-*-bin-x64.zip` (CUDA). Extract and place `whisper-cli.exe` in a directory on `PATH`, or set `CLIPWRIGHT_WHISPER`. |
+| **macOS** | `brew install whisper-cpp` — installs `whisper-cli` on PATH automatically. |
+| **Linux** | Build from source: `git clone https://github.com/ggerganov/whisper.cpp && cd whisper.cpp && cmake -B build && cmake --build build -j --config Release` — binary is at `build/bin/whisper-cli`. |
+
+```bash
+# If whisper-cli is not on PATH, set the full path:
+export CLIPWRIGHT_WHISPER=/path/to/whisper-cli
+```
+
+### ggml Model File
+
+Download a model (e.g. `ggml-base.bin`) from [Hugging Face](https://huggingface.co/ggerganov/whisper.cpp).
+
+```bash
+export CLIPWRIGHT_WHISPER_MODEL=/path/to/ggml-base.bin
+```
+
+If neither `CLIPWRIGHT_WHISPER` nor a `whisper-cli` binary on PATH is found, the
+`clipwright_transcribe` tool returns `DEPENDENCY_MISSING` and integration tests are
+automatically skipped.
+
+---
+
 ## Development Environment Setup
 
 ```bash
