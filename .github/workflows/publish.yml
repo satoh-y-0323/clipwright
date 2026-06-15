@@ -35,6 +35,7 @@ jobs:
           - clipwright-render
           - clipwright-silence
           - clipwright-transcribe
+          - clipwright-scene
           - clipwright-wrap
     environment:
       name: pypi
