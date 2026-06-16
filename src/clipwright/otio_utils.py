@@ -6,6 +6,7 @@ Time conversions use to_otio_time / from_otio_time imported from schemas.py.
 
 from __future__ import annotations
 
+import collections.abc
 import contextlib
 import os
 import tempfile
@@ -196,6 +197,61 @@ def get_clipwright_metadata(obj: Any) -> dict[str, Any]:
     Returns an empty dict if no metadata has been set.
     """
     return dict(obj.metadata.get("clipwright", {}))
+
+
+# ===========================================================================
+# Marker queries
+# ===========================================================================
+
+
+def get_markers(
+    timeline: otio.schema.Timeline,
+    kind: str | None = None,
+) -> list[otio.schema.Marker]:
+    """Collect Marker objects from all tracks and clips in a Timeline.
+
+    Traversal order: tracks in track order → track markers first, then clip
+    markers in item order → individual markers in marker list order.
+    Time-based sorting is intentionally omitted so that the caller controls
+    ordering and round-trip stability is preserved even when two markers share
+    the same timestamp.
+
+    When *kind* is None all markers are returned.  When *kind* is specified,
+    only markers whose ``metadata["clipwright"]["kind"]`` equals *kind* are
+    returned.  Markers that have no ``metadata["clipwright"]`` dict, or where
+    that value is not a dict, are excluded when *kind* is given (defensive
+    pattern matching ``_marker_to_dict``).
+    """
+    result: list[otio.schema.Marker] = []
+    for track in timeline.tracks:
+        # Track-level markers first
+        for marker in track.markers:
+            if _marker_matches_kind(marker, kind):
+                result.append(marker)
+        # Clip-level markers in item order
+        for item in track:
+            if isinstance(item, otio.schema.Clip):
+                for marker in item.markers:
+                    if _marker_matches_kind(marker, kind):
+                        result.append(marker)
+    return result
+
+
+def _marker_matches_kind(marker: otio.schema.Marker, kind: str | None) -> bool:
+    """Return True when *marker* matches the given kind filter.
+
+    When *kind* is None every marker matches.
+    When *kind* is set, the marker must have metadata["clipwright"]["kind"] == kind.
+    Missing or non-dict clipwright metadata is treated as no-match (exclusive).
+    """
+    if kind is None:
+        return True
+    cw_meta = marker.metadata.get("clipwright", {})
+    # OTIO stores metadata values as AnyDictionary, not a plain dict,
+    # so use Mapping to accept both types.
+    if not isinstance(cw_meta, collections.abc.Mapping):
+        return False
+    return cw_meta.get("kind") == kind
 
 
 # ===========================================================================
