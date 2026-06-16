@@ -9,14 +9,18 @@ Design decisions:
 - subprocess errors are sanitised with safe_subprocess_message() before reaching
   the MCP error envelope (mirrors detect.py pattern).
 - Error messages expose basename only (CWE-209 path disclosure prevention).
-- build_single_frame_command returns list[str|float]; all elements are str()-ified
-  before passing to run() so that subprocess receives only strings.
+- build_single_frame_command returns list[str]; run() receives the list directly
+  without any str() conversion in this module.
+- _check_within_boundary(path, base) raises PATH_NOT_ALLOWED when path.resolve()
+  falls outside base; scene_timeline is a read-only input and is NOT required
+  to be inside output_dir.
 """
 
 from __future__ import annotations
 
 import json
 import math
+import os
 from pathlib import Path
 
 from clipwright.envelope import error_result, ok_result
@@ -35,11 +39,160 @@ from clipwright.schemas import RationalTimeModel, TimeRangeModel, ToolResult
 from clipwright_frames.plan import (
     build_fps_command,
     build_single_frame_command,
+    compute_interval_timestamps,
     compute_timestamps_mode,
     frame_filename,
     scene_marker_seconds,
 )
 from clipwright_frames.schemas import ExtractFramesOptions
+
+
+def _check_within_boundary(path: Path, base: Path) -> None:
+    """Verify that path resolves within base directory (CWE-22 prevention).
+
+    Falls back to absolute()-based comparison when resolve() raises OSError
+    (e.g. network paths, extremely long paths). Raises PATH_NOT_ALLOWED when
+    path points outside the allowed base directory.
+
+    scene_timeline (read-only input) is NOT validated here; this function is
+    used only for output artifacts written under output_dir.
+
+    Args:
+        path: The artifact path to validate.
+        base: Resolved base directory that must contain path.
+
+    Raises:
+        ClipwrightError: PATH_NOT_ALLOWED when path resolves outside base.
+    """
+    try:
+        resolved = path.resolve()
+        base_str = str(base)
+        target_str = str(resolved)
+        if not (
+            target_str == base_str
+            or target_str.startswith(base_str + "/")
+            or target_str.startswith(base_str + os.sep)
+        ):
+            raise ClipwrightError(
+                code=ErrorCode.PATH_NOT_ALLOWED,
+                message=f"{path.name} is outside the allowed output boundary.",
+                hint=(
+                    "Ensure the output_dir does not contain symlinks that"
+                    " escape the directory."
+                ),
+            )
+    except ClipwrightError:
+        raise
+    except OSError:
+        # resolve() failure: fall back to absolute()-based best-effort comparison.
+        try:
+            base_abs = str(base.absolute()) if not base.is_absolute() else str(base)
+            target_abs = str(path.absolute())
+            if not (
+                target_abs == base_abs
+                or target_abs.startswith(base_abs + "/")
+                or target_abs.startswith(base_abs + os.sep)
+            ):
+                raise ClipwrightError(
+                    code=ErrorCode.PATH_NOT_ALLOWED,
+                    message=f"{path.name} is outside the allowed output boundary.",
+                    hint=(
+                        "Ensure the output_dir does not contain symlinks that"
+                        " escape the directory."
+                    ),
+                )
+        except ClipwrightError:
+            raise
+        except OSError:
+            pass
+
+
+def _write_frames_otio(
+    out_dir: Path,
+    media_path: Path,
+    extracted_frames: list[tuple[int, float]],
+    rate: float,
+) -> Path:
+    """Write frames.otio with zero-duration markers for each extracted frame.
+
+    Each marker carries metadata['clipwright']['kind']='extracted_frame' and
+    metadata['clipwright']['timestamp_sec']. Uses save_timeline (atomic).
+
+    Args:
+        out_dir: Directory to write frames.otio.
+        media_path: Source media path (stem used for timeline name).
+        extracted_frames: List of (index, timestamp_sec) pairs.
+        rate: Frame rate used for RationalTime construction.
+
+    Returns:
+        Resolved Path to the written frames.otio file.
+    """
+    frames_otio_path = out_dir / "frames.otio"
+    frames_timeline = new_timeline(name=f"{media_path.stem} - frames")
+    v1 = frames_timeline.tracks[0]
+
+    for idx, ts in extracted_frames:
+        marked_range = TimeRangeModel(
+            start_time=RationalTimeModel(value=ts * rate, rate=rate),
+            duration=RationalTimeModel(value=0.0, rate=rate),
+        )
+        add_marker(
+            v1,
+            marked_range=marked_range,
+            name=f"frame_{idx:05d}",
+            color="CYAN",
+            metadata={
+                "kind": "extracted_frame",
+                "timestamp_sec": float(ts),
+            },
+        )
+
+    save_timeline(frames_timeline, str(frames_otio_path))
+    return frames_otio_path
+
+
+def _write_frames_json(
+    out_dir: Path,
+    options: ExtractFramesOptions,
+    extracted_frames: list[tuple[int, float]],
+) -> Path:
+    """Write frames.json manifest atomically (temp file + os.replace).
+
+    Partial/interrupted writes do not leave a corrupt JSON file because the
+    content is first written to a sibling temp file and then renamed.
+
+    Args:
+        out_dir: Directory to write frames.json (and temp file).
+        options: Extraction options (mode, format).
+        extracted_frames: List of (index, timestamp_sec) pairs.
+
+    Returns:
+        Resolved Path to the written frames.json file.
+    """
+    frames_json_path = out_dir / "frames.json"
+    frame_entries: list[dict[str, object]] = []
+    for idx, ts in extracted_frames:
+        frame_path = (out_dir / frame_filename(idx, options.format)).resolve()
+        frame_entries.append(
+            {
+                "index": idx,
+                "timestamp_sec": float(ts),
+                "path": str(frame_path),
+            }
+        )
+
+    manifest = {
+        "count": len(extracted_frames),
+        "mode": options.mode,
+        "format": options.format,
+        "frames": frame_entries,
+    }
+
+    tmp_path = out_dir / "frames.json.tmp"
+    tmp_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    os.replace(tmp_path, frames_json_path)
+
+    return frames_json_path
 
 
 def _extract_frames_inner(
@@ -101,6 +254,9 @@ def _extract_frames_inner(
     duration_sec = media_info.duration.value / media_info.duration.rate
     rate = media_info.duration.rate
 
+    # Compute timeout once (used by all modes that call ffmpeg).
+    timeout = float(max(60, math.ceil(duration_sec * 2)))
+
     # --- 5. Mode dispatch ---
 
     warnings: list[str] = []
@@ -117,20 +273,18 @@ def _extract_frames_inner(
 
         if interval_sec > duration_sec:
             warnings.append(
-                f"interval_sec ({interval_sec}s) exceeds media duration "
-                f"({duration_sec:.2f}s). No frames extracted."
+                "interval_sec exceeds media duration. No frames extracted. "
+                "Use a smaller interval_sec value."
             )
         else:
             # Build fps-filter command; output pattern uses frame_%05d.<ext>
             out_pattern = str(out_dir / f"frame_%05d.{ext}")
             cmd = build_fps_command(ffmpeg, abs_media, out_pattern, options)
-            timeout = float(max(60, math.ceil(duration_sec * 2)))
             _run_with_safe_error(cmd, timeout)
 
-            # Discover produced files and map index -> timestamp
-            produced = sorted(out_dir.glob(f"frame_?????.{ext}"))
-            for idx, _fpath in enumerate(produced):
-                ts = float(idx) * interval_sec
+            # Compute frame count from timestamps (CR M-1: no glob dependency).
+            timestamps = compute_interval_timestamps(duration_sec, interval_sec)
+            for idx, ts in enumerate(timestamps):
                 extracted_frames.append((idx, ts))
 
     elif options.mode == "scene":
@@ -146,10 +300,7 @@ def _extract_frames_inner(
         if scene_path.suffix.lower() != ".otio":
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
-                message=(
-                    f"Invalid scene_timeline extension: {scene_path.suffix!r}. "
-                    "Only .otio is allowed."
-                ),
+                message="scene_timeline must have a .otio extension.",
                 hint="Change the scene_timeline file path extension to .otio.",
             )
         if not scene_path.exists():
@@ -159,7 +310,9 @@ def _extract_frames_inner(
                 hint="Specify a valid .otio timeline file path.",
             )
 
-        # Load OTIO (OTIO_ERROR propagated as-is)
+        # Load OTIO (OTIO_ERROR propagated as-is).
+        # scene_timeline is a read-only input; it is NOT required to be inside
+        # output_dir. Boundary check applies to output artifacts only.
         tl = load_timeline(scene_timeline)
 
         # Extract scene_boundary marker timestamps
@@ -171,14 +324,12 @@ def _extract_frames_inner(
                 "No scene_boundary markers found in the timeline. No frames extracted."
             )
         else:
-            timeout = float(max(60, math.ceil(duration_sec * 2)))
             for idx, ts in enumerate(scene_ts_list):
                 out_path = str(out_dir / frame_filename(idx, options.format))
-                raw_cmd = build_single_frame_command(
+                cmd = build_single_frame_command(
                     ffmpeg, abs_media, ts, out_path, options
                 )
-                str_cmd = [str(x) for x in raw_cmd]
-                _run_with_safe_error(str_cmd, timeout)
+                _run_with_safe_error(cmd, timeout)
                 extracted_frames.append((idx, ts))
 
     else:
@@ -186,67 +337,35 @@ def _extract_frames_inner(
         kept, skipped = compute_timestamps_mode(options.timestamps, duration_sec)
 
         if skipped:
-            skipped_str = ", ".join(f"{s}s" for s in skipped)
             warnings.append(
-                f"Skipped {len(skipped)} out-of-range timestamp(s): {skipped_str}."
+                f"Skipped {len(skipped)} out-of-range timestamp(s). "
+                "Values must be in [0, duration_sec)."
             )
 
         if kept:
-            timeout = float(max(60, math.ceil(duration_sec * 2)))
             for idx, ts in enumerate(kept):
                 out_path = str(out_dir / frame_filename(idx, options.format))
-                raw_cmd = build_single_frame_command(
+                cmd = build_single_frame_command(
                     ffmpeg, abs_media, ts, out_path, options
                 )
-                str_cmd = [str(x) for x in raw_cmd]
-                _run_with_safe_error(str_cmd, timeout)
+                _run_with_safe_error(cmd, timeout)
                 extracted_frames.append((idx, ts))
+
+    # --- 6. Boundary check on output artifacts (CWE-22) ---
+
+    out_dir_resolved = out_dir.resolve()
+    frames_otio_path = out_dir / "frames.otio"
+    frames_json_path = out_dir / "frames.json"
+    _check_within_boundary(frames_otio_path, out_dir_resolved)
+    _check_within_boundary(frames_json_path, out_dir_resolved)
 
     # --- 7. Write frames.otio ---
 
-    frames_otio_path = out_dir / "frames.otio"
-    frames_timeline = new_timeline(name=f"{media_path.stem} — frames")
-    v1 = frames_timeline.tracks[0]
+    frames_otio_path = _write_frames_otio(out_dir, media_path, extracted_frames, rate)
 
-    for idx, ts in extracted_frames:
-        marked_range = TimeRangeModel(
-            start_time=RationalTimeModel(value=ts * rate, rate=rate),
-            duration=RationalTimeModel(value=0.0, rate=rate),
-        )
-        add_marker(
-            v1,
-            marked_range=marked_range,
-            name=f"frame_{idx:05d}",
-            color="CYAN",
-            metadata={
-                "kind": "extracted_frame",
-                "timestamp_sec": float(ts),
-            },
-        )
+    # --- 8. Write frames.json (atomic) ---
 
-    save_timeline(frames_timeline, str(frames_otio_path))
-
-    # --- 8. Write frames.json ---
-
-    frames_json_path = out_dir / "frames.json"
-    frame_entries: list[dict[str, object]] = []
-    for idx, ts in extracted_frames:
-        frame_path = (out_dir / frame_filename(idx, options.format)).resolve()
-        frame_entries.append(
-            {
-                "index": idx,
-                "timestamp_sec": float(ts),
-                "path": str(frame_path),
-            }
-        )
-
-    manifest = {
-        "count": len(extracted_frames),
-        "mode": options.mode,
-        "format": options.format,
-        "frames": frame_entries,
-    }
-    frames_json_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    frames_json_path = _write_frames_json(out_dir, options, extracted_frames)
 
     # --- 9. Build return envelope ---
 
