@@ -386,9 +386,7 @@ class TestBuildFpsCommand:
         cmd = self._cmd(interval_sec=10.0, max_width=320)
         vf_idx = cmd.index("-vf")
         vf_val = cmd[vf_idx + 1]
-        pattern = re.compile(
-            r"^fps=1/\d+(?:\.\d+)?,scale='min\(\d+,iw\)':-2$"
-        )
+        pattern = re.compile(r"^fps=1/\d+(?:\.\d+)?,scale='min\(\d+,iw\)':-2$")
         assert pattern.fullmatch(vf_val), (
             f"-vf value {vf_val!r} does not match expected combined fps+scale pattern"
         )

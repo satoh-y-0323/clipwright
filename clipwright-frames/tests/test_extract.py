@@ -51,7 +51,6 @@ from typing import Any
 from unittest.mock import patch
 
 import opentimelineio as otio
-import pytest
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo
 
@@ -120,7 +119,6 @@ def _make_fake_run(output_dir: Path, timestamps: list[float], fmt: str = "jpeg")
     The fake run creates image files in output_dir so that the orchestration
     can find them during manifest assembly.
     """
-    ext = "jpg" if fmt == "jpeg" else "png"
     created: list[Path] = []
 
     def _impl(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
@@ -674,7 +672,10 @@ class TestIntervalExceedsDuration:
 
         assert result.ok is True
         assert result.warnings is not None
-        assert any("interval_sec" in w.lower() or "interval" in w.lower() for w in result.warnings)
+        assert any(
+            "interval_sec" in w.lower() or "interval" in w.lower()
+            for w in result.warnings
+        )
 
     def test_interval_exceeds_duration_produces_empty_artifacts(
         self, tmp_path: Path
@@ -733,7 +734,10 @@ class TestSceneModeZeroMarkers:
 
         assert result.ok is True
         assert result.warnings is not None
-        assert any("scene_boundary" in w.lower() or "marker" in w.lower() for w in result.warnings)
+        assert any(
+            "scene_boundary" in w.lower() or "marker" in w.lower()
+            for w in result.warnings
+        )
 
     def test_zero_scene_markers_frame_count_is_zero(self, tmp_path: Path) -> None:
         """0 scene_boundary markers -> frame_count == 0."""
@@ -800,7 +804,9 @@ class TestTimestampsOutOfRange:
         assert result.ok is True
         assert result.warnings is not None
         warning_text = " ".join(result.warnings).lower()
-        assert "skip" in warning_text or "exceed" in warning_text or "out" in warning_text
+        assert (
+            "skip" in warning_text or "exceed" in warning_text or "out" in warning_text
+        )
 
     def test_only_in_range_timestamps_are_extracted(self, tmp_path: Path) -> None:
         """Only in-range timestamps (0 <= ts < duration) are extracted."""
@@ -950,13 +956,13 @@ class TestFramesJsonSchema:
         for a in result.artifacts:
             role = a.role if hasattr(a, "role") else a.get("role", "")
             if role == "manifest":
-                manifest_path = (
-                    a.path if hasattr(a, "path") else a.get("path", "")
-                )
+                manifest_path = a.path if hasattr(a, "path") else a.get("path", "")
                 break
 
         assert manifest_path is not None, "No manifest artifact found"
-        assert Path(str(manifest_path)).exists(), f"Manifest file does not exist: {manifest_path}"
+        assert Path(str(manifest_path)).exists(), (
+            f"Manifest file does not exist: {manifest_path}"
+        )
 
         with open(str(manifest_path), encoding="utf-8") as f:
             manifest = json.load(f)
@@ -967,9 +973,7 @@ class TestFramesJsonSchema:
         assert "frames" in manifest
         assert isinstance(manifest["frames"], list)
 
-    def test_frames_json_frame_entries_have_required_keys(
-        self, tmp_path: Path
-    ) -> None:
+    def test_frames_json_frame_entries_have_required_keys(self, tmp_path: Path) -> None:
         """Each frame entry in frames.json must have index, timestamp_sec, path."""
         from clipwright_frames.extract import extract_frames
 
@@ -1005,9 +1009,7 @@ class TestFramesJsonSchema:
         for a in result.artifacts:
             role = a.role if hasattr(a, "role") else a.get("role", "")
             if role == "manifest":
-                manifest_path = (
-                    a.path if hasattr(a, "path") else a.get("path", "")
-                )
+                manifest_path = a.path if hasattr(a, "path") else a.get("path", "")
                 break
 
         assert manifest_path is not None
@@ -1060,9 +1062,7 @@ class TestFramesJsonSchema:
         for a in result.artifacts:
             role = a.role if hasattr(a, "role") else a.get("role", "")
             if role == "manifest":
-                manifest_path = (
-                    a.path if hasattr(a, "path") else a.get("path", "")
-                )
+                manifest_path = a.path if hasattr(a, "path") else a.get("path", "")
                 break
 
         assert manifest_path is not None
