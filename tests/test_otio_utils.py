@@ -1075,3 +1075,543 @@ class TestSetClipwrightMetadataPartialUpdate:
         assert result == {"a": 1, "b": 2, "c": 3}, (
             "All keys must be preserved after multiple partial updates (L-5)"
         )
+
+
+# ===========================================================================
+# get_markers — Red phase (function not yet implemented)
+# §2-1 architecture-report: get_markers(timeline, kind=None) -> list[Marker]
+# ===========================================================================
+
+
+class TestGetMarkers:
+    """Red-phase contract tests for get_markers.
+
+    get_markers is not yet implemented in otio_utils.py.
+    All tests in this class must fail with ImportError or AttributeError.
+
+    Signature (§2-1):
+        def get_markers(
+            timeline: otio.schema.Timeline,
+            kind: str | None = None,
+        ) -> list[otio.schema.Marker]
+
+    Verified observations:
+    - kind=None: collect all markers from all tracks and all clips
+    - kind="scene_boundary": return only markers where
+      metadata["clipwright"]["kind"] == "scene_boundary"
+    - both track markers and clip markers are collected
+    - stable ordering: tracks in track order, clips in item order, markers in marker order
+    - empty timeline returns []
+    - markers without metadata["clipwright"] are excluded when kind is specified
+    """
+
+    # ------------------------------------------------------------------
+    # GM-1: kind=None collects all markers from all tracks and all clips
+    # ------------------------------------------------------------------
+
+    def test_kind_none_returns_all_track_markers(self) -> None:
+        """kind=None collects all markers attached to tracks (GM-1)."""
+        import opentimelineio as otio
+
+        from clipwright.otio_utils import get_markers
+
+        tl = new_timeline("all_track_markers")
+        track = tl.tracks[0]  # V1
+
+        # Attach 3 markers directly to the track
+        for i in range(3):
+            mr = otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(float(i * 30), 30.0),
+                duration=otio.opentime.RationalTime(1.0, 30.0),
+            )
+            track.markers.append(otio.schema.Marker(name=f"track_m{i}", marked_range=mr))
+
+        result = get_markers(tl, kind=None)
+        assert len(result) == 3
+
+    def test_kind_none_returns_all_clip_markers(self) -> None:
+        """kind=None collects all markers attached to clips (GM-1)."""
+        import opentimelineio as otio
+
+        from clipwright.otio_utils import get_markers
+
+        tl = new_timeline("all_clip_markers")
+        track = tl.tracks[0]  # V1
+
+        # Add one clip
+        clip = otio.schema.Clip(
+            name="clip0",
+            source_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0.0, 30.0),
+                duration=otio.opentime.RationalTime(90.0, 30.0),
+            ),
+        )
+        track.append(clip)
+
+        # Attach 2 markers to the clip
+        for i in range(2):
+            mr = otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(float(i * 10), 30.0),
+                duration=otio.opentime.RationalTime(1.0, 30.0),
+            )
+            clip.markers.append(otio.schema.Marker(name=f"clip_m{i}", marked_range=mr))
+
+        result = get_markers(tl, kind=None)
+        assert len(result) == 2
+
+    def test_kind_none_combines_track_and_clip_markers(self) -> None:
+        """kind=None collects track markers and clip markers together (GM-1)."""
+        import opentimelineio as otio
+
+        from clipwright.otio_utils import get_markers
+
+        tl = new_timeline("combined_markers")
+        track = tl.tracks[0]  # V1
+
+        # Attach 1 marker to the track
+        track.markers.append(
+            otio.schema.Marker(
+                name="on_track",
+                marked_range=otio.opentime.TimeRange(
+                    start_time=otio.opentime.RationalTime(0.0, 30.0),
+                    duration=otio.opentime.RationalTime(1.0, 30.0),
+                ),
+            )
+        )
+
+        # Add a clip with 2 markers
+        clip = otio.schema.Clip(
+            name="clip0",
+            source_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0.0, 30.0),
+                duration=otio.opentime.RationalTime(90.0, 30.0),
+            ),
+        )
+        track.append(clip)
+        for i in range(2):
+            clip.markers.append(
+                otio.schema.Marker(
+                    name=f"on_clip_{i}",
+                    marked_range=otio.opentime.TimeRange(
+                        start_time=otio.opentime.RationalTime(float(i), 30.0),
+                        duration=otio.opentime.RationalTime(1.0, 30.0),
+                    ),
+                )
+            )
+
+        result = get_markers(tl, kind=None)
+        assert len(result) == 3  # 1 track + 2 clip
+
+    def test_kind_none_default_arg_same_as_explicit_none(self) -> None:
+        """get_markers(tl) and get_markers(tl, kind=None) return the same result (GM-1)."""
+        import opentimelineio as otio
+
+        from clipwright.otio_utils import get_markers
+
+        tl = new_timeline("default_arg")
+        track = tl.tracks[0]
+        track.markers.append(
+            otio.schema.Marker(
+                name="m",
+                marked_range=otio.opentime.TimeRange(
+                    start_time=otio.opentime.RationalTime(0.0, 30.0),
+                    duration=otio.opentime.RationalTime(1.0, 30.0),
+                ),
+            )
+        )
+
+        result_default = get_markers(tl)
+        result_explicit = get_markers(tl, kind=None)
+        assert result_default == result_explicit
+
+    # ------------------------------------------------------------------
+    # GM-2: kind="scene_boundary" filters by metadata["clipwright"]["kind"]
+    # ------------------------------------------------------------------
+
+    def test_kind_filter_returns_only_matching_markers(self) -> None:
+        """kind='scene_boundary' returns only markers with matching clipwright kind (GM-2)."""
+        import opentimelineio as otio
+
+        from clipwright.otio_utils import get_markers
+
+        tl = new_timeline("kind_filter")
+        track = tl.tracks[0]
+
+        # Add a scene_boundary marker
+        m_scene = otio.schema.Marker(
+            name="scene1",
+            marked_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0.0, 30.0),
+                duration=otio.opentime.RationalTime(1.0, 30.0),
+            ),
+        )
+        m_scene.metadata["clipwright"] = {"kind": "scene_boundary"}
+        track.markers.append(m_scene)
+
+        # Add a chapter marker (different kind)
+        m_chapter = otio.schema.Marker(
+            name="chapter1",
+            marked_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(30.0, 30.0),
+                duration=otio.opentime.RationalTime(1.0, 30.0),
+            ),
+        )
+        m_chapter.metadata["clipwright"] = {"kind": "chapter"}
+        track.markers.append(m_chapter)
+
+        result = get_markers(tl, kind="scene_boundary")
+        assert len(result) == 1
+        assert result[0].name == "scene1"
+
+    def test_kind_filter_excludes_non_matching_kind(self) -> None:
+        """Markers with a different kind value are excluded when kind is specified (GM-2)."""
+        import opentimelineio as otio
+
+        from clipwright.otio_utils import get_markers
+
+        tl = new_timeline("exclude_mismatch")
+        track = tl.tracks[0]
+
+        m = otio.schema.Marker(
+            name="other_kind",
+            marked_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0.0, 30.0),
+                duration=otio.opentime.RationalTime(1.0, 30.0),
+            ),
+        )
+        m.metadata["clipwright"] = {"kind": "chapter"}
+        track.markers.append(m)
+
+        result = get_markers(tl, kind="scene_boundary")
+        assert len(result) == 0
+
+    def test_kind_filter_works_on_clip_markers(self) -> None:
+        """kind filter also applies to clip-attached markers (GM-2)."""
+        import opentimelineio as otio
+
+        from clipwright.otio_utils import get_markers
+
+        tl = new_timeline("clip_kind_filter")
+        track = tl.tracks[0]
+
+        clip = otio.schema.Clip(
+            name="clip0",
+            source_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0.0, 30.0),
+                duration=otio.opentime.RationalTime(90.0, 30.0),
+            ),
+        )
+        track.append(clip)
+
+        # scene_boundary on the clip
+        m_scene = otio.schema.Marker(
+            name="scene_on_clip",
+            marked_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(10.0, 30.0),
+                duration=otio.opentime.RationalTime(1.0, 30.0),
+            ),
+        )
+        m_scene.metadata["clipwright"] = {"kind": "scene_boundary"}
+        clip.markers.append(m_scene)
+
+        # chapter on the clip (should be excluded)
+        m_chapter = otio.schema.Marker(
+            name="chapter_on_clip",
+            marked_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(20.0, 30.0),
+                duration=otio.opentime.RationalTime(1.0, 30.0),
+            ),
+        )
+        m_chapter.metadata["clipwright"] = {"kind": "chapter"}
+        clip.markers.append(m_chapter)
+
+        result = get_markers(tl, kind="scene_boundary")
+        assert len(result) == 1
+        assert result[0].name == "scene_on_clip"
+
+    # ------------------------------------------------------------------
+    # GM-3: both track markers and clip markers are collected
+    # ------------------------------------------------------------------
+
+    def test_collects_markers_from_audio_track(self) -> None:
+        """Markers on the A1 (audio) track are also collected (GM-3)."""
+        import opentimelineio as otio
+
+        from clipwright.otio_utils import get_markers
+
+        tl = new_timeline("audio_track_marker")
+        audio_track = tl.tracks[1]  # A1
+
+        audio_track.markers.append(
+            otio.schema.Marker(
+                name="audio_cue",
+                marked_range=otio.opentime.TimeRange(
+                    start_time=otio.opentime.RationalTime(0.0, 30.0),
+                    duration=otio.opentime.RationalTime(1.0, 30.0),
+                ),
+            )
+        )
+
+        result = get_markers(tl, kind=None)
+        assert len(result) == 1
+        assert result[0].name == "audio_cue"
+
+    def test_collects_markers_from_both_video_and_audio_tracks(self) -> None:
+        """Markers on V1 and A1 are both collected (GM-3)."""
+        import opentimelineio as otio
+
+        from clipwright.otio_utils import get_markers
+
+        tl = new_timeline("both_tracks")
+        video_track = tl.tracks[0]
+        audio_track = tl.tracks[1]
+
+        video_track.markers.append(
+            otio.schema.Marker(
+                name="video_m",
+                marked_range=otio.opentime.TimeRange(
+                    start_time=otio.opentime.RationalTime(0.0, 30.0),
+                    duration=otio.opentime.RationalTime(1.0, 30.0),
+                ),
+            )
+        )
+        audio_track.markers.append(
+            otio.schema.Marker(
+                name="audio_m",
+                marked_range=otio.opentime.TimeRange(
+                    start_time=otio.opentime.RationalTime(0.0, 30.0),
+                    duration=otio.opentime.RationalTime(1.0, 30.0),
+                ),
+            )
+        )
+
+        result = get_markers(tl, kind=None)
+        assert len(result) == 2
+
+    # ------------------------------------------------------------------
+    # GM-4: stable ordering — track order → clip item order → marker order
+    # ------------------------------------------------------------------
+
+    def test_stable_ordering_track_markers_before_clip_markers(self) -> None:
+        """Track markers appear before clip markers for the same track (GM-4)."""
+        import opentimelineio as otio
+
+        from clipwright.otio_utils import get_markers
+
+        tl = new_timeline("order_check")
+        track = tl.tracks[0]
+
+        # Track marker: should appear first
+        track.markers.append(
+            otio.schema.Marker(
+                name="track_first",
+                marked_range=otio.opentime.TimeRange(
+                    start_time=otio.opentime.RationalTime(0.0, 30.0),
+                    duration=otio.opentime.RationalTime(1.0, 30.0),
+                ),
+            )
+        )
+
+        # Clip marker: should appear after track marker
+        clip = otio.schema.Clip(
+            name="clip0",
+            source_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0.0, 30.0),
+                duration=otio.opentime.RationalTime(60.0, 30.0),
+            ),
+        )
+        track.append(clip)
+        clip.markers.append(
+            otio.schema.Marker(
+                name="clip_second",
+                marked_range=otio.opentime.TimeRange(
+                    start_time=otio.opentime.RationalTime(5.0, 30.0),
+                    duration=otio.opentime.RationalTime(1.0, 30.0),
+                ),
+            )
+        )
+
+        result = get_markers(tl, kind=None)
+        assert len(result) == 2
+        assert result[0].name == "track_first"
+        assert result[1].name == "clip_second"
+
+    def test_stable_ordering_track_order_v1_before_a1(self) -> None:
+        """V1 track markers appear before A1 track markers in the result (GM-4)."""
+        import opentimelineio as otio
+
+        from clipwright.otio_utils import get_markers
+
+        tl = new_timeline("track_order")
+        video_track = tl.tracks[0]  # V1 (index 0)
+        audio_track = tl.tracks[1]  # A1 (index 1)
+
+        video_track.markers.append(
+            otio.schema.Marker(
+                name="v1_marker",
+                marked_range=otio.opentime.TimeRange(
+                    start_time=otio.opentime.RationalTime(0.0, 30.0),
+                    duration=otio.opentime.RationalTime(1.0, 30.0),
+                ),
+            )
+        )
+        audio_track.markers.append(
+            otio.schema.Marker(
+                name="a1_marker",
+                marked_range=otio.opentime.TimeRange(
+                    start_time=otio.opentime.RationalTime(0.0, 30.0),
+                    duration=otio.opentime.RationalTime(1.0, 30.0),
+                ),
+            )
+        )
+
+        result = get_markers(tl, kind=None)
+        assert len(result) == 2
+        assert result[0].name == "v1_marker"
+        assert result[1].name == "a1_marker"
+
+    # ------------------------------------------------------------------
+    # GM-5: empty timeline returns []
+    # ------------------------------------------------------------------
+
+    def test_empty_timeline_returns_empty_list(self) -> None:
+        """Empty timeline (no tracks, no markers) returns [] (GM-5)."""
+        from clipwright.otio_utils import get_markers
+
+        tl = new_timeline("empty_tl")
+        result = get_markers(tl, kind=None)
+        assert result == []
+
+    def test_timeline_with_tracks_but_no_markers_returns_empty(self) -> None:
+        """Timeline with V1/A1 tracks but no markers returns [] (GM-5)."""
+        from clipwright.otio_utils import get_markers
+
+        tl = new_timeline("tracks_no_markers")
+        result = get_markers(tl, kind=None)
+        assert result == []
+
+    def test_timeline_with_clips_but_no_markers_returns_empty(self) -> None:
+        """Timeline with clips but no markers returns [] (GM-5)."""
+        import opentimelineio as otio
+
+        from clipwright.otio_utils import get_markers
+
+        tl = new_timeline("clips_no_markers")
+        track = tl.tracks[0]
+        clip = otio.schema.Clip(
+            name="clip0",
+            source_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0.0, 30.0),
+                duration=otio.opentime.RationalTime(30.0, 30.0),
+            ),
+        )
+        track.append(clip)
+
+        result = get_markers(tl, kind=None)
+        assert result == []
+
+    # ------------------------------------------------------------------
+    # GM-6: markers without metadata["clipwright"] are excluded when kind specified
+    # ------------------------------------------------------------------
+
+    def test_marker_without_clipwright_metadata_excluded_by_kind_filter(self) -> None:
+        """Markers without metadata['clipwright'] are excluded when kind is set (GM-6)."""
+        import opentimelineio as otio
+
+        from clipwright.otio_utils import get_markers
+
+        tl = new_timeline("no_meta_excluded")
+        track = tl.tracks[0]
+
+        # Marker with no clipwright metadata at all
+        m_bare = otio.schema.Marker(
+            name="bare_marker",
+            marked_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0.0, 30.0),
+                duration=otio.opentime.RationalTime(1.0, 30.0),
+            ),
+        )
+        track.markers.append(m_bare)
+
+        # This marker has clipwright metadata with the matching kind
+        m_scene = otio.schema.Marker(
+            name="scene_marker",
+            marked_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(10.0, 30.0),
+                duration=otio.opentime.RationalTime(1.0, 30.0),
+            ),
+        )
+        m_scene.metadata["clipwright"] = {"kind": "scene_boundary"}
+        track.markers.append(m_scene)
+
+        result = get_markers(tl, kind="scene_boundary")
+        assert len(result) == 1
+        assert result[0].name == "scene_marker"
+
+    def test_marker_without_clipwright_metadata_included_when_kind_none(self) -> None:
+        """Markers without metadata['clipwright'] are included when kind=None (GM-6)."""
+        import opentimelineio as otio
+
+        from clipwright.otio_utils import get_markers
+
+        tl = new_timeline("no_meta_included")
+        track = tl.tracks[0]
+
+        # Bare marker (no clipwright metadata)
+        m_bare = otio.schema.Marker(
+            name="bare_marker",
+            marked_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0.0, 30.0),
+                duration=otio.opentime.RationalTime(1.0, 30.0),
+            ),
+        )
+        track.markers.append(m_bare)
+
+        result = get_markers(tl, kind=None)
+        assert len(result) == 1
+        assert result[0].name == "bare_marker"
+
+    # ------------------------------------------------------------------
+    # GM-7: return type is list[otio.schema.Marker] (not dict)
+    # ------------------------------------------------------------------
+
+    def test_returns_marker_objects_not_dicts(self) -> None:
+        """get_markers returns Marker objects, not summarized dicts (GM-7)."""
+        import opentimelineio as otio
+
+        from clipwright.otio_utils import get_markers
+
+        tl = new_timeline("marker_objects")
+        track = tl.tracks[0]
+        mr = otio.opentime.TimeRange(
+            start_time=otio.opentime.RationalTime(0.0, 30.0),
+            duration=otio.opentime.RationalTime(1.0, 30.0),
+        )
+        track.markers.append(otio.schema.Marker(name="m0", marked_range=mr))
+
+        result = get_markers(tl, kind=None)
+        assert len(result) == 1
+        assert isinstance(result[0], otio.schema.Marker)
+
+    def test_marker_object_preserves_marked_range(self) -> None:
+        """Returned Marker objects preserve the original marked_range (GM-7)."""
+        import opentimelineio as otio
+
+        from clipwright.otio_utils import get_markers
+
+        tl = new_timeline("range_preserved")
+        track = tl.tracks[0]
+
+        expected_start = otio.opentime.RationalTime(15.0, 30.0)
+        expected_duration = otio.opentime.RationalTime(3.0, 30.0)
+        mr = otio.opentime.TimeRange(
+            start_time=expected_start,
+            duration=expected_duration,
+        )
+        track.markers.append(otio.schema.Marker(name="range_m", marked_range=mr))
+
+        result = get_markers(tl, kind=None)
+        assert len(result) == 1
+        # Use RationalTime equality (no float approximation)
+        assert result[0].marked_range.start_time == expected_start
+        assert result[0].marked_range.duration == expected_duration
