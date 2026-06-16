@@ -1,4 +1,4 @@
-"""test_extract.py — Tests for extract.py orchestration (TDD Red phase).
+"""test_extract.py — Orchestration tests for extract.py (extract_frames function).
 
 Target API:
   clipwright_frames.extract.extract_frames(

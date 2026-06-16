@@ -1078,16 +1078,13 @@ class TestSetClipwrightMetadataPartialUpdate:
 
 
 # ===========================================================================
-# get_markers — Red phase (function not yet implemented)
+# get_markers — contract tests for the implemented get_markers function
 # §2-1 architecture-report: get_markers(timeline, kind=None) -> list[Marker]
 # ===========================================================================
 
 
 class TestGetMarkers:
-    """Red-phase contract tests for get_markers.
-
-    get_markers is not yet implemented in otio_utils.py.
-    All tests in this class must fail with ImportError or AttributeError.
+    """Contract tests for get_markers (implemented in otio_utils.py).
 
     Signature (§2-1):
         def get_markers(

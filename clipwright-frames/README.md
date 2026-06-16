@@ -49,7 +49,7 @@ Or using `uvx` without a global install:
 
 - `data.frame_count`: Number of frames extracted.
 - `data.mode`: Extraction mode used (`"interval"`, `"scene"`, or `"timestamps"`).
-- `data.total_duration_sec`: Total duration of the media in seconds.
+- `data.format`: Output image format used (`"jpeg"` or `"png"`).
 - `artifacts[0]`: The output OTIO timeline path (`role: "timeline"`, `format: "otio"`).
 - `artifacts[1]`: The JSON manifest path (`role: "manifest"`, `format: "json"`).
 
@@ -115,24 +115,26 @@ Each marker's `metadata["clipwright"]` contains:
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `kind` | `string` | Always `"frame"`. |
-| `frame_index` | `int` | 0-based sequential index. |
-| `path` | `string` | Absolute path to the extracted image file. |
-| `tool` | `string` | Always `"clipwright-frames"`. |
-| `version` | `string` | Package version. |
+| `kind` | `string` | Always `"extracted_frame"`. |
+| `timestamp_sec` | `float` | Timestamp of the frame in seconds. |
 
 ### JSON manifest (`frames.json`)
 
-A JSON array where each element describes one extracted frame:
+A JSON object with a `frames` array where each element describes one extracted frame:
 
 ```json
-[
-  {
-    "frame_index": 0,
-    "timestamp_sec": 0.0,
-    "path": "/output/frame_0000.jpg"
-  }
-]
+{
+  "count": 3,
+  "mode": "interval",
+  "format": "jpeg",
+  "frames": [
+    {
+      "index": 0,
+      "timestamp_sec": 0.0,
+      "path": "/output/frame_00000.jpg"
+    }
+  ]
+}
 ```
 
 ## Prerequisites

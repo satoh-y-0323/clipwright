@@ -1,4 +1,4 @@
-"""test_plan.py — Tests for plan.py pure functions (TDD Red phase).
+"""test_plan.py — Tests for plan.py pure functions.
 
 Target functions (all pure, no IO, no mocks needed):
   - compute_interval_timestamps(duration_sec, interval_sec) -> list[float]
@@ -63,8 +63,6 @@ import pytest
 if TYPE_CHECKING:
     from clipwright_frames.schemas import ExtractFramesOptions
 
-# All tests import from clipwright_frames.plan which does not exist yet.
-# The ImportError/ModuleNotFoundError is the expected Red failure.
 from clipwright_frames.plan import (
     build_fps_command,
     build_single_frame_command,
@@ -94,10 +92,7 @@ def _opts(
     timestamps: list[float] | None = None,
     scene_timeline: str | None = None,
 ) -> ExtractFramesOptions:
-    """Create an ExtractFramesOptions instance using the real schema.
-
-    Imports deferred so that the plan module import error is the first failure.
-    """
+    """Create an ExtractFramesOptions instance using the real schema."""
     from clipwright_frames.schemas import ExtractFramesOptions
 
     kwargs: dict[str, object] = {
