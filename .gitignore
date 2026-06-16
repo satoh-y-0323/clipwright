@@ -61,6 +61,8 @@ Thumbs.db
 AGENTS.md
 .cursor/
 .opencode/
+# メンテナ向け開発ガイド（配布しない・ローカル開発専用）
+/CLAUDE.md
 
 # プロジェクト生成物（テスト用 tmp は pytest が管理）
 outputs/
