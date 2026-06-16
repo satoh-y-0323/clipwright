@@ -1,7 +1,7 @@
 [project]
 name = "clipwright-frames"
 version = "0.1.0"
-description = "MCP tool for frame extraction from video media."
+description = "MCP tool for still-frame extraction from video into images, OTIO markers, and a JSON manifest."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
@@ -69,6 +69,8 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--strict-markers -q"
+# Prevent unintended auto mode if pytest-asyncio is added in future.
+# Has no effect unless pytest-asyncio is installed (warning is benign without it).
 asyncio_mode = "strict"
 markers = [
     "integration: integration test requiring actual ffmpeg/ffprobe binaries",
