@@ -1121,7 +1121,9 @@ class TestGetMarkers:
                 start_time=otio.opentime.RationalTime(float(i * 30), 30.0),
                 duration=otio.opentime.RationalTime(1.0, 30.0),
             )
-            track.markers.append(otio.schema.Marker(name=f"track_m{i}", marked_range=mr))
+            track.markers.append(
+                otio.schema.Marker(name=f"track_m{i}", marked_range=mr)
+            )
 
         result = get_markers(tl, kind=None)
         assert len(result) == 3
