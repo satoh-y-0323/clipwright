@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-17
+
+### Added
+
+- **`clipwright-frames` package (v0.1.0)**: New MCP tool `clipwright_extract_frames` for still-frame
+  extraction from video. Supports three extraction modes — `interval` (fixed interval in seconds),
+  `scene` (one frame per scene boundary from a `clipwright-scene` OTIO timeline), and `timestamps`
+  (explicit list of timestamp positions). Writes extracted images to an output directory and returns
+  OTIO markers and a JSON manifest as artifacts.
+
 ## [0.3.0] - 2026-06-16
 
 ### Added

@@ -74,6 +74,7 @@ jobs:
             "clipwright-noise"
             "clipwright-transcribe"
             "clipwright-bgm"
+            "clipwright-frames"
             "clipwright-render"
             "clipwright-wrap"
             "clipwright-scene"
