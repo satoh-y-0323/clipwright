@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`clipwright` core (v0.3.0)**: Added `otio_utils.get_markers()` to collect markers across
+  tracks, optionally filtered by clipwright kind.
 - **`clipwright-scene` package (v0.1.0)**: New MCP tool `clipwright_detect_scenes` for shot
   boundary detection. Detects scene transitions via FFmpeg's `scdet` filter (default) or
   PySceneDetect (optional backend) and writes detected boundaries as OTIO markers into a new
