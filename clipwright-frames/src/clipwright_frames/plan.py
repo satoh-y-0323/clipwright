@@ -93,6 +93,9 @@ def build_fps_command(
     if options.format == "jpeg":
         cmd += ["-q:v", str(options.quality)]
 
+    # -start_number 0 aligns ffmpeg's 1-based default frame numbering to 0-based,
+    # so frame_00000.jpg matches frame_filename(0) and avoids path mismatch.
+    cmd += ["-start_number", "0"]
     cmd.append(out_pattern)
     return cmd
 

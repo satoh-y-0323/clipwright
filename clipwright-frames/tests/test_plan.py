@@ -390,6 +390,46 @@ class TestBuildFpsCommand:
             f"-vf value {vf_val!r} does not match expected combined fps+scale pattern"
         )
 
+    def test_d11_start_number_zero_present_before_out_pattern(self) -> None:
+        """-start_number 0 must appear in the command, before the output pattern.
+
+        ffmpeg fps filter uses 1-based frame numbering by default (frame_00001.jpg...),
+        but frame_filename(index) generates 0-based names (frame_00000.jpg...).
+        -start_number 0 aligns ffmpeg output numbering to 0-based to prevent
+        path mismatch between frames.json entries and actual files on disk.
+        """
+        cmd = self._cmd(interval_sec=10.0)
+        assert "-start_number" in cmd, "-start_number flag must be present in command"
+        sn_idx = cmd.index("-start_number")
+        assert cmd[sn_idx + 1] == "0", (
+            f"-start_number value must be '0', got {cmd[sn_idx + 1]!r}"
+        )
+        # -start_number 0 must appear before the output pattern
+        out_idx = cmd.index(OUT_PATTERN)
+        assert sn_idx < out_idx, (
+            "-start_number must appear before the output pattern argument"
+        )
+
+    def test_d12_start_number_zero_present_with_max_width(self) -> None:
+        """-start_number 0 must be present when max_width is also specified."""
+        cmd = self._cmd(interval_sec=5.0, max_width=640)
+        assert "-start_number" in cmd, (
+            "-start_number flag must be present even when max_width is set"
+        )
+        sn_idx = cmd.index("-start_number")
+        assert cmd[sn_idx + 1] == "0", (
+            f"-start_number value must be '0', got {cmd[sn_idx + 1]!r}"
+        )
+
+    def test_d13_start_number_zero_present_png_format(self) -> None:
+        """-start_number 0 must be present for PNG format output."""
+        cmd = self._cmd(interval_sec=10.0, format="png")
+        assert "-start_number" in cmd, (
+            "-start_number flag must be present for PNG format"
+        )
+        sn_idx = cmd.index("-start_number")
+        assert cmd[sn_idx + 1] == "0"
+
 
 # ===========================================================================
 # (E) build_single_frame_command — scene/timestamps mode

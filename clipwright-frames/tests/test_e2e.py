@@ -280,6 +280,142 @@ class TestIntervalMode:
             f"Expected {frame_count} .jpg files on disk, found {len(jpg_files)}"
         )
 
+    def test_manifest_paths_exist_on_disk(
+        self, tmp_path: Path, require_ffmpeg: str
+    ) -> None:
+        """Regression: frames.json path entries must point to real files on disk.
+
+        Bug: interval mode uses fps filter which defaults to 1-based numbering
+        (frame_00001.jpg, frame_00002.jpg...), but frame_filename(index) generates
+        0-based names (frame_00000.jpg...). This causes path mismatch where the
+        first frame listed in frames.json does not exist and subsequent frames are
+        off by one.
+
+        Fix: build_fps_command must include -start_number 0 so ffmpeg writes
+        frame_00000.jpg, frame_00001.jpg... matching frame_filename output.
+        """
+        video_path = str(tmp_path / "video.mp4")
+        out_dir = tmp_path / "frames"
+        out_dir.mkdir()
+
+        _generate_solid_color_video(require_ffmpeg, video_path, duration=6.0, rate=10)
+
+        content, structured = asyncio.run(
+            mcp.call_tool(
+                "clipwright_extract_frames",
+                {
+                    "media": video_path,
+                    "output_dir": str(out_dir),
+                    "options": {
+                        "mode": "interval",
+                        "interval_sec": 2.0,
+                        "format": "jpeg",
+                    },
+                },
+            )
+        )
+
+        assert structured["ok"] is True, (
+            f"Expected ok=True but got: {structured.get('error')}"
+        )
+
+        # Locate frames.json among artifacts
+        artifacts = structured.get("artifacts", [])
+        manifest_path: str | None = None
+        for artifact in artifacts:
+            if artifact.get("role") == "manifest":
+                manifest_path = artifact.get("path")
+                break
+
+        assert manifest_path is not None, "No manifest artifact in response"
+        assert Path(manifest_path).exists(), f"frames.json not found: {manifest_path}"
+
+        with open(manifest_path, encoding="utf-8") as f:
+            manifest = json.load(f)
+
+        frames = manifest.get("frames", [])
+        assert len(frames) > 0, "frames.json contains no frame entries"
+
+        # Each path in frames.json must exist on disk.
+        # This is the core regression guard: a 1-based ffmpeg output would cause
+        # frame_00000.jpg (first entry) to be missing, and frame_00003.jpg to appear
+        # on disk without a corresponding manifest entry.
+        missing: list[str] = []
+        for frame_entry in frames:
+            p = frame_entry.get("path", "")
+            if not Path(p).exists():
+                missing.append(p)
+
+        assert not missing, (
+            f"{len(missing)} frame path(s) in frames.json do not exist on disk:\n"
+            + "\n".join(missing[:10])
+        )
+
+    def test_manifest_paths_match_disk_files_exactly(
+        self, tmp_path: Path, require_ffmpeg: str
+    ) -> None:
+        """frames.json path set must equal the set of .jpg files on disk exactly.
+
+        Verifies both directions:
+          - Every path in frames.json must exist on disk (no phantom entries).
+          - Every .jpg file on disk must appear in frames.json (no orphan files).
+
+        A 1-based ffmpeg output would produce frame_00001.jpg through frame_00003.jpg
+        on disk, but frames.json would list frame_00000.jpg through frame_00002.jpg,
+        causing the sets to differ in both directions.
+        """
+        video_path = str(tmp_path / "video.mp4")
+        out_dir = tmp_path / "frames"
+        out_dir.mkdir()
+
+        _generate_solid_color_video(require_ffmpeg, video_path, duration=6.0, rate=10)
+
+        content, structured = asyncio.run(
+            mcp.call_tool(
+                "clipwright_extract_frames",
+                {
+                    "media": video_path,
+                    "output_dir": str(out_dir),
+                    "options": {
+                        "mode": "interval",
+                        "interval_sec": 2.0,
+                        "format": "jpeg",
+                    },
+                },
+            )
+        )
+
+        assert structured["ok"] is True
+
+        artifacts = structured.get("artifacts", [])
+        manifest_path: str | None = None
+        for artifact in artifacts:
+            if artifact.get("role") == "manifest":
+                manifest_path = artifact.get("path")
+                break
+
+        assert manifest_path is not None, "No manifest artifact in response"
+
+        with open(manifest_path, encoding="utf-8") as f:
+            manifest = json.load(f)
+
+        # Paths listed in frames.json
+        manifest_paths = {Path(entry["path"]) for entry in manifest.get("frames", [])}
+
+        # Actual .jpg files written by ffmpeg
+        disk_paths = set(out_dir.glob("frame_?????.jpg"))
+
+        phantom = manifest_paths - disk_paths
+        orphan = disk_paths - manifest_paths
+
+        assert not phantom, (
+            "Paths in frames.json that do not exist on disk: "
+            + ", ".join(str(p) for p in sorted(phantom))
+        )
+        assert not orphan, "Files on disk not listed in frames.json: " + ", ".join(
+            str(p) for p in sorted(orphan)
+        )
+
 
 # ---------------------------------------------------------------------------
 # e2e: scene mode
