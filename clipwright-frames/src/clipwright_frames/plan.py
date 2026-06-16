@@ -75,8 +75,7 @@ def build_fps_command(
     JPEG output appends -q:v {quality}; PNG does not use -q:v.
     """
     interval_sec = options.interval_sec
-    # Format interval_sec: omit trailing .0 for integer values to keep the
-    # -vf string clean and match the regex in tests (fps=1/10 not fps=1/10.0).
+    # strip trailing .0 so the ffmpeg fps filter reads e.g. '1/10' not '1/10.0'
     if interval_sec == int(interval_sec):
         interval_str = str(int(interval_sec))
     else:
@@ -104,15 +103,15 @@ def build_single_frame_command(
     ts: float,
     out_path: str,
     options: ExtractFramesOptions,
-) -> list[str | float]:
+) -> list[str]:
     """Build ffmpeg command for scene/timestamps mode (single frame extraction).
 
-    -ss is placed before -i for fast input seeking. The timestamp value is stored
-    as a float so callers can compare it numerically without re-parsing a string.
+    -ss is placed before -i for fast input seeking. The timestamp is converted to
+    str so the caller can pass the list directly to subprocess without re-casting.
     max_width adds a scale-only -vf filter (no fps filter).
     JPEG output appends -q:v {quality}; PNG does not.
     """
-    cmd: list[str | float] = [ffmpeg, "-ss", ts, "-i", media, "-frames:v", "1"]
+    cmd: list[str] = [ffmpeg, "-ss", str(ts), "-i", media, "-frames:v", "1"]
 
     if options.max_width is not None:
         cmd += ["-vf", f"scale='min({options.max_width},iw)':-2"]
