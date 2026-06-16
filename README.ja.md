@@ -205,6 +205,73 @@ src/clipwright/
 
 ---
 
+## 利用可能なツール
+
+| パッケージ | MCP ツール | 説明 |
+|------------|-----------|------|
+| `clipwright`（コア） | `clipwright_inspect_media` | メディアファイルを probe し、コーデック / 尺 / ストリーム情報を返す |
+| `clipwright`（コア） | `clipwright_init_project` | 空の OTIO タイムラインでプロジェクトディレクトリを初期化する |
+| `clipwright`（コア） | `clipwright_read_timeline` | OTIO タイムラインファイルを読み込み、その構造を返す |
+| `clipwright`（コア） | `clipwright_write_timeline` | OTIO タイムラインをディスクへ書き戻す |
+| `clipwright-silence` | `clipwright_detect_silence` | FFmpeg `silencedetect` で無音区間を検出し OTIO マーカーを注記する |
+| `clipwright-loudness` | `clipwright_measure_loudness` | FFmpeg で EBU R128 ラウドネス（積分 LUFS / トゥルーピーク）を測定する |
+| `clipwright-noise` | `clipwright_reduce_noise` | FFmpeg `afftdn` のノイズ低減設定を OTIO タイムラインに注記する |
+| `clipwright-transcribe` | `clipwright_transcribe` | whisper-cli で音声をテキスト化し、単語単位の OTIO マーカーを書き込む |
+| `clipwright-bgm` | `clipwright_place_bgm` | BGM の配置注記（音量 / フェード / ダッキング）を OTIO タイムラインに書く |
+| `clipwright-render` | `clipwright_render` | OTIO の編集オペレーション（トリム / 連結 / フィルタ）を FFmpeg で出力メディアに実体化する |
+| `clipwright-wrap` | `clipwright_wrap_text` | 長いテキスト行に改行注記を付けて OTIO タイムラインで折り返す |
+| `clipwright-scene` | `clipwright_detect_scenes` | FFmpeg `scdet` または PySceneDetect でショット境界を検出し OTIO マーカーを書く |
+| `clipwright-frames` | `clipwright_extract_frames` | 指定時刻 / シーン境界 / 固定間隔で動画から静止画を抽出し、画像・OTIO マーカー・JSON マニフェストを出力する |
+
+---
+
+## MCP クライアントへの登録
+
+各 clipwright ツールは独立した MCP サーバー。MCP クライアントの設定（`.mcp.json` / `claude_desktop_config.json`）に登録する:
+
+```json
+{
+  "mcpServers": {
+    "clipwright": {
+      "command": "clipwright-mcp",
+      "env": {
+        "CLIPWRIGHT_FFMPEG": "/path/to/ffmpeg",
+        "CLIPWRIGHT_FFPROBE": "/path/to/ffprobe"
+      }
+    },
+    "clipwright-render": {
+      "command": "clipwright-render",
+      "env": {
+        "CLIPWRIGHT_FFMPEG": "/path/to/ffmpeg"
+      }
+    },
+    "clipwright-bgm": {
+      "command": "clipwright-bgm"
+    },
+    "clipwright-scene": {
+      "command": "clipwright-scene",
+      "env": {
+        "CLIPWRIGHT_FFMPEG": "/path/to/ffmpeg",
+        "CLIPWRIGHT_FFPROBE": "/path/to/ffprobe"
+      }
+    },
+    "clipwright-frames": {
+      "command": "clipwright-frames",
+      "env": {
+        "CLIPWRIGHT_FFMPEG": "/path/to/ffmpeg",
+        "CLIPWRIGHT_FFPROBE": "/path/to/ffprobe"
+      }
+    }
+  }
+}
+```
+
+> 注: `clipwright-frames` は `CLIPWRIGHT_FFMPEG`（フレーム抽出）と `CLIPWRIGHT_FFPROBE`（`inspect_media` 経由のビデオストリーム検出・尺取得）の両方を使うため、両変数を設定する必要がある。
+
+ffmpeg が `PATH` 上にない場合は `CLIPWRIGHT_FFMPEG` / `CLIPWRIGHT_FFPROBE` 環境変数を設定する。
+
+---
+
 ## ライセンス
 
 MIT — 詳細は [LICENSE](LICENSE) を参照。
