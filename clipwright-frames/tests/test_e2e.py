@@ -499,9 +499,9 @@ class TestTimestampsMode:
 
         warnings = structured.get("warnings") or []
         warning_text = " ".join(warnings).lower()
-        assert "skip" in warning_text or "out" in warning_text or "range" in warning_text, (
-            f"Expected out-of-range warning in warnings, got: {warnings}"
-        )
+        assert (
+            "skip" in warning_text or "out" in warning_text or "range" in warning_text
+        ), f"Expected out-of-range warning in warnings, got: {warnings}"
 
     def test_remaining_in_range_timestamps_extracted_after_out_of_range(
         self, tmp_path: Path, require_ffmpeg: str

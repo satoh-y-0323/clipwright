@@ -496,9 +496,7 @@ class TestBuildSingleFrameCommand:
         """SR L-3: every element of build_single_frame_command result must be str."""
         cmd = self._cmd(ts=1.5, max_width=480)
         non_str = [(i, type(v)) for i, v in enumerate(cmd) if not isinstance(v, str)]
-        assert not non_str, (
-            f"Non-str elements found (index, type): {non_str}"
-        )
+        assert not non_str, f"Non-str elements found (index, type): {non_str}"
 
 
 # ===========================================================================

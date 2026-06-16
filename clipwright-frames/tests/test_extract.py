@@ -688,9 +688,7 @@ class TestIntervalExceedsDuration:
         assert "10.0" not in warning_text, (
             "interval_sec value must not appear in warning"
         )
-        assert "5.0" not in warning_text, (
-            "duration value must not appear in warning"
-        )
+        assert "5.0" not in warning_text, "duration value must not appear in warning"
 
     def test_interval_exceeds_duration_produces_empty_artifacts(
         self, tmp_path: Path
@@ -827,8 +825,7 @@ class TestTimestampsOutOfRange:
         assert result.warnings is not None
         # SR M-2: fixed warning format with N=2
         expected_warning = (
-            "Skipped 2 out-of-range timestamp(s). "
-            "Values must be in [0, duration_sec)."
+            "Skipped 2 out-of-range timestamp(s). Values must be in [0, duration_sec)."
         )
         assert any(w == expected_warning for w in result.warnings), (
             f"Expected fixed warning not found. Got: {result.warnings}"
@@ -1410,9 +1407,7 @@ class TestBoundaryChecks:
       and fall back to asserting that a normal output_dir never triggers PATH_NOT_ALLOWED.
     """
 
-    def test_scene_timeline_outside_output_dir_succeeds(
-        self, tmp_path: Path
-    ) -> None:
+    def test_scene_timeline_outside_output_dir_succeeds(self, tmp_path: Path) -> None:
         """scene_timeline in a separate directory (outside output_dir) -> ok=True.
 
         SR M-1: read-only inputs are not required to be inside output_dir.
