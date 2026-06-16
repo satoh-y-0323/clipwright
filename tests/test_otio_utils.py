@@ -1615,3 +1615,89 @@ class TestGetMarkers:
         # Use RationalTime equality (no float approximation)
         assert result[0].marked_range.start_time == expected_start
         assert result[0].marked_range.duration == expected_duration
+
+    # ------------------------------------------------------------------
+    # GM-6 (補完): non-Mapping metadata["clipwright"] の型防衛
+    # _marker_matches_kind は Mapping でない値を kind フィルタ時に除外する
+    # ------------------------------------------------------------------
+
+    def test_non_mapping_clipwright_metadata_excluded_by_kind_filter(self) -> None:
+        """metadata['clipwright'] が Mapping でない場合、kind 指定時に除外される (GM-6).
+
+        _marker_matches_kind は isinstance(..., Mapping) で型防衛しており、
+        文字列・整数など非 Mapping 値が入ったマーカーは no-match として扱う。
+        """
+        import opentimelineio as otio
+
+        from clipwright.otio_utils import get_markers
+
+        tl = new_timeline("non_mapping_excluded")
+        track = tl.tracks[0]
+
+        # metadata["clipwright"] に非 Mapping 値（文字列）を設定したマーカー
+        m_str = otio.schema.Marker(
+            name="str_meta_marker",
+            marked_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0.0, 30.0),
+                duration=otio.opentime.RationalTime(1.0, 30.0),
+            ),
+        )
+        m_str.metadata["clipwright"] = "scene_boundary"  # non-Mapping
+        track.markers.append(m_str)
+
+        # metadata["clipwright"] に非 Mapping 値（整数）を設定したマーカー
+        m_int = otio.schema.Marker(
+            name="int_meta_marker",
+            marked_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(10.0, 30.0),
+                duration=otio.opentime.RationalTime(1.0, 30.0),
+            ),
+        )
+        m_int.metadata["clipwright"] = 42  # non-Mapping
+        track.markers.append(m_int)
+
+        # 正しい Mapping を持つマーカー（これだけが返るはず）
+        m_valid = otio.schema.Marker(
+            name="valid_marker",
+            marked_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(20.0, 30.0),
+                duration=otio.opentime.RationalTime(1.0, 30.0),
+            ),
+        )
+        m_valid.metadata["clipwright"] = {"kind": "scene_boundary"}
+        track.markers.append(m_valid)
+
+        result = get_markers(tl, kind="scene_boundary")
+        assert len(result) == 1, (
+            "non-Mapping metadata['clipwright'] を持つマーカーは kind フィルタで除外される"
+        )
+        assert result[0].name == "valid_marker"
+
+    def test_non_mapping_clipwright_metadata_included_when_kind_none(self) -> None:
+        """metadata['clipwright'] が Mapping でなくても kind=None では含まれる (GM-6).
+
+        kind=None はすべてのマーカーを返す。型防衛は kind 指定時のみ機能する。
+        """
+        import opentimelineio as otio
+
+        from clipwright.otio_utils import get_markers
+
+        tl = new_timeline("non_mapping_included")
+        track = tl.tracks[0]
+
+        # non-Mapping clipwright metadata
+        m_str = otio.schema.Marker(
+            name="non_mapping_m",
+            marked_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0.0, 30.0),
+                duration=otio.opentime.RationalTime(1.0, 30.0),
+            ),
+        )
+        m_str.metadata["clipwright"] = "some_string"  # non-Mapping
+        track.markers.append(m_str)
+
+        result = get_markers(tl, kind=None)
+        assert len(result) == 1, (
+            "kind=None では non-Mapping metadata のマーカーも返される"
+        )
+        assert result[0].name == "non_mapping_m"

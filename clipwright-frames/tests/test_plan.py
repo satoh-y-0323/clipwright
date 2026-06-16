@@ -55,9 +55,13 @@ Verification aspects:
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
 
 import opentimelineio as otio
 import pytest
+
+if TYPE_CHECKING:
+    from clipwright_frames.schemas import ExtractFramesOptions
 
 # All tests import from clipwright_frames.plan which does not exist yet.
 # The ImportError/ModuleNotFoundError is the expected Red failure.
@@ -81,7 +85,7 @@ OUT_PATH = "/tmp/frames/frame_00001.jpg"
 FPS = 30.0
 
 
-def _make_options(
+def _opts(
     mode: str = "interval",
     interval_sec: float = 10.0,
     format: str = "jpeg",
@@ -89,8 +93,8 @@ def _make_options(
     max_width: int | None = None,
     timestamps: list[float] | None = None,
     scene_timeline: str | None = None,
-) -> object:
-    """Create an ExtractFramesOptions-like object using the real schema.
+) -> ExtractFramesOptions:
+    """Create an ExtractFramesOptions instance using the real schema.
 
     Imports deferred so that the plan module import error is the first failure.
     """
@@ -105,7 +109,7 @@ def _make_options(
         "timestamps": timestamps if timestamps is not None else [],
         "scene_timeline": scene_timeline,
     }
-    return ExtractFramesOptions(**kwargs)  # type: ignore[arg-type]
+    return ExtractFramesOptions(**kwargs)
 
 
 def _make_marker(start_sec: float, rate: float = FPS) -> otio.schema.Marker:
@@ -293,14 +297,14 @@ class TestBuildFpsCommand:
         quality: int = 2,
         max_width: int | None = None,
     ) -> list[str]:
-        opts = _make_options(
+        opts = _opts(
             mode="interval",
             interval_sec=interval_sec,
             format=format,
             quality=quality,
             max_width=max_width,
         )
-        return build_fps_command(FFMPEG, MEDIA, OUT_PATTERN, opts)  # type: ignore[arg-type]
+        return build_fps_command(FFMPEG, MEDIA, OUT_PATTERN, opts)
 
     def test_d1_vf_contains_fps_filter(self) -> None:
         """-vf value must contain fps=1/{interval_sec} as a numeric expression."""
@@ -407,13 +411,13 @@ class TestBuildSingleFrameCommand:
         quality: int = 2,
         max_width: int | None = None,
     ) -> list[str]:
-        opts = _make_options(
+        opts = _opts(
             mode="scene",
             format=format,
             quality=quality,
             max_width=max_width,
         )
-        return build_single_frame_command(FFMPEG, MEDIA, ts, OUT_PATH, opts)  # type: ignore[arg-type]
+        return build_single_frame_command(FFMPEG, MEDIA, ts, OUT_PATH, opts)
 
     def test_e1_ss_appears_before_i(self) -> None:
         """-ss {ts} must appear before -i in the command (input seeking)."""
@@ -423,7 +427,10 @@ class TestBuildSingleFrameCommand:
         ss_idx = cmd.index("-ss")
         i_idx = cmd.index("-i")
         assert ss_idx < i_idx, "-ss must come before -i for input seeking"
-        assert cmd[ss_idx + 1] == pytest.approx(float(cmd[ss_idx + 1]))
+        # SR L-3: -ss value must be a str, not a float
+        assert isinstance(cmd[ss_idx + 1], str), (
+            f"-ss value must be str, got {type(cmd[ss_idx + 1])!r}"
+        )
 
     def test_e2_frames_v_1_present(self) -> None:
         """-frames:v 1 must be in the command to extract a single frame."""
@@ -471,12 +478,14 @@ class TestBuildSingleFrameCommand:
         assert cmd[0] == FFMPEG
 
     def test_e9_ss_value_matches_ts(self) -> None:
-        """-ss value must correspond to the provided timestamp."""
+        """-ss value must correspond to the provided timestamp as a str (SR L-3)."""
         ts = 7.5
         cmd = self._cmd(ts=ts)
         ss_idx = cmd.index("-ss")
-        # The value after -ss must be parseable as float and equal ts
-        assert float(cmd[ss_idx + 1]) == pytest.approx(ts)
+        # SR L-3: ts is stored as str(ts) — element must be a str equal to str(ts)
+        assert cmd[ss_idx + 1] == str(ts), (
+            f"-ss value expected {str(ts)!r}, got {cmd[ss_idx + 1]!r}"
+        )
 
     def test_e10_vf_scale_locked_by_regex(self) -> None:
         """-vf value with max_width must match 'scale=...' pattern precisely."""
@@ -486,6 +495,14 @@ class TestBuildSingleFrameCommand:
         pattern = re.compile(r"^scale='min\(\d+,iw\)':-2$")
         assert pattern.fullmatch(vf_val), (
             f"-vf value {vf_val!r} does not match expected scale pattern"
+        )
+
+    def test_e11_all_elements_are_str(self) -> None:
+        """SR L-3: every element of build_single_frame_command result must be str."""
+        cmd = self._cmd(ts=1.5, max_width=480)
+        non_str = [(i, type(v)) for i, v in enumerate(cmd) if not isinstance(v, str)]
+        assert not non_str, (
+            f"Non-str elements found (index, type): {non_str}"
         )
 
 

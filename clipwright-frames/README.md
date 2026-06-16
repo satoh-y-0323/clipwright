@@ -143,6 +143,7 @@ FFmpeg must be available on `PATH` or specified via the `CLIPWRIGHT_FFMPEG` envi
 
 ```bash
 export CLIPWRIGHT_FFMPEG=/path/to/ffmpeg
+export CLIPWRIGHT_FFPROBE=/path/to/ffprobe
 ```
 
 On Windows with winget:
@@ -153,6 +154,8 @@ winget install Gyan.FFmpeg
 
 FFmpeg is used to seek to timestamps and extract frames. It is invoked as a subprocess
 and is never linked as a library.
+
+> Note: `clipwright-frames` also requires ffprobe (via `inspect_media`) for video-stream detection and duration probing, so `CLIPWRIGHT_FFPROBE` must be configured as well.
 
 ## License
 

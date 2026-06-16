@@ -269,6 +269,8 @@ Each clipwright tool is a standalone MCP server. Register them in your MCP clien
 }
 ```
 
+> Note: `clipwright-frames` lists both `CLIPWRIGHT_FFMPEG` (frame extraction) and `CLIPWRIGHT_FFPROBE` (video-stream detection and duration probing via `inspect_media`), so both variables must be configured.
+
 Set `CLIPWRIGHT_FFMPEG` and `CLIPWRIGHT_FFPROBE` environment variables if ffmpeg is not in `PATH`.
 
 ---

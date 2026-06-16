@@ -1,11 +1,4 @@
-"""test_schemas.py — Red tests for ExtractFramesOptions.
-
-Encodes the ExtractFramesOptions specification from architecture §7 / requirements §3-2
-as executable test observations. All tests are expected to fail with ImportError
-until clipwright_frames/schemas.py is implemented.
-
-Coverage target: 100% of schemas.py (contract surface).
-"""
+"""Tests for ExtractFramesOptions schema validation."""
 
 from __future__ import annotations
 

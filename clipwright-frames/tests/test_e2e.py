@@ -67,6 +67,8 @@ def _generate_solid_color_video(
         f"color=c={color}:duration={duration}:size={size}:rate={rate}",
         output_path,
     ]
+    # Intentional exception to the process.run convention: test fixture video
+    # generation runs ffmpeg directly (see conftest module docstring).
     result = subprocess.run(
         cmd,
         shell=False,
@@ -79,7 +81,7 @@ def _generate_solid_color_video(
     if result.returncode != 0:
         raise RuntimeError(
             f"ffmpeg failed to generate test video (exit {result.returncode}):\n"
-            f"{result.stderr[:300]}"
+            f"{result.stderr[:200]}"
         )
 
 
@@ -105,6 +107,8 @@ def _generate_black_white_video(ffmpeg: str, output_path: str) -> None:
         "[0:v][1:v]concat=n=2:v=1:a=0",
         output_path,
     ]
+    # Intentional exception to the process.run convention: test fixture video
+    # generation runs ffmpeg directly (see conftest module docstring).
     result = subprocess.run(
         cmd,
         shell=False,
@@ -117,7 +121,7 @@ def _generate_black_white_video(ffmpeg: str, output_path: str) -> None:
     if result.returncode != 0:
         raise RuntimeError(
             f"ffmpeg failed to generate test video (exit {result.returncode}):\n"
-            f"{result.stderr[:300]}"
+            f"{result.stderr[:200]}"
         )
 
 

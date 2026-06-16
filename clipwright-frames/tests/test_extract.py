@@ -21,15 +21,19 @@ Verification aspects:
   (4)  Scene mode: scene_timeline unspecified or non-existent -> INVALID_INPUT
   (5)  Scene mode: load_timeline raises OTIO_ERROR -> OTIO_ERROR propagated
   (6)  Scene mode: scene_timeline extension not .otio -> INVALID_INPUT
+       - error message is fixed: "scene_timeline must have a .otio extension."
+       - .suffix value (e.g. "'.json'") must NOT appear in the message
   (7)  Success paths (interval/scene/timestamps) — run mocked, image files created
        artificially -> artifacts contains frames.otio (role=timeline, format=otio)
        and frames.json (role=manifest, format=json), data.frame_count is correct
-  (8)  interval > duration -> ok=True, warnings contain "interval_sec exceeds"
-       phrase, empty frames.otio and frames.json produced
+  (8)  interval > duration -> ok=True, warning is fixed:
+       "interval_sec exceeds media duration. No frames extracted. Use a smaller
+       interval_sec value." — concrete interval/duration values must NOT appear
   (9)  Scene mode: 0 markers found -> ok=True, warnings contain "No scene_boundary
        markers found", empty output
-  (10) timestamps mode: out-of-range timestamps -> warnings contain "skipped",
-       in-range timestamps extracted
+  (10) timestamps mode: out-of-range timestamps -> warning is fixed:
+       "Skipped {N} out-of-range timestamp(s). Values must be in [0, duration_sec)."
+       — raw timestamp values (e.g. "999.0s") must NOT appear in the warning
   (11) subprocess failure -> safe_subprocess_message used, no absolute path exposed
   (12) frames.json schema: {"count", "mode", "format", "frames":[{"index",
        "timestamp_sec", "path"}]} where path is absolute path inside output_dir
@@ -38,8 +42,10 @@ Verification aspects:
   (14) artifacts format: {"role", "path", "format"} —
        frames.otio -> role="timeline"/format="otio",
        frames.json -> role="manifest"/format="json"
-  (15) build_single_frame_command returns list[str|float]; extract passes str()
-       of each element to run — captured run args are all str
+  (15) build_single_frame_command now returns list[str] directly; run() must receive
+       a list[str] with no float elements (no str() conversion needed in extract.py)
+  (SR M-1) Boundary check: scene_timeline may be outside output_dir (ok=True);
+       output artifacts that resolve outside output_dir boundary -> PATH_NOT_ALLOWED
 """
 
 from __future__ import annotations
@@ -111,30 +117,6 @@ def _opts(
         quality=quality,
         max_width=max_width,
     )
-
-
-def _make_fake_run(output_dir: Path, timestamps: list[float], fmt: str = "jpeg") -> Any:
-    """Return a side_effect for run() that also creates fake image files.
-
-    The fake run creates image files in output_dir so that the orchestration
-    can find them during manifest assembly.
-    """
-    created: list[Path] = []
-
-    def _impl(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
-        # Create a fake output file for each unique output path found in cmd.
-        # build_single_frame_command puts the out_path as the last element.
-        # build_fps_command puts the pattern as the last element (skip for interval).
-        if cmd:
-            last = cmd[-1]
-            last_path = Path(last)
-            if last_path.suffix in {".jpg", ".png", ".jpeg"}:
-                last_path.parent.mkdir(parents=True, exist_ok=True)
-                last_path.write_bytes(b"FAKE_IMAGE")
-                created.append(last_path)
-        return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
-
-    return _impl
 
 
 def _make_scene_timeline_with_markers(
@@ -332,7 +314,11 @@ class TestSceneTimelineValidation:
     def test_scene_mode_with_non_otio_extension_returns_invalid_input(
         self, tmp_path: Path
     ) -> None:
-        """mode='scene' with scene_timeline having extension other than .otio -> INVALID_INPUT."""
+        """mode='scene' with scene_timeline having extension other than .otio -> INVALID_INPUT.
+
+        SR L-1: error message must be exactly "scene_timeline must have a .otio extension."
+        The .suffix value (e.g. "'.json'") must NOT appear in the message.
+        """
         from clipwright_frames.extract import extract_frames
 
         media = str(tmp_path / "video.mp4")
@@ -351,6 +337,10 @@ class TestSceneTimelineValidation:
         assert result.ok is False
         assert result.error is not None
         assert result.error.code == ErrorCode.INVALID_INPUT
+        # SR L-1: fixed message; no .suffix value in message
+        assert result.error.message == "scene_timeline must have a .otio extension."
+        assert "'.json'" not in result.error.message
+        assert ".json" not in result.error.message
 
 
 # ===========================================================================
@@ -399,21 +389,27 @@ class TestSceneModeOtioError:
 
 
 class TestSuccessPathInterval:
-    """Normal success case for interval mode."""
+    """Normal success case for interval mode.
+
+    CR M-1: frame_count is based on compute_interval_timestamps count, NOT glob.
+    _fake_run does NOT create files; the orchestration no longer depends on
+    out_dir.glob() — it uses compute_interval_timestamps to determine the count.
+    """
 
     def test_interval_mode_returns_ok_with_two_artifacts(self, tmp_path: Path) -> None:
-        """Interval mode success -> ok=True, 2 artifacts (frames.otio + frames.json)."""
+        """Interval mode success -> ok=True, 2 artifacts (frames.otio + frames.json).
+
+        CR M-1: run is a no-op; no pre-created files needed.
+        duration=10.0, interval_sec=5.0 -> compute_interval_timestamps -> [0.0, 5.0] (2 frames).
+        """
         from clipwright_frames.extract import extract_frames
 
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
         media_info = _make_media_info(path=media, duration_sec=10.0)
 
-        # Pre-create fake frame files that the orchestration will discover
         out_dir = tmp_path / "frames_out"
         out_dir.mkdir()
-        (out_dir / "frame_00000.jpg").write_bytes(b"FAKE")
-        (out_dir / "frame_00001.jpg").write_bytes(b"FAKE")
 
         def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
@@ -440,7 +436,6 @@ class TestSuccessPathInterval:
 
         out_dir = tmp_path / "frames_out"
         out_dir.mkdir()
-        (out_dir / "frame_00000.jpg").write_bytes(b"FAKE")
 
         def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
@@ -468,7 +463,11 @@ class TestSuccessPathInterval:
         assert "json" in formats
 
     def test_interval_mode_data_has_frame_count(self, tmp_path: Path) -> None:
-        """result.data must have a 'frame_count' key with the number of extracted frames."""
+        """result.data must have 'frame_count' equal to compute_interval_timestamps count.
+
+        CR M-1: duration=10.0, interval_sec=5.0 -> timestamps=[0.0, 5.0] -> frame_count=2.
+        No pre-created glob files needed; count comes from timestamp computation.
+        """
         from clipwright_frames.extract import extract_frames
 
         media = str(tmp_path / "video.mp4")
@@ -477,8 +476,6 @@ class TestSuccessPathInterval:
 
         out_dir = tmp_path / "frames_out"
         out_dir.mkdir()
-        (out_dir / "frame_00000.jpg").write_bytes(b"FAKE")
-        (out_dir / "frame_00001.jpg").write_bytes(b"FAKE")
 
         def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
@@ -492,6 +489,8 @@ class TestSuccessPathInterval:
         assert result.ok is True
         assert result.data is not None
         assert "frame_count" in result.data
+        # CR M-1: 10.0 / 5.0 = 2 timestamps (0.0, 5.0)
+        assert result.data["frame_count"] == 2
 
 
 class TestSuccessPathScene:
@@ -645,17 +644,22 @@ class TestSuccessPathTimestamps:
 
 
 # ===========================================================================
-# (8) interval > duration -> ok=True + warning + empty output
+# (8) interval > duration -> ok=True + fixed warning + empty output
 # ===========================================================================
 
 
 class TestIntervalExceedsDuration:
-    """interval_sec exceeding media duration: ok=True with warning, empty output."""
+    """interval_sec exceeding media duration: ok=True with fixed warning, empty output.
 
-    def test_interval_exceeds_duration_returns_ok_with_warning(
+    SR M-3: warning must be exactly:
+    "interval_sec exceeds media duration. No frames extracted. Use a smaller interval_sec value."
+    Concrete numeric values (interval_sec/duration) must NOT appear.
+    """
+
+    def test_interval_exceeds_duration_returns_ok_with_fixed_warning(
         self, tmp_path: Path
     ) -> None:
-        """interval_sec > duration_sec -> ok=True, warnings contains 'interval_sec'."""
+        """interval_sec > duration_sec -> ok=True, warning matches fixed string (SR M-3)."""
         from clipwright_frames.extract import extract_frames
 
         media = str(tmp_path / "video.mp4")
@@ -672,9 +676,20 @@ class TestIntervalExceedsDuration:
 
         assert result.ok is True
         assert result.warnings is not None
-        assert any(
-            "interval_sec" in w.lower() or "interval" in w.lower()
-            for w in result.warnings
+        expected_warning = (
+            "interval_sec exceeds media duration. No frames extracted. "
+            "Use a smaller interval_sec value."
+        )
+        assert any(w == expected_warning for w in result.warnings), (
+            f"Expected fixed warning not found. Got: {result.warnings}"
+        )
+        # SR M-3: concrete numbers must NOT appear
+        warning_text = " ".join(result.warnings)
+        assert "10.0" not in warning_text, (
+            "interval_sec value must not appear in warning"
+        )
+        assert "5.0" not in warning_text, (
+            "duration value must not appear in warning"
         )
 
     def test_interval_exceeds_duration_produces_empty_artifacts(
@@ -764,15 +779,22 @@ class TestSceneModeZeroMarkers:
 
 
 # ===========================================================================
-# (10) timestamps mode: out-of-range timestamps produce warnings
+# (10) timestamps mode: out-of-range timestamps produce fixed warning
 # ===========================================================================
 
 
 class TestTimestampsOutOfRange:
-    """Out-of-range timestamps produce warnings; in-range timestamps are extracted."""
+    """Out-of-range timestamps produce fixed warning; in-range timestamps are extracted.
 
-    def test_out_of_range_timestamps_produce_warnings(self, tmp_path: Path) -> None:
-        """Timestamps outside [0, duration) produce warnings and are skipped."""
+    SR M-2: warning must be exactly:
+    "Skipped {N} out-of-range timestamp(s). Values must be in [0, duration_sec)."
+    Raw timestamp values (e.g. "999.0s", "-1.0s") must NOT appear in the warning.
+    """
+
+    def test_out_of_range_timestamps_produce_fixed_warning(
+        self, tmp_path: Path
+    ) -> None:
+        """Timestamps outside [0, duration) produce fixed warning (SR M-2)."""
         from clipwright_frames.extract import extract_frames
 
         media = str(tmp_path / "video.mp4")
@@ -797,15 +819,27 @@ class TestTimestampsOutOfRange:
             result = extract_frames(
                 media,
                 str(out_dir),
-                # 2.0 is valid; 15.0 and -1.0 are out of range
+                # 2.0 is valid; 15.0 and -1.0 are out of range -> N=2
                 _opts(mode="timestamps", timestamps=[2.0, 15.0, -1.0]),
             )
 
         assert result.ok is True
         assert result.warnings is not None
-        warning_text = " ".join(result.warnings).lower()
-        assert (
-            "skip" in warning_text or "exceed" in warning_text or "out" in warning_text
+        # SR M-2: fixed warning format with N=2
+        expected_warning = (
+            "Skipped 2 out-of-range timestamp(s). "
+            "Values must be in [0, duration_sec)."
+        )
+        assert any(w == expected_warning for w in result.warnings), (
+            f"Expected fixed warning not found. Got: {result.warnings}"
+        )
+        # SR M-2: raw timestamp values must NOT appear
+        warning_text = " ".join(result.warnings)
+        assert "15.0" not in warning_text, (
+            "Raw timestamp value 15.0 must not appear in warning"
+        )
+        assert "-1.0" not in warning_text, (
+            "Raw timestamp value -1.0 must not appear in warning"
         )
 
     def test_only_in_range_timestamps_are_extracted(self, tmp_path: Path) -> None:
@@ -855,7 +889,10 @@ class TestSubprocessFailure:
     """subprocess failure must use safe_subprocess_message; no absolute paths exposed."""
 
     def test_subprocess_failure_returns_error_result(self, tmp_path: Path) -> None:
-        """run() raising SUBPROCESS_FAILED -> ok=False."""
+        """run() raising SUBPROCESS_FAILED -> ok=False / SUBPROCESS_FAILED.
+
+        CR L-4: only ErrorCode.SUBPROCESS_FAILED is allowed; INTERNAL is excluded.
+        """
         from clipwright_frames.extract import extract_frames
 
         media = str(tmp_path / "video.mp4")
@@ -864,7 +901,6 @@ class TestSubprocessFailure:
 
         out_dir = tmp_path / "frames_out"
         out_dir.mkdir()
-        (out_dir / "frame_00000.jpg").write_bytes(b"FAKE")
 
         def _fail(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             raise ClipwrightError(
@@ -881,10 +917,8 @@ class TestSubprocessFailure:
 
         assert result.ok is False
         assert result.error is not None
-        assert result.error.code in (
-            ErrorCode.SUBPROCESS_FAILED,
-            ErrorCode.INTERNAL,
-        )
+        # CR L-4: SUBPROCESS_FAILED only; INTERNAL must NOT be accepted
+        assert result.error.code == ErrorCode.SUBPROCESS_FAILED
 
     def test_subprocess_error_does_not_expose_absolute_path(
         self, tmp_path: Path
@@ -899,7 +933,6 @@ class TestSubprocessFailure:
 
         out_dir = tmp_path / "frames_out"
         out_dir.mkdir()
-        (out_dir / "frame_00000.jpg").write_bytes(b"FAKE")
 
         def _fail(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             raise ClipwrightError(
@@ -928,7 +961,12 @@ class TestFramesJsonSchema:
     """frames.json must have the correct schema."""
 
     def test_frames_json_has_required_top_level_keys(self, tmp_path: Path) -> None:
-        """frames.json must contain count, mode, format, frames keys."""
+        """frames.json must contain count, mode, format, frames keys.
+
+        CR M-1: interval mode uses compute_interval_timestamps; no pre-created files.
+        duration=10.0, interval_sec=5.0 -> 2 timestamps -> manifest has 2 entries.
+        But since run() is a no-op (no actual files written), we only verify schema keys.
+        """
         from clipwright_frames.extract import extract_frames
 
         media = str(tmp_path / "video.mp4")
@@ -937,7 +975,6 @@ class TestFramesJsonSchema:
 
         out_dir = tmp_path / "frames_out"
         out_dir.mkdir()
-        (out_dir / "frame_00000.jpg").write_bytes(b"FAKE")
 
         def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
@@ -1073,7 +1110,7 @@ class TestFramesJsonSchema:
             frame_path = Path(frame["path"])
             assert frame_path.is_absolute(), f"path must be absolute: {frame_path}"
             # path must be inside output_dir
-            assert str(frame_path).startswith(str(out_dir)), (
+            assert str(frame_path).startswith(str(out_dir.resolve())), (
                 f"path {frame_path} is not under output_dir {out_dir}"
             )
 
@@ -1203,7 +1240,10 @@ class TestArtifactFormat:
     """Artifacts must follow the scene convention: {role, path, format}."""
 
     def test_frames_otio_artifact_format(self, tmp_path: Path) -> None:
-        """frames.otio artifact must have role='timeline' and format='otio'."""
+        """frames.otio artifact must have role='timeline' and format='otio'.
+
+        CR M-1: no pre-created files; run() is a no-op.
+        """
         from clipwright_frames.extract import extract_frames
 
         media = str(tmp_path / "video.mp4")
@@ -1212,7 +1252,6 @@ class TestArtifactFormat:
 
         out_dir = tmp_path / "frames_out"
         out_dir.mkdir()
-        (out_dir / "frame_00000.jpg").write_bytes(b"FAKE")
 
         def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
@@ -1251,7 +1290,10 @@ class TestArtifactFormat:
         assert str(path_val).endswith(".otio")
 
     def test_frames_json_artifact_format(self, tmp_path: Path) -> None:
-        """frames.json artifact must have role='manifest' and format='json'."""
+        """frames.json artifact must have role='manifest' and format='json'.
+
+        CR M-1: no pre-created files; run() is a no-op.
+        """
         from clipwright_frames.extract import extract_frames
 
         media = str(tmp_path / "video.mp4")
@@ -1260,7 +1302,6 @@ class TestArtifactFormat:
 
         out_dir = tmp_path / "frames_out"
         out_dir.mkdir()
-        (out_dir / "frame_00000.jpg").write_bytes(b"FAKE")
 
         def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
             return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
@@ -1300,15 +1341,21 @@ class TestArtifactFormat:
 
 
 # ===========================================================================
-# (15) build_single_frame_command returns list[str|float]; extract str()-ifies args
+# (15) build_single_frame_command returns list[str]; run() receives all-str args
 # ===========================================================================
 
 
 class TestRunArgsAreAllStrings:
-    """extract must convert all list[str|float] command elements to str before run()."""
+    """run() must receive list[str] with no float elements.
+
+    SR L-3: build_single_frame_command now returns list[str] directly.
+    The [str(x) for x in raw_cmd] conversion in extract.py is no longer needed.
+    We verify that run() is still called with all-str args (the contract is the same,
+    but now build_single_frame_command is the source of truth for str types).
+    """
 
     def test_run_called_with_all_string_args(self, tmp_path: Path) -> None:
-        """run() must receive a list[str] with no float elements (str() applied to ts)."""
+        """run() must receive a list[str] with no float elements."""
         from clipwright_frames.extract import extract_frames
 
         media = str(tmp_path / "video.mp4")
@@ -1346,3 +1393,163 @@ class TestRunArgsAreAllStrings:
                 assert isinstance(arg, str), (
                     f"run() received non-str argument: {arg!r} (type={type(arg).__name__})"
                 )
+
+
+# ===========================================================================
+# (SR M-1) Boundary checks: output_dir / scene_timeline path validation
+# ===========================================================================
+
+
+class TestBoundaryChecks:
+    """SR M-1: boundary validation for output artifacts and scene_timeline.
+
+    - scene_timeline may be located OUTSIDE output_dir; mode='scene' must still succeed.
+    - Artifacts written outside out_dir.resolve() boundary -> PATH_NOT_ALLOWED.
+      On Windows, real symlink creation requires elevation; we verify the
+      boundary-check function directly when symlink is not available,
+      and fall back to asserting that a normal output_dir never triggers PATH_NOT_ALLOWED.
+    """
+
+    def test_scene_timeline_outside_output_dir_succeeds(
+        self, tmp_path: Path
+    ) -> None:
+        """scene_timeline in a separate directory (outside output_dir) -> ok=True.
+
+        SR M-1: read-only inputs are not required to be inside output_dir.
+        Only the output artifacts must be within the boundary.
+        """
+        from clipwright_frames.extract import extract_frames
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        # scene_timeline lives in a sibling directory, NOT inside out_dir
+        scene_dir = tmp_path / "scene_sources"
+        scene_dir.mkdir()
+        out_dir = tmp_path / "frames_out"
+        out_dir.mkdir()
+
+        scene_otio = _make_scene_timeline_with_markers(scene_dir, [2.0, 5.0])
+        # Confirm scene_timeline is outside out_dir
+        assert not str(scene_otio).startswith(str(out_dir))
+
+        captured_cmds: list[list[str]] = []
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            captured_cmds.append(cmd)
+            if cmd:
+                out = Path(cmd[-1])
+                if out.suffix in {".jpg", ".png", ".jpeg"}:
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    out.write_bytes(b"FAKE_IMAGE")
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with (
+            patch("clipwright_frames.extract.inspect_media", return_value=media_info),
+            patch("clipwright_frames.extract.run", side_effect=_fake_run),
+        ):
+            result = extract_frames(
+                media,
+                str(out_dir),
+                _opts(mode="scene", scene_timeline=scene_otio),
+            )
+
+        assert result.ok is True
+        assert result.error is None
+
+    def test_normal_output_dir_does_not_trigger_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """A normal, well-behaved output_dir must never produce PATH_NOT_ALLOWED.
+
+        Regression guard: ensures the boundary check itself does not break
+        the happy path when output artifacts resolve within out_dir.
+        """
+        from clipwright_frames.extract import extract_frames
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        out_dir = tmp_path / "frames_out"
+        out_dir.mkdir()
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            if cmd:
+                out = Path(cmd[-1])
+                if out.suffix in {".jpg", ".png", ".jpeg"}:
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    out.write_bytes(b"FAKE_IMAGE")
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with (
+            patch("clipwright_frames.extract.inspect_media", return_value=media_info),
+            patch("clipwright_frames.extract.run", side_effect=_fake_run),
+        ):
+            result = extract_frames(
+                media,
+                str(out_dir),
+                _opts(mode="timestamps", timestamps=[2.0, 5.0]),
+            )
+
+        assert result.ok is True
+        # Must not produce PATH_NOT_ALLOWED for a normal output_dir
+        if result.error is not None:
+            assert result.error.code != ErrorCode.PATH_NOT_ALLOWED
+
+    def test_boundary_outside_path_returns_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """Artifacts resolving outside out_dir boundary -> PATH_NOT_ALLOWED.
+
+        SR M-1: We mock _check_within_boundary to raise PATH_NOT_ALLOWED when
+        the resolved artifact path is outside out_dir.resolve().
+        This verifies that extract.py calls the boundary check and propagates
+        the error correctly without exposing raw paths.
+
+        On Windows, creating real symlinks that escape boundaries requires
+        elevation (UAC), so we use a direct mock of the boundary-check function.
+        """
+        from clipwright_frames.extract import extract_frames
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        out_dir = tmp_path / "frames_out"
+        out_dir.mkdir()
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            if cmd:
+                out = Path(cmd[-1])
+                if out.suffix in {".jpg", ".png", ".jpeg"}:
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    out.write_bytes(b"FAKE_IMAGE")
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        # Patch the boundary-check function to simulate an escape
+        def _boundary_escape(path: Path, base: Path) -> None:
+            raise ClipwrightError(
+                code=ErrorCode.PATH_NOT_ALLOWED,
+                message="Output path is outside the allowed boundary.",
+                hint="Ensure the output_dir does not contain symlinks that escape the directory.",
+            )
+
+        with (
+            patch("clipwright_frames.extract.inspect_media", return_value=media_info),
+            patch("clipwright_frames.extract.run", side_effect=_fake_run),
+            patch(
+                "clipwright_frames.extract._check_within_boundary",
+                side_effect=_boundary_escape,
+            ),
+        ):
+            result = extract_frames(
+                media,
+                str(out_dir),
+                _opts(mode="timestamps", timestamps=[2.0]),
+            )
+
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.PATH_NOT_ALLOWED
