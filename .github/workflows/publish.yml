@@ -34,9 +34,10 @@ jobs:
           - clipwright-loudness
           - clipwright-noise
           - clipwright-render
-          - clipwright-silence
-          - clipwright-transcribe
           - clipwright-scene
+          - clipwright-silence
+          - clipwright-speed
+          - clipwright-transcribe
           - clipwright-wrap
     environment:
       name: pypi

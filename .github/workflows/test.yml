@@ -76,8 +76,9 @@ jobs:
             "clipwright-bgm"
             "clipwright-frames"
             "clipwright-render"
-            "clipwright-wrap"
             "clipwright-scene"
+            "clipwright-speed"
+            "clipwright-wrap"
           )
           for pkg in "${PACKAGES[@]}"; do
             echo "======================================================="

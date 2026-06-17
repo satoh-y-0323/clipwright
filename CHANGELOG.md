@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`clipwright-speed` package (v0.1.0)**: New MCP tool `clipwright_set_speed` that annotates a
+  clip with a speed multiplier by writing an OTIO `LinearTimeWarp` effect. The annotation is
+  non-destructive; the actual `setpts`/`atempo` filter pass is materialized in a single render
+  pass by `clipwright-render`.
+- **`clipwright-render` LinearTimeWarp support (v0.3.0)**: `clipwright_render` now realizes
+  `LinearTimeWarp` effects written by `clipwright_set_speed`. Video timing is adjusted via the
+  `setpts` filter and audio pitch-corrected via `atempo`, both applied in a single FFmpeg pass.
+
 ## [0.4.0] - 2026-06-17
 
 ### Added

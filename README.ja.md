@@ -218,7 +218,8 @@ src/clipwright/
 | `clipwright-noise` | `clipwright_reduce_noise` | FFmpeg `afftdn` のノイズ低減設定を OTIO タイムラインに注記する |
 | `clipwright-transcribe` | `clipwright_transcribe` | whisper-cli で音声をテキスト化し、単語単位の OTIO マーカーを書き込む |
 | `clipwright-bgm` | `clipwright_place_bgm` | BGM の配置注記（音量 / フェード / ダッキング）を OTIO タイムラインに書く |
-| `clipwright-render` | `clipwright_render` | OTIO の編集オペレーション（トリム / 連結 / フィルタ）を FFmpeg で出力メディアに実体化する |
+| `clipwright-render` | `clipwright_render` | OTIO の編集オペレーション（トリム / 連結 / フィルタ / LinearTimeWarp 速度変換）を FFmpeg で出力メディアに実体化する |
+| `clipwright-speed` | `clipwright_set_speed` | OTIO の `LinearTimeWarp` でクリップに速度倍率を注記する。実体化は `clipwright-render` が行う |
 | `clipwright-wrap` | `clipwright_wrap_text` | 長いテキスト行に改行注記を付けて OTIO タイムラインで折り返す |
 | `clipwright-scene` | `clipwright_detect_scenes` | FFmpeg `scdet` または PySceneDetect でショット境界を検出し OTIO マーカーを書く |
 | `clipwright-frames` | `clipwright_extract_frames` | 指定時刻 / シーン境界 / 固定間隔で動画から静止画を抽出し、画像・OTIO マーカー・JSON マニフェストを出力する |
@@ -261,6 +262,9 @@ src/clipwright/
         "CLIPWRIGHT_FFMPEG": "/path/to/ffmpeg",
         "CLIPWRIGHT_FFPROBE": "/path/to/ffprobe"
       }
+    },
+    "clipwright-speed": {
+      "command": "clipwright-speed"
     }
   }
 }
