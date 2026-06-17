@@ -1,12 +1,8 @@
-"""Tests for clipwright-text add_text() core logic — TDD Red phase.
+"""Tests for clipwright-text add_text() core logic.
 
 All tests in this module verify the contract of add_text() as defined in:
   - architecture-report-20260617-230606.md §3.4 / §3.5
   - requirements-report-20260617-230230.md AC-1-2 ~ AC-1-9
-
-These tests are written before the implementation exists (Red phase).
-They are expected to fail with ImportError / NotImplementedError until
-the developer implements clipwright_text.text.add_text().
 
 Covered contracts:
   - AC-1-2  Value range violations -> INVALID_INPUT + hint (parametrize)
@@ -786,3 +782,99 @@ class TestNoVideoTrack:
                 f"got {error.get('code')!r}"
             )
             assert error.get("hint")
+
+
+# ===========================================================================
+# S-L-2: font_path validation — _validate_text_overlay_fields level
+#
+# font_path must be rejected when it contains:
+#   - single-quote character (')  — would corrupt filtergraph quoting
+#   - newline (LF \n, CR \r)      — control characters
+#   - NUL byte (\x00) / DEL (\x7f) — control characters
+# A normal absolute path (e.g. "C:/Windows/Fonts/arial.ttf") must be accepted.
+#
+# These tests are RED until _validate_text_overlay_fields adds font_path checks.
+#
+# Parity with render side: _marker_to_text_overlay must also validate font_path
+# with the same rules (see test-render-fixes for the render-side Red tests).
+#
+# L-2 note: _is_duplicate_overlay currently defines _eps = 1e-6 as a local
+# variable. The implementation should promote this to a module-level constant
+# _IDEMPOTENCY_EPS: float = 1e-6 for consistency (no new Red test needed —
+# the existing idempotent no-op tests remain green and serve as regression guard).
+#
+# L-5 note: text.py has _COLOR_PATTERN while clipwright-render/plan.py has
+# _COLOR_ALLOWLIST_RE. The cross-reference comment in plan.py should name
+# the correct variable (_COLOR_PATTERN). No new test needed — this is a
+# comment-only correction.
+# ===========================================================================
+
+
+class TestFontPathValidation:
+    """font_path containing dangerous characters must return INVALID_INPUT (S-L-2).
+
+    _validate_text_overlay_fields must reject font_path values that contain
+    single-quotes, newlines, or control characters to prevent OTIO injection
+    and future filtergraph corruption.
+    """
+
+    @pytest.mark.parametrize(
+        "bad_font_path,description",
+        [
+            # Single-quote: would break filtergraph fontfile='...' quoting (M-2/S-L-2)
+            ("C:/Windows/Fonts/arial'.ttf", "single-quote in path"),
+            # Newline LF: control character
+            ("C:/Windows/Fonts/arial\n.ttf", "LF newline in path"),
+            # Newline CR: control character
+            ("C:/Windows/Fonts/arial\r.ttf", "CR newline in path"),
+            # NUL byte: control character
+            ("C:/Windows/Fonts/arial\x00.ttf", "NUL byte in path"),
+            # DEL: control character
+            ("C:/Windows/Fonts/arial\x7f.ttf", "DEL char in path"),
+        ],
+    )
+    def test_dangerous_font_path_returns_invalid_input(
+        self, bad_font_path: str, description: str
+    ) -> None:
+        """font_path with dangerous chars must return INVALID_INPUT with hint (S-L-2).
+
+        S-L-2 Red: _validate_text_overlay_fields does not currently check font_path.
+        Implementation must add control-char / single-quote check for font_path.
+        """
+        with tempfile.TemporaryDirectory() as tmpd:
+            tmp = Path(tmpd)
+            tl = _make_v1_timeline()
+            inp = tmp / "in.otio"
+            out = tmp / "out.otio"
+            _write_timeline(tl, inp)
+
+            opts = _default_opts(font_path=bad_font_path)
+            result = add_text(str(inp), str(out), opts)
+
+            assert result["ok"] is False, (
+                f"Expected ok=False for font_path with {description}, got ok=True"
+            )
+            error = result.get("error") or {}
+            assert error.get("code") == "INVALID_INPUT", (
+                f"Expected INVALID_INPUT for font_path with {description}, "
+                f"got {error.get('code')!r}"
+            )
+            assert error.get("hint"), (
+                f"hint must be non-empty for font_path with {description}"
+            )
+
+    def test_normal_font_path_accepted(self) -> None:
+        """A normal absolute font path must be accepted by _validate_text_overlay_fields."""
+        with tempfile.TemporaryDirectory() as tmpd:
+            tmp = Path(tmpd)
+            tl = _make_v1_timeline()
+            inp = tmp / "in.otio"
+            out = tmp / "out.otio"
+            _write_timeline(tl, inp)
+
+            opts = _default_opts(font_path="C:/Windows/Fonts/arial.ttf")
+            result = add_text(str(inp), str(out), opts)
+
+            assert result["ok"] is True, (
+                f"Normal font path must be accepted, got error: {result.get('error')}"
+            )

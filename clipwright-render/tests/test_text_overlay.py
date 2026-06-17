@@ -747,3 +747,374 @@ class TestMultipleOverlaysCommaJoined:
         # Intermediate labels like [outvtext0] should not appear
         assert "[outvtext0]" not in fc
         assert "[outvtext1]" not in fc
+
+
+# ---------------------------------------------------------------------------
+# Review fix Red tests — render-side validations not yet implemented
+# References: code-review-report-20260617-234432.md (M-1, M-2, H-1, L-3)
+#             security-review-report-review-security.md (S-M-1, S-M-2, S-M-3,
+#                                                        S-L-2, S-L-3)
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# S-M-2 / M-1: render-side fade_sum > duration validation
+# ---------------------------------------------------------------------------
+
+
+class TestFadeSumValidation:
+    """_marker_to_text_overlay raises INVALID_INPUT when fade_in+fade_out > duration.
+
+    References: S-M-2 (security-review), M-1 (code-review), ADR-T4.
+    These tests are RED: the render-side fade_sum check is not yet implemented.
+    """
+
+    def _build_with_fades(
+        self,
+        fade_in_sec: float,
+        fade_out_sec: float,
+        duration_sec: float,
+    ) -> None:
+        """Helper: build_plan with a marker whose fade sums may exceed duration."""
+        tl = _make_timeline([_make_clip("/src/a.mp4", 0.0, 10.0)])
+        _add_text_overlay_marker(
+            tl,
+            fade_in_sec=fade_in_sec,
+            fade_out_sec=fade_out_sec,
+            duration_sec=duration_sec,
+            font_path="/fake/font.ttf",
+        )
+        ranges = resolve_kept_ranges(tl)
+        probe = _make_probe(audio_count=0)
+        with patch("pathlib.Path.is_file", return_value=True):
+            build_plan(ranges, probe, RenderOptions())
+
+    def test_fade_sum_exceeds_duration_raises_invalid_input(self) -> None:
+        """fade_in+fade_out > duration → INVALID_INPUT (multi-layer defence ADR-T4)."""
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._build_with_fades(
+                fade_in_sec=5.0, fade_out_sec=5.0, duration_sec=3.0
+            )
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_fade_in_alone_exceeds_duration_raises_invalid_input(self) -> None:
+        """fade_in alone > duration → INVALID_INPUT."""
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._build_with_fades(
+                fade_in_sec=4.0, fade_out_sec=0.0, duration_sec=3.0
+            )
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_fade_out_alone_exceeds_duration_raises_invalid_input(self) -> None:
+        """fade_out alone > duration → INVALID_INPUT."""
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._build_with_fades(
+                fade_in_sec=0.0, fade_out_sec=4.0, duration_sec=3.0
+            )
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_fade_sum_exactly_equal_to_duration_passes(self) -> None:
+        """fade_in+fade_out == duration is valid (boundary: sum <= duration)."""
+        # Must NOT raise: exactly equal is acceptable
+        self._build_with_fades(
+            fade_in_sec=1.5, fade_out_sec=1.5, duration_sec=3.0
+        )
+
+    def test_fade_sum_within_1e9_tolerance_passes(self) -> None:
+        """fade_in+fade_out barely > duration by float noise (< 1e-9) passes."""
+        # sum = duration + 5e-10 → within 1e-9 tolerance → should pass
+        duration = 3.0
+        self._build_with_fades(
+            fade_in_sec=1.5, fade_out_sec=1.5 + 5e-10, duration_sec=duration
+        )
+
+    def test_fade_sum_just_over_1e9_tolerance_raises(self) -> None:
+        """fade_in+fade_out > duration + 1e-9 → INVALID_INPUT."""
+        with pytest.raises(ClipwrightError) as exc_info:
+            # sum = duration + 2e-9, clearly over tolerance
+            self._build_with_fades(
+                fade_in_sec=1.5, fade_out_sec=1.5 + 2e-9, duration_sec=3.0
+            )
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+
+# ---------------------------------------------------------------------------
+# S-M-3: render-side empty text validation
+# ---------------------------------------------------------------------------
+
+
+class TestEmptyTextValidation:
+    """_marker_to_text_overlay raises INVALID_INPUT for empty text.
+
+    Reference: S-M-3 (security-review).
+    These tests are RED: the empty-text check is not yet implemented on render side.
+    """
+
+    def _build_with_text(self, text: str) -> None:
+        tl = _make_timeline([_make_clip("/src/a.mp4", 0.0, 10.0)])
+        _add_text_overlay_marker(tl, text=text, font_path="/fake/font.ttf")
+        ranges = resolve_kept_ranges(tl)
+        probe = _make_probe(audio_count=0)
+        with patch("pathlib.Path.is_file", return_value=True):
+            build_plan(ranges, probe, RenderOptions())
+
+    def test_empty_text_raises_invalid_input(self) -> None:
+        """text='' in marker → INVALID_INPUT (drawtext=text='' must not be emitted)."""
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._build_with_text("")
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_nonempty_text_passes(self) -> None:
+        """Non-empty text passes without raising."""
+        # Must NOT raise
+        self._build_with_text("Hello")
+
+    def test_whitespace_only_text_raises_invalid_input(self) -> None:
+        """text='   ' (whitespace only) → INVALID_INPUT.
+
+        Whitespace-only strings produce an effectively invisible overlay.
+        The render side should reject them alongside empty strings.
+        Note: if the impl only checks `not text` (falsy), whitespace passes.
+        This test pins the stricter behaviour: strip().
+        """
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._build_with_text("   ")
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+
+# ---------------------------------------------------------------------------
+# S-M-1: error message must NOT expose internal field names or OTIO paths
+# ---------------------------------------------------------------------------
+
+
+class TestErrorMessageDoesNotExposeInternals:
+    """ClipwrightError.message must use fixed wording, not field-name expansion.
+
+    Reference: S-M-1 (security-review, CWE-209).
+    These tests are RED: the current render-side messages still contain
+    field_name (e.g. 'font_color', 'text', 'x', 'y', 'box_color').
+    """
+
+    # Internal field names that must NOT appear in .message (only allowed in .hint)
+    _INTERNAL_FIELD_NAMES = ("'text'", "'x'", "'y'", "'font_color'", "'box_color'")
+
+    def _get_error_for(self, **bad_fields: Any) -> ClipwrightError:
+        """Trigger _marker_to_text_overlay validation and capture the error."""
+        tl = _make_timeline([_make_clip("/src/a.mp4", 0.0, 10.0)])
+        _add_text_overlay_marker(tl, font_path="/fake/font.ttf", **bad_fields)
+        ranges = resolve_kept_ranges(tl)
+        probe = _make_probe(audio_count=0)
+        with pytest.raises(ClipwrightError) as exc_info:
+            with patch("pathlib.Path.is_file", return_value=True):
+                build_plan(ranges, probe, RenderOptions())
+        return exc_info.value
+
+    def test_control_char_in_text_message_has_no_field_name(self) -> None:
+        """Control char in 'text': message must not contain 'text' as quoted name."""
+        err = self._get_error_for(text="hello\x01world")
+        assert err.code == ErrorCode.INVALID_INPUT
+        for fname in self._INTERNAL_FIELD_NAMES:
+            assert fname not in err.message, (
+                f"message must not contain internal field name {fname!r}: {err.message!r}"
+            )
+
+    def test_control_char_in_x_message_has_no_field_name(self) -> None:
+        """Control char in 'x': message must not contain 'x' as quoted name."""
+        err = self._get_error_for(x="(w-tw)/2\x00")
+        assert err.code == ErrorCode.INVALID_INPUT
+        for fname in self._INTERNAL_FIELD_NAMES:
+            assert fname not in err.message, (
+                f"message must not contain internal field name {fname!r}: {err.message!r}"
+            )
+
+    def test_invalid_font_color_message_has_no_field_name(self) -> None:
+        """Invalid font_color: message must not contain 'font_color' as quoted name."""
+        err = self._get_error_for(font_color="white with spaces")
+        assert err.code == ErrorCode.INVALID_INPUT
+        for fname in self._INTERNAL_FIELD_NAMES:
+            assert fname not in err.message, (
+                f"message must not contain internal field name {fname!r}: {err.message!r}"
+            )
+
+    def test_invalid_box_color_message_has_no_field_name(self) -> None:
+        """Invalid box_color: message must not contain 'box_color' as quoted name."""
+        err = self._get_error_for(box_color="black;rm -rf /")
+        assert err.code == ErrorCode.INVALID_INPUT
+        for fname in self._INTERNAL_FIELD_NAMES:
+            assert fname not in err.message, (
+                f"message must not contain internal field name {fname!r}: {err.message!r}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# M-2 / S-L-2: render-side font_path validation (single-quote, control chars,
+#               max_length)
+# ---------------------------------------------------------------------------
+
+
+class TestFontPathValidation:
+    """_marker_to_text_overlay rejects font_path with dangerous characters.
+
+    References: M-2 (code-review, filtergraph injection via single-quote),
+                S-L-2 (security-review, no max_length/pattern constraint).
+    These tests are RED: the render-side font_path character/length check
+    is not yet implemented.
+
+    Path.is_file is mocked so tests do not require real font files; the
+    character/length check must fire BEFORE the is_file check.
+    """
+
+    def _build_with_font_path(self, font_path: str | None) -> None:
+        tl = _make_timeline([_make_clip("/src/a.mp4", 0.0, 10.0)])
+        _add_text_overlay_marker(tl, font_path=font_path)
+        ranges = resolve_kept_ranges(tl)
+        probe = _make_probe(audio_count=0)
+        with patch("pathlib.Path.is_file", return_value=True):
+            build_plan(ranges, probe, RenderOptions())
+
+    def test_single_quote_in_font_path_raises_invalid_input(self) -> None:
+        """font_path with single-quote → INVALID_INPUT (filtergraph injection risk)."""
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._build_with_font_path("/fake/fon't.ttf")
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_newline_in_font_path_raises_invalid_input(self) -> None:
+        """font_path with newline (\\n) → INVALID_INPUT."""
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._build_with_font_path("/fake/font\n.ttf")
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_null_byte_in_font_path_raises_invalid_input(self) -> None:
+        """font_path with null byte (\\x00) → INVALID_INPUT."""
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._build_with_font_path("/fake/font\x00.ttf")
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_font_path_exceeding_max_length_raises_invalid_input(self) -> None:
+        """font_path longer than 4096 chars → INVALID_INPUT."""
+        long_path = "/fake/" + "a" * 4092 + ".ttf"  # total > 4096
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._build_with_font_path(long_path)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_font_path_at_max_length_passes(self) -> None:
+        """font_path of exactly 4096 chars passes length check."""
+        # 4096 chars total: "/fake/" (6) + "a"*(4084) + ".ttf" (4) = 4094 ≤ 4096
+        path_4096 = "/fake/" + "a" * 4086 + ".ttf"  # exactly 4096
+        assert len(path_4096) == 4096
+        # Must NOT raise for length; is_file mocked True
+        self._build_with_font_path(path_4096)
+
+    def test_normal_font_path_passes(self) -> None:
+        """A normal font path without special chars passes validation."""
+        # Must NOT raise
+        self._build_with_font_path("/fake/normal_font.ttf")
+
+
+# ---------------------------------------------------------------------------
+# S-L-3: assert → if-raise in _build_drawtext_segment
+# ---------------------------------------------------------------------------
+
+
+class TestBuildDrawtextSegmentAssertReplaced:
+    """_build_drawtext_segment raises ClipwrightError(INTERNAL) for font_path=None.
+
+    Reference: S-L-3 (security-review).
+    Current code uses `assert` which is a no-op under python -O.
+    This test is RED: the impl still uses assert (not if-raise).
+    """
+
+    def test_font_path_none_raises_clipwright_internal_not_assertion_error(
+        self,
+    ) -> None:
+        """font_path=None passed directly → ClipwrightError(INTERNAL), not AssertionError."""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            _build_drawtext_segment,
+        )
+
+        overlay = _make_text_overlay_dataclass(font_path=None)
+        # Under normal execution, assert fires → AssertionError.
+        # After fix, if-raise fires → ClipwrightError(INTERNAL).
+        with pytest.raises(ClipwrightError) as exc_info:
+            _build_drawtext_segment(overlay)
+        assert exc_info.value.code == ErrorCode.INTERNAL
+
+    def test_font_path_none_does_not_raise_assertion_error(self) -> None:
+        """Calling _build_drawtext_segment(font_path=None) must NOT raise AssertionError."""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            _build_drawtext_segment,
+        )
+
+        overlay = _make_text_overlay_dataclass(font_path=None)
+        # After fix: should raise ClipwrightError, not AssertionError
+        with pytest.raises(Exception) as exc_info:
+            _build_drawtext_segment(overlay)
+        # The exception type must not be AssertionError
+        assert not isinstance(exc_info.value, AssertionError), (
+            "_build_drawtext_segment should use if-raise, not assert"
+        )
+
+
+# ---------------------------------------------------------------------------
+# H-1: _PLATFORM_FONT_CANDIDATES type sanity
+# ---------------------------------------------------------------------------
+
+
+class TestPlatformFontCandidatesType:
+    """_PLATFORM_FONT_CANDIDATES is list[str] — iterable with str elements.
+
+    Reference: H-1 (code-review).
+    This is a type sanity check.  The full mypy verification is the mypy gate
+    in the CI/commit flow; this test verifies runtime behaviour.
+    These tests should already pass (the runtime value IS a list[str] due to
+    dict.get() with a non-None default).  They serve as a regression guard
+    so that future refactors that accidentally introduce None are caught.
+    """
+
+    def test_platform_font_candidates_is_not_none(self) -> None:
+        """_PLATFORM_FONT_CANDIDATES must not be None."""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            _PLATFORM_FONT_CANDIDATES,
+        )
+
+        assert _PLATFORM_FONT_CANDIDATES is not None
+
+    def test_platform_font_candidates_is_iterable(self) -> None:
+        """_PLATFORM_FONT_CANDIDATES must be iterable (list[str])."""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            _PLATFORM_FONT_CANDIDATES,
+        )
+
+        # Will raise TypeError if None
+        items = list(_PLATFORM_FONT_CANDIDATES)
+        assert isinstance(items, list)
+
+    def test_platform_font_candidates_elements_are_str(self) -> None:
+        """Each element of _PLATFORM_FONT_CANDIDATES is a str."""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            _PLATFORM_FONT_CANDIDATES,
+        )
+
+        for item in _PLATFORM_FONT_CANDIDATES:
+            assert isinstance(item, str), (
+                f"Expected str element, got {type(item).__name__!r}: {item!r}"
+            )
+
+    def test_platform_font_candidates_nonempty(self) -> None:
+        """_PLATFORM_FONT_CANDIDATES must have at least one candidate."""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            _PLATFORM_FONT_CANDIDATES,
+        )
+
+        assert len(_PLATFORM_FONT_CANDIDATES) >= 1
+
+
+# ---------------------------------------------------------------------------
+# L-3: _get expected_type simplification note
+# NOTE: No new Red test for L-3.  The simplification (removing unused
+# `expected_type` arg from the nested `_get` helper) is an internal refactor.
+# The existing normal-path tests in TestRenderSideRevalidation and
+# TestSingleSourceDrawtext exercise _marker_to_text_overlay and will remain
+# Green after the simplification.  This comment records that L-3 is
+# intentionally covered by the existing Green tests rather than a new Red test.
+# ---------------------------------------------------------------------------

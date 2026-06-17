@@ -286,3 +286,67 @@ class TestFieldTypes:
             font_path="/path/to/font.ttf",
         )
         assert opts.font_path == "/path/to/font.ttf"
+
+
+# ===========================================================================
+# S-L-2: font_path max_length constraint
+# These tests are RED until font_path is annotated with Field(max_length=4096).
+# ===========================================================================
+
+
+class TestFontPathMaxLength:
+    """font_path must enforce max_length=4096 at the schema level (S-L-2).
+
+    S-L-2: AddTextOptions.font_path has no length or pattern constraint.
+    A path exceeding 4096 characters must be rejected with ValidationError.
+    A normal Windows font path must be accepted.
+    """
+
+    def test_font_path_over_4096_rejected(self) -> None:
+        """font_path longer than 4096 characters must raise ValidationError (S-L-2)."""
+        # S-L-2 Red: font_path currently has no max_length constraint.
+        # Implementation must add: font_path: Annotated[str, Field(max_length=4096)] | None = None
+        long_path = "C:/fonts/" + "a" * 4090 + ".ttf"  # total > 4096
+        with pytest.raises(ValidationError):
+            AddTextOptions(
+                text="Hello",
+                start_sec=1.0,
+                duration_sec=3.0,
+                font_path=long_path,
+            )
+
+    def test_font_path_exactly_4096_accepted(self) -> None:
+        """font_path of exactly 4096 characters must be accepted (boundary)."""
+        # S-L-2: max_length boundary — exactly 4096 must pass.
+        path_4096 = "C:/" + "a" * 4090 + ".ttf"  # "C:/" + 4090 + ".ttf" = 3+4090+4 = 4097? recompute
+        # Need exactly 4096: "C:/" (3) + stem (4089) + ".ttf" (4) = 4096
+        path_4096 = "C:/" + "a" * 4089 + ".ttf"
+        assert len(path_4096) == 4096
+        opts = AddTextOptions(
+            text="Hello",
+            start_sec=1.0,
+            duration_sec=3.0,
+            font_path=path_4096,
+        )
+        assert opts.font_path is not None
+        assert len(opts.font_path) == 4096
+
+    def test_font_path_normal_windows_path_accepted(self) -> None:
+        """A normal Windows font path must be accepted (S-L-2 positive case)."""
+        opts = AddTextOptions(
+            text="Hello",
+            start_sec=1.0,
+            duration_sec=3.0,
+            font_path="C:/Windows/Fonts/arial.ttf",
+        )
+        assert opts.font_path == "C:/Windows/Fonts/arial.ttf"
+
+    def test_font_path_none_accepted(self) -> None:
+        """font_path=None must still be accepted after adding max_length constraint."""
+        opts = AddTextOptions(
+            text="Hello",
+            start_sec=1.0,
+            duration_sec=3.0,
+            font_path=None,
+        )
+        assert opts.font_path is None
