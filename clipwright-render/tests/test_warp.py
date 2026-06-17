@@ -1,11 +1,14 @@
-"""test_warp.py — Red tests for LinearTimeWarp support in plan.py (WP-2).
+"""test_warp.py — Tests verifying the render contract for LinearTimeWarp in plan.py (WP-2).
 
-Target functions (to be added / modified in plan.py):
-  - KeptRange.time_scalar field (new; default 1.0)
-  - resolve_kept_ranges() — reads time_scalar from clip.effects LinearTimeWarp
-  - _build_atempo_chain(speed) -> str  (new pure helper)
-  - _build_filter_complex() — single-source warp injection
-  - _build_clip_filters() — multi-source warp injection
+Verifies the following functions and their render contracts:
+  - KeptRange.time_scalar field (default 1.0; ADR-SP-5 backward compatibility)
+  - resolve_kept_ranges() — reads time_scalar from clip.effects LinearTimeWarp;
+    validates value domain [0.25, 8.0] (SR H-1 / M-3); message must not expose
+    raw numeric values (NR-L-2 / SR NL-1)
+  - _build_atempo_chain(speed) -> str — multi-stage atempo decomposition (ADR-SP-3)
+  - _is_warp_identity(s) -> bool — identity threshold guard (CR M-2; _WARP_IDENTITY_THRESHOLD=1e-9)
+  - _build_filter_complex() — single-source warp injection (ADR-SP-6)
+  - _build_clip_filters() — multi-source warp injection (ADR-SP-6)
   - build_plan() — warped total_duration_seconds / estimated_size_bytes
 
 Architecture references:
@@ -732,6 +735,38 @@ class TestTimeScalarValueDomain:
         ranges = resolve_kept_ranges(tl)
         assert ranges[0].time_scalar == pytest.approx(1.0)
 
+    def test_out_of_range_message_does_not_expose_scalar_value(self) -> None:
+        """Out-of-range time_scalar error: message must NOT contain the raw numeric value.
+
+        NR-L-2 / SR NL-1: error message is a fixed string; diagnostic numerics
+        (time_scalar value, supported range) belong in hint, not message.
+        Design principle: message = what went wrong (static), hint = how to fix
+        (may include range boundaries).
+
+        Currently FAILS because plan.py embeds {time_scalar!r} in the message.
+        This test is the Red gate for the NR-L-2 / SR NL-1 fix.
+        """
+        from clipwright.errors import ClipwrightError, ErrorCode
+
+        speed = 9.0
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._resolve(speed)
+        exc = exc_info.value
+        # Existing contract: INVALID_INPUT, non-empty message and hint
+        assert exc.code == ErrorCode.INVALID_INPUT
+        assert exc.message
+        assert exc.hint
+
+        # NR-L-2 / SR NL-1: raw time_scalar value must NOT appear in message
+        assert "9.0" not in exc.message, (
+            f"NR-L-2: message must not expose raw time_scalar value '9.0', "
+            f"got: {exc.message!r}"
+        )
+        # Hint must contain supported range boundaries (SR NL-1)
+        assert "0.25" in exc.hint and "8" in exc.hint, (
+            f"SR NL-1: hint must state supported range 0.25-8.0, got: {exc.hint!r}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Section 9: _build_atempo_chain precondition guard (CR L-2 / SR H-1(b))
@@ -912,3 +947,43 @@ class TestFreezeFrameExclusion:
         assert "atempo=" not in fc, (
             "Multi-source FreezeFrame must not produce atempo stage (CR L-6)"
         )
+
+
+# ---------------------------------------------------------------------------
+# Section 12: _is_warp_identity threshold boundary (NR-L-5 / CR M-2)
+# ---------------------------------------------------------------------------
+
+
+class TestIsWarpIdentityThreshold:
+    """_is_warp_identity threshold boundary: _WARP_IDENTITY_THRESHOLD = 1e-9.
+
+    NR-L-5 / CR M-2: pins the exact boundary behaviour so that changes to
+    _WARP_IDENTITY_THRESHOLD are caught by regression.
+
+    Values within 1e-9 of 1.0 (inclusive) are treated as identity (True).
+    Values beyond 1e-9 of 1.0 are treated as non-identity (False).
+    """
+
+    @staticmethod
+    def _identity(s: float) -> bool:
+        from clipwright_render.plan import (
+            _is_warp_identity,  # type: ignore[attr-defined]
+        )
+
+        return _is_warp_identity(s)
+
+    def test_exactly_one_is_identity(self) -> None:
+        """_is_warp_identity(1.0) must return True (exact identity)."""
+        assert self._identity(1.0) is True
+
+    def test_one_plus_sub_threshold_is_identity(self) -> None:
+        """_is_warp_identity(1.0 + 1e-12) must return True (within threshold 1e-9)."""
+        assert self._identity(1.0 + 1e-12) is True
+
+    def test_one_plus_super_threshold_is_not_identity(self) -> None:
+        """_is_warp_identity(1.0 + 1e-6) must return False (exceeds threshold 1e-9)."""
+        assert self._identity(1.0 + 1e-6) is False
+
+    def test_half_speed_is_not_identity(self) -> None:
+        """_is_warp_identity(0.5) must return False (not close to 1.0)."""
+        assert self._identity(0.5) is False
