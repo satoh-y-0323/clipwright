@@ -80,8 +80,11 @@ _VALID_NT_VALUES: frozenset[str] = frozenset({"w", "v"})
 # Speed / warp constants
 # ---------------------------------------------------------------------------
 
-# Supported playback speed range (mirrors clipwright-speed bounds).
-# Both constants are used in resolve_kept_ranges validation and _is_warp_identity.
+# Supported playback speed range.
+# These constants are intentionally defined here independently of clipwright-speed's
+# own _SPEED_MIN / _SPEED_MAX to avoid cross-package imports and preserve layering.
+# Both packages own their validation boundary; when changing either constant,
+# update the other package's copy to keep them in sync.
 _SPEED_MIN: float = 0.25
 _SPEED_MAX: float = 8.0
 
@@ -469,21 +472,27 @@ def resolve_kept_ranges(timeline: otio.schema.Timeline) -> list[KeptRange]:
                     # supported range [_SPEED_MIN, _SPEED_MAX] are rejected here
                     # — the single chokepoint where untrusted OTIO values enter.
                     if math.isnan(time_scalar) or math.isinf(time_scalar):
+                        # NR-L-2 / SR NL-1: message is a fixed string; raw
+                        # time_scalar value is intentionally excluded from message
+                        # to avoid leaking untrusted OTIO data. Diagnostic range
+                        # info belongs in hint only.
                         raise ClipwrightError(
                             code=ErrorCode.INVALID_INPUT,
                             message=(
-                                f"LinearTimeWarp time_scalar is not a finite number"
-                                f" ({time_scalar!r})."
+                                "LinearTimeWarp time_scalar is not a finite number."
                             ),
                             hint=("Supported playback speed range is 0.25 to 8.0."),
                         )
                     if not (_SPEED_MIN <= time_scalar <= _SPEED_MAX):
+                        # NR-L-2 / SR NL-1: message is a fixed string; raw
+                        # time_scalar value is intentionally excluded from message
+                        # to avoid leaking untrusted OTIO data. Diagnostic range
+                        # info belongs in hint only.
                         raise ClipwrightError(
                             code=ErrorCode.INVALID_INPUT,
                             message=(
-                                f"LinearTimeWarp time_scalar {time_scalar!r} is"
-                                f" outside the supported range"
-                                f" [{_SPEED_MIN}, {_SPEED_MAX}]."
+                                "time_scalar is outside the supported playback"
+                                " speed range."
                             ),
                             hint=("Supported playback speed range is 0.25 to 8.0."),
                         )
@@ -1784,9 +1793,11 @@ def build_plan(
         # input_sources; DC-AS-005)
         bgm_index = len(input_sources)
         # BGM duration target must match the warped output duration (§6).
+        # SR NL-2: use _is_warp_identity for identity detection (consistent with
+        # filter_complex side; guards against OTIO round-trip float drift).
         total_duration_for_bgm = sum(
             _to_seconds(r.source_range.duration) / r.time_scalar
-            if r.time_scalar != 1.0
+            if not _is_warp_identity(r.time_scalar)
             else _to_seconds(r.source_range.duration)
             for r in ranges
         )
@@ -1818,12 +1829,14 @@ def build_plan(
     )
 
     # ---------- Dry-run estimate ----------
-    # Sum warped durations: source_dur / time_scalar when time_scalar != 1.0,
+    # Sum warped durations: source_dur / time_scalar when not identity,
     # else source_dur (ADR-SP-2 / §6). render.py derives ffmpeg timeout from
     # total_duration_seconds, so warped duration is functionally required.
+    # SR NL-2: use _is_warp_identity for identity detection (consistent with
+    # filter_complex side; guards against OTIO round-trip float drift).
     total_duration = sum(
         _to_seconds(r.source_range.duration) / r.time_scalar
-        if r.time_scalar != 1.0
+        if not _is_warp_identity(r.time_scalar)
         else _to_seconds(r.source_range.duration)
         for r in ranges
     )

@@ -65,7 +65,13 @@ def _check_output_within_timeline_dir(timeline: Path, output: Path) -> None:
     (SR M-2). Allows recursive subdirectories; raises PATH_NOT_ALLOWED only
     when the resolved output is outside the timeline directory tree.
 
-    Re-implemented locally to avoid cross-package import of clipwright-render.
+    Intentionally re-implemented locally to avoid cross-package import of
+    clipwright-render (NR-L-4: cross-package imports between satellite tools
+    create tight coupling and break independent packaging/deployment).
+    When changing the logic here, ensure the behaviour remains in sync with
+    clipwright-render's _check_within_timeline_dir; the two functions must
+    enforce the same boundary contract.
+
     Uses Path.resolve() + string prefix comparison with separator guard to
     avoid false matches on directory name prefixes.
 
