@@ -792,33 +792,25 @@ class TestFadeSumValidation:
     def test_fade_sum_exceeds_duration_raises_invalid_input(self) -> None:
         """fade_in+fade_out > duration → INVALID_INPUT (multi-layer defence ADR-T4)."""
         with pytest.raises(ClipwrightError) as exc_info:
-            self._build_with_fades(
-                fade_in_sec=5.0, fade_out_sec=5.0, duration_sec=3.0
-            )
+            self._build_with_fades(fade_in_sec=5.0, fade_out_sec=5.0, duration_sec=3.0)
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_fade_in_alone_exceeds_duration_raises_invalid_input(self) -> None:
         """fade_in alone > duration → INVALID_INPUT."""
         with pytest.raises(ClipwrightError) as exc_info:
-            self._build_with_fades(
-                fade_in_sec=4.0, fade_out_sec=0.0, duration_sec=3.0
-            )
+            self._build_with_fades(fade_in_sec=4.0, fade_out_sec=0.0, duration_sec=3.0)
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_fade_out_alone_exceeds_duration_raises_invalid_input(self) -> None:
         """fade_out alone > duration → INVALID_INPUT."""
         with pytest.raises(ClipwrightError) as exc_info:
-            self._build_with_fades(
-                fade_in_sec=0.0, fade_out_sec=4.0, duration_sec=3.0
-            )
+            self._build_with_fades(fade_in_sec=0.0, fade_out_sec=4.0, duration_sec=3.0)
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_fade_sum_exactly_equal_to_duration_passes(self) -> None:
         """fade_in+fade_out == duration is valid (boundary: sum <= duration)."""
         # Must NOT raise: exactly equal is acceptable
-        self._build_with_fades(
-            fade_in_sec=1.5, fade_out_sec=1.5, duration_sec=3.0
-        )
+        self._build_with_fades(fade_in_sec=1.5, fade_out_sec=1.5, duration_sec=3.0)
 
     def test_fade_sum_within_1e9_tolerance_passes(self) -> None:
         """fade_in+fade_out barely > duration by float noise (< 1e-9) passes."""

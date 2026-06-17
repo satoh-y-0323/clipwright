@@ -193,6 +193,9 @@ class TestTextValidation:
         "bad_text",
         [
             "",  # empty string
+            "   ",  # whitespace-only (spaces) — RED: not options.text passes this
+            "\t",  # whitespace-only (tab)
+            "  \t  ",  # mixed whitespace only
             "Hello\nWorld",  # newline LF
             "Hello\rWorld",  # newline CR
             "Hello\x00World",  # null control char
@@ -202,7 +205,7 @@ class TestTextValidation:
         ],
     )
     def test_bad_text_returns_invalid_input(self, bad_text: str) -> None:
-        """Empty or control-char-containing text must return INVALID_INPUT."""
+        """Empty, whitespace-only, or control-char-containing text must return INVALID_INPUT."""
         with tempfile.TemporaryDirectory() as tmpd:
             tmp = Path(tmpd)
             tl = _make_v1_timeline()
@@ -793,20 +796,8 @@ class TestNoVideoTrack:
 #   - NUL byte (\x00) / DEL (\x7f) — control characters
 # A normal absolute path (e.g. "C:/Windows/Fonts/arial.ttf") must be accepted.
 #
-# These tests are RED until _validate_text_overlay_fields adds font_path checks.
-#
 # Parity with render side: _marker_to_text_overlay must also validate font_path
 # with the same rules (see test-render-fixes for the render-side Red tests).
-#
-# L-2 note: _is_duplicate_overlay currently defines _eps = 1e-6 as a local
-# variable. The implementation should promote this to a module-level constant
-# _IDEMPOTENCY_EPS: float = 1e-6 for consistency (no new Red test needed —
-# the existing idempotent no-op tests remain green and serve as regression guard).
-#
-# L-5 note: text.py has _COLOR_PATTERN while clipwright-render/plan.py has
-# _COLOR_ALLOWLIST_RE. The cross-reference comment in plan.py should name
-# the correct variable (_COLOR_PATTERN). No new test needed — this is a
-# comment-only correction.
 # ===========================================================================
 
 
@@ -836,11 +827,7 @@ class TestFontPathValidation:
     def test_dangerous_font_path_returns_invalid_input(
         self, bad_font_path: str, description: str
     ) -> None:
-        """font_path with dangerous chars must return INVALID_INPUT with hint (S-L-2).
-
-        S-L-2 Red: _validate_text_overlay_fields does not currently check font_path.
-        Implementation must add control-char / single-quote check for font_path.
-        """
+        """font_path with dangerous chars must return INVALID_INPUT with hint (S-L-2)."""
         with tempfile.TemporaryDirectory() as tmpd:
             tmp = Path(tmpd)
             tl = _make_v1_timeline()

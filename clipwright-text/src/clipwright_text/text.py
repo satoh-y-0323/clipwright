@@ -189,10 +189,10 @@ def _validate_text_overlay_fields(options: AddTextOptions) -> None:
         )
 
     # --- 2. text content ---
-    if not options.text:
+    if not options.text.strip():
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message="Text must not be empty.",
+            message="Text must not be empty or whitespace-only.",
             hint="Provide a non-empty text string to display.",
         )
     if _CONTROL_CHAR_PATTERN.search(options.text):

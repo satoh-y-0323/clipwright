@@ -318,7 +318,9 @@ class TestFontPathMaxLength:
     def test_font_path_exactly_4096_accepted(self) -> None:
         """font_path of exactly 4096 characters must be accepted (boundary)."""
         # S-L-2: max_length boundary — exactly 4096 must pass.
-        path_4096 = "C:/" + "a" * 4090 + ".ttf"  # "C:/" + 4090 + ".ttf" = 3+4090+4 = 4097? recompute
+        path_4096 = (
+            "C:/" + "a" * 4090 + ".ttf"
+        )  # "C:/" + 4090 + ".ttf" = 3+4090+4 = 4097? recompute
         # Need exactly 4096: "C:/" (3) + stem (4089) + ".ttf" (4) = 4096
         path_4096 = "C:/" + "a" * 4089 + ".ttf"
         assert len(path_4096) == 4096
