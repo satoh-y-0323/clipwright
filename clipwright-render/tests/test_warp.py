@@ -742,9 +742,6 @@ class TestTimeScalarValueDomain:
         (time_scalar value, supported range) belong in hint, not message.
         Design principle: message = what went wrong (static), hint = how to fix
         (may include range boundaries).
-
-        Currently FAILS because plan.py embeds {time_scalar!r} in the message.
-        This test is the Red gate for the NR-L-2 / SR NL-1 fix.
         """
         from clipwright.errors import ClipwrightError, ErrorCode
 
