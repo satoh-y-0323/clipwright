@@ -39,12 +39,17 @@ from clipwright_text.schemas import AddTextOptions
 # Color allowlist (shared with clipwright-render; keep in sync — ADR-T4/ADR-T7)
 # Permits: named colors, #RRGGBB, #RRGGBBAA, name@alpha.
 # Excludes: spaces, single-quotes, colon, comma (filtergraph separators).
+# clipwright-render counterpart: _COLOR_ALLOWLIST_RE in plan.py
 # ---------------------------------------------------------------------------
 _COLOR_PATTERN = re.compile(r"^[A-Za-z0-9#@._-]+$")
 
-# Control-character pattern for text / position expressions.
+# Control-character pattern for text / position expressions / font_path.
 # Includes: NUL-US (\x00-\x1f), DEL (\x7f), and line terminators (\n, \r).
 _CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x1f\x7f]")
+
+# Tolerance for float comparison in idempotency checks (rate-invariant).
+# Keep in sync with _is_duplicate_overlay float comparison logic.
+_IDEMPOTENCY_EPS: float = 1e-6
 
 
 # ===========================================================================
@@ -236,6 +241,26 @@ def _validate_text_overlay_fields(options: AddTextOptions) -> None:
             hint=_pos_hint,
         )
 
+    # --- 5. font_path: single-quote, newline, control characters ---
+    # Keep in sync with render-side _marker_to_text_overlay font_path validator
+    # (same rules: _CONTROL_CHAR_PATTERN + explicit single-quote check).
+    if options.font_path is not None:
+        if "'" in options.font_path:
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message="Font path must not contain single-quote characters.",
+                hint=(
+                    "Remove single-quotes from the font file path "
+                    "(they would corrupt filtergraph fontfile='...' quoting)."
+                ),
+            )
+        if _CONTROL_CHAR_PATTERN.search(options.font_path):
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message="Font path must not contain newlines or control characters.",
+                hint="Remove newlines and control characters from the font file path.",
+            )
+
 
 # ===========================================================================
 # Idempotency helpers
@@ -311,13 +336,11 @@ def _is_duplicate_overlay(marker: otio.schema.Marker, options: AddTextOptions) -
     if cw.get("font_path") != options.font_path:
         return False
 
-    # Float fields: approximate comparison (tolerance 1e-6 seconds)
-    _eps = 1e-6
-
+    # Float fields: approximate comparison (rate-invariant tolerance)
     def _approx_eq(a: object, b: float) -> bool:
         if not isinstance(a, (int, float)):
             return False
-        return abs(float(a) - b) <= _eps
+        return abs(float(a) - b) <= _IDEMPOTENCY_EPS
 
     if not _approx_eq(cw.get("start_sec"), options.start_sec):
         return False

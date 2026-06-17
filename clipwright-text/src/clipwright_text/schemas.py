@@ -13,7 +13,9 @@ boundary before business logic runs.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AddTextOptions(BaseModel):
@@ -78,8 +80,12 @@ class AddTextOptions(BaseModel):
     Sum of fade_in_sec + fade_out_sec must not exceed duration_sec.
     """
 
-    font_path: str | None = None
+    font_path: Annotated[str | None, Field(max_length=4096)] = None
     """Absolute path to a .ttf/.otf font file.
 
     When None, clipwright-render resolves a platform default font.
+    Max length 4096 characters (OS path limit upper bound). Character-level
+    validation (single-quotes, newlines, control chars) is performed in
+    _validate_text_overlay_fields — keep in sync with render-side
+    _marker_to_text_overlay font_path validator.
     """
