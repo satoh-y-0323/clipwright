@@ -34,7 +34,7 @@ from clipwright_text.schemas import AddTextOptions
 
 # ---------------------------------------------------------------------------
 # Fixture helpers (conftest.py is owned by test-text-schema task; helpers are
-# defined inline here to remain self-contained for the Red phase)
+# defined inline here to remain self-contained)
 # ---------------------------------------------------------------------------
 
 _RATE = 24.0
@@ -193,7 +193,7 @@ class TestTextValidation:
         "bad_text",
         [
             "",  # empty string
-            "   ",  # whitespace-only (spaces) — RED: not options.text passes this
+            "   ",  # whitespace-only (spaces)
             "\t",  # whitespace-only (tab)
             "  \t  ",  # mixed whitespace only
             "Hello\nWorld",  # newline LF
