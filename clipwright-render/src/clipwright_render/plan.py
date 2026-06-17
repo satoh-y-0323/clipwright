@@ -265,10 +265,13 @@ class KeptRange:
 
     source: target_url of the media file (source path).
     source_range: OTIO TimeRange (held as opentime; seconds conversion is deferred).
+    time_scalar: playback speed multiplier from LinearTimeWarp (ADR-SP-2).
+        1.0 means no warp (default; backward compatible with ADR-SP-5).
     """
 
     source: str
     source_range: otio.opentime.TimeRange
+    time_scalar: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -425,7 +428,23 @@ def resolve_kept_ranges(timeline: otio.schema.Timeline) -> list[KeptRange]:
                 )
             source = mr.target_url
             source_range = item.source_range
-            ranges.append(KeptRange(source=source, source_range=source_range))
+            # Extract time_scalar from the first LinearTimeWarp effect (ADR-SP-2).
+            # First-found wins; non-LinearTimeWarp effects are ignored.
+            # Default is 1.0 (no warp; ADR-SP-5).
+            # Use type() exact check rather than isinstance() because FreezeFrame
+            # is a subclass of LinearTimeWarp with time_scalar=0.0; it represents
+            # a freeze (speed=0) rather than a playback-speed warp and must be
+            # excluded from the warp path.
+            time_scalar = 1.0
+            for effect in item.effects:
+                if type(effect) is otio.schema.LinearTimeWarp:
+                    time_scalar = float(effect.time_scalar)
+                    break
+            ranges.append(
+                KeptRange(
+                    source=source, source_range=source_range, time_scalar=time_scalar
+                )
+            )
 
     if len(ranges) == 0:
         raise ClipwrightError(
@@ -735,6 +754,49 @@ def _append_subtitle_filter(
     return "[outvsub]"
 
 
+def _build_atempo_chain(speed: float) -> str:
+    """Build an ffmpeg atempo filter chain string for the given playback speed.
+
+    ffmpeg's atempo filter accepts values in [0.5, 2.0] only. For speeds outside
+    that range, multiple stages are chained so their product equals speed (ADR-SP-3).
+
+    Stage values are formatted with :g (no trailing zeros).
+
+    Examples:
+        speed=2.0  -> "atempo=2"
+        speed=4.0  -> "atempo=2,atempo=2"
+        speed=0.5  -> "atempo=0.5"
+        speed=0.25 -> "atempo=0.5,atempo=0.5"
+        speed=3.0  -> "atempo=2,atempo=1.5"
+        speed=0.3  -> "atempo=0.5,atempo=0.6"
+
+    Args:
+        speed: playback speed multiplier (must be > 0).
+
+    Returns:
+        Comma-separated atempo filter chain string.
+    """
+    stages: list[float] = []
+    remaining = speed
+
+    if speed >= 1.0:
+        # For speed > 2.0: emit atempo=2.0 stages until remainder <= 2.0,
+        # then emit a final atempo=remainder stage.
+        while remaining > 2.0:
+            stages.append(2.0)
+            remaining /= 2.0
+        stages.append(remaining)
+    else:
+        # For speed < 0.5: emit atempo=0.5 stages until remainder >= 0.5,
+        # then emit a final atempo=remainder stage.
+        while remaining < 0.5:
+            stages.append(0.5)
+            remaining /= 0.5
+        stages.append(remaining)
+
+    return ",".join(f"atempo={s:g}" for s in stages)
+
+
 def _to_seconds(rt: otio.opentime.RationalTime) -> float:
     """Convert RationalTime to seconds (6 decimal places).
 
@@ -967,16 +1029,30 @@ def _build_filter_complex(
         start = _to_seconds(r.source_range.start_time)
         end = round(start + _to_seconds(r.source_range.duration), 6)
         vl = f"v{i}"
-        filter_parts.append(
-            f"[0:v]trim=start={start}:end={end},setpts=PTS-STARTPTS[{vl}]"
-        )
+        s = r.time_scalar
+        if s != 1.0:
+            # Warp: setpts=(PTS-STARTPTS)/{s} (ADR-SP-6) to change video speed.
+            filter_parts.append(
+                f"[0:v]trim=start={start}:end={end},setpts=(PTS-STARTPTS)/{s:g}[{vl}]"
+            )
+        else:
+            filter_parts.append(
+                f"[0:v]trim=start={start}:end={end},setpts=PTS-STARTPTS[{vl}]"
+            )
         video_labels.append(f"[{vl}]")
 
         if has_audio:
             al = f"a{i}"
-            filter_parts.append(
-                f"[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS[{al}]"
-            )
+            if s != 1.0:
+                # Warp: apply atempo chain after asetpts (ADR-SP-3).
+                atempo = _build_atempo_chain(s)
+                filter_parts.append(
+                    f"[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS,{atempo}[{al}]"
+                )
+            else:
+                filter_parts.append(
+                    f"[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS[{al}]"
+                )
             audio_labels.append(f"[{al}]")
 
     # concat filter (interleave video/audio labels as inputs)
@@ -1159,11 +1235,15 @@ def _build_clip_filters(
         start = _to_seconds(r.source_range.start_time)
         dur = _to_seconds(r.source_range.duration)
         end = round(start + dur, 6)
+        s = r.time_scalar
         vl = f"v{i}"
-        # Per-clip video: trim → setpts → fps → scale/pad/crop/setsar (fit-based).
+        # Per-clip video: trim → setpts[warp] → fps → scale/pad/crop/setsar (fit-based).
         # fps written with at least 5 decimal places (ADR-C2-r2; NTSC fps precision)
+        # Warp: setpts=(PTS-STARTPTS)/{s} when s != 1.0 (ADR-SP-5/SP-6).
+        # fps stays downstream of setpts (per fixed decision in architecture).
+        setpts_expr = f"(PTS-STARTPTS)/{s:g}" if s != 1.0 else "PTS-STARTPTS"
         base = (
-            f"[{k}:v]trim=start={start}:end={end},setpts=PTS-STARTPTS,"
+            f"[{k}:v]trim=start={start}:end={end},setpts={setpts_expr},"
             f"fps={target_fps:.5f},"
         )
         if fit == "cover":
@@ -1187,17 +1267,34 @@ def _build_clip_filters(
             al = f"a{i}"
             probe = source_probes[r.source]
             if probe.audio_count >= 1:
-                # Audio present: atrim → asetpts → aformat for spec normalisation.
-                filter_parts.append(
-                    f"[{k}:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS,"
-                    f"aformat=sample_rates=48000:channel_layouts=stereo[{al}]"
-                )
+                # Audio present: atrim → asetpts → [atempo warp] → aformat.
+                if s != 1.0:
+                    atempo = _build_atempo_chain(s)
+                    filter_parts.append(
+                        f"[{k}:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS,"
+                        f"{atempo},"
+                        f"aformat=sample_rates=48000:channel_layouts=stereo[{al}]"
+                    )
+                else:
+                    filter_parts.append(
+                        f"[{k}:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS,"
+                        f"aformat=sample_rates=48000:channel_layouts=stereo[{al}]"
+                    )
             else:
-                # No audio: pad with anullsrc (same duration as the video clip)
-                filter_parts.append(
-                    f"anullsrc=channel_layout=stereo:sample_rate=48000,"
-                    f"atrim=0:{dur},asetpts=PTS-STARTPTS[{al}]"
-                )
+                # No audio: pad with anullsrc. When warped, use warped duration
+                # so the silent pad matches the video duration (OQ-2).
+                pad_dur = dur / s if s != 1.0 else dur
+                if s != 1.0:
+                    atempo = _build_atempo_chain(s)
+                    filter_parts.append(
+                        f"anullsrc=channel_layout=stereo:sample_rate=48000,"
+                        f"atrim=0:{pad_dur:g},asetpts=PTS-STARTPTS,{atempo}[{al}]"
+                    )
+                else:
+                    filter_parts.append(
+                        f"anullsrc=channel_layout=stereo:sample_rate=48000,"
+                        f"atrim=0:{pad_dur:g},asetpts=PTS-STARTPTS[{al}]"
+                    )
             audio_labels.append(f"[{al}]")
 
     return filter_parts, video_labels, audio_labels
@@ -1619,8 +1716,12 @@ def build_plan(
         # BGM index = len(input_sources) (bgm_source not included in
         # input_sources; DC-AS-005)
         bgm_index = len(input_sources)
+        # BGM duration target must match the warped output duration (§6).
         total_duration_for_bgm = sum(
-            _to_seconds(r.source_range.duration) for r in ranges
+            _to_seconds(r.source_range.duration) / r.time_scalar
+            if r.time_scalar != 1.0
+            else _to_seconds(r.source_range.duration)
+            for r in ranges
         )
 
         # Expand filter_complex into filter_parts list and append the BGM stage
@@ -1650,7 +1751,15 @@ def build_plan(
     )
 
     # ---------- Dry-run estimate ----------
-    total_duration = sum(_to_seconds(r.source_range.duration) for r in ranges)
+    # Sum warped durations: source_dur / time_scalar when time_scalar != 1.0,
+    # else source_dur (ADR-SP-2 / §6). render.py derives ffmpeg timeout from
+    # total_duration_seconds, so warped duration is functionally required.
+    total_duration = sum(
+        _to_seconds(r.source_range.duration) / r.time_scalar
+        if r.time_scalar != 1.0
+        else _to_seconds(r.source_range.duration)
+        for r in ranges
+    )
 
     estimated_size: float | None = None
     warnings: list[str] = []

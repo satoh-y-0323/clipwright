@@ -19,7 +19,6 @@ Architecture references:
 
 from __future__ import annotations
 
-import math
 from typing import Any
 
 import opentimelineio as otio
@@ -194,7 +193,9 @@ class TestBuildAtempoChain:
 
     @staticmethod
     def _chain(speed: float) -> str:
-        from clipwright_render.plan import _build_atempo_chain  # type: ignore[attr-defined]
+        from clipwright_render.plan import (
+            _build_atempo_chain,  # type: ignore[attr-defined]
+        )
 
         return _build_atempo_chain(speed)
 
@@ -204,7 +205,7 @@ class TestBuildAtempoChain:
         for part in chain.split(","):
             part = part.strip()
             assert part.startswith("atempo="), f"Unexpected part: {part!r}"
-            stages.append(float(part[len("atempo="):]))
+            stages.append(float(part[len("atempo=") :]))
         return stages
 
     # --- standard cases (exact values, :g formatting) ---
@@ -289,7 +290,7 @@ class TestSingleSourceWarpFilterComplex:
         clips: list[otio.schema.Clip],
         probe: ProbeInfo | None = None,
     ) -> Any:
-        from clipwright_render.plan import build_plan, resolve_kept_ranges
+        from clipwright_render.plan import resolve_kept_ranges
 
         tl = _make_timeline_with_clips(clips)
         ranges = resolve_kept_ranges(tl)
@@ -324,7 +325,7 @@ class TestSingleSourceWarpFilterComplex:
         """
         clip = _make_clip("/src/a.mp4", 0.0, 5.0)
         tl = _make_timeline_with_clips([clip])
-        from clipwright_render.plan import build_plan, resolve_kept_ranges
+        from clipwright_render.plan import resolve_kept_ranges
 
         ranges = resolve_kept_ranges(tl)
         probe = _make_probe(audio_count=1)
@@ -344,7 +345,7 @@ class TestSingleSourceWarpFilterComplex:
 
     def test_speed_1_matches_unwarped(self) -> None:
         """speed=1.0 (explicit warp) must produce same filter_complex as no-warp (R-8 / ADR-SP-5)."""
-        from clipwright_render.plan import build_plan, resolve_kept_ranges
+        from clipwright_render.plan import resolve_kept_ranges
 
         # Build unwarped plan
         clip_plain = _make_clip("/src/a.mp4", 0.0, 5.0)
@@ -389,7 +390,7 @@ class TestMultiSourceWarpFilterComplex:
         audio_count: int = 1,
     ) -> Any:
         """Build multi-source plan from (source, start, dur, speed_or_None) tuples."""
-        from clipwright_render.plan import build_plan, resolve_kept_ranges
+        from clipwright_render.plan import resolve_kept_ranges
 
         clip_objs = []
         for src, start, dur, speed in clips:
@@ -470,7 +471,7 @@ class TestWarpDurationAndSize:
         """speed=2.0, source_dur=10s -> total_duration_seconds == 5.0."""
         clip = _make_warped_clip("/src/a.mp4", 0.0, 10.0, speed=2.0)
         tl = _make_timeline_with_clips([clip])
-        from clipwright_render.plan import build_plan, resolve_kept_ranges
+        from clipwright_render.plan import resolve_kept_ranges
 
         ranges = resolve_kept_ranges(tl)
         probe = _make_probe(bit_rate=8_000_000, audio_count=0)
@@ -483,7 +484,7 @@ class TestWarpDurationAndSize:
         """speed=0.5, source_dur=4s -> total_duration_seconds == 8.0."""
         clip = _make_warped_clip("/src/a.mp4", 0.0, 4.0, speed=0.5)
         tl = _make_timeline_with_clips([clip])
-        from clipwright_render.plan import build_plan, resolve_kept_ranges
+        from clipwright_render.plan import resolve_kept_ranges
 
         ranges = resolve_kept_ranges(tl)
         probe = _make_probe(bit_rate=None, audio_count=0)
@@ -499,7 +500,7 @@ class TestWarpDurationAndSize:
             _make_warped_clip("/src/a.mp4", 10.0, 4.0, speed=0.5),  # 4/0.5 = 8.0s
         ]
         tl = _make_timeline_with_clips(clips)
-        from clipwright_render.plan import build_plan, resolve_kept_ranges
+        from clipwright_render.plan import resolve_kept_ranges
 
         ranges = resolve_kept_ranges(tl)
         probe = _make_probe(bit_rate=None, audio_count=0)
@@ -511,7 +512,7 @@ class TestWarpDurationAndSize:
         """speed=2.0, source_dur=10s, bit_rate=8Mbps -> estimated_size = 8e6*5/8 = 5_000_000."""
         clip = _make_warped_clip("/src/a.mp4", 0.0, 10.0, speed=2.0)
         tl = _make_timeline_with_clips([clip])
-        from clipwright_render.plan import build_plan, resolve_kept_ranges
+        from clipwright_render.plan import resolve_kept_ranges
 
         ranges = resolve_kept_ranges(tl)
         probe = _make_probe(bit_rate=8_000_000, audio_count=0)
@@ -525,7 +526,7 @@ class TestWarpDurationAndSize:
         """Unwarped timeline -> total_duration_seconds equals raw source duration (ADR-SP-5)."""
         clip = _make_clip("/src/a.mp4", 0.0, 10.0)
         tl = _make_timeline_with_clips([clip])
-        from clipwright_render.plan import build_plan, resolve_kept_ranges
+        from clipwright_render.plan import resolve_kept_ranges
 
         ranges = resolve_kept_ranges(tl)
         probe = _make_probe(bit_rate=8_000_000, audio_count=0)
@@ -534,7 +535,7 @@ class TestWarpDurationAndSize:
 
     def test_speed_1_duration_matches_unwarped(self) -> None:
         """speed=1.0 clip -> total_duration_seconds identical to plain unwarped clip (R-8)."""
-        from clipwright_render.plan import build_plan, resolve_kept_ranges
+        from clipwright_render.plan import resolve_kept_ranges
 
         clip_plain = _make_clip("/src/a.mp4", 0.0, 7.0)
         tl_plain = _make_timeline_with_clips([clip_plain])
@@ -547,7 +548,10 @@ class TestWarpDurationAndSize:
         ranges_warp = resolve_kept_ranges(tl_warp)
         plan_warp = build_plan(ranges_warp, probe, RenderOptions())
 
-        assert abs(plan_warp.total_duration_seconds - plan_plain.total_duration_seconds) < _EPSILON
+        assert (
+            abs(plan_warp.total_duration_seconds - plan_plain.total_duration_seconds)
+            < _EPSILON
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -576,7 +580,7 @@ class TestAnullsrcWarpedBranch:
         clip_b = _make_warped_clip("/src/b.mp4", 0.0, source_dur_b, speed=speed_b)
 
         tl = _make_timeline_with_clips([clip_a, clip_b])
-        from clipwright_render.plan import build_plan, resolve_kept_ranges
+        from clipwright_render.plan import resolve_kept_ranges
 
         ranges = resolve_kept_ranges(tl)
         probe_a = _make_probe(audio_count=1, width=1920, height=1080, fps=30.0)
@@ -593,9 +597,10 @@ class TestAnullsrcWarpedBranch:
             f"but got: {fc!r}"
         )
         # The unwarped source duration (4.0s) must NOT appear as the pad bound
-        assert f"atrim=0:{source_dur_b:g}" not in fc or f"atrim=0:{expected_pad_dur:g}" in fc, (
-            "Unwarped duration should not be used for the anullsrc pad (OQ-2)"
-        )
+        assert (
+            f"atrim=0:{source_dur_b:g}" not in fc
+            or f"atrim=0:{expected_pad_dur:g}" in fc
+        ), "Unwarped duration should not be used for the anullsrc pad (OQ-2)"
 
     def test_anullsrc_warped_pad_atempo_present(self) -> None:
         """Audio-less warped clip -> anullsrc branch must contain atempo (OQ-2 single code path)."""
@@ -603,7 +608,7 @@ class TestAnullsrcWarpedBranch:
         clip_b = _make_warped_clip("/src/b.mp4", 0.0, 4.0, speed=2.0)
 
         tl = _make_timeline_with_clips([clip_a, clip_b])
-        from clipwright_render.plan import build_plan, resolve_kept_ranges
+        from clipwright_render.plan import resolve_kept_ranges
 
         ranges = resolve_kept_ranges(tl)
         probe_a = _make_probe(audio_count=1, width=1920, height=1080, fps=30.0)
@@ -621,7 +626,7 @@ class TestAnullsrcWarpedBranch:
         clip_b = _make_clip("/src/b.mp4", 0.0, source_dur_b)  # no warp
 
         tl = _make_timeline_with_clips([clip_a, clip_b])
-        from clipwright_render.plan import build_plan, resolve_kept_ranges
+        from clipwright_render.plan import resolve_kept_ranges
 
         ranges = resolve_kept_ranges(tl)
         probe_a = _make_probe(audio_count=1, width=1920, height=1080, fps=30.0)
