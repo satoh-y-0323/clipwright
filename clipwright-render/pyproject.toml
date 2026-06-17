@@ -1,6 +1,6 @@
 [project]
 name = "clipwright-render"
-version = "0.3.0"
+version = "0.4.0"
 description = "MCP tool to realize OTIO timelines with FFmpeg. Completes segment extraction, concatenation, and trimming in a single transcode pass."
 readme = "README.md"
 license = { text = "MIT" }
@@ -46,7 +46,13 @@ ignore = []
 
 [tool.ruff.lint.per-file-ignores]
 # Allow E501 for English docstrings/comments in test files (same rules as wrap/silence)
-"tests/*.py" = ["E501"]
+# F401: unused imports in test files are intentional (e.g. imported-for-side-effects,
+#   or available-but-unused stubs used by test helpers).
+# I001: test files use local inline imports for isolation; import order is intentional.
+# C408: dict() calls in test helpers are acceptable for readability.
+# SIM108: nested with statements in tests are intentional for clarity.
+# SIM117: nested with statements in tests are intentional for clarity.
+"tests/*.py" = ["E501", "F401", "I001", "C408", "SIM108", "SIM117"]
 
 [tool.ruff.format]
 # Default ruff formatter is OK

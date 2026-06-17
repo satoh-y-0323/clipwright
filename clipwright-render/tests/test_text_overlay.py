@@ -178,7 +178,9 @@ class TestGetMarkersTextOverlay:
         tl = _make_timeline([_make_clip("/src/a.mp4", 0.0, 10.0)])
 
         # Add a marker of a different kind
-        video_track = next(t for t in tl.tracks if t.kind == otio.schema.TrackKind.Video)
+        video_track = next(
+            t for t in tl.tracks if t.kind == otio.schema.TrackKind.Video
+        )
         other_marker = otio.schema.Marker(
             name="scene_0",
             marked_range=_tr(2.0, 1.0),
@@ -436,9 +438,7 @@ class TestSubtitleDrawtextOrder:
             patch("pathlib.Path.is_file", return_value=True),
             patch("pathlib.Path.exists", return_value=True),
         ):
-            plan = build_plan(
-                ranges, probe, RenderOptions(subtitle=subtitle)
-            )
+            plan = build_plan(ranges, probe, RenderOptions(subtitle=subtitle))
 
         fc = plan.filter_complex
         sub_pos = fc.find("subtitles=")
@@ -585,7 +585,9 @@ class TestBuildAlphaExpr:
         """fi=0 → no (t-s)/0 term in expression."""
         from clipwright_render.plan import _build_alpha_expr  # type: ignore[attr-defined]
 
-        o = _make_text_overlay_dataclass(start_s=1.0, end_s=4.0, fade_in_s=0.0, fade_out_s=0.3)
+        o = _make_text_overlay_dataclass(
+            start_s=1.0, end_s=4.0, fade_in_s=0.0, fade_out_s=0.3
+        )
         expr = _build_alpha_expr(o)
         assert "/0" not in expr
         # Fade-out branch should still be present
@@ -595,7 +597,9 @@ class TestBuildAlphaExpr:
         """fo=0 → no (e-t)/0 term in expression."""
         from clipwright_render.plan import _build_alpha_expr  # type: ignore[attr-defined]
 
-        o = _make_text_overlay_dataclass(start_s=1.0, end_s=4.0, fade_in_s=0.3, fade_out_s=0.0)
+        o = _make_text_overlay_dataclass(
+            start_s=1.0, end_s=4.0, fade_in_s=0.3, fade_out_s=0.0
+        )
         expr = _build_alpha_expr(o)
         assert "/0" not in expr
         # Fade-in branch should still be present

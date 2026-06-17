@@ -43,12 +43,16 @@ from __future__ import annotations
 
 import math
 import os
+import re
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import opentimelineio as otio
 from clipwright.errors import ClipwrightError, ErrorCode
+from clipwright.otio_utils import get_markers
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from clipwright_render.schemas import RenderOptions, SubtitleOptions
@@ -302,6 +306,54 @@ class KeptRange:
     time_scalar: float = 1.0
 
 
+class KeptRangeList(list):  # type: ignore[type-arg]
+    """List subclass that carries an optional reference to the source timeline.
+
+    Used by resolve_kept_ranges to propagate the OTIO timeline object into
+    build_plan without changing the public list[KeptRange] contract.  Callers
+    that treat the return value as a plain list continue to work unchanged.
+
+    _timeline is accessed via getattr(ranges, '_timeline', None) so that plain
+    list arguments (e.g. in existing tests that construct ranges manually) also
+    work safely (getattr returns None and no marker lookup is attempted).
+    """
+
+    def __init__(
+        self,
+        ranges: list[KeptRange],
+        timeline: otio.schema.Timeline | None = None,
+    ) -> None:
+        super().__init__(ranges)
+        self._timeline: otio.schema.Timeline | None = timeline
+
+
+@dataclass(frozen=True)
+class TextOverlay:
+    """Immutable value object representing a single text overlay instruction.
+
+    Constructed from an OTIO text_overlay marker in _marker_to_text_overlay.
+    All fields are validated on construction; invalid values raise INVALID_INPUT
+    before this dataclass is instantiated (multi-layer defence; ADR-T4).
+
+    font_path: resolved absolute path to the font file, or None when not yet
+        resolved.  render.py resolves this via _resolve_font_path before
+        calling build_plan.
+    """
+
+    text: str
+    start_s: float
+    end_s: float  # = start_s + duration_s
+    x: str
+    y: str
+    font_size: int
+    font_color: str
+    box: bool
+    box_color: str
+    fade_in_s: float
+    fade_out_s: float
+    font_path: str | None  # resolved absolute path, or None
+
+
 @dataclass(frozen=True)
 class BgmClip:
     """Value object representing BGM clip information (ADR-B4-r2).
@@ -388,7 +440,7 @@ def unique_sources_in_order(ranges: list[KeptRange]) -> list[str]:
 # ===========================================================================
 
 
-def resolve_kept_ranges(timeline: otio.schema.Timeline) -> list[KeptRange]:
+def resolve_kept_ranges(timeline: otio.schema.Timeline) -> KeptRangeList:
     """Scan the first video track's Clips and return the list of kept segments
     (ADR-5/DC-AS-006).
 
@@ -400,7 +452,8 @@ def resolve_kept_ranges(timeline: otio.schema.Timeline) -> list[KeptRange]:
     - Raises INVALID_INPUT if there are zero Clips.
 
     Returns:
-        List of KeptRange (source and source_range held as opentime).
+        KeptRangeList (list[KeptRange] subclass) with the source timeline
+        attached as _timeline for downstream text_overlay marker lookup.
     """
     # Retrieve the first video track (multiple video tracks are not supported)
     video_tracks = [t for t in timeline.tracks if t.kind == otio.schema.TrackKind.Video]
@@ -420,7 +473,7 @@ def resolve_kept_ranges(timeline: otio.schema.Timeline) -> list[KeptRange]:
 
     video_track = video_tracks[0]
 
-    ranges: list[KeptRange] = []
+    _ranges: list[KeptRange] = []
 
     for item in video_track:
         if isinstance(item, otio.schema.Gap):
@@ -497,20 +550,20 @@ def resolve_kept_ranges(timeline: otio.schema.Timeline) -> list[KeptRange]:
                             hint=("Supported playback speed range is 0.25 to 8.0."),
                         )
                     break
-            ranges.append(
+            _ranges.append(
                 KeptRange(
                     source=source, source_range=source_range, time_scalar=time_scalar
                 )
             )
 
-    if len(ranges) == 0:
+    if len(_ranges) == 0:
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
             message="No kept segments found (no Clips).",
             hint="Use an OTIO timeline that contains at least one Clip.",
         )
 
-    return ranges
+    return KeptRangeList(_ranges, timeline=timeline)
 
 
 # ===========================================================================
@@ -647,6 +700,406 @@ def _escape_filtergraph(path: str) -> str:
     Example: C:\\Users\\sub.srt → C\\:\\\\Users\\\\sub.srt
     """  # noqa: E501
     return path.replace("\\", "\\\\").replace(":", "\\:")
+
+
+# ===========================================================================
+# drawtext helpers (WP-2 — text_overlay → drawtext extension)
+# ===========================================================================
+
+# Color allowlist for fontcolor / boxcolor.
+# Allows: named colors, #RRGGBB, name@alpha.
+# Rejects: spaces, quotes, colons, commas, semicolons — i.e. chars that
+# could break the filtergraph option syntax when placed unquoted.
+# NOTE: Keep this constant in sync with clipwright-text's _COLOR_ALLOWLIST_RE.
+# Both packages own their validation boundary; cross-package import is avoided
+# (衛星間結合回避方針 / same rationale as _check_output_within_timeline_dir).
+_COLOR_ALLOWLIST_RE: re.Pattern[str] = re.compile(r"^[A-Za-z0-9#@._-]+$")
+
+# Control characters forbidden in text / x / y to prevent filtergraph injection.
+# NOTE: Keep this set in sync with clipwright-text's _CONTROL_CHARS set.
+_CONTROL_CHARS: frozenset[str] = frozenset(
+    chr(c) for c in range(0x00, 0x20)
+) | frozenset({chr(0x7F)})
+
+# Platform-default font paths searched when font_path is not specified.
+# Order: prefer the first existing path.  font_path kwarg always takes
+# precedence (ADR-T5).
+_PLATFORM_FONT_CANDIDATES: list[str] = {
+    "win32": [
+        r"C:\Windows\Fonts\arial.ttf",
+        r"C:\Windows\Fonts\Arial.ttf",
+    ],
+    "darwin": [
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/System/Library/Fonts/Arial.ttf",
+        "/Library/Fonts/Arial.ttf",
+    ],
+}.get(
+    sys.platform,
+    [  # Linux / other
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    ],
+)
+
+
+def _escape_drawtext_text(s: str) -> str:
+    r"""Escape a string for use as the drawtext text= / x= / y= value.
+
+    Applies escaping in this order (backslash first to avoid double-escaping):
+    1. Backslash (\\) → \\\\
+    2. Single-quote (') → \'
+
+    The caller wraps the result in single quotes, so these two replacements
+    are sufficient to prevent filtergraph injection via the text value.
+
+    Args:
+        s: raw string to escape.
+
+    Returns:
+        Escaped string suitable for wrapping in single quotes in a drawtext
+        option value.
+    """
+    return s.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def _resolve_font_path(font_path: str | None) -> str:
+    """Resolve a font path to an existing absolute path (ADR-T5).
+
+    When font_path is specified, verify it exists.  When None, search
+    platform-default candidates in order.  Raises INVALID_INPUT if no
+    usable font is found.
+
+    NOTE: Path.is_file() is used so that tests can mock it via
+    ``unittest.mock.patch('pathlib.Path.is_file', return_value=True)``.
+
+    Args:
+        font_path: explicit font file path, or None for platform default.
+
+    Returns:
+        Absolute path string to an existing font file.
+
+    Raises:
+        ClipwrightError(INVALID_INPUT): when the specified path does not
+            exist, or when all platform defaults are missing.
+    """
+    if font_path is not None:
+        if not Path(font_path).is_file():
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message="The specified font file was not found.",
+                hint=(
+                    "Specify font_path with an absolute path to an existing"
+                    " .ttf or .otf font file."
+                ),
+            )
+        return font_path
+
+    # font_path is None: search platform defaults
+    for candidate in _PLATFORM_FONT_CANDIDATES:
+        if Path(candidate).is_file():
+            return candidate
+
+    raise ClipwrightError(
+        code=ErrorCode.INVALID_INPUT,
+        message="No usable font was found for text overlay.",
+        hint=(
+            "Specify font_path with an absolute path to a .ttf/.otf font"
+            " file (e.g. via the font_path field in clipwright_add_text)."
+        ),
+    )
+
+
+def _marker_to_text_overlay(
+    marker: otio.schema.Marker,
+    resolved_font_path: str,
+) -> TextOverlay:
+    """Convert an OTIO text_overlay marker to a validated TextOverlay.
+
+    Re-validates all fields on the render side (multi-layer defence; ADR-T4).
+    The caller has already resolved the font path via _resolve_font_path.
+
+    Validation mirrors clipwright-text's _validate_text_overlay_fields.
+    NOTE: keep validation rules (ranges, colour allowlist, control chars) in
+    sync with clipwright-text.  Cross-package import is intentionally avoided
+    (衛星間結合回避).
+
+    Args:
+        marker: OTIO Marker with kind=="text_overlay" in metadata["clipwright"].
+        resolved_font_path: absolute path to an existing font file.
+
+    Returns:
+        Validated TextOverlay value object.
+
+    Raises:
+        ClipwrightError(INVALID_INPUT): when any field fails validation.
+    """
+    cw: Any = marker.metadata.get("clipwright", {})
+    if not isinstance(cw, Mapping):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains a text_overlay marker with missing metadata."
+            ),
+            hint="Re-annotate with clipwright_add_text.",
+        )
+
+    def _get(key: str, expected_type: type, default: Any = None) -> Any:
+        val = cw.get(key, default)
+        if val is None and default is None:
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message=(
+                    f"The timeline contains an invalid text overlay: missing '{key}'."
+                ),
+                hint="Re-annotate with clipwright_add_text using valid values.",
+            )
+        return val
+
+    start_sec: float = float(_get("start_sec", float, 0.0))
+    duration_sec: float = float(_get("duration_sec", float, 1.0))
+    text: str = str(_get("text", str, ""))
+    x: str = str(_get("x", str, "(w-tw)/2"))
+    y: str = str(_get("y", str, "h-th-40"))
+    font_size: int = int(_get("font_size", int, 48))
+    font_color: str = str(_get("font_color", str, "white"))
+    box: bool = bool(_get("box", bool, False))
+    box_color: str = str(_get("box_color", str, "black@0.5"))
+    fade_in_s: float = float(_get("fade_in_sec", float, 0.3))
+    fade_out_s: float = float(_get("fade_out_sec", float, 0.3))
+
+    # Re-validate value ranges (multi-layer defence)
+    if start_sec < 0:
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message="The timeline contains an invalid text overlay: start_sec < 0.",
+            hint="Re-annotate with clipwright_add_text using a non-negative start_sec.",
+        )
+    if duration_sec <= 0:
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message="The timeline contains an invalid text overlay: duration_sec <= 0.",
+            hint="Re-annotate with clipwright_add_text using a positive duration_sec.",
+        )
+    if font_size <= 0:
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message="The timeline contains an invalid text overlay: font_size <= 0.",
+            hint="Re-annotate with clipwright_add_text using a positive font_size.",
+        )
+
+    # Validate text / x / y for control characters
+    for field_name, field_val in (("text", text), ("x", x), ("y", y)):
+        for ch in field_val:
+            if ch in _CONTROL_CHARS:
+                raise ClipwrightError(
+                    code=ErrorCode.INVALID_INPUT,
+                    message=(
+                        f"The timeline contains an invalid text overlay:"
+                        f" '{field_name}' contains a control character."
+                    ),
+                    hint=(
+                        "Re-annotate with clipwright_add_text without"
+                        " control characters."
+                    ),
+                )
+
+    # Validate colour values against allowlist
+    for color_field, color_val in (
+        ("font_color", font_color),
+        ("box_color", box_color),
+    ):
+        if not _COLOR_ALLOWLIST_RE.match(color_val):
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message=(
+                    f"The timeline contains an invalid text overlay:"
+                    f" '{color_field}' is not in the allowed format."
+                ),
+                hint=(
+                    "Use a named color, #RRGGBB, or name@alpha"
+                    " (e.g. white, #FFCC00, black@0.5)."
+                ),
+            )
+
+    end_s = round(start_sec + duration_sec, 6)
+
+    return TextOverlay(
+        text=text,
+        start_s=start_sec,
+        end_s=end_s,
+        x=x,
+        y=y,
+        font_size=font_size,
+        font_color=font_color,
+        box=box,
+        box_color=box_color,
+        fade_in_s=fade_in_s,
+        fade_out_s=fade_out_s,
+        font_path=resolved_font_path,
+    )
+
+
+def _build_alpha_expr(o: TextOverlay) -> str:
+    """Build the ffmpeg drawtext alpha= expression for fade-in/fade-out.
+
+    Zero-division guard: when fade_in_s or fade_out_s is 0, the corresponding
+    branch is omitted (returning '1' instead of '(t-s)/0').
+
+    Expression shape (when both fades are non-zero):
+        if(lt(t,s+fi),(t-s)/ fi,if(gt(t,e-fo),(e-t)/ fo,1))
+
+    Division uses a space before the denominator (``/ {fi}``) to prevent the
+    string ``/0`` from appearing when a denominator like ``0.3`` is used.
+    ffmpeg's av_expr_eval ignores whitespace in expressions.
+
+    Args:
+        o: TextOverlay with start_s, end_s, fade_in_s, fade_out_s populated.
+
+    Returns:
+        Alpha expression string suitable for alpha= in a drawtext filter.
+    """
+    s = o.start_s
+    e = o.end_s
+    fi = o.fade_in_s
+    fo = o.fade_out_s
+
+    has_fi = fi > 0
+    has_fo = fo > 0
+
+    if not has_fi and not has_fo:
+        return "1"
+
+    if has_fi and not has_fo:
+        return f"if(lt(t,{s}+{fi}),(t-{s})/ {fi},1)"
+
+    if not has_fi and has_fo:
+        return f"if(gt(t,{e}-{fo}),({e}-t)/ {fo},1)"
+
+    # Both fades non-zero
+    return f"if(lt(t,{s}+{fi}),(t-{s})/ {fi},if(gt(t,{e}-{fo}),({e}-t)/ {fo},1))"
+
+
+def _build_drawtext_segment(o: TextOverlay) -> str:
+    """Build a single drawtext filter option string for one TextOverlay.
+
+    Encoding rules (ADR-T7 / §8):
+    - text / x / y: single-quoted + _escape_drawtext_text applied.
+    - fontfile: _escape_filtergraph applied, then single-quoted (Windows path
+      support; same convention as subtitle filename=).
+    - fontcolor / boxcolor: allowlist-validated, placed without quotes.
+    - fontsize: int, no quoting needed.
+    - enable: single-quoted 'between(t,start,end)'.
+    - alpha: single-quoted expression string.
+    - box / boxcolor: omitted entirely when o.box is False.
+
+    Args:
+        o: validated TextOverlay value object.
+
+    Returns:
+        drawtext filter option string (without leading/trailing
+        filter separators).
+    """
+    assert o.font_path is not None, "font_path must be resolved before building segment"
+
+    esc_text = _escape_drawtext_text(o.text)
+    esc_fontfile = _escape_filtergraph(o.font_path)
+    esc_x = _escape_drawtext_text(o.x)
+    esc_y = _escape_drawtext_text(o.y)
+    alpha_expr = _build_alpha_expr(o)
+
+    seg = (
+        f"drawtext=text='{esc_text}'"
+        f":fontfile='{esc_fontfile}'"
+        f":fontsize={o.font_size}"
+        f":fontcolor={o.font_color}"
+        f":x='{esc_x}'"
+        f":y='{esc_y}'"
+        f":enable='between(t,{o.start_s},{o.end_s})'"
+        f":alpha='{alpha_expr}'"
+    )
+    if o.box:
+        seg += f":box=1:boxcolor={o.box_color}"
+    return seg
+
+
+def _append_drawtext_filter(
+    filter_parts: list[str],
+    video_map_label: str,
+    overlays: list[TextOverlay],
+) -> str:
+    """Append the drawtext stage to filter_parts and return the new video label.
+
+    Modelled after _append_subtitle_filter (745-811).  When overlays is empty,
+    filter_parts is left unchanged and video_map_label is returned as-is
+    (backward compatible; ADR-T3).
+
+    When overlays is non-empty, all segments are comma-joined into a single
+    filter chain entry:
+        {label}seg1,seg2,...[outvtext]
+    and [outvtext] is returned as the new video_map_label.
+
+    OQ-4: multiple overlays share one [outvtext] label via comma-joining
+    (no intermediate [outvtext0]/[outvtext1] labels).
+
+    Args:
+        filter_parts: mutable list of filter_complex segments.
+        video_map_label: current terminal video label (e.g. '[outv]').
+        overlays: list of validated TextOverlay objects.
+
+    Returns:
+        New video_map_label ('[outvtext]') when overlays is non-empty;
+        original video_map_label otherwise.
+    """
+    if not overlays:
+        return video_map_label
+
+    segments = ",".join(_build_drawtext_segment(o) for o in overlays)
+    filter_parts.append(f"{video_map_label}{segments}[outvtext]")
+    return "[outvtext]"
+
+
+def _collect_text_overlays(
+    timeline: otio.schema.Timeline,
+) -> list[TextOverlay]:
+    """Read text_overlay markers from the timeline, resolve fonts, and convert.
+
+    Called by build_plan when a KeptRangeList with an attached timeline is
+    received.  Returns an empty list when there are no text_overlay markers
+    (preserving backward compatibility).
+
+    Font resolution: all overlays that share the same font_path value reuse the
+    same resolved path.  Resolution failure raises INVALID_INPUT.
+
+    Args:
+        timeline: OTIO timeline object (from KeptRangeList._timeline).
+
+    Returns:
+        List of validated TextOverlay objects, or [].
+    """
+    markers = get_markers(timeline, kind="text_overlay")
+    if not markers:
+        return []
+
+    overlays: list[TextOverlay] = []
+    # Cache resolved font paths to avoid repeated is_file() calls for the same
+    # raw font_path value.
+    font_cache: dict[str | None, str] = {}
+
+    for marker in markers:
+        cw: Any = marker.metadata.get("clipwright", {})
+        raw_font = cw.get("font_path") if isinstance(cw, Mapping) else None
+
+        if raw_font not in font_cache:
+            font_cache[raw_font] = _resolve_font_path(
+                str(raw_font) if raw_font is not None else None
+            )
+        resolved = font_cache[raw_font]
+
+        overlays.append(_marker_to_text_overlay(marker, resolved))
+
+    return overlays
 
 
 def _rgb_to_ass_colour(hex_color: str) -> str:
@@ -1075,6 +1528,7 @@ def _build_filter_complex(
     loudness_directive: LoudnessDirective | None,
     options: RenderOptions,
     probe_info: ProbeInfo | None = None,
+    text_overlays: list[TextOverlay] | None = None,
 ) -> tuple[str, str, str, bool, bool]:
     """Build the filter_complex string, video_map_label, and audio_map_label
     (M-2).
@@ -1087,6 +1541,9 @@ def _build_filter_complex(
     (ADR-F2) with even-rounding applied to W/H (ADR-F4). probe_info is used to
     determine frame_h for subtitle counter-scaling when width/height are not
     specified (ADR-F3 revised).
+
+    text_overlays: when non-empty, _append_drawtext_filter is called after the
+        subtitle stage to inject the drawtext filter chain (WP-2; ADR-T3).
 
     Returns:
         (filter_complex, video_map_label, audio_map_label, use_afftdn,
@@ -1192,6 +1649,14 @@ def _build_filter_complex(
     if options.subtitle is not None:
         video_map_label = _append_subtitle_filter(
             filter_parts, video_map_label, options.subtitle, frame_h
+        )
+
+    # Inject drawtext stage after subtitle (ADR-T3; WP-2).
+    # When text_overlays is empty/None, _append_drawtext_filter is a no-op
+    # (backward compatible; FR-6-6).
+    if text_overlays:
+        video_map_label = _append_drawtext_filter(
+            filter_parts, video_map_label, text_overlays
         )
 
     filter_complex = ";".join(filter_parts)
@@ -1385,6 +1850,7 @@ def _build_multi_source_filter_complex(
     loudness_directive: LoudnessDirective | None,
     options: RenderOptions,
     first_source: str,
+    text_overlays: list[TextOverlay] | None = None,
 ) -> tuple[str, str, str, bool, bool]:
     """Build the filter_complex for the multi-source path
     (ADR-C1/C5-r2/C7-r2/C11-r2).
@@ -1399,6 +1865,9 @@ def _build_multi_source_filter_complex(
     - _build_clip_filters: generates per-clip video/audio filter strings.
     - This function: assembles the concat filter, calls _append_audio_pipe,
       and determines return values.
+
+    text_overlays: when non-empty, _append_drawtext_filter is called after the
+        subtitle stage (WP-2; ADR-T3).
 
     Returns:
         (filter_complex, video_map_label, audio_map_label, use_afftdn,
@@ -1459,6 +1928,13 @@ def _build_multi_source_filter_complex(
     if options.subtitle is not None:
         video_map_label = _append_subtitle_filter(
             filter_parts, video_map_label, options.subtitle, target_h
+        )
+
+    # Inject drawtext stage after subtitle (ADR-T3; WP-2).
+    # When text_overlays is empty/None, _append_drawtext_filter is a no-op.
+    if text_overlays:
+        video_map_label = _append_drawtext_filter(
+            filter_parts, video_map_label, text_overlays
         )
 
     filter_complex = ";".join(filter_parts)
@@ -1624,6 +2100,7 @@ def build_plan(
     loudness: dict[str, Any] | None = None,
     source_probes: dict[str, ProbeInfo] | None = None,
     bgm: BgmClip | None = None,
+    text_overlays: list[TextOverlay] | None = None,
 ) -> RenderPlan:
     """Return filter_complex string and ffmpeg argument list as a RenderPlan
     (ADR-1/ADR-7).
@@ -1667,7 +2144,20 @@ def build_plan(
       len(input_sources) (bgm_source is not included in input_sources; DC-AS-005).
       bgm=None is identical to the previous behaviour (backward compatible;
       ADR-B7).
+    - text_overlays: when None and ranges is a KeptRangeList with a _timeline,
+      text_overlay markers are read from the timeline automatically.  When
+      explicitly set to [] (empty list), no overlays are applied (backward
+      compatible; FR-6-6).  When non-empty, drawtext is appended after subtitle
+      (ADR-T3; WP-2).
     """
+    # Resolve text_overlays: prefer the explicit argument; fall back to reading
+    # markers from the attached timeline (KeptRangeList._timeline).
+    # When text_overlays=[] is passed explicitly (backward-compat test), that
+    # empty list is used directly (no marker lookup).
+    if text_overlays is None:
+        tl_ref: otio.schema.Timeline | None = getattr(ranges, "_timeline", None)
+        text_overlays = _collect_text_overlays(tl_ref) if tl_ref is not None else []
+
     # Validate the denoise directive (raises INVALID_INPUT /
     # UNSUPPORTED_OPERATION on failure)
     denoise_directive: DenoiseDirective | None = None
@@ -1753,6 +2243,7 @@ def build_plan(
                 loudness_directive,
                 options,
                 first_source,
+                text_overlays=text_overlays,
             )
         )
 
@@ -1778,6 +2269,7 @@ def build_plan(
                 loudness_directive,
                 options,
                 probe_info,
+                text_overlays=text_overlays,
             )
         )
 
