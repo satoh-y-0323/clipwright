@@ -221,8 +221,9 @@ For details, see [docs/clipwright-spec.md](docs/clipwright-spec.md).
 | `clipwright-noise` | `clipwright_reduce_noise` | Annotate OTIO timeline with FFmpeg `afftdn` noise-reduction settings |
 | `clipwright-transcribe` | `clipwright_transcribe` | Transcribe audio to text via whisper-cli and write word-level OTIO markers |
 | `clipwright-bgm` | `clipwright_place_bgm` | Write BGM placement annotations (volume / fade / ducking) to OTIO timeline |
-| `clipwright-render` | `clipwright_render` | Realize OTIO edit operations (trim / concat / filters / LinearTimeWarp speed changes) to an output media file via FFmpeg |
+| `clipwright-render` | `clipwright_render` | Realize OTIO edit operations (trim / concat / filters / LinearTimeWarp speed changes / drawtext overlays) to an output media file via FFmpeg |
 | `clipwright-speed` | `clipwright_set_speed` | Annotate a clip with a speed multiplier via OTIO `LinearTimeWarp`; materialized by `clipwright-render` |
+| `clipwright-text` | `clipwright_add_text` | Annotate an OTIO timeline with text overlay settings (drawtext); rendered to video by `clipwright-render` |
 | `clipwright-wrap` | `clipwright_wrap_text` | Wrap long text lines with line-break annotations in OTIO timeline |
 | `clipwright-scene` | `clipwright_detect_scenes` | Detect shot boundaries via FFmpeg `scdet` or PySceneDetect and write OTIO markers |
 | `clipwright-frames` | `clipwright_extract_frames` | Extract still frames from video at specified times, scene boundaries, or fixed intervals; writes images, OTIO markers, and a JSON manifest |
@@ -268,6 +269,9 @@ Each clipwright tool is a standalone MCP server. Register them in your MCP clien
     },
     "clipwright-speed": {
       "command": "clipwright-speed"
+    },
+    "clipwright-text": {
+      "command": "clipwright-text"
     }
   }
 }

@@ -5,6 +5,18 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`clipwright-text` package (v0.1.0)**: New MCP tool `clipwright_add_text` that annotates an
+  OTIO timeline with text overlay settings (position, font, size, color, timing). The annotation
+  is non-destructive; the `drawtext` filter pass is materialized in a single render pass by
+  `clipwright-render`.
+- **`clipwright-render` drawtext support (v0.4.0)**: `clipwright_render` now realizes text
+  overlay annotations written by `clipwright_add_text`, applying them via the FFmpeg `drawtext`
+  filter in a single render pass.
+
 ## [0.5.0] - 2026-06-17
 
 ### Added

@@ -78,6 +78,7 @@ jobs:
             "clipwright-render"
             "clipwright-scene"
             "clipwright-speed"
+            "clipwright-text"
             "clipwright-wrap"
           )
           for pkg in "${PACKAGES[@]}"; do
