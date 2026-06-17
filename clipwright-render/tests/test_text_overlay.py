@@ -1,6 +1,6 @@
-"""test_text_overlay.py — Red tests for text_overlay → drawtext extension (WP-2).
+"""test_text_overlay.py — Tests for text_overlay → drawtext extension (WP-2).
 
-Target functions (all new — not yet implemented):
+Target functions covered by this test file:
   - _escape_drawtext_text(s: str) -> str
   - TextOverlay (frozen dataclass)
   - _build_alpha_expr(o: TextOverlay) -> str
@@ -750,7 +750,7 @@ class TestMultipleOverlaysCommaJoined:
 
 
 # ---------------------------------------------------------------------------
-# Review fix Red tests — render-side validations not yet implemented
+# Render-side validations (review cycle additions)
 # References: code-review-report-20260617-234432.md (M-1, M-2, H-1, L-3)
 #             security-review-report-review-security.md (S-M-1, S-M-2, S-M-3,
 #                                                        S-L-2, S-L-3)
@@ -766,7 +766,6 @@ class TestFadeSumValidation:
     """_marker_to_text_overlay raises INVALID_INPUT when fade_in+fade_out > duration.
 
     References: S-M-2 (security-review), M-1 (code-review), ADR-T4.
-    These tests are RED: the render-side fade_sum check is not yet implemented.
     """
 
     def _build_with_fades(
@@ -839,7 +838,6 @@ class TestEmptyTextValidation:
     """_marker_to_text_overlay raises INVALID_INPUT for empty text.
 
     Reference: S-M-3 (security-review).
-    These tests are RED: the empty-text check is not yet implemented on render side.
     """
 
     def _build_with_text(self, text: str) -> None:
@@ -883,8 +881,6 @@ class TestErrorMessageDoesNotExposeInternals:
     """ClipwrightError.message must use fixed wording, not field-name expansion.
 
     Reference: S-M-1 (security-review, CWE-209).
-    These tests are RED: the current render-side messages still contain
-    field_name (e.g. 'font_color', 'text', 'x', 'y', 'box_color').
     """
 
     # Internal field names that must NOT appear in .message (only allowed in .hint)
@@ -949,11 +945,9 @@ class TestFontPathValidation:
 
     References: M-2 (code-review, filtergraph injection via single-quote),
                 S-L-2 (security-review, no max_length/pattern constraint).
-    These tests are RED: the render-side font_path character/length check
-    is not yet implemented.
 
     Path.is_file is mocked so tests do not require real font files; the
-    character/length check must fire BEFORE the is_file check.
+    character/length check fires before the is_file check.
     """
 
     def _build_with_font_path(self, font_path: str | None) -> None:
@@ -1012,8 +1006,7 @@ class TestBuildDrawtextSegmentAssertReplaced:
     """_build_drawtext_segment raises ClipwrightError(INTERNAL) for font_path=None.
 
     Reference: S-L-3 (security-review).
-    Current code uses `assert` which is a no-op under python -O.
-    This test is RED: the impl still uses assert (not if-raise).
+    Replaces `assert` (no-op under python -O) with an explicit if-raise.
     """
 
     def test_font_path_none_raises_clipwright_internal_not_assertion_error(
@@ -1025,8 +1018,7 @@ class TestBuildDrawtextSegmentAssertReplaced:
         )
 
         overlay = _make_text_overlay_dataclass(font_path=None)
-        # Under normal execution, assert fires → AssertionError.
-        # After fix, if-raise fires → ClipwrightError(INTERNAL).
+        # if-raise fires → ClipwrightError(INTERNAL), not AssertionError.
         with pytest.raises(ClipwrightError) as exc_info:
             _build_drawtext_segment(overlay)
         assert exc_info.value.code == ErrorCode.INTERNAL
@@ -1038,7 +1030,7 @@ class TestBuildDrawtextSegmentAssertReplaced:
         )
 
         overlay = _make_text_overlay_dataclass(font_path=None)
-        # After fix: should raise ClipwrightError, not AssertionError
+        # Raises ClipwrightError (not AssertionError) via explicit if-raise.
         with pytest.raises(Exception) as exc_info:
             _build_drawtext_segment(overlay)
         # The exception type must not be AssertionError
