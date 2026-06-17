@@ -19,6 +19,7 @@ Design decisions:
 
 from __future__ import annotations
 
+import collections.abc
 from pathlib import Path
 
 import opentimelineio as otio
@@ -46,11 +47,84 @@ def _is_clipwright_speed_warp(effect: object) -> bool:
     ADR-SP-4 conservative predicate: removes only when the effect is a
     LinearTimeWarp AND the clip's clipwright metadata has kind == 'speed'.
     Foreign LinearTimeWarps (no clipwright metadata) are NOT removed (R-3).
+    CR L-4: guard get_clipwright_metadata return value with isinstance(cw, Mapping)
+    before calling .get() to handle AnyDictionary and non-dict return types.
     """
     if not isinstance(effect, otio.schema.LinearTimeWarp):
         return False
     cw = get_clipwright_metadata(effect)
+    if not isinstance(cw, collections.abc.Mapping):
+        return False
     return cw.get("kind") == "speed"
+
+
+def _check_output_within_timeline_dir(timeline: Path, output: Path) -> None:
+    """Verify that output is within the timeline's parent directory tree.
+
+    Mirrors clipwright-render _check_within_timeline_dir boundary contract
+    (SR M-2). Allows recursive subdirectories; raises PATH_NOT_ALLOWED only
+    when the resolved output is outside the timeline directory tree.
+
+    Re-implemented locally to avoid cross-package import of clipwright-render.
+    Uses Path.resolve() + string prefix comparison with separator guard to
+    avoid false matches on directory name prefixes.
+
+    Falls back to Path.absolute() when resolve() raises OSError (network
+    paths, symlink loops, etc.) and silently skips only when absolute() also
+    fails.
+
+    Args:
+        timeline: Resolved path to the input OTIO timeline file.
+        output: Output path to validate against the boundary.
+
+    Raises:
+        ClipwrightError: PATH_NOT_ALLOWED when output is outside the
+            timeline's parent directory tree.
+    """
+    try:
+        allowed_base = timeline.parent.resolve()
+        target_resolved = output.resolve()
+        target_str = str(target_resolved)
+        base_str = str(allowed_base)
+        if not (
+            target_str == base_str
+            or target_str.startswith(base_str + "/")
+            or target_str.startswith(base_str + "\\")
+        ):
+            raise ClipwrightError(
+                code=ErrorCode.PATH_NOT_ALLOWED,
+                message="Output path points outside the project boundary.",
+                hint=(
+                    "Place the output file within the same directory as the "
+                    "OTIO timeline, or in a subdirectory of it."
+                ),
+            )
+    except ClipwrightError:
+        raise
+    except OSError:
+        # resolve() failed (network path, symlink loop, etc.): fall back to
+        # absolute()-based best-effort comparison.
+        try:
+            allowed_base_abs = str(timeline.parent.absolute())
+            target_abs = str(output.absolute())
+            if not (
+                target_abs == allowed_base_abs
+                or target_abs.startswith(allowed_base_abs + "/")
+                or target_abs.startswith(allowed_base_abs + "\\")
+            ):
+                raise ClipwrightError(
+                    code=ErrorCode.PATH_NOT_ALLOWED,
+                    message="Output path points outside the project boundary.",
+                    hint=(
+                        "Place the output file within the same directory as the "
+                        "OTIO timeline, or in a subdirectory of it."
+                    ),
+                )
+        except ClipwrightError:
+            raise
+        except OSError:
+            # Skip only when absolute() also fails (truly unresolvable path).
+            pass
 
 
 def _set_speed_inner(
@@ -61,33 +135,47 @@ def _set_speed_inner(
     """Internal implementation of set_speed. Raises ClipwrightError on failure.
 
     Validation order:
-      1. output suffix == .otio; output parent exists; output != timeline
-      2. speed in [0.25, 8.0]
-      3. load_timeline (FILE_NOT_FOUND / OTIO_ERROR propagate)
-      4. first TrackKind.Video track exists
-      5. clip-only index space; clip_index range check
-      6. apply: remove old clipwright warp, append new, set metadata
-      7. save_timeline atomically
-      8. return ok_result
+      1. output suffix == .otio
+      2. output parent exists
+      3. output boundary check (PATH_NOT_ALLOWED when outside timeline dir)
+      4. output != timeline
+      5. speed in [0.25, 8.0]
+      6. load_timeline (FILE_NOT_FOUND / OTIO_ERROR propagate)
+      7. first TrackKind.Video track exists
+      8. clip-only index space; clip_index range check
+      9. apply: remove old clipwright warp, append new, set metadata
+     10. save_timeline atomically
+     11. return ok_result
+
+    Boundary check (step 3) is placed after suffix/parent checks so that
+    INVALID_INPUT and FILE_NOT_FOUND are surfaced first (matching render's
+    PATH_NOT_ALLOWED-priority ordering where format errors take precedence).
     """
     out = Path(output)
     inp = Path(timeline)
 
-    # --- Step 1: output path validation ---
+    # --- Step 1: output suffix validation (SR L-1: no raw suffix in message) ---
     if out.suffix.lower() != ".otio":
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message=f"Output path must have a .otio extension, got: {out.suffix!r}",
+            message="Output path must have a .otio extension.",
             hint="Change the output file extension to .otio (e.g., 'result.otio').",
         )
 
+    # --- Step 2: output parent exists (SR M-1: no path in message or hint) ---
     if not out.parent.exists():
         raise ClipwrightError(
             code=ErrorCode.FILE_NOT_FOUND,
-            message=f"Output directory does not exist: {out.parent}",
+            message="Output directory does not exist.",
             hint="Create the output directory before calling clipwright_set_speed.",
         )
 
+    # --- Step 3: output boundary check (SR M-2) ---
+    # Check after suffix/parent so format errors surface first (consistent with
+    # render's ordering where content validation precedes boundary validation).
+    _check_output_within_timeline_dir(inp, out)
+
+    # --- Step 4: output != timeline ---
     if out.resolve() == inp.resolve():
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
@@ -97,7 +185,7 @@ def _set_speed_inner(
             ),
         )
 
-    # --- Step 2: speed range validation (OQ-1) ---
+    # --- Step 5: speed range validation (OQ-1) ---
     speed = options.speed
     if speed < _SPEED_MIN or speed > _SPEED_MAX:
         raise ClipwrightError(
@@ -106,7 +194,7 @@ def _set_speed_inner(
             hint=f"Set speed within {_SPEED_MIN}-{_SPEED_MAX}.",
         )
 
-    # --- Step 3: load timeline ---
+    # --- Step 6: load timeline ---
     # ClipwrightError(FILE_NOT_FOUND / OTIO_ERROR) propagates to set_speed boundary.
     if not inp.exists():
         raise ClipwrightError(
@@ -116,7 +204,7 @@ def _set_speed_inner(
         )
     timeline_obj = load_timeline(timeline)
 
-    # --- Step 4: select first Video track ---
+    # --- Step 7: select first Video track ---
     video_track: otio.schema.Track | None = None
     for track in timeline_obj.tracks:
         if track.kind == otio.schema.TrackKind.Video:
@@ -133,7 +221,7 @@ def _set_speed_inner(
             ),
         )
 
-    # --- Step 5: build clip-only index space (gaps/transitions excluded) ---
+    # --- Step 8: build clip-only index space (gaps/transitions excluded) ---
     clips: list[otio.schema.Clip] = [
         item for item in video_track if isinstance(item, otio.schema.Clip)
     ]
@@ -147,7 +235,7 @@ def _set_speed_inner(
             ),
         )
 
-    # --- Step 5b: resolve target clip indices ---
+    # --- Step 8b: resolve target clip indices ---
     clip_index = options.clip_index
     if clip_index is None:
         target_indices = list(range(len(clips)))
@@ -156,10 +244,7 @@ def _set_speed_inner(
         if clip_index > max_index:
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
-                message=(
-                    f"clip_index {clip_index} is out of range for a track with "
-                    f"{len(clips)} clip(s)."
-                ),
+                message="clip_index is out of range for the video track.",
                 hint=(
                     f"Provide a clip_index within 0-{max_index}, or omit it to "
                     "apply the speed change to all clips."
@@ -167,7 +252,7 @@ def _set_speed_inner(
             )
         target_indices = [clip_index]
 
-    # --- Step 6: per-target clip: remove old warp, append new, set metadata ---
+    # --- Step 9: per-target clip: remove old warp, append new, set metadata ---
     for idx in target_indices:
         clip = clips[idx]
 
@@ -202,10 +287,10 @@ def _set_speed_inner(
             },
         )
 
-    # --- Step 7: save atomically; input file is never written ---
+    # --- Step 10: save atomically; input file is never written ---
     save_timeline(timeline_obj, output)
 
-    # --- Step 8: build result ---
+    # --- Step 11: build result ---
     applied_count = len(target_indices)
     out_resolved = out.resolve()
     summary = (

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
+from clipwright.envelope import error_result
 from clipwright.schemas import ToolResult
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
@@ -57,8 +58,6 @@ def clipwright_set_speed(
     if options is None:
         # speed is required in SetSpeedOptions, so None options cannot resolve to
         # a valid default. Return an error envelope.
-        from clipwright.envelope import error_result
-
         return error_result(
             "INVALID_INPUT",
             "options.speed is required but options was not provided.",

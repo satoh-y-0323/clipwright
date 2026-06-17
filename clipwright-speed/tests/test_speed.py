@@ -831,9 +831,7 @@ class TestOutputBoundaryCheck:
     FAILS until speed.py adds the boundary validation.
     """
 
-    def test_output_outside_timeline_dir_path_not_allowed(
-        self, tmp_path: Path
-    ) -> None:
+    def test_output_outside_timeline_dir_path_not_allowed(self, tmp_path: Path) -> None:
         """Output outside timeline directory must return PATH_NOT_ALLOWED.
 
         Layout:
@@ -985,9 +983,7 @@ class TestClipIndexOORMessageNoNumbers:
         assert result["ok"] is False
         error = result.get("error") or {}
         hint = error.get("hint", "")
-        assert "0-2" in hint, (
-            f"hint must contain valid range '0-2', got: {hint!r}"
-        )
+        assert "0-2" in hint, f"hint must contain valid range '0-2', got: {hint!r}"
 
     def test_clip_index_oor_simple_message_no_numeric_index(
         self, simple_timeline_file: Path, tmp_dir: Path
@@ -1009,9 +1005,7 @@ class TestClipIndexOORMessageNoNumbers:
         )
         # hint must still contain the valid range
         hint = error.get("hint", "")
-        assert "0-1" in hint, (
-            f"hint must contain valid range '0-1', got: {hint!r}"
-        )
+        assert "0-1" in hint, f"hint must contain valid range '0-1', got: {hint!r}"
 
 
 # ===========================================================================

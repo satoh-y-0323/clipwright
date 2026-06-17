@@ -41,6 +41,7 @@ Design decisions:
 
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -74,6 +75,30 @@ class AfftdnParams(BaseModel):
 # Defence-in-depth alongside the Literal["w","v"] type constraint,
 # referenced from _append_audio_pipe.
 _VALID_NT_VALUES: frozenset[str] = frozenset({"w", "v"})
+
+# ---------------------------------------------------------------------------
+# Speed / warp constants
+# ---------------------------------------------------------------------------
+
+# Supported playback speed range (mirrors clipwright-speed bounds).
+# Both constants are used in resolve_kept_ranges validation and _is_warp_identity.
+_SPEED_MIN: float = 0.25
+_SPEED_MAX: float = 8.0
+
+# Tolerance for treating a time_scalar as identity (1.0) after OTIO round-trip
+# float drift. H-1 validation guarantees values are already in [0.25, 8.0] before
+# these checks run; 1.0 is the only identity value in that range.
+_WARP_IDENTITY_THRESHOLD: float = 1e-9
+
+
+def _is_warp_identity(s: float) -> bool:
+    """Return True when *s* is close enough to 1.0 to be treated as no-warp.
+
+    Protects against OTIO round-trip float drift (CR M-2 / ADR-SP-5).
+    Callers must ensure *s* is already validated finite and in [_SPEED_MIN, _SPEED_MAX]
+    (i.e. resolve_kept_ranges has already run) before calling this function.
+    """
+    return abs(s - 1.0) <= _WARP_IDENTITY_THRESHOLD
 
 
 class DenoiseDirective(BaseModel):
@@ -439,6 +464,29 @@ def resolve_kept_ranges(timeline: otio.schema.Timeline) -> list[KeptRange]:
             for effect in item.effects:
                 if type(effect) is otio.schema.LinearTimeWarp:
                     time_scalar = float(effect.time_scalar)
+                    # SR H-1 / M-3: validate time_scalar value domain before
+                    # building KeptRange. nan/inf and values outside the
+                    # supported range [_SPEED_MIN, _SPEED_MAX] are rejected here
+                    # — the single chokepoint where untrusted OTIO values enter.
+                    if math.isnan(time_scalar) or math.isinf(time_scalar):
+                        raise ClipwrightError(
+                            code=ErrorCode.INVALID_INPUT,
+                            message=(
+                                f"LinearTimeWarp time_scalar is not a finite number"
+                                f" ({time_scalar!r})."
+                            ),
+                            hint=("Supported playback speed range is 0.25 to 8.0."),
+                        )
+                    if not (_SPEED_MIN <= time_scalar <= _SPEED_MAX):
+                        raise ClipwrightError(
+                            code=ErrorCode.INVALID_INPUT,
+                            message=(
+                                f"LinearTimeWarp time_scalar {time_scalar!r} is"
+                                f" outside the supported range"
+                                f" [{_SPEED_MIN}, {_SPEED_MAX}]."
+                            ),
+                            hint=("Supported playback speed range is 0.25 to 8.0."),
+                        )
                     break
             ranges.append(
                 KeptRange(
@@ -762,6 +810,11 @@ def _build_atempo_chain(speed: float) -> str:
 
     Stage values are formatted with :g (no trailing zeros).
 
+    Precondition: speed must be finite > 0 (callers pre-validate; values outside
+    0.25–8.0 are rejected upstream in resolve_kept_ranges). speed=1.0 is valid
+    and returns a single "atempo=1" stage, but callers typically skip this function
+    for identity speed (_is_warp_identity).
+
     Examples:
         speed=2.0  -> "atempo=2"
         speed=4.0  -> "atempo=2,atempo=2"
@@ -771,11 +824,23 @@ def _build_atempo_chain(speed: float) -> str:
         speed=0.3  -> "atempo=0.5,atempo=0.6"
 
     Args:
-        speed: playback speed multiplier (must be > 0).
+        speed: playback speed multiplier. Must be finite and > 0.
 
     Returns:
         Comma-separated atempo filter chain string.
+
+    Raises:
+        ValueError: when speed is not finite or not > 0 (defence-in-depth;
+            CR L-2 / SR H-1(b)).
     """
+    # Defence-in-depth guard (CR L-2 / SR H-1(b)): prevent infinite loops from
+    # zero, negative, inf, or nan inputs. resolve_kept_ranges rejects these
+    # upstream, so this branch should never be reached in normal usage.
+    if not math.isfinite(speed) or speed <= 0:
+        raise ValueError(
+            f"_build_atempo_chain requires a finite speed > 0, got {speed!r}"
+        )
+
     stages: list[float] = []
     remaining = speed
 
@@ -1030,7 +1095,7 @@ def _build_filter_complex(
         end = round(start + _to_seconds(r.source_range.duration), 6)
         vl = f"v{i}"
         s = r.time_scalar
-        if s != 1.0:
+        if not _is_warp_identity(s):
             # Warp: setpts=(PTS-STARTPTS)/{s} (ADR-SP-6) to change video speed.
             filter_parts.append(
                 f"[0:v]trim=start={start}:end={end},setpts=(PTS-STARTPTS)/{s:g}[{vl}]"
@@ -1043,7 +1108,7 @@ def _build_filter_complex(
 
         if has_audio:
             al = f"a{i}"
-            if s != 1.0:
+            if not _is_warp_identity(s):
                 # Warp: apply atempo chain after asetpts (ADR-SP-3).
                 atempo = _build_atempo_chain(s)
                 filter_parts.append(
@@ -1239,9 +1304,11 @@ def _build_clip_filters(
         vl = f"v{i}"
         # Per-clip video: trim → setpts[warp] → fps → scale/pad/crop/setsar (fit-based).
         # fps written with at least 5 decimal places (ADR-C2-r2; NTSC fps precision)
-        # Warp: setpts=(PTS-STARTPTS)/{s} when s != 1.0 (ADR-SP-5/SP-6).
+        # Warp: setpts=(PTS-STARTPTS)/{s} when not identity (ADR-SP-5/SP-6).
         # fps stays downstream of setpts (per fixed decision in architecture).
-        setpts_expr = f"(PTS-STARTPTS)/{s:g}" if s != 1.0 else "PTS-STARTPTS"
+        setpts_expr = (
+            f"(PTS-STARTPTS)/{s:g}" if not _is_warp_identity(s) else "PTS-STARTPTS"
+        )
         base = (
             f"[{k}:v]trim=start={start}:end={end},setpts={setpts_expr},"
             f"fps={target_fps:.5f},"
@@ -1268,7 +1335,7 @@ def _build_clip_filters(
             probe = source_probes[r.source]
             if probe.audio_count >= 1:
                 # Audio present: atrim → asetpts → [atempo warp] → aformat.
-                if s != 1.0:
+                if not _is_warp_identity(s):
                     atempo = _build_atempo_chain(s)
                     filter_parts.append(
                         f"[{k}:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS,"
@@ -1283,8 +1350,8 @@ def _build_clip_filters(
             else:
                 # No audio: pad with anullsrc. When warped, use warped duration
                 # so the silent pad matches the video duration (OQ-2).
-                pad_dur = dur / s if s != 1.0 else dur
-                if s != 1.0:
+                pad_dur = dur / s if not _is_warp_identity(s) else dur
+                if not _is_warp_identity(s):
                     atempo = _build_atempo_chain(s)
                     filter_parts.append(
                         f"anullsrc=channel_layout=stereo:sample_rate=48000,"

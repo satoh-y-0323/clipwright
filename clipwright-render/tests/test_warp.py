@@ -670,7 +670,9 @@ class TestTimeScalarValueDomain:
             f"speed={speed} must raise INVALID_INPUT, got {exc.code}"
         )
         assert exc.message, f"speed={speed}: exc.message must be non-empty"
-        assert exc.hint, f"speed={speed}: exc.hint must be non-empty (state supported range)"
+        assert exc.hint, (
+            f"speed={speed}: exc.hint must be non-empty (state supported range)"
+        )
         # hint must mention the supported range 0.25–8.0
         assert "0.25" in exc.hint and "8" in exc.hint, (
             f"speed={speed}: hint must state supported range 0.25-8.0, got: {exc.hint!r}"
@@ -785,9 +787,10 @@ class TestTimeScalarOneFloatRobustness:
     Float serialisation must not introduce drift that causes the s != 1.0 branch to fire.
     """
 
-    def test_speed_1_roundtrip_byte_identical(self, tmp_path: pytest.TempPathFactory) -> None:
+    def test_speed_1_roundtrip_byte_identical(
+        self, tmp_path: pytest.TempPathFactory
+    ) -> None:
         """LinearTimeWarp(1.0) saved → loaded → build_plan must match unwarped golden."""
-        import tempfile
 
         from clipwright.otio_utils import load_timeline, save_timeline
 
@@ -860,9 +863,7 @@ class TestFreezeFrameExclusion:
         assert "setpts=(PTS-STARTPTS)/0" not in fc, (
             "FreezeFrame must not produce division-by-zero setpts (CR L-6)"
         )
-        assert "atempo=" not in fc, (
-            "FreezeFrame must not produce atempo stage (CR L-6)"
-        )
+        assert "atempo=" not in fc, "FreezeFrame must not produce atempo stage (CR L-6)"
         # Standard unwarped form must be present
         assert "setpts=PTS-STARTPTS" in fc
 
