@@ -44,7 +44,9 @@ from clipwright_text.schemas import AddTextOptions
 _RATE = 24.0
 
 
-def _make_clip(name: str, duration_sec: float = 10.0, rate: float = _RATE) -> otio.schema.Clip:
+def _make_clip(
+    name: str, duration_sec: float = 10.0, rate: float = _RATE
+) -> otio.schema.Clip:
     ref = otio.schema.ExternalReference(target_url=f"file:///media/{name}.mp4")
     sr = otio.opentime.TimeRange(
         start_time=otio.opentime.RationalTime(0.0, rate),
@@ -194,13 +196,13 @@ class TestTextValidation:
     @pytest.mark.parametrize(
         "bad_text",
         [
-            "",           # empty string
-            "Hello\nWorld",   # newline LF
-            "Hello\rWorld",   # newline CR
-            "Hello\x00World", # null control char
-            "Hello\x7fWorld", # DEL control char
-            "\x01abc",        # SOH control char
-            "\x1fabc",        # US control char
+            "",  # empty string
+            "Hello\nWorld",  # newline LF
+            "Hello\rWorld",  # newline CR
+            "Hello\x00World",  # null control char
+            "Hello\x7fWorld",  # DEL control char
+            "\x01abc",  # SOH control char
+            "\x1fabc",  # US control char
         ],
     )
     def test_bad_text_returns_invalid_input(self, bad_text: str) -> None:
@@ -366,7 +368,9 @@ class TestNormalAnnotation:
             assert result["ok"] is True, f"Expected ok=True, got: {result.get('error')}"
             out_tl = _read_timeline(out)
             markers = _get_text_overlay_markers(out_tl)
-            assert len(markers) == 1, f"Expected 1 text_overlay marker, got {len(markers)}"
+            assert len(markers) == 1, (
+                f"Expected 1 text_overlay marker, got {len(markers)}"
+            )
 
     def test_marker_name_is_text_0(self) -> None:
         """First marker name must be 'text_0'."""
@@ -493,7 +497,8 @@ class TestNormalAnnotation:
                         a.get("role")
                         if isinstance(a, dict)
                         else getattr(a, "role", None)
-                    ) == "timeline"
+                    )
+                    == "timeline"
                 ),
                 None,
             )
@@ -563,7 +568,9 @@ class TestIdempotentNoop:
             assert r1["ok"] is True
 
             r2 = add_text(str(mid), str(out), opts)
-            assert r2["ok"] is True, f"no-op call must still return ok=True: {r2.get('error')}"
+            assert r2["ok"] is True, (
+                f"no-op call must still return ok=True: {r2.get('error')}"
+            )
 
             data = r2.get("data") or {}
             assert data.get("applied") == 0, (

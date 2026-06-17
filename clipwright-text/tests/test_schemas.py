@@ -266,7 +266,9 @@ class TestFieldTypes:
 
     def test_font_size_accepts_int(self) -> None:
         """font_size must accept an integer value."""
-        opts = AddTextOptions(text="Hello", start_sec=1.0, duration_sec=3.0, font_size=64)
+        opts = AddTextOptions(
+            text="Hello", start_sec=1.0, duration_sec=3.0, font_size=64
+        )
         assert opts.font_size == 64
         assert isinstance(opts.font_size, int)
 
