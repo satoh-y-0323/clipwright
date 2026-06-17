@@ -23,7 +23,6 @@ from pydantic import ValidationError
 
 from clipwright_speed.schemas import SetSpeedOptions
 
-
 # ===========================================================================
 # speed: required field (no default)
 # ===========================================================================
@@ -236,6 +235,12 @@ def test_set_speed_options_does_not_redefine_core_types() -> None:
     """schemas.py must not redefine core common types (MediaRef/Artifact/ToolResult)."""
     import clipwright_speed.schemas as speed_schemas
 
-    assert not hasattr(speed_schemas, "MediaRef"), "schemas.py redefines MediaRef from core"
-    assert not hasattr(speed_schemas, "Artifact"), "schemas.py redefines Artifact from core"
-    assert not hasattr(speed_schemas, "ToolResult"), "schemas.py redefines ToolResult from core"
+    assert not hasattr(speed_schemas, "MediaRef"), (
+        "schemas.py redefines MediaRef from core"
+    )
+    assert not hasattr(speed_schemas, "Artifact"), (
+        "schemas.py redefines Artifact from core"
+    )
+    assert not hasattr(speed_schemas, "ToolResult"), (
+        "schemas.py redefines ToolResult from core"
+    )

@@ -24,7 +24,7 @@ Covered behaviors (all currently Red — not yet implemented):
 
 from __future__ import annotations
 
-import os
+import collections.abc
 from pathlib import Path
 
 import opentimelineio as otio
@@ -58,7 +58,10 @@ def _get_clipwright_warp(clip: otio.schema.Clip) -> otio.schema.LinearTimeWarp |
     for effect in clip.effects:
         if isinstance(effect, otio.schema.LinearTimeWarp):
             cw = effect.metadata.get("clipwright", {})
-            if isinstance(cw, dict) and cw.get("tool") == "clipwright-speed":
+            if (
+                isinstance(cw, collections.abc.Mapping)
+                and cw.get("tool") == "clipwright-speed"
+            ):
                 return effect
     return None
 
@@ -71,7 +74,9 @@ def _get_clipwright_warp(clip: otio.schema.Clip) -> otio.schema.LinearTimeWarp |
 class TestNonDestructive:
     """Input timeline file must not be modified after set_speed."""
 
-    def test_input_file_bytes_unchanged(self, simple_timeline_file: Path, tmp_dir: Path) -> None:
+    def test_input_file_bytes_unchanged(
+        self, simple_timeline_file: Path, tmp_dir: Path
+    ) -> None:
         """Input file bytes must be identical before and after set_speed."""
         before = simple_timeline_file.read_bytes()
         output = tmp_dir / "out.otio"
@@ -80,12 +85,16 @@ class TestNonDestructive:
         after = simple_timeline_file.read_bytes()
         assert before == after, "Input timeline file was modified by set_speed"
 
-    def test_output_is_distinct_file(self, simple_timeline_file: Path, tmp_dir: Path) -> None:
+    def test_output_is_distinct_file(
+        self, simple_timeline_file: Path, tmp_dir: Path
+    ) -> None:
         """Output file must be a different path from the input timeline."""
         output = tmp_dir / "out.otio"
         opts = SetSpeedOptions(speed=2.0)
         result = set_speed(str(simple_timeline_file), str(output), opts)
-        assert result["ok"] is True, f"Expected ok=True, got error: {result.get('error')}"
+        assert result["ok"] is True, (
+            f"Expected ok=True, got error: {result.get('error')}"
+        )
         # output must exist and be distinct from input
         assert output.exists()
         assert output.resolve() != simple_timeline_file.resolve()
@@ -99,7 +108,9 @@ class TestNonDestructive:
 class TestApplyToAllClips:
     """When clip_index=None, all clips in V1 must receive the warp."""
 
-    def test_all_clips_get_warp(self, simple_timeline_file: Path, tmp_dir: Path) -> None:
+    def test_all_clips_get_warp(
+        self, simple_timeline_file: Path, tmp_dir: Path
+    ) -> None:
         """All clips in V1 must have a clipwright LinearTimeWarp after set_speed."""
         output = tmp_dir / "out.otio"
         opts = SetSpeedOptions(speed=2.0, clip_index=None)
@@ -114,7 +125,9 @@ class TestApplyToAllClips:
             assert warp is not None, f"Clip {clip.name!r} missing clipwright warp"
             assert warp.time_scalar == pytest.approx(2.0)
 
-    def test_applied_count_matches_all_clips(self, simple_timeline_file: Path, tmp_dir: Path) -> None:
+    def test_applied_count_matches_all_clips(
+        self, simple_timeline_file: Path, tmp_dir: Path
+    ) -> None:
         """data.applied_count must equal the number of clips when clip_index=None."""
         output = tmp_dir / "out.otio"
         opts = SetSpeedOptions(speed=2.0, clip_index=None)
@@ -132,7 +145,9 @@ class TestApplyToAllClips:
 class TestApplyToSingleClip:
     """When clip_index=k, only the k-th clip (gap-excluded) must receive the warp."""
 
-    def test_single_clip_warp_applied(self, gap_timeline_file: Path, tmp_dir: Path) -> None:
+    def test_single_clip_warp_applied(
+        self, gap_timeline_file: Path, tmp_dir: Path
+    ) -> None:
         """clip_index=1 must apply warp only to Clip1 (not Clip0 or Clip2).
 
         Gap timeline: [Clip0, Gap, Clip1, Clip2]
@@ -154,7 +169,9 @@ class TestApplyToSingleClip:
         assert warp1.time_scalar == pytest.approx(3.0)
         assert _get_clipwright_warp(clips[2]) is None, "Clip2 should NOT have warp"
 
-    def test_single_clip_index_zero(self, gap_timeline_file: Path, tmp_dir: Path) -> None:
+    def test_single_clip_index_zero(
+        self, gap_timeline_file: Path, tmp_dir: Path
+    ) -> None:
         """clip_index=0 must apply warp only to Clip0."""
         output = tmp_dir / "out.otio"
         opts = SetSpeedOptions(speed=0.5, clip_index=0)
@@ -207,7 +224,9 @@ class TestClipwrightMetadata:
             cw = dict(warp.metadata.get("clipwright", {}))
             assert cw.get("kind") == "speed"
 
-    def test_metadata_speed_value(self, simple_timeline_file: Path, tmp_dir: Path) -> None:
+    def test_metadata_speed_value(
+        self, simple_timeline_file: Path, tmp_dir: Path
+    ) -> None:
         """metadata["clipwright"]["speed"] must record the applied speed value."""
         output = tmp_dir / "out.otio"
         opts = SetSpeedOptions(speed=1.5)
@@ -221,7 +240,9 @@ class TestClipwrightMetadata:
             cw = dict(warp.metadata.get("clipwright", {}))
             assert cw.get("speed") == pytest.approx(1.5)
 
-    def test_metadata_version_present(self, simple_timeline_file: Path, tmp_dir: Path) -> None:
+    def test_metadata_version_present(
+        self, simple_timeline_file: Path, tmp_dir: Path
+    ) -> None:
         """metadata["clipwright"]["version"] must be present."""
         output = tmp_dir / "out.otio"
         opts = SetSpeedOptions(speed=2.0)
@@ -261,9 +282,10 @@ class TestIdempotency:
         for clip in _get_v1_clips(out_tl):
             # Count only clipwright-speed warps
             cw_warps = [
-                e for e in clip.effects
+                e
+                for e in clip.effects
                 if isinstance(e, otio.schema.LinearTimeWarp)
-                and isinstance(e.metadata.get("clipwright"), dict)
+                and isinstance(e.metadata.get("clipwright"), collections.abc.Mapping)
                 and e.metadata["clipwright"].get("tool") == "clipwright-speed"
             ]
             assert len(cw_warps) == 1, (
@@ -277,7 +299,9 @@ class TestIdempotency:
         output1 = tmp_dir / "out1.otio"
         output2 = tmp_dir / "out2.otio"
 
-        r1 = set_speed(str(simple_timeline_file), str(output1), SetSpeedOptions(speed=2.0))
+        r1 = set_speed(
+            str(simple_timeline_file), str(output1), SetSpeedOptions(speed=2.0)
+        )
         assert r1["ok"] is True
         r2 = set_speed(str(output1), str(output2), SetSpeedOptions(speed=4.0))
         assert r2["ok"] is True
@@ -291,9 +315,10 @@ class TestIdempotency:
             )
             # No duplicate warp
             cw_warps = [
-                e for e in clip.effects
+                e
+                for e in clip.effects
                 if isinstance(e, otio.schema.LinearTimeWarp)
-                and isinstance(e.metadata.get("clipwright"), dict)
+                and isinstance(e.metadata.get("clipwright"), collections.abc.Mapping)
                 and e.metadata["clipwright"].get("tool") == "clipwright-speed"
             ]
             assert len(cw_warps) == 1
@@ -343,14 +368,17 @@ class TestForeignWarpSurvives:
 
         effects = clips[0].effects
         # At least 2 effects: the foreign warp + the new clipwright warp
-        assert len(effects) >= 2, "Foreign warp must be preserved alongside clipwright warp"
+        assert len(effects) >= 2, (
+            "Foreign warp must be preserved alongside clipwright warp"
+        )
 
         # Verify foreign warp is still there
         foreign_warps = [
-            e for e in effects
+            e
+            for e in effects
             if isinstance(e, otio.schema.LinearTimeWarp)
             and not (
-                isinstance(e.metadata.get("clipwright"), dict)
+                isinstance(e.metadata.get("clipwright"), collections.abc.Mapping)
                 and e.metadata["clipwright"].get("tool") == "clipwright-speed"
             )
         ]
@@ -394,7 +422,9 @@ class TestRoundTrip:
 class TestSpeedOneAttachesWarp:
     """speed=1.0 is valid; a LinearTimeWarp with time_scalar=1.0 must be attached."""
 
-    def test_speed_1_0_warp_attached(self, simple_timeline_file: Path, tmp_dir: Path) -> None:
+    def test_speed_1_0_warp_attached(
+        self, simple_timeline_file: Path, tmp_dir: Path
+    ) -> None:
         """speed=1.0 must attach a warp with time_scalar=1.0 (no-op warp)."""
         output = tmp_dir / "out.otio"
         opts = SetSpeedOptions(speed=1.0)
@@ -505,7 +535,9 @@ class TestNoVideoTrack:
 class TestClipIndexOutOfRange:
     """clip_index exceeding clip count must return INVALID_INPUT with range hint."""
 
-    def test_clip_index_out_of_range(self, gap_timeline_file: Path, tmp_dir: Path) -> None:
+    def test_clip_index_out_of_range(
+        self, gap_timeline_file: Path, tmp_dir: Path
+    ) -> None:
         """clip_index=99 on a 3-clip timeline must return INVALID_INPUT.
 
         The hint must contain '0-2' (0 to max_index) so AI knows the valid range.
@@ -606,20 +638,30 @@ class TestSuccessEnvelopeShape:
     def test_ok_is_true(self, simple_timeline_file: Path, tmp_dir: Path) -> None:
         """Success result ok must be True."""
         output = tmp_dir / "out.otio"
-        result = set_speed(str(simple_timeline_file), str(output), SetSpeedOptions(speed=2.0))
+        result = set_speed(
+            str(simple_timeline_file), str(output), SetSpeedOptions(speed=2.0)
+        )
         assert result["ok"] is True
 
-    def test_summary_is_non_empty(self, simple_timeline_file: Path, tmp_dir: Path) -> None:
+    def test_summary_is_non_empty(
+        self, simple_timeline_file: Path, tmp_dir: Path
+    ) -> None:
         """Success result summary must be non-empty."""
         output = tmp_dir / "out.otio"
-        result = set_speed(str(simple_timeline_file), str(output), SetSpeedOptions(speed=2.0))
+        result = set_speed(
+            str(simple_timeline_file), str(output), SetSpeedOptions(speed=2.0)
+        )
         assert result["ok"] is True
         assert result.get("summary"), "summary must be non-empty"
 
-    def test_data_applied_count(self, simple_timeline_file: Path, tmp_dir: Path) -> None:
+    def test_data_applied_count(
+        self, simple_timeline_file: Path, tmp_dir: Path
+    ) -> None:
         """data.applied_count must be present and correct."""
         output = tmp_dir / "out.otio"
-        result = set_speed(str(simple_timeline_file), str(output), SetSpeedOptions(speed=2.0))
+        result = set_speed(
+            str(simple_timeline_file), str(output), SetSpeedOptions(speed=2.0)
+        )
         assert result["ok"] is True
         data = result.get("data", {})
         assert "applied_count" in data, "data must contain applied_count"
@@ -628,7 +670,9 @@ class TestSuccessEnvelopeShape:
     def test_data_speed(self, simple_timeline_file: Path, tmp_dir: Path) -> None:
         """data.speed must match the requested speed."""
         output = tmp_dir / "out.otio"
-        result = set_speed(str(simple_timeline_file), str(output), SetSpeedOptions(speed=1.5))
+        result = set_speed(
+            str(simple_timeline_file), str(output), SetSpeedOptions(speed=1.5)
+        )
         assert result["ok"] is True
         data = result.get("data", {})
         assert "speed" in data
@@ -637,23 +681,38 @@ class TestSuccessEnvelopeShape:
     def test_data_clip_indices(self, simple_timeline_file: Path, tmp_dir: Path) -> None:
         """data.clip_indices must be a list of affected clip indices."""
         output = tmp_dir / "out.otio"
-        result = set_speed(str(simple_timeline_file), str(output), SetSpeedOptions(speed=2.0))
+        result = set_speed(
+            str(simple_timeline_file), str(output), SetSpeedOptions(speed=2.0)
+        )
         assert result["ok"] is True
         data = result.get("data", {})
         assert "clip_indices" in data
         assert isinstance(data["clip_indices"], list)
 
-    def test_artifacts_contains_timeline(self, simple_timeline_file: Path, tmp_dir: Path) -> None:
+    def test_artifacts_contains_timeline(
+        self, simple_timeline_file: Path, tmp_dir: Path
+    ) -> None:
         """artifacts must contain one entry with role='timeline' and format='otio'."""
         output = tmp_dir / "out.otio"
-        result = set_speed(str(simple_timeline_file), str(output), SetSpeedOptions(speed=2.0))
+        result = set_speed(
+            str(simple_timeline_file), str(output), SetSpeedOptions(speed=2.0)
+        )
         assert result["ok"] is True
         artifacts = result.get("artifacts", [])
         assert len(artifacts) >= 1, "artifacts must contain at least one entry"
         tl_artifact = next(
-            (a for a in artifacts if (a.get("role") if isinstance(a, dict) else getattr(a, "role", None)) == "timeline"),
+            (
+                a
+                for a in artifacts
+                if (a.get("role") if isinstance(a, dict) else getattr(a, "role", None))
+                == "timeline"
+            ),
             None,
         )
         assert tl_artifact is not None, "artifacts must contain a 'timeline' role entry"
-        fmt = tl_artifact.get("format") if isinstance(tl_artifact, dict) else getattr(tl_artifact, "format", None)
+        fmt = (
+            tl_artifact.get("format")
+            if isinstance(tl_artifact, dict)
+            else getattr(tl_artifact, "format", None)
+        )
         assert fmt == "otio", f"timeline artifact format must be 'otio', got {fmt!r}"

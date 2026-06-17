@@ -3,19 +3,20 @@
 from __future__ import annotations
 
 import tempfile
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator
 
 import opentimelineio as otio
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _make_clip(name: str, duration_sec: float = 5.0, rate: float = 24.0) -> otio.schema.Clip:
+def _make_clip(
+    name: str, duration_sec: float = 5.0, rate: float = 24.0
+) -> otio.schema.Clip:
     """Build a simple Clip with an ExternalReference and source_range."""
     ref = otio.schema.ExternalReference(target_url=f"file:///media/{name}.mp4")
     sr = otio.opentime.TimeRange(

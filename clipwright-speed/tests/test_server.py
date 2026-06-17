@@ -253,9 +253,7 @@ class TestSuccessEnvelopeShape:
                 )
             )
         artifacts = structured.get("artifacts", [])
-        tl_artifact = next(
-            (a for a in artifacts if a.get("role") == "timeline"), None
-        )
+        tl_artifact = next((a for a in artifacts if a.get("role") == "timeline"), None)
         assert tl_artifact is not None, "artifacts must contain role='timeline'"
         assert tl_artifact.get("format") == "otio"
 
