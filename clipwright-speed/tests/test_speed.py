@@ -1,9 +1,9 @@
 """Tests for clipwright-speed set_speed / _set_speed_inner business logic.
 
-These tests exercise the unimplemented _set_speed_inner stub and are expected
-to FAIL (Red phase) because the function raises NotImplementedError.
+Verifies the implemented clipwright-speed behavior. All tests in this module
+exercise the fully implemented _set_speed_inner function.
 
-Covered behaviors (all currently Red — not yet implemented):
+Covered behaviors:
 - AC-1 NON-DESTRUCTIVE: input file bytes unchanged; output is a distinct file
 - AC-4 IDEMPOTENCY: apply twice -> exactly one clipwright warp, no stacking
 - R-3 FOREIGN WARP SURVIVES: pre-existing non-clipwright LinearTimeWarp preserved
@@ -13,12 +13,14 @@ Covered behaviors (all currently Red — not yet implemented):
 - metadata["clipwright"] recorded with tool/version/kind/speed
 - speed=1.0 accepted (warp still attached)
 - Error cases (each asserts code + hint in the error envelope):
-  - bad output extension -> INVALID_INPUT
-  - missing output parent -> FILE_NOT_FOUND
+  - bad output extension -> INVALID_INPUT; message must not leak the raw suffix
+  - missing output parent -> FILE_NOT_FOUND; message must not contain path separators
+  - output outside timeline directory tree -> PATH_NOT_ALLOWED
   - output == timeline -> INVALID_INPUT
   - missing timeline -> FILE_NOT_FOUND
-  - no video track -> UNSUPPORTED_OPERATION
-  - clip_index out of range -> INVALID_INPUT with "0-{max}" hint
+  - no video track (audio-only timeline) -> UNSUPPORTED_OPERATION
+  - V1 track present but no clips (Gap only) -> UNSUPPORTED_OPERATION
+  - clip_index out of range -> INVALID_INPUT; range in hint only, not in message
   - speed out of range (0.24 / 8.01) -> INVALID_INPUT with "0.25-8.0" hint
 """
 
@@ -716,3 +718,388 @@ class TestSuccessEnvelopeShape:
             else getattr(tl_artifact, "format", None)
         )
         assert fmt == "otio", f"timeline artifact format must be 'otio', got {fmt!r}"
+
+
+# ===========================================================================
+# SR M-1 — full-path leak: missing output parent message must not contain paths
+# ===========================================================================
+
+
+class TestMissingOutputParentNoPathLeak:
+    """SR M-1: FILE_NOT_FOUND message for missing parent must not expose the path.
+
+    The message is a fixed sentence with no directory path or path separators.
+    The hint may guide but must not embed the absolute parent path either.
+    FAILS until speed.py removes the {out.parent} interpolation.
+    """
+
+    def test_missing_parent_message_no_path_separator(
+        self, simple_timeline_file: Path, tmp_dir: Path
+    ) -> None:
+        """error.message must not contain '/' or '\\' when output parent is missing."""
+        output = tmp_dir / "nonexistent_dir" / "out.otio"
+        opts = SetSpeedOptions(speed=2.0)
+        result = set_speed(str(simple_timeline_file), str(output), opts)
+        assert result["ok"] is False
+        error = result.get("error") or {}
+        assert error.get("code") == "FILE_NOT_FOUND"
+        message = error.get("message", "")
+        assert "/" not in message, (
+            f"message must not contain '/' (path leak), got: {message!r}"
+        )
+        assert "\\" not in message, (
+            f"message must not contain '\\\\' (path leak), got: {message!r}"
+        )
+
+    def test_missing_parent_message_no_absolute_path(
+        self, simple_timeline_file: Path, tmp_dir: Path
+    ) -> None:
+        """error.message must not contain the absolute parent directory path."""
+        output = tmp_dir / "nonexistent_dir" / "out.otio"
+        parent_str = str(output.parent)
+        opts = SetSpeedOptions(speed=2.0)
+        result = set_speed(str(simple_timeline_file), str(output), opts)
+        assert result["ok"] is False
+        error = result.get("error") or {}
+        assert error.get("code") == "FILE_NOT_FOUND"
+        message = error.get("message", "")
+        assert parent_str not in message, (
+            f"message must not embed the absolute parent path, got: {message!r}"
+        )
+        # hint may guide, but must not embed the absolute path either
+        hint = error.get("hint", "")
+        assert parent_str not in hint, (
+            f"hint must not embed the absolute parent path, got: {hint!r}"
+        )
+
+
+# ===========================================================================
+# SR L-1 — suffix value leak: bad extension message must not expose the suffix
+# ===========================================================================
+
+
+class TestBadExtensionNoSuffixLeak:
+    """SR L-1: INVALID_INPUT message for a bad extension must not expose the raw suffix.
+
+    FAILS until speed.py removes the {out.suffix!r} interpolation.
+    """
+
+    def test_bad_extension_message_no_raw_suffix(
+        self, simple_timeline_file: Path, tmp_dir: Path
+    ) -> None:
+        """error.message must not contain 'mp4' or '.mp4' when extension is wrong."""
+        output = tmp_dir / "out.mp4"
+        opts = SetSpeedOptions(speed=2.0)
+        result = set_speed(str(simple_timeline_file), str(output), opts)
+        assert result["ok"] is False
+        error = result.get("error") or {}
+        assert error.get("code") == "INVALID_INPUT"
+        message = error.get("message", "")
+        assert "mp4" not in message.lower(), (
+            f"message must not contain raw suffix 'mp4', got: {message!r}"
+        )
+        assert ".mp4" not in message.lower(), (
+            f"message must not contain '.mp4', got: {message!r}"
+        )
+
+    def test_bad_extension_hint_may_mention_otio(
+        self, simple_timeline_file: Path, tmp_dir: Path
+    ) -> None:
+        """hint may mention '.otio' as the correct extension (generic example)."""
+        output = tmp_dir / "out.mp4"
+        opts = SetSpeedOptions(speed=2.0)
+        result = set_speed(str(simple_timeline_file), str(output), opts)
+        assert result["ok"] is False
+        error = result.get("error") or {}
+        hint = error.get("hint", "")
+        assert hint, "hint must be non-empty"
+        # hint should guide toward .otio; checking at least one keyword is present
+        assert ".otio" in hint.lower() or "otio" in hint.lower(), (
+            f"hint should mention '.otio' as the required extension, got: {hint!r}"
+        )
+
+
+# ===========================================================================
+# SR M-2 — output boundary: output outside timeline dir must be PATH_NOT_ALLOWED
+# ===========================================================================
+
+
+class TestOutputBoundaryCheck:
+    """SR M-2: output path must be within the timeline's directory tree.
+
+    Mirrors clipwright-render _check_within_timeline_dir boundary contract.
+    FAILS until speed.py adds the boundary validation.
+    """
+
+    def test_output_outside_timeline_dir_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """Output outside timeline directory must return PATH_NOT_ALLOWED.
+
+        Layout:
+          tmp_path/proj/timeline.otio   <- timeline
+          tmp_path/elsewhere/out.otio   <- output (outside proj/)
+        """
+        proj_dir = tmp_path / "proj"
+        proj_dir.mkdir()
+        elsewhere_dir = tmp_path / "elsewhere"
+        elsewhere_dir.mkdir()
+
+        # Build and write a simple timeline inside proj/
+        tl = otio.schema.Timeline(name="boundary_tl")
+        v1 = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
+        a1 = otio.schema.Track(name="A1", kind=otio.schema.TrackKind.Audio)
+        tl.tracks.append(v1)
+        tl.tracks.append(a1)
+        ref = otio.schema.ExternalReference(target_url="file:///media/clip.mp4")
+        sr = otio.opentime.TimeRange(
+            start_time=otio.opentime.RationalTime(0.0, 24.0),
+            duration=otio.opentime.RationalTime(120.0, 24.0),
+        )
+        v1.append(otio.schema.Clip(name="clip0", media_reference=ref, source_range=sr))
+        timeline_path = proj_dir / "timeline.otio"
+        otio.adapters.write_to_file(tl, str(timeline_path))
+
+        output = elsewhere_dir / "out.otio"
+        opts = SetSpeedOptions(speed=2.0)
+        result = set_speed(str(timeline_path), str(output), opts)
+        assert result["ok"] is False
+        error = result.get("error") or {}
+        assert error.get("code") == "PATH_NOT_ALLOWED", (
+            f"Expected PATH_NOT_ALLOWED for output outside timeline dir, "
+            f"got code={error.get('code')!r}, message={error.get('message')!r}"
+        )
+        assert error.get("hint"), "hint must be non-empty for PATH_NOT_ALLOWED"
+        # message must not leak absolute paths
+        message = error.get("message", "")
+        assert "/" not in message and "\\" not in message, (
+            f"PATH_NOT_ALLOWED message must not contain path separators, got: {message!r}"
+        )
+
+    def test_output_within_timeline_dir_allowed(self, tmp_path: Path) -> None:
+        """Output within the timeline directory (same dir) must succeed normally."""
+        proj_dir = tmp_path / "proj"
+        proj_dir.mkdir()
+
+        tl = otio.schema.Timeline(name="boundary_tl")
+        v1 = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
+        a1 = otio.schema.Track(name="A1", kind=otio.schema.TrackKind.Audio)
+        tl.tracks.append(v1)
+        tl.tracks.append(a1)
+        ref = otio.schema.ExternalReference(target_url="file:///media/clip.mp4")
+        sr = otio.opentime.TimeRange(
+            start_time=otio.opentime.RationalTime(0.0, 24.0),
+            duration=otio.opentime.RationalTime(120.0, 24.0),
+        )
+        v1.append(otio.schema.Clip(name="clip0", media_reference=ref, source_range=sr))
+        timeline_path = proj_dir / "timeline.otio"
+        otio.adapters.write_to_file(tl, str(timeline_path))
+
+        output = proj_dir / "output.otio"
+        opts = SetSpeedOptions(speed=2.0)
+        result = set_speed(str(timeline_path), str(output), opts)
+        # Must NOT be rejected with PATH_NOT_ALLOWED
+        error = result.get("error") or {}
+        assert error.get("code") != "PATH_NOT_ALLOWED", (
+            "Output within the timeline directory must be allowed"
+        )
+        assert result["ok"] is True, (
+            f"Expected ok=True for valid same-dir output, got: {error}"
+        )
+
+    def test_output_in_subdir_of_timeline_dir_allowed(self, tmp_path: Path) -> None:
+        """Output in a recursive subdirectory of the timeline directory must succeed."""
+        proj_dir = tmp_path / "proj"
+        sub_dir = proj_dir / "exports"
+        proj_dir.mkdir()
+        sub_dir.mkdir()
+
+        tl = otio.schema.Timeline(name="boundary_tl")
+        v1 = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
+        a1 = otio.schema.Track(name="A1", kind=otio.schema.TrackKind.Audio)
+        tl.tracks.append(v1)
+        tl.tracks.append(a1)
+        ref = otio.schema.ExternalReference(target_url="file:///media/clip.mp4")
+        sr = otio.opentime.TimeRange(
+            start_time=otio.opentime.RationalTime(0.0, 24.0),
+            duration=otio.opentime.RationalTime(120.0, 24.0),
+        )
+        v1.append(otio.schema.Clip(name="clip0", media_reference=ref, source_range=sr))
+        timeline_path = proj_dir / "timeline.otio"
+        otio.adapters.write_to_file(tl, str(timeline_path))
+
+        output = sub_dir / "result.otio"
+        opts = SetSpeedOptions(speed=2.0)
+        result = set_speed(str(timeline_path), str(output), opts)
+        error = result.get("error") or {}
+        assert error.get("code") != "PATH_NOT_ALLOWED", (
+            "Output in a subdirectory of the timeline directory must be allowed"
+        )
+        assert result["ok"] is True, (
+            f"Expected ok=True for valid subdir output, got: {error}"
+        )
+
+
+# ===========================================================================
+# SR L-2 — clip_index OOR: diagnostic numbers must be in hint only, not message
+# ===========================================================================
+
+
+class TestClipIndexOORMessageNoNumbers:
+    """SR L-2: clip_index OOR must keep diagnostic numbers in hint only.
+
+    message must NOT contain the numeric clip_index value or the clip count.
+    hint MUST contain the valid range in '0-{max_index}' format.
+    FAILS until speed.py moves the numbers out of message into hint only.
+    """
+
+    def test_clip_index_oor_message_no_numeric_index(
+        self, gap_timeline_file: Path, tmp_dir: Path
+    ) -> None:
+        """message must not contain the out-of-range clip_index value (99).
+
+        gap_timeline: [Clip0, Gap, Clip1, Clip2] -> 3 clips (indices 0-2).
+        """
+        output = tmp_dir / "out.otio"
+        opts = SetSpeedOptions(speed=2.0, clip_index=99)
+        result = set_speed(str(gap_timeline_file), str(output), opts)
+        assert result["ok"] is False
+        error = result.get("error") or {}
+        assert error.get("code") == "INVALID_INPUT"
+        message = error.get("message", "")
+        assert "99" not in message, (
+            f"message must not contain the clip_index value 99, got: {message!r}"
+        )
+        # clip count (3) must also not appear in message
+        assert "3" not in message, (
+            f"message must not contain clip count '3', got: {message!r}"
+        )
+
+    def test_clip_index_oor_hint_contains_range(
+        self, gap_timeline_file: Path, tmp_dir: Path
+    ) -> None:
+        """hint must contain '0-2' range guidance for gap_timeline (3 clips)."""
+        output = tmp_dir / "out.otio"
+        opts = SetSpeedOptions(speed=2.0, clip_index=99)
+        result = set_speed(str(gap_timeline_file), str(output), opts)
+        assert result["ok"] is False
+        error = result.get("error") or {}
+        hint = error.get("hint", "")
+        assert "0-2" in hint, (
+            f"hint must contain valid range '0-2', got: {hint!r}"
+        )
+
+    def test_clip_index_oor_simple_message_no_numeric_index(
+        self, simple_timeline_file: Path, tmp_dir: Path
+    ) -> None:
+        """message must not contain clip_index=2 or clip count=2 for simple timeline.
+
+        simple_timeline: 2 clips (indices 0-1); clip_index=2 is out of range.
+        """
+        output = tmp_dir / "out.otio"
+        opts = SetSpeedOptions(speed=2.0, clip_index=2)
+        result = set_speed(str(simple_timeline_file), str(output), opts)
+        assert result["ok"] is False
+        error = result.get("error") or {}
+        assert error.get("code") == "INVALID_INPUT"
+        message = error.get("message", "")
+        # message must not embed the clip_index (2) or clip count (2)
+        assert "2" not in message, (
+            f"message must not contain numeric clip info '2', got: {message!r}"
+        )
+        # hint must still contain the valid range
+        hint = error.get("hint", "")
+        assert "0-1" in hint, (
+            f"hint must contain valid range '0-1', got: {hint!r}"
+        )
+
+
+# ===========================================================================
+# CR L-5 — V1 present but no clips (Gap only) -> UNSUPPORTED_OPERATION
+# ===========================================================================
+
+
+class TestNoClipsInVideoTrack:
+    """CR L-5: V1 video track exists but contains no clips (only Gap or empty).
+
+    Distinct from the audio-only (no V1) case tested by TestNoVideoTrack.
+    The 'No clips found in the video track.' branch must return UNSUPPORTED_OPERATION.
+    """
+
+    def test_no_clips_in_video_track(self, tmp_dir: Path) -> None:
+        """V1 track with a Gap but no Clip must return UNSUPPORTED_OPERATION."""
+        tl = otio.schema.Timeline(name="gap_only_tl")
+        v1 = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
+        a1 = otio.schema.Track(name="A1", kind=otio.schema.TrackKind.Audio)
+        tl.tracks.append(v1)
+        tl.tracks.append(a1)
+
+        # V1 has only a Gap, no Clip
+        gap_sr = otio.opentime.TimeRange(
+            start_time=otio.opentime.RationalTime(0.0, 24.0),
+            duration=otio.opentime.RationalTime(120.0, 24.0),
+        )
+        v1.append(otio.schema.Gap(source_range=gap_sr))
+
+        a1.append(
+            otio.schema.Clip(
+                name="audio_clip",
+                media_reference=otio.schema.ExternalReference(
+                    target_url="file:///media/audio.wav"
+                ),
+                source_range=gap_sr,
+            )
+        )
+
+        input_path = tmp_dir / "gap_only.otio"
+        otio.adapters.write_to_file(tl, str(input_path))
+
+        output = tmp_dir / "out.otio"
+        opts = SetSpeedOptions(speed=2.0)
+        result = set_speed(str(input_path), str(output), opts)
+
+        assert result["ok"] is False
+        error = result.get("error") or {}
+        assert error.get("code") == "UNSUPPORTED_OPERATION", (
+            f"V1-present-but-no-clips must yield UNSUPPORTED_OPERATION, "
+            f"got code={error.get('code')!r}"
+        )
+        assert error.get("hint"), "hint must be non-empty"
+
+    def test_empty_video_track(self, tmp_dir: Path) -> None:
+        """Completely empty V1 track (no items at all) must return UNSUPPORTED_OPERATION."""
+        tl = otio.schema.Timeline(name="empty_v1_tl")
+        v1 = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
+        a1 = otio.schema.Track(name="A1", kind=otio.schema.TrackKind.Audio)
+        tl.tracks.append(v1)
+        tl.tracks.append(a1)
+        # v1 is intentionally left empty (no items appended)
+
+        a_sr = otio.opentime.TimeRange(
+            start_time=otio.opentime.RationalTime(0.0, 24.0),
+            duration=otio.opentime.RationalTime(120.0, 24.0),
+        )
+        a1.append(
+            otio.schema.Clip(
+                name="audio_clip",
+                media_reference=otio.schema.ExternalReference(
+                    target_url="file:///media/audio.wav"
+                ),
+                source_range=a_sr,
+            )
+        )
+
+        input_path = tmp_dir / "empty_v1.otio"
+        otio.adapters.write_to_file(tl, str(input_path))
+
+        output = tmp_dir / "out.otio"
+        opts = SetSpeedOptions(speed=2.0)
+        result = set_speed(str(input_path), str(output), opts)
+
+        assert result["ok"] is False
+        error = result.get("error") or {}
+        assert error.get("code") == "UNSUPPORTED_OPERATION", (
+            f"Empty V1 track must yield UNSUPPORTED_OPERATION, "
+            f"got code={error.get('code')!r}"
+        )
+        assert error.get("hint"), "hint must be non-empty"

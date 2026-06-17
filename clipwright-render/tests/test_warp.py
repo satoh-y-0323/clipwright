@@ -639,3 +639,275 @@ class TestAnullsrcWarpedBranch:
         assert f"atrim=0:{source_dur_b:g}" in fc, (
             f"Unwarped anullsrc pad must use full source duration {source_dur_b}s"
         )
+
+
+# ---------------------------------------------------------------------------
+# Section 8: time_scalar value-domain validation (SR H-1 / M-3)
+# ---------------------------------------------------------------------------
+
+
+class TestTimeScalarValueDomain:
+    """resolve_kept_ranges must reject invalid time_scalar values (SR H-1 / M-3).
+
+    Valid range: [_SPEED_MIN=0.25, _SPEED_MAX=8.0] inclusive.
+    Boundary values 0.25 and 8.0 must be accepted (no raise).
+    0.0, inf, nan, <0.25 (e.g. 0.24), >8.0 (e.g. 8.01) must raise
+    ClipwrightError(INVALID_INPUT) with non-empty message and hint.
+    """
+
+    def _resolve(self, speed: float) -> list[KeptRange]:
+        clip = _make_warped_clip("/src/a.mp4", 0.0, 5.0, speed=speed)
+        tl = _make_timeline_with_clips([clip])
+        return resolve_kept_ranges(tl)
+
+    def _assert_invalid(self, speed: float) -> None:
+        from clipwright.errors import ClipwrightError, ErrorCode
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._resolve(speed)
+        exc = exc_info.value
+        assert exc.code == ErrorCode.INVALID_INPUT, (
+            f"speed={speed} must raise INVALID_INPUT, got {exc.code}"
+        )
+        assert exc.message, f"speed={speed}: exc.message must be non-empty"
+        assert exc.hint, f"speed={speed}: exc.hint must be non-empty (state supported range)"
+        # hint must mention the supported range 0.25–8.0
+        assert "0.25" in exc.hint and "8" in exc.hint, (
+            f"speed={speed}: hint must state supported range 0.25-8.0, got: {exc.hint!r}"
+        )
+
+    # --- Invalid values ---
+
+    def test_time_scalar_zero_raises(self) -> None:
+        """time_scalar=0.0 (division-by-zero setpts) must raise INVALID_INPUT."""
+        self._assert_invalid(0.0)
+
+    def test_time_scalar_inf_raises(self) -> None:
+        """time_scalar=inf must raise INVALID_INPUT."""
+        self._assert_invalid(float("inf"))
+
+    def test_time_scalar_nan_raises(self) -> None:
+        """time_scalar=nan must raise INVALID_INPUT."""
+        self._assert_invalid(float("nan"))
+
+    def test_time_scalar_below_min_raises(self) -> None:
+        """time_scalar=0.24 (below _SPEED_MIN=0.25) must raise INVALID_INPUT."""
+        self._assert_invalid(0.24)
+
+    def test_time_scalar_above_max_raises(self) -> None:
+        """time_scalar=8.01 (above _SPEED_MAX=8.0) must raise INVALID_INPUT."""
+        self._assert_invalid(8.01)
+
+    def test_time_scalar_below_zero_raises(self) -> None:
+        """time_scalar=-1.0 (negative) must raise INVALID_INPUT."""
+        self._assert_invalid(-1.0)
+
+    # --- Valid boundary values (must NOT raise) ---
+
+    def test_time_scalar_min_boundary_accepted(self) -> None:
+        """time_scalar=0.25 (== _SPEED_MIN) must be accepted (inclusive lower bound)."""
+        ranges = self._resolve(0.25)
+        assert ranges[0].time_scalar == pytest.approx(0.25)
+
+    def test_time_scalar_max_boundary_accepted(self) -> None:
+        """time_scalar=8.0 (== _SPEED_MAX) must be accepted (inclusive upper bound)."""
+        ranges = self._resolve(8.0)
+        assert ranges[0].time_scalar == pytest.approx(8.0)
+
+    # --- Backward compatibility ---
+
+    def test_no_warp_does_not_raise(self) -> None:
+        """Clip with no effects (default time_scalar=1.0) must not raise."""
+        clip = _make_clip("/src/a.mp4", 0.0, 5.0)
+        tl = _make_timeline_with_clips([clip])
+        ranges = resolve_kept_ranges(tl)
+        assert ranges[0].time_scalar == pytest.approx(1.0)
+
+    def test_time_scalar_1_does_not_raise(self) -> None:
+        """Explicit LinearTimeWarp(time_scalar=1.0) must not raise and yield 1.0."""
+        clip = _make_warped_clip("/src/a.mp4", 0.0, 5.0, speed=1.0)
+        tl = _make_timeline_with_clips([clip])
+        ranges = resolve_kept_ranges(tl)
+        assert ranges[0].time_scalar == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# Section 9: _build_atempo_chain precondition guard (CR L-2 / SR H-1(b))
+# ---------------------------------------------------------------------------
+
+
+class TestBuildAtempoChainPreconditionGuard:
+    """_build_atempo_chain must raise ValueError for out-of-domain inputs.
+
+    CR L-2 / SR H-1(b): zero, negative, inf, nan must all raise ValueError
+    to prevent infinite loops and undefined ffmpeg filter outputs.
+    """
+
+    @staticmethod
+    def _chain(speed: float) -> str:
+        from clipwright_render.plan import (
+            _build_atempo_chain,  # type: ignore[attr-defined]
+        )
+
+        return _build_atempo_chain(speed)
+
+    def test_atempo_chain_zero_raises(self) -> None:
+        """_build_atempo_chain(0.0) must raise ValueError."""
+        with pytest.raises(ValueError):
+            self._chain(0.0)
+
+    def test_atempo_chain_negative_raises(self) -> None:
+        """_build_atempo_chain(-1.0) must raise ValueError."""
+        with pytest.raises(ValueError):
+            self._chain(-1.0)
+
+    def test_atempo_chain_inf_raises(self) -> None:
+        """_build_atempo_chain(float('inf')) must raise ValueError."""
+        with pytest.raises(ValueError):
+            self._chain(float("inf"))
+
+    def test_atempo_chain_nan_raises(self) -> None:
+        """_build_atempo_chain(float('nan')) must raise ValueError."""
+        with pytest.raises(ValueError):
+            self._chain(float("nan"))
+
+
+# ---------------------------------------------------------------------------
+# Section 10: time_scalar==1.0 float-equality robustness (CR M-2)
+# ---------------------------------------------------------------------------
+
+
+class TestTimeScalarOneFloatRobustness:
+    """speed=1.0 after OTIO round-trip must yield byte-identical filter_complex (CR M-2).
+
+    A LinearTimeWarp(time_scalar=1.0) serialised via save_timeline then loaded via
+    load_timeline must still produce the same filter_complex as a plain unwarped clip.
+    Float serialisation must not introduce drift that causes the s != 1.0 branch to fire.
+    """
+
+    def test_speed_1_roundtrip_byte_identical(self, tmp_path: pytest.TempPathFactory) -> None:
+        """LinearTimeWarp(1.0) saved → loaded → build_plan must match unwarped golden."""
+        import tempfile
+
+        from clipwright.otio_utils import load_timeline, save_timeline
+
+        # Build unwarped golden
+        clip_plain = _make_clip("/src/a.mp4", 0.0, 5.0)
+        tl_plain = _make_timeline_with_clips([clip_plain])
+        ranges_plain = resolve_kept_ranges(tl_plain)
+        probe = _make_probe(audio_count=1)
+        plan_plain = build_plan(ranges_plain, probe, RenderOptions())
+        golden_fc = plan_plain.filter_complex
+
+        # Build speed=1.0 timeline, save and reload
+        clip_warp = _make_warped_clip("/src/a.mp4", 0.0, 5.0, speed=1.0)
+        tl_warp = _make_timeline_with_clips([clip_warp])
+        otio_path = str(tmp_path / "warp_roundtrip.otio")  # type: ignore[operator]
+        save_timeline(tl_warp, otio_path)
+        tl_loaded = load_timeline(otio_path)
+
+        ranges_loaded = resolve_kept_ranges(tl_loaded)
+        plan_loaded = build_plan(ranges_loaded, probe, RenderOptions())
+
+        assert plan_loaded.filter_complex == golden_fc, (
+            "speed=1.0 round-tripped via OTIO must produce byte-identical "
+            "filter_complex to unwarped baseline (CR M-2 / ADR-SP-5).\n"
+            f"  golden : {golden_fc!r}\n"
+            f"  loaded : {plan_loaded.filter_complex!r}"
+        )
+        # Confirm atempo absent in round-tripped plan
+        assert "atempo=" not in plan_loaded.filter_complex, (
+            "atempo must not appear in speed=1.0 round-tripped filter_complex"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Section 11: FreezeFrame strict-type exclusion (CR L-6)
+# ---------------------------------------------------------------------------
+
+
+class TestFreezeFrameExclusion:
+    """FreezeFrame (subclass of LinearTimeWarp, time_scalar=0.0) must be treated as
+    a pass-through (time_scalar=1.0), not a warp, at every path (CR L-6).
+
+    - resolve_kept_ranges must NOT raise for FreezeFrame.
+    - filter_complex must NOT contain 'setpts=(PTS-STARTPTS)/0' or atempo stage.
+    - Both single-source (_build_filter_complex) and multi-source
+      (_build_clip_filters) paths are verified.
+    """
+
+    # --- Single-source path ---
+
+    def test_freeze_frame_resolve_does_not_raise(self) -> None:
+        """resolve_kept_ranges with FreezeFrame clip must not raise (CR L-6)."""
+        clip = _make_clip("/src/a.mp4", 0.0, 5.0)
+        clip.effects.append(otio.schema.FreezeFrame())
+        tl = _make_timeline_with_clips([clip])
+        ranges = resolve_kept_ranges(tl)
+        # FreezeFrame must yield time_scalar==1.0 (pass-through)
+        assert ranges[0].time_scalar == pytest.approx(1.0)
+
+    def test_freeze_frame_single_source_no_divide_setpts(self) -> None:
+        """Single-source FreezeFrame clip must NOT produce 'setpts=(PTS-STARTPTS)/0'."""
+        clip = _make_clip("/src/a.mp4", 0.0, 5.0)
+        clip.effects.append(otio.schema.FreezeFrame())
+        tl = _make_timeline_with_clips([clip])
+        ranges = resolve_kept_ranges(tl)
+        probe = _make_probe(audio_count=1)
+        plan = build_plan(ranges, probe, RenderOptions())
+        fc = plan.filter_complex
+
+        assert "setpts=(PTS-STARTPTS)/0" not in fc, (
+            "FreezeFrame must not produce division-by-zero setpts (CR L-6)"
+        )
+        assert "atempo=" not in fc, (
+            "FreezeFrame must not produce atempo stage (CR L-6)"
+        )
+        # Standard unwarped form must be present
+        assert "setpts=PTS-STARTPTS" in fc
+
+    def test_freeze_frame_single_source_plain_setpts(self) -> None:
+        """Single-source FreezeFrame -> filter_complex must use plain setpts=PTS-STARTPTS."""
+        clip = _make_clip("/src/a.mp4", 0.0, 5.0)
+        clip.effects.append(otio.schema.FreezeFrame())
+        tl = _make_timeline_with_clips([clip])
+        ranges = resolve_kept_ranges(tl)
+        probe = _make_probe(audio_count=1)
+        plan = build_plan(ranges, probe, RenderOptions())
+        fc = plan.filter_complex
+
+        # Must match unwarped golden exactly
+        clip_plain = _make_clip("/src/a.mp4", 0.0, 5.0)
+        tl_plain = _make_timeline_with_clips([clip_plain])
+        ranges_plain = resolve_kept_ranges(tl_plain)
+        plan_plain = build_plan(ranges_plain, probe, RenderOptions())
+
+        assert fc == plan_plain.filter_complex, (
+            "FreezeFrame must produce byte-identical filter_complex to unwarped "
+            "baseline (CR L-6 / type() exact check).\n"
+            f"  expected (plain): {plan_plain.filter_complex!r}\n"
+            f"  actual (freeze) : {fc!r}"
+        )
+
+    # --- Multi-source path (_build_clip_filters) ---
+
+    def test_freeze_frame_multi_source_no_divide_setpts(self) -> None:
+        """Multi-source FreezeFrame clip must NOT produce 'setpts=(PTS-STARTPTS)/0'."""
+        clip_a = _make_clip("/src/a.mp4", 0.0, 3.0)
+        clip_b = _make_clip("/src/b.mp4", 0.0, 2.0)
+        clip_b.effects.append(otio.schema.FreezeFrame())
+
+        tl = _make_timeline_with_clips([clip_a, clip_b])
+        ranges = resolve_kept_ranges(tl)
+        probe_a = _make_probe(audio_count=1, width=1920, height=1080, fps=30.0)
+        probe_b = _make_probe(audio_count=1, width=1920, height=1080, fps=30.0)
+        source_probes = {"/src/a.mp4": probe_a, "/src/b.mp4": probe_b}
+        plan = build_plan(ranges, probe_a, RenderOptions(), source_probes=source_probes)
+        fc = plan.filter_complex
+
+        assert "setpts=(PTS-STARTPTS)/0" not in fc, (
+            "Multi-source FreezeFrame must not produce division-by-zero setpts (CR L-6)"
+        )
+        assert "atempo=" not in fc, (
+            "Multi-source FreezeFrame must not produce atempo stage (CR L-6)"
+        )
