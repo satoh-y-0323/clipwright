@@ -544,7 +544,19 @@ def _render_inner(
     # --- 5. build_plan ---
     # Pass source_probes to enable multi-source path (ADR-C2-r2 / ADR-C9-r2).
     # Pass bgm_clip for BGM audio chain integration (ADR-B5-r2; bgm=None for
-    # backward compat)
+    # backward compat).
+    #
+    # L-4 / S-I-2: text_overlays is not passed here; build_plan auto-collects
+    # text_overlay markers from KeptRangeList._timeline when text_overlays=None
+    # (the default).  ranges is a KeptRangeList with _timeline set by
+    # resolve_kept_ranges, so marker lookup happens automatically inside build_plan.
+    # Callers that pass a plain list[KeptRange] (e.g. in unit tests) will receive
+    # no overlays (getattr returns None; _collect_text_overlays is not called).
+    # IMPORTANT: if build_plan is ever called with a plain list[KeptRange] instead
+    # of a KeptRangeList here, text_overlay markers will be silently ignored.
+    # This is the designed fallback; however, any refactor that switches from
+    # resolve_kept_ranges to manual KeptRange construction must pass text_overlays
+    # explicitly to preserve overlay functionality.
     plan = build_plan(
         ranges,
         probe_info,

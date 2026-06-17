@@ -710,7 +710,7 @@ def _escape_filtergraph(path: str) -> str:
 # Allows: named colors, #RRGGBB, name@alpha.
 # Rejects: spaces, quotes, colons, commas, semicolons — i.e. chars that
 # could break the filtergraph option syntax when placed unquoted.
-# NOTE: Keep this constant in sync with clipwright-text's _COLOR_ALLOWLIST_RE.
+# NOTE: Keep this constant in sync with clipwright-text's _COLOR_PATTERN regex.
 # Both packages own their validation boundary; cross-package import is avoided
 # (衛星間結合回避方針 / same rationale as _check_output_within_timeline_dir).
 _COLOR_ALLOWLIST_RE: re.Pattern[str] = re.compile(r"^[A-Za-z0-9#@._-]+$")
@@ -724,24 +724,27 @@ _CONTROL_CHARS: frozenset[str] = frozenset(
 # Platform-default font paths searched when font_path is not specified.
 # Order: prefer the first existing path.  font_path kwarg always takes
 # precedence (ADR-T5).
-_PLATFORM_FONT_CANDIDATES: list[str] = {
-    "win32": [
+# H-1: dict.get() can return None when the key is absent, but the explicit
+# default argument guarantees a list[str] here.  The if/elif/else form makes
+# the return type unambiguous to mypy strict mode.
+_LINUX_FONT_CANDIDATES: list[str] = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+]
+if sys.platform == "win32":
+    _PLATFORM_FONT_CANDIDATES: list[str] = [
         r"C:\Windows\Fonts\arial.ttf",
         r"C:\Windows\Fonts\Arial.ttf",
-    ],
-    "darwin": [
+    ]
+elif sys.platform == "darwin":
+    _PLATFORM_FONT_CANDIDATES = [
         "/System/Library/Fonts/Helvetica.ttc",
         "/System/Library/Fonts/Arial.ttf",
         "/Library/Fonts/Arial.ttf",
-    ],
-}.get(
-    sys.platform,
-    [  # Linux / other
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-    ],
-)
+    ]
+else:
+    _PLATFORM_FONT_CANDIDATES = _LINUX_FONT_CANDIDATES
 
 
 def _escape_drawtext_text(s: str) -> str:
@@ -794,6 +797,8 @@ def _resolve_font_path(font_path: str | None) -> str:
                     " .ttf or .otf font file."
                 ),
             )
+        # Intentional: no path-boundary restriction; system fonts are allowed by
+        # ADR-T5 (same policy as subtitle fonts_dir).  S-L-1.
         return font_path
 
     # font_path is None: search platform defaults
@@ -845,29 +850,63 @@ def _marker_to_text_overlay(
             hint="Re-annotate with clipwright_add_text.",
         )
 
-    def _get(key: str, expected_type: type, default: Any = None) -> Any:
+    # L-3: expected_type argument removed (unused; callers only pass key and default).
+    def _get(key: str, default: Any = None) -> Any:
         val = cw.get(key, default)
         if val is None and default is None:
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
                 message=(
-                    f"The timeline contains an invalid text overlay: missing '{key}'."
+                    "The timeline contains an invalid text overlay: a required"
+                    " field is missing."
                 ),
                 hint="Re-annotate with clipwright_add_text using valid values.",
             )
         return val
 
-    start_sec: float = float(_get("start_sec", float, 0.0))
-    duration_sec: float = float(_get("duration_sec", float, 1.0))
-    text: str = str(_get("text", str, ""))
-    x: str = str(_get("x", str, "(w-tw)/2"))
-    y: str = str(_get("y", str, "h-th-40"))
-    font_size: int = int(_get("font_size", int, 48))
-    font_color: str = str(_get("font_color", str, "white"))
-    box: bool = bool(_get("box", bool, False))
-    box_color: str = str(_get("box_color", str, "black@0.5"))
-    fade_in_s: float = float(_get("fade_in_sec", float, 0.3))
-    fade_out_s: float = float(_get("fade_out_sec", float, 0.3))
+    start_sec: float = float(_get("start_sec", 0.0))
+    duration_sec: float = float(_get("duration_sec", 1.0))
+    text: str = str(_get("text", ""))
+    x: str = str(_get("x", "(w-tw)/2"))
+    y: str = str(_get("y", "h-th-40"))
+    font_size: int = int(_get("font_size", 48))
+    font_color: str = str(_get("font_color", "white"))
+    box: bool = bool(_get("box", False))
+    box_color: str = str(_get("box_color", "black@0.5"))
+    fade_in_s: float = float(_get("fade_in_sec", 0.3))
+    fade_out_s: float = float(_get("fade_out_sec", 0.3))
+
+    # M-2 / S-L-2: validate font_path for dangerous characters and max_length
+    # before passing to _resolve_font_path.  Single-quote breaks the
+    # fontfile='...' quoting used in _build_drawtext_segment; control characters
+    # (including newline \n) can corrupt the filtergraph string.
+    # max_length=4096 matches the POSIX PATH_MAX convention.
+    # NOTE: Keep this validation in sync with clipwright-text's font_path checks.
+    raw_font_path: Any = cw.get("font_path")
+    if raw_font_path is not None:
+        fp_str = str(raw_font_path)
+        if len(fp_str) > 4096:
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message=(
+                    "The timeline contains an invalid text overlay:"
+                    " font_path exceeds the maximum allowed length."
+                ),
+                hint="Use a font_path of 4096 characters or fewer.",
+            )
+        for ch in fp_str:
+            if ch == "'" or ch in _CONTROL_CHARS:
+                raise ClipwrightError(
+                    code=ErrorCode.INVALID_INPUT,
+                    message=(
+                        "The timeline contains an invalid text overlay:"
+                        " font_path contains a disallowed character."
+                    ),
+                    hint=(
+                        "font_path must not contain single-quotes or control"
+                        " characters (including newlines)."
+                    ),
+                )
 
     # Re-validate value ranges (multi-layer defence)
     if start_sec < 0:
@@ -889,33 +928,67 @@ def _marker_to_text_overlay(
             hint="Re-annotate with clipwright_add_text using a positive font_size.",
         )
 
-    # Validate text / x / y for control characters
-    for field_name, field_val in (("text", text), ("x", x), ("y", y)):
-        for ch in field_val:
+    # S-M-3: reject empty or whitespace-only text.
+    # Whitespace-only strings produce an effectively invisible overlay (CWE-20).
+    # NOTE: Keep in sync with clipwright-text's _validate_text_overlay_fields.
+    if not text.strip():
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an invalid text overlay: text must not be empty."
+            ),
+            hint="Re-annotate with clipwright_add_text using a non-empty text value.",
+        )
+
+    # M-1 / S-M-2: validate that fade_in + fade_out does not exceed duration.
+    # Ensures the alpha fade expression is meaningful and consistent with the
+    # overlay duration (multi-layer defence; ADR-T4).
+    # Tolerance 1e-9 guards against float noise from OTIO round-trips.
+    # NOTE: Keep in sync with clipwright-text's _validate_text_overlay_fields.
+    if fade_in_s + fade_out_s > (duration_sec + 1e-9):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an invalid text overlay:"
+                " fade_in_sec + fade_out_sec exceeds duration_sec."
+            ),
+            hint=(
+                "Re-annotate with clipwright_add_text so that"
+                " fade_in_sec + fade_out_sec <= duration_sec."
+            ),
+        )
+
+    # S-M-1: validate text / x / y for control characters.
+    # Fixed message wording — field names are intentionally excluded from
+    # .message to prevent information leakage (CWE-209).  Diagnostic details
+    # belong in .hint only.
+    # NOTE: Keep in sync with clipwright-text's _validate_text_overlay_fields.
+    for _field_val in (text, x, y):
+        for ch in _field_val:
             if ch in _CONTROL_CHARS:
                 raise ClipwrightError(
                     code=ErrorCode.INVALID_INPUT,
                     message=(
-                        f"The timeline contains an invalid text overlay:"
-                        f" '{field_name}' contains a control character."
+                        "The timeline contains an invalid text overlay:"
+                        " a field contains a control character."
                     ),
                     hint=(
                         "Re-annotate with clipwright_add_text without"
-                        " control characters."
+                        " control characters in text, x, or y."
                     ),
                 )
 
-    # Validate colour values against allowlist
-    for color_field, color_val in (
-        ("font_color", font_color),
-        ("box_color", box_color),
-    ):
+    # S-M-1: validate colour values against allowlist.
+    # Fixed message wording — color field names are intentionally excluded from
+    # .message (CWE-209); diagnostic details belong in .hint only.
+    # NOTE: Keep in sync with clipwright-text's _validate_text_overlay_fields.
+    for color_val in (font_color, box_color):
         if not _COLOR_ALLOWLIST_RE.match(color_val):
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
                 message=(
-                    f"The timeline contains an invalid text overlay:"
-                    f" '{color_field}' is not in the allowed format."
+                    "The timeline contains an invalid text overlay:"
+                    " a color value is not in the allowed format."
                 ),
                 hint=(
                     "Use a named color, #RRGGBB, or name@alpha"
@@ -1001,7 +1074,15 @@ def _build_drawtext_segment(o: TextOverlay) -> str:
         drawtext filter option string (without leading/trailing
         filter separators).
     """
-    assert o.font_path is not None, "font_path must be resolved before building segment"
+    # S-L-3: replace assert (no-op under python -O) with an explicit if-raise so
+    # that python -O execution still produces a diagnostic error rather than an
+    # AttributeError or incorrect output.
+    if o.font_path is None:
+        raise ClipwrightError(
+            code=ErrorCode.INTERNAL,
+            message="font_path is not resolved.",
+            hint=("This is an internal error; report with reproduction steps."),
+        )
 
     esc_text = _escape_drawtext_text(o.text)
     esc_fontfile = _escape_filtergraph(o.font_path)
