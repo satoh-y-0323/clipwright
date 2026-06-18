@@ -1,0 +1,76 @@
+[project]
+name = "clipwright-color"
+version = "0.1.0"
+description = "MCP tool for video brightness detection and OTIO timeline color annotation generation. Measures average luma with ffmpeg signalstats and writes an eq color-correction directive to timeline-level metadata."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "satoh-y-0323", email = "shoma.papa.0323@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "clipwright>=0.2.0",
+    "mcp[cli]>=1.27.2",
+    "pydantic>=2",
+]
+
+[project.scripts]
+clipwright-color = "clipwright_color.server:main"
+
+[build-system]
+requires = ["uv_build>=0.11.19,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.1.0",
+    "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
+    "pytest-mock>=3.15.1",
+    "ruff>=0.15.16",
+]
+
+[tool.uv.sources]
+clipwright = { workspace = true }
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = ["E501"]
+
+[tool.ruff.format]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_any_generics = true
+
+[[tool.mypy.overrides]]
+module = "opentimelineio.*"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers -q"
+markers = [
+    "integration: integration test requiring actual ffmpeg/ffprobe binaries",
+    "slow: test with long execution time",
+    "e2e: e2e test using actual ffmpeg binary",
+]
+
+[tool.coverage.run]
+source = ["clipwright_color"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
