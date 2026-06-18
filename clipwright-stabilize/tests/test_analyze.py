@@ -255,10 +255,51 @@ class TestArgvFiltergraph:
             run_vidstabdetect(media, output, opts)
 
         cmd = captured_cmds[0]
-        assert cmd[-2:] == ["-f", "null"] or cmd[-3:] == ["-f", "null", "-"], (
+        assert cmd[-3:] == ["-f", "null", "-"], (
             f"command must end with -f null -, got tail: {cmd[-3:]}"
         )
-        assert "-" in cmd, "'-' output sink must be present"
+
+    def test_vf_result_sanitized_for_special_chars(self, tmp_path: Path) -> None:
+        """filtergraph special chars in media stem must be replaced in result= (SR-INJ-002)."""
+        from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
+            run_vidstabdetect,
+        )
+        from clipwright_stabilize.schemas import (  # type: ignore[import-not-found]
+            DetectShakeOptions,
+        )
+
+        # Stem contains ':' and ';' — filtergraph-unsafe on Linux.
+        # Windows does not allow ':' in filenames, so we substitute a safe-looking
+        # special char that is allowed on both platforms but unsafe in filtergraphs.
+        media = tmp_path / "my video[clip].mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "my video[clip].otio"
+        opts = DetectShakeOptions()
+        captured_cmds: list[list[str]] = []
+
+        def _capture(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            captured_cmds.append(cmd)
+            # Write the sanitized trf (brackets replaced with underscores).
+            trf = tmp_path / "my_video_clip_.stabilize.trf"
+            trf.write_bytes(b"TRF1")
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr("clipwright_stabilize.analyze.resolve_tool", _fake_resolve)
+            mp.setattr("clipwright_stabilize.analyze.run", _capture)
+            run_vidstabdetect(media, output, opts)
+
+        cmd = captured_cmds[0]
+        vf_idx = cmd.index("-vf")
+        vf_val = cmd[vf_idx + 1]
+        # Brackets and spaces must NOT appear in result=
+        assert "[" not in vf_val, f"'[' must not appear in vf: {vf_val}"
+        assert "]" not in vf_val, f"']' must not appear in vf: {vf_val}"
+        assert " " not in vf_val, f"space must not appear in vf: {vf_val}"
+        # Sanitized stem must appear (spaces and brackets replaced with '_')
+        assert "my_video_clip_" in vf_val, (
+            f"sanitized stem 'my_video_clip_' not found in vf: {vf_val}"
+        )
 
 
 # ===========================================================================

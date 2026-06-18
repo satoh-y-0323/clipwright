@@ -35,7 +35,7 @@ class StabilizeDirective(BaseModel):
     is best-effort (None when the binary .trf could not be parsed).
     """
 
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "forbid", "allow_inf_nan": False}
 
     tool: Annotated[str, Field(max_length=64)] = "clipwright-stabilize"
     version: Annotated[str, Field(max_length=64)]

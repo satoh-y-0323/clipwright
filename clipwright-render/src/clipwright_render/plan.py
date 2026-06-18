@@ -97,6 +97,16 @@ _SPEED_MAX: float = 8.0
 # these checks run; 1.0 is the only identity value in that range.
 _WARP_IDENTITY_THRESHOLD: float = 1e-9
 
+# Default smoothing value for vidstabtransform.
+# Must match DetectShakeOptions.smoothing and _RenderStabilize.smoothing defaults (30).
+# When changing this value, update all three locations to keep them in sync.
+_DEFAULT_STABILIZE_SMOOTHING: int = 30
+
+# Allowlist for stabilize basename characters used in filtergraph input= option.
+# vid.stab input= does not support _escape_filtergraph (\:) escaping, so basenames
+# containing filtergraph special characters are rejected (INVALID_INPUT / CWE-78).
+_STABILIZE_BASENAME_SAFE_RE: re.Pattern[str] = re.compile(r"^[A-Za-z0-9._-]+$")
+
 
 def _is_warp_identity(s: float) -> bool:
     """Return True when *s* is close enough to 1.0 to be treated as no-warp.
@@ -1292,7 +1302,7 @@ class _RenderStabilize(BaseModel):
     version / kind / severity / shakiness / accuracy are ignored. Reader must
     not be stricter than writer (ADR-CO-3 parity)."""
 
-    model_config = {"extra": "ignore"}
+    model_config = {"extra": "ignore", "allow_inf_nan": False}
 
     trf_path: str
     smoothing: Annotated[int, Field(ge=0, le=1000)] = 30
@@ -1316,6 +1326,36 @@ def _validate_stabilize(stabilize: dict[str, Any]) -> _RenderStabilize | None:
             ),
             hint="trf_path must be a path string and smoothing an integer in 0..1000.",
         ) from None
+
+
+def _validate_stabilize_basename(basename: str) -> None:
+    """Reject stabilize trf basenames with filtergraph special characters (CWE-78).
+
+    vid.stab input= does not support _escape_filtergraph (\\:) escaping, so basenames
+    must consist only of safe characters (alphanumeric, hyphens, underscores, dots).
+    Characters such as ':', ';', '[', ']', '\\', ',', and newlines would be
+    interpreted by the filtergraph parser and could cause unintended injection.
+
+    The normal flow produces safe basenames because fix-stabilize-pkg sanitizes the
+    stem in analyze.py. This function provides defence-in-depth for OTIO-embedded
+    trf_path values that arrive directly at the render stage (e.g. crafted OTIO).
+
+    Raises:
+        ClipwrightError: INVALID_INPUT when the basename contains disallowed characters.
+            Raw input is not included in the message (CWE-209).
+    """
+    if not _STABILIZE_BASENAME_SAFE_RE.match(basename):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "Stabilize trf filename contains characters not allowed in"
+                " the filtergraph input= option."
+            ),
+            hint=(
+                "The .trf filename must contain only alphanumeric characters,"
+                " hyphens, underscores, and dots."
+            ),
+        )
 
 
 # ===========================================================================
@@ -1727,7 +1767,7 @@ def _build_filter_complex(
     text_overlays: list[TextOverlay] | None = None,
     color_eq: _RenderEqParams | None = None,
     stabilize_basename: str | None = None,
-    stabilize_smoothing: int = 30,
+    stabilize_smoothing: int = _DEFAULT_STABILIZE_SMOOTHING,
 ) -> tuple[str, str, str, bool, bool]:
     """Build the filter_complex string, video_map_label, and audio_map_label
     (M-2).
@@ -2525,6 +2565,10 @@ def build_plan(
         stabilize_basename: str | None = None
         if stabilize_directive is not None:
             stabilize_basename = Path(stabilize_directive.trf_path).name
+            # Reject basenames with filtergraph special chars (CWE-78 / SR-INJ-002).
+            # cwd+relative basename method (ADR-ST-1) is preserved; escaping is not
+            # used because _escape_filtergraph (\:) does not work with vid.stab input=.
+            _validate_stabilize_basename(stabilize_basename)
             stabilize_cwd = str(Path(stabilize_directive.trf_path).resolve().parent)
 
         filter_complex, video_map_label, audio_map_label, use_afftdn, use_loudness = (
@@ -2541,7 +2585,7 @@ def build_plan(
                 stabilize_smoothing=(
                     stabilize_directive.smoothing
                     if stabilize_directive is not None
-                    else 30
+                    else _DEFAULT_STABILIZE_SMOOTHING
                 ),
             )
         )

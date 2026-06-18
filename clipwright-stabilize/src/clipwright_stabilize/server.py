@@ -29,7 +29,7 @@ mcp = FastMCP("clipwright-stabilize")
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        readOnlyHint=True,
+        readOnlyHint=False,  # .trf binary + .otio are generated as side-products
         destructiveHint=False,
         idempotentHint=True,
         openWorldHint=False,

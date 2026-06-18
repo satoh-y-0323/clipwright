@@ -39,6 +39,16 @@ _NORM_PX: float = 30.0
 # Regex for detecting libvidstab filter absence in error messages (P-4 / §4-B).
 _UNSUPPORTED_RE = re.compile(r"Unknown filter|No such filter", re.IGNORECASE)
 
+# Maximum .trf file size accepted by _estimate_severity (OOM DoS guard — SR-MEM-001).
+# Files larger than this are treated as unparseable (best-effort, return None).
+_TRF_MAX_BYTES: int = 100 * 1024 * 1024  # 100 MB
+
+# Sanitise filtergraph-unsafe characters from a trf stem (SR-INJ-002).
+# vid.stab result=/input= cannot be safely escaped with backslash sequences;
+# instead we replace any character that is not alphanumeric, '-', or '_' with '_'.
+# An empty result falls back to "media" to guarantee a non-empty basename.
+_TRF_STEM_SANITIZE_RE = re.compile(r"[^A-Za-z0-9\-_]")
+
 
 def _estimate_severity(trf_path: Path) -> float | None:
     """Best-effort severity in 0.0-1.0 from a binary TRF1 file.
@@ -61,6 +71,9 @@ def _estimate_severity(trf_path: Path) -> float | None:
     except OSError:
         return None
 
+    if len(blob) > _TRF_MAX_BYTES:
+        return None  # best-effort; oversized .trf treated as unparseable
+
     if not blob.startswith(_TRF_MAGIC):
         return None
 
@@ -74,15 +87,14 @@ def _estimate_severity(trf_path: Path) -> float | None:
     except struct.error:
         return None
 
-    doubles: list[float] = [float(v) for v in unpacked]
-    finite = [abs(d) for d in doubles if math.isfinite(d)]
+    finite = [abs(v) for v in unpacked if math.isfinite(v)]
     if not finite:
         return None
 
-    mean_abs = sum(finite) / len(finite)
+    mean_abs: float = sum(finite) / len(finite)
     # Normalise mean pixel displacement to 0..1 (_NORM_PX is a pinned heuristic
     # constant; see ADR-ST-3). Values above _NORM_PX clamp to 1.0.
-    severity = mean_abs / _NORM_PX
+    severity: float = mean_abs / _NORM_PX
     if not math.isfinite(severity):
         return None
 
@@ -118,7 +130,10 @@ def run_vidstabdetect(
     ffmpeg_bin = resolve_tool("ffmpeg", "CLIPWRIGHT_FFMPEG")
 
     trf_dir = output_path.parent
-    trf_name = f"{media_path.stem}.stabilize.trf"  # relative basename (cwd-based)
+    # Sanitise stem: replace filtergraph-unsafe chars with '_' (SR-INJ-002).
+    # cwd+relative basename approach (ADR-ST-1/P-2/P-3) is preserved.
+    sanitized_stem = _TRF_STEM_SANITIZE_RE.sub("_", media_path.stem) or "media"
+    trf_name = f"{sanitized_stem}.stabilize.trf"  # relative basename (cwd-based)
     trf_abs = trf_dir / trf_name
 
     # -vf is a single argv element (CWE-78).

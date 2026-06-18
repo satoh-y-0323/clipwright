@@ -125,13 +125,7 @@ def _detect_shake_inner(
         )
 
     # --- 2. inspect_media: video required, audio NOT required ---
-
-    if not media_path.exists():
-        raise ClipwrightError(
-            code=ErrorCode.FILE_NOT_FOUND,
-            message=f"File not found: {media_path.name}",
-            hint="Check that the input media file path is correct.",
-        )
+    # inspect_media raises FILE_NOT_FOUND internally (color.py parity — no pre-check).
 
     media_info = inspect_media(media)
 
@@ -336,17 +330,18 @@ def _load_and_validate_timeline(
         if isinstance(ref, otio.schema.ExternalReference):
             urls.add(ref.target_url)
 
-    # Boundary check: target_url must be within timeline parent dir (SR L-2)
-    tl_path = Path(timeline_path)
-    for url in urls:
-        _check_source_within_timeline_dir(tl_path, url)
-
+    # Reject multi-source timelines first (UNSUPPORTED_OPERATION — color.py order).
     if len(urls) > 1:
         raise ClipwrightError(
             code=ErrorCode.UNSUPPORTED_OPERATION,
             message="Timeline contains clips from multiple sources.",
             hint="Specify a timeline with a single source (same media file).",
         )
+
+    # Boundary check: target_url must be within timeline parent dir (SR L-2)
+    tl_path = Path(timeline_path)
+    for url in urls:
+        _check_source_within_timeline_dir(tl_path, url)
 
     # Validate target_url == media_path (B-4: resolve() normalization)
     if urls:

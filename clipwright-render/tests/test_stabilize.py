@@ -1,11 +1,13 @@
-"""test_stabilize.py — Red-phase tests for the stabilize → vidstabtransform extension.
+"""test_stabilize.py — Tests for the stabilize → vidstabtransform extension (render side).
 
-Target functions (not yet implemented; all tests expected to fail):
+All tests pass (Green). Covers:
   - build_plan(..., stabilize=stabilize_dict) — vidstabtransform injection (FR-3)
   - _validate_stabilize(stabilize: dict) -> _RenderStabilize | None
   - RenderPlan.stabilize_cwd — trf parent directory for run(cwd=...)
   - render.py F-4: run called with cwd=<trf parent dir> when stabilize enabled,
     cwd=None when disabled
+  - Guard tests: trf_path boundary (PATH_NOT_ALLOWED), trf missing (FILE_NOT_FOUND),
+    filtergraph-unsafe basename (INVALID_INPUT / CWE-78)
 
 Architecture reference: architecture-report-20260618-222323.md §6 + §7-B
 Requirements: FR-3 (render-side vidstabtransform application)
@@ -17,7 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 from subprocess import CompletedProcess
 from typing import Any
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import patch
 
 import opentimelineio as otio
 import pytest
@@ -670,3 +672,172 @@ class TestRenderRunCwd:
         assert run_cwd is None, (
             f"Expected run cwd=None when stabilize absent, got {run_cwd!r}"
         )
+
+
+# ===========================================================================
+# ST-8: render guard tests — boundary / existence / basename validation
+# (CR-E-001 / SR-V-002 / SR-INJ-002)
+# ===========================================================================
+
+
+class TestRenderStabilizeGuards:
+    """render_timeline raises early errors for invalid trf_path before ffmpeg runs.
+
+    Tests cover:
+      - trf_path outside the timeline directory → PATH_NOT_ALLOWED (SR-V-002)
+      - trf_path missing from disk → FILE_NOT_FOUND (CR-E-001)
+      - basename with filtergraph special characters → INVALID_INPUT (SR-INJ-002)
+      - INVALID_INPUT message must not expose the raw basename (CWE-209)
+    """
+
+    def _make_media_info(self, path: str) -> Any:
+        from clipwright.schemas import MediaInfo, StreamInfo
+
+        return MediaInfo(
+            path=path,
+            container="mov,mp4,m4a,3gp,3g2,mj2",
+            duration=None,
+            streams=[StreamInfo(index=0, codec_type="video", codec_name="h264")],
+            bit_rate=8_000_000,
+        )
+
+    def _write_timeline(self, tmp_path: Path, trf_path: str) -> tuple[Path, Path]:
+        """Write an OTIO timeline file with a stabilize directive pointing to trf_path."""
+        source = tmp_path / "src.mp4"
+        source.touch()
+        stabilize = _make_stabilize_dict(trf_path)
+        tl = _make_timeline([_make_clip(str(source), 0.0, 5.0)], stabilize)
+        tl_path = tmp_path / "tl.otio"
+        import opentimelineio as otio
+
+        otio.adapters.write_to_file(tl, str(tl_path))
+        return tl_path, source
+
+    def _render_with_mocks(
+        self, tl_path: Path, output_path: Path, *, overwrite: bool = True
+    ) -> dict[str, Any]:
+        """Call render_timeline with inspect_media and resolve_tool mocked."""
+        from clipwright_render.render import render_timeline
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                side_effect=lambda path: self._make_media_info(path),
+            ),
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
+            patch(
+                "clipwright_render.render.run",
+                return_value=__import__(
+                    "subprocess", fromlist=["CompletedProcess"]
+                ).CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+            ),
+        ):
+            return render_timeline(  # type: ignore[return-value]
+                timeline=str(tl_path),
+                output=str(output_path),
+                options=RenderOptions(overwrite=overwrite),
+            )
+
+    def test_trf_path_outside_timeline_dir_raises_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """trf_path outside the timeline directory → PATH_NOT_ALLOWED (SR-V-002 / CWE-22)."""
+        # Create a separate directory outside tmp_path
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+        trf_path = str(outside_dir / "clip.stabilize.trf")
+        Path(trf_path).touch()
+
+        # Timeline lives in tmp_path / "proj"
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        source = proj / "src.mp4"
+        source.touch()
+        stabilize = _make_stabilize_dict(trf_path)
+        tl = _make_timeline([_make_clip(str(source), 0.0, 5.0)], stabilize)
+        tl_path = proj / "tl.otio"
+        import opentimelineio as otio
+
+        otio.adapters.write_to_file(tl, str(tl_path))
+        output_path = proj / "out.mp4"
+        output_path.touch()
+
+        result = self._render_with_mocks(tl_path, output_path)
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == "PATH_NOT_ALLOWED"
+
+    def test_trf_path_missing_raises_file_not_found(self, tmp_path: Path) -> None:
+        """trf_path not present on disk → FILE_NOT_FOUND before ffmpeg runs (CR-E-001)."""
+        trf_path = str(tmp_path / "missing.stabilize.trf")
+        # Do NOT create the file — it must be absent.
+
+        tl_path, _ = self._write_timeline(tmp_path, trf_path)
+        output_path = tmp_path / "out.mp4"
+        output_path.touch()
+
+        result = self._render_with_mocks(tl_path, output_path)
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == "FILE_NOT_FOUND"
+
+    def test_trf_not_found_message_contains_basename_only(self, tmp_path: Path) -> None:
+        """FILE_NOT_FOUND message must use basename only, not the full path (CWE-209)."""
+        trf_path = str(tmp_path / "secret.stabilize.trf")
+        # Do NOT create the file.
+
+        tl_path, _ = self._write_timeline(tmp_path, trf_path)
+        output_path = tmp_path / "out.mp4"
+        output_path.touch()
+
+        result = self._render_with_mocks(tl_path, output_path)
+
+        assert result["ok"] is False
+        msg = result["error"]["message"]
+        # Full path must not appear in message
+        assert str(tmp_path) not in msg
+        # Basename is acceptable to include for actionability
+        assert "secret.stabilize.trf" in msg
+
+    def test_basename_with_colon_raises_invalid_input(self, tmp_path: Path) -> None:
+        """Basename containing ':' (filtergraph special char) → INVALID_INPUT (SR-INJ-002 / CWE-78)."""
+        # Use a trf_path that is within the timeline dir but has a colon in the name.
+        # On Windows colons are not valid in filenames, so we test via build_plan directly.
+        from clipwright_render.plan import _validate_stabilize_basename  # type: ignore[attr-defined]
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            _validate_stabilize_basename("clip:bad.stabilize.trf")
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_basename_with_semicolon_raises_invalid_input(self, tmp_path: Path) -> None:
+        """Basename containing ';' → INVALID_INPUT (SR-INJ-002 / CWE-78)."""
+        from clipwright_render.plan import _validate_stabilize_basename  # type: ignore[attr-defined]
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            _validate_stabilize_basename("clip;inject.trf")
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_invalid_basename_message_does_not_expose_raw_input(
+        self, tmp_path: Path
+    ) -> None:
+        """INVALID_INPUT message for unsafe basename must not expose the raw filename (CWE-209)."""
+        from clipwright_render.plan import _validate_stabilize_basename  # type: ignore[attr-defined]
+
+        unsafe = "clip:colon;semi[bracket].trf"
+        with pytest.raises(ClipwrightError) as exc_info:
+            _validate_stabilize_basename(unsafe)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+        # Raw unsafe string must not appear in message
+        assert unsafe not in exc_info.value.message
+        assert ":" not in exc_info.value.message
+        assert ";" not in exc_info.value.message
+
+    def test_safe_basename_does_not_raise(self, tmp_path: Path) -> None:
+        """Normal basename (alphanumeric + hyphen/underscore/dot) must not raise."""
+        from clipwright_render.plan import _validate_stabilize_basename  # type: ignore[attr-defined]
+
+        # Should not raise
+        _validate_stabilize_basename("my-video_clip.stabilize.trf")

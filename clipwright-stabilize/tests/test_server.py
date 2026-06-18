@@ -2,8 +2,8 @@
 
 Verification points:
   - Tool registered as clipwright_detect_shake.
-  - annotations: readOnlyHint=True / destructiveHint=False / idempotentHint=True
-    / openWorldHint=False (FR-1-6 / ADR-ST-4).
+  - annotations: readOnlyHint=False / destructiveHint=False / idempotentHint=True
+    / openWorldHint=False (SR-NEW: .trf + .otio are generated as side-products).
   - options=None -> DetectShakeOptions() defaults applied (shakiness=5/accuracy=15/smoothing=30).
   - Delegates to stabilize.detect_shake.
 
@@ -66,10 +66,10 @@ class TestMcpRegistration:
 class TestMcpAnnotations:
     """Verify MCP annotations for clipwright_detect_shake (FR-1-6)."""
 
-    def test_read_only_hint_is_true(self) -> None:
-        """readOnlyHint=True: input media is not modified (.trf is a side-product)."""
+    def test_read_only_hint_is_false(self) -> None:
+        """readOnlyHint=False: .trf binary and .otio are generated as side-products."""
         annotations = _get_tool_annotations()
-        assert annotations.readOnlyHint is True  # type: ignore[union-attr]
+        assert annotations.readOnlyHint is False  # type: ignore[union-attr]
 
     def test_destructive_hint_is_false(self) -> None:
         """destructiveHint=False: not a destructive operation."""
