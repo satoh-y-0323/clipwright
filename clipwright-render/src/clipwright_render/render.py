@@ -540,6 +540,7 @@ def _render_inner(
     clipwright_meta = get_clipwright_metadata(tl)
     raw_denoise = clipwright_meta.get("denoise")
     raw_loudness = clipwright_meta.get("loudness")
+    raw_color = clipwright_meta.get("color")
 
     # --- 5. build_plan ---
     # Pass source_probes to enable multi-source path (ADR-C2-r2 / ADR-C9-r2).
@@ -563,6 +564,7 @@ def _render_inner(
         options,
         denoise=raw_denoise,
         loudness=raw_loudness,
+        color=raw_color,
         source_probes=source_probes,
         bgm=bgm_clip,
     )

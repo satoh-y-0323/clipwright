@@ -10,6 +10,7 @@ resolution-markers = [
 members = [
     "clipwright",
     "clipwright-bgm",
+    "clipwright-color",
     "clipwright-frames",
     "clipwright-loudness",
     "clipwright-noise",
@@ -273,6 +274,41 @@ dev = [
 ]
 
 [[package]]
+name = "clipwright-color"
+version = "0.1.0"
+source = { editable = "clipwright-color" }
+dependencies = [
+    { name = "clipwright" },
+    { name = "mcp", extra = ["cli"] },
+    { name = "pydantic" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "pytest-mock" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "clipwright", editable = "." },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.27.2" },
+    { name = "pydantic", specifier = ">=2" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy", specifier = ">=2.1.0" },
+    { name = "pytest", specifier = ">=9.0.3" },
+    { name = "pytest-cov", specifier = ">=7.1.0" },
+    { name = "pytest-mock", specifier = ">=3.15.1" },
+    { name = "ruff", specifier = ">=0.15.16" },
+]
+
+[[package]]
 name = "clipwright-frames"
 version = "0.1.0"
 source = { editable = "clipwright-frames" }
@@ -383,7 +419,7 @@ dev = [
 
 [[package]]
 name = "clipwright-render"
-version = "0.3.0"
+version = "0.5.0"
 source = { editable = "clipwright-render" }
 dependencies = [
     { name = "clipwright" },

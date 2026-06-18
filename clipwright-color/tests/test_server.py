@@ -15,6 +15,7 @@ import asyncio
 from unittest.mock import patch
 
 from clipwright.schemas import Artifact, ToolResult
+
 from clipwright_color.schemas import (
     DetectColorOptions,  # type: ignore[import-not-found]
 )

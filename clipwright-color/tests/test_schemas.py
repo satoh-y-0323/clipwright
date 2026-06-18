@@ -17,13 +17,14 @@ from __future__ import annotations
 import math
 
 import pytest
+from pydantic import ValidationError
+
 from clipwright_color.schemas import (  # type: ignore[import-not-found]
     BrightnessMeasured,
     ColorDirective,
     DetectColorOptions,
     EqParams,
 )
-from pydantic import ValidationError
 
 # ===========================================================================
 # DetectColorOptions

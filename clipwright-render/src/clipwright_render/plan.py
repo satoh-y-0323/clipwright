@@ -1276,6 +1276,29 @@ def _build_force_style(
     return ",".join(parts)
 
 
+def _append_eq_filter(
+    filter_parts: list[str],
+    video_map_label: str,
+    eq: _RenderEqParams | None,
+) -> str:
+    """Append the eq color-correction stage and return the new video label.
+
+    No-op when eq is None (backward compatible). :g formatting removes trailing
+    zeros (consistent with afftdn nr/nf and atempo formatting).
+    Placed scale-after / subtitle-before (ADR-CO-4).
+    """
+    if eq is None:
+        return video_map_label
+    seg = (
+        f"eq=brightness={eq.brightness:g}"
+        f":contrast={eq.contrast:g}"
+        f":saturation={eq.saturation:g}"
+        f":gamma={eq.gamma:g}"
+    )
+    filter_parts.append(f"{video_map_label}{seg}[outveq]")
+    return "[outveq]"
+
+
 def _append_subtitle_filter(
     filter_parts: list[str],
     video_map_label: str,
@@ -1412,6 +1435,56 @@ def _to_seconds(rt: otio.opentime.RationalTime) -> float:
     cast is used to satisfy mypy strict mode.
     """
     return round(float(rt.to_seconds()), 6)
+
+
+# ===========================================================================
+# Color eq schema (no dependency on clipwright-color; defined inline for render)
+# ADR-CO-3: re-declares the same ranges as EqParams in clipwright-color to avoid
+# satellite-to-satellite coupling. When changing ranges, update both copies.
+# ===========================================================================
+
+
+class _RenderEqParams(BaseModel):
+    """Reader-side validation of color["eq"] (no dependency on clipwright-color).
+
+    Ranges mirror clipwright-color's EqParams (writer). Reader must not be
+    stricter than writer. Unknown keys forbidden; inf/nan rejected (CWE-20).
+    """
+
+    model_config = {"extra": "forbid", "allow_inf_nan": False}
+
+    brightness: Annotated[float, Field(ge=-1.0, le=1.0)] = 0.0
+    contrast: Annotated[float, Field(ge=0.0, le=2.0)] = 1.0
+    saturation: Annotated[float, Field(ge=0.0, le=2.0)] = 1.0
+    gamma: Annotated[float, Field(ge=0.1, le=10.0)] = 1.0
+
+
+def _validate_color_eq(color: dict[str, Any]) -> _RenderEqParams | None:
+    """Validate the color directive's eq block; raises INVALID_INPUT on failure.
+
+    Only color["eq"] is consumed. tool / version / kind / target_luma / measured
+    are intentionally ignored (the render side only needs eq parameters). When eq
+    is absent or None, returns None (treated as no color correction; backward
+    compatible).
+    Security: input values are not included in error messages (CWE-209).
+    """
+    raw_eq = color.get("eq")
+    if raw_eq is None:
+        return None
+    try:
+        return _RenderEqParams(**raw_eq)
+    except (ValidationError, TypeError):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "Color eq directive validation failed."
+                " Check field names, types, and values."
+            ),
+            hint=(
+                "color['eq'] must have brightness in -1..1, contrast and"
+                " saturation in 0..2, and gamma in 0.1..10."
+            ),
+        ) from None
 
 
 def _validate_denoise_directive(denoise: dict[str, Any]) -> DenoiseDirective:
@@ -1610,6 +1683,7 @@ def _build_filter_complex(
     options: RenderOptions,
     probe_info: ProbeInfo | None = None,
     text_overlays: list[TextOverlay] | None = None,
+    color_eq: _RenderEqParams | None = None,
 ) -> tuple[str, str, str, bool, bool]:
     """Build the filter_complex string, video_map_label, and audio_map_label
     (M-2).
@@ -1724,6 +1798,11 @@ def _build_filter_complex(
         # (ADR-F3 revised §5.3). Falls back to None when probe height unavailable.
         if probe_info is not None:
             frame_h = probe_info.height  # may be None → counter-scale skipped
+
+    # Inject eq color-correction stage after scale, before subtitle
+    # (ADR-CO-4: geometry normalise → colour correct → overlay burn-in).
+    # When color_eq is None, this is a no-op (backward compatible).
+    video_map_label = _append_eq_filter(filter_parts, video_map_label, color_eq)
 
     # Inject subtitle stage after video_map_label is finalised (ADR-S4-r3).
     # When subtitle=None, nothing is done (backward compatible; ADR-S8).
@@ -1932,6 +2011,7 @@ def _build_multi_source_filter_complex(
     options: RenderOptions,
     first_source: str,
     text_overlays: list[TextOverlay] | None = None,
+    color_eq: _RenderEqParams | None = None,
 ) -> tuple[str, str, str, bool, bool]:
     """Build the filter_complex for the multi-source path
     (ADR-C1/C5-r2/C7-r2/C11-r2).
@@ -2001,6 +2081,10 @@ def _build_multi_source_filter_complex(
     # In the multi-source path, per-clip spec normalisation is already done up
     # front, so no post-concat scale is applied (ADR-C5-r2).
     video_map_label = "[outv]"
+
+    # Inject eq color-correction stage after concat/normalisation, before subtitle
+    # (ADR-CO-4). When color_eq is None, this is a no-op (backward compatible).
+    video_map_label = _append_eq_filter(filter_parts, video_map_label, color_eq)
 
     # Inject subtitle stage after video_map_label is finalised (ADR-S4-r3).
     # When subtitle=None, nothing is done (backward compatible; ADR-S8).
@@ -2179,6 +2263,7 @@ def build_plan(
     options: RenderOptions,
     denoise: dict[str, Any] | None = None,
     loudness: dict[str, Any] | None = None,
+    color: dict[str, Any] | None = None,
     source_probes: dict[str, ProbeInfo] | None = None,
     bgm: BgmClip | None = None,
     text_overlays: list[TextOverlay] | None = None,
@@ -2261,6 +2346,12 @@ def build_plan(
     if loudness is not None:
         loudness_directive = _validate_loudness_directive(loudness)
 
+    # Validate the color eq directive (raises INVALID_INPUT on failure)
+    # Only color["eq"] is consumed; tool/version/measured are ignored (ADR-CO-3).
+    color_eq: _RenderEqParams | None = None
+    if color is not None:
+        color_eq = _validate_color_eq(color)
+
     # Unique source list (single source of truth for ADR-C9-r2)
     input_sources = unique_sources_in_order(ranges)
     n = len(ranges)
@@ -2325,6 +2416,7 @@ def build_plan(
                 options,
                 first_source,
                 text_overlays=text_overlays,
+                color_eq=color_eq,
             )
         )
 
@@ -2351,6 +2443,7 @@ def build_plan(
                 options,
                 probe_info,
                 text_overlays=text_overlays,
+                color_eq=color_eq,
             )
         )
 
