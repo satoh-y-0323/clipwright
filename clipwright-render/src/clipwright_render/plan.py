@@ -401,6 +401,8 @@ class RenderPlan:
     input_sources: ordered, deduplicated list of input sources. Single source
         of truth for ADR-C9-r2.
     bgm_source: BGM source path. None when there is no BGM (ADR-B5/B7).
+    stabilize_cwd: trf parent directory for run(cwd=...) when stabilize is
+        enabled. None when stabilize is absent (backward compatible; §6-E).
     """
 
     filter_complex: str
@@ -411,6 +413,7 @@ class RenderPlan:
     warnings: list[str] = field(default_factory=list)
     input_sources: list[str] = field(default_factory=list)
     bgm_source: str | None = None
+    stabilize_cwd: str | None = None
 
 
 # ===========================================================================
@@ -1277,6 +1280,45 @@ def _build_force_style(
 
 
 # ===========================================================================
+# Stabilize schema (no dependency on clipwright-stabilize; defined inline for render)
+# ADR-ST-5: reader uses extra="ignore" so unused keys (severity/shakiness/accuracy)
+# do not break validation. Reader must not be stricter than writer (ADR-CO-3 parity).
+# ===========================================================================
+
+
+class _RenderStabilize(BaseModel):
+    """Reader-side validation of the stabilize directive (no dependency on
+    clipwright-stabilize). Only trf_path / smoothing are consumed; tool /
+    version / kind / severity / shakiness / accuracy are ignored. Reader must
+    not be stricter than writer (ADR-CO-3 parity)."""
+
+    model_config = {"extra": "ignore"}
+
+    trf_path: str
+    smoothing: Annotated[int, Field(ge=0, le=1000)] = 30
+
+
+def _validate_stabilize(stabilize: dict[str, Any]) -> _RenderStabilize | None:
+    """Validate the stabilize directive; raises INVALID_INPUT on failure.
+
+    Returns None when trf_path is absent/None (no stabilization; backward compat).
+    Security: input values are not included in error messages (CWE-209).
+    """
+    if stabilize.get("trf_path") is None:
+        return None
+    try:
+        return _RenderStabilize(**stabilize)
+    except (ValidationError, TypeError):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "Stabilize directive validation failed. Check trf_path and smoothing."
+            ),
+            hint="trf_path must be a path string and smoothing an integer in 0..1000.",
+        ) from None
+
+
+# ===========================================================================
 # Color eq schema (no dependency on clipwright-color; defined inline for render)
 # ADR-CO-3: re-declares the same ranges as EqParams in clipwright-color to avoid
 # satellite-to-satellite coupling. When changing ranges, update both copies.
@@ -1684,6 +1726,8 @@ def _build_filter_complex(
     probe_info: ProbeInfo | None = None,
     text_overlays: list[TextOverlay] | None = None,
     color_eq: _RenderEqParams | None = None,
+    stabilize_basename: str | None = None,
+    stabilize_smoothing: int = 30,
 ) -> tuple[str, str, str, bool, bool]:
     """Build the filter_complex string, video_map_label, and audio_map_label
     (M-2).
@@ -1716,15 +1760,33 @@ def _build_filter_complex(
         end = round(start + _to_seconds(r.source_range.duration), 6)
         vl = f"v{i}"
         s = r.time_scalar
+        # stabilize: vidstabtransform inserted trim-directly-after, setpts-before
+        # (§6-F). basename is relative; cwd set by render.py (ADR-ST-1/P-2/P-3).
+        # None → no insertion (backward compatible).
+        vst = (
+            f"vidstabtransform=input={stabilize_basename}:smoothing={stabilize_smoothing}"
+            if stabilize_basename is not None
+            else None
+        )
         if not _is_warp_identity(s):
             # Warp: setpts=(PTS-STARTPTS)/{s} (ADR-SP-6) to change video speed.
-            filter_parts.append(
-                f"[0:v]trim=start={start}:end={end},setpts=(PTS-STARTPTS)/{s:g}[{vl}]"
-            )
+            if vst is not None:
+                filter_parts.append(
+                    f"[0:v]trim=start={start}:end={end},{vst},setpts=(PTS-STARTPTS)/{s:g}[{vl}]"
+                )
+            else:
+                filter_parts.append(
+                    f"[0:v]trim=start={start}:end={end},setpts=(PTS-STARTPTS)/{s:g}[{vl}]"
+                )
         else:
-            filter_parts.append(
-                f"[0:v]trim=start={start}:end={end},setpts=PTS-STARTPTS[{vl}]"
-            )
+            if vst is not None:
+                filter_parts.append(
+                    f"[0:v]trim=start={start}:end={end},{vst},setpts=PTS-STARTPTS[{vl}]"
+                )
+            else:
+                filter_parts.append(
+                    f"[0:v]trim=start={start}:end={end},setpts=PTS-STARTPTS[{vl}]"
+                )
         video_labels.append(f"[{vl}]")
 
         if has_audio:
@@ -2264,6 +2326,7 @@ def build_plan(
     denoise: dict[str, Any] | None = None,
     loudness: dict[str, Any] | None = None,
     color: dict[str, Any] | None = None,
+    stabilize: dict[str, Any] | None = None,
     source_probes: dict[str, ProbeInfo] | None = None,
     bgm: BgmClip | None = None,
     text_overlays: list[TextOverlay] | None = None,
@@ -2352,12 +2415,34 @@ def build_plan(
     if color is not None:
         color_eq = _validate_color_eq(color)
 
+    # Validate the stabilize directive (raises INVALID_INPUT on failure)
+    # Only trf_path / smoothing are consumed; severity/shakiness/accuracy etc. are
+    # ignored (ADR-ST-5). Returns None when trf_path is absent/None (backward compat).
+    stabilize_directive: _RenderStabilize | None = None
+    if stabilize is not None:
+        stabilize_directive = _validate_stabilize(stabilize)
+
     # Unique source list (single source of truth for ADR-C9-r2)
     input_sources = unique_sources_in_order(ranges)
     n = len(ranges)
 
     # Branch on source count (ADR-C3)
     use_multi_source = source_probes is not None and len(input_sources) >= 2
+
+    # multi-source + stabilize → UNSUPPORTED_OPERATION (ADR-ST-2)
+    if use_multi_source and stabilize_directive is not None:
+        raise ClipwrightError(
+            code=ErrorCode.UNSUPPORTED_OPERATION,
+            message="Stabilization is not supported for multi-source timelines.",
+            hint=(
+                "Use a single-source timeline for stabilization, "
+                "or remove the stabilize directive."
+            ),
+        )
+
+    # stabilize_cwd: initialized for both branches. Set in single-source branch;
+    # remains None for multi-source (blocked above; ADR-ST-2).
+    stabilize_cwd: str | None = None
 
     if use_multi_source:
         # Multi-source path. When use_multi_source is True, source_probes is
@@ -2434,6 +2519,14 @@ def build_plan(
         # Audio presence: multiple audio streams use first only (treated as a=1)
         has_audio = probe_info.audio_count >= 1
 
+        # Compute stabilize basename and cwd for vidstabtransform injection (§6-G).
+        # basename is relative (cwd+relative; P-2/P-3). cwd is the trf parent dir
+        # passed to render.py's run(..., cwd=plan.stabilize_cwd).
+        stabilize_basename: str | None = None
+        if stabilize_directive is not None:
+            stabilize_basename = Path(stabilize_directive.trf_path).name
+            stabilize_cwd = str(Path(stabilize_directive.trf_path).resolve().parent)
+
         filter_complex, video_map_label, audio_map_label, use_afftdn, use_loudness = (
             _build_filter_complex(
                 ranges,
@@ -2444,6 +2537,12 @@ def build_plan(
                 probe_info,
                 text_overlays=text_overlays,
                 color_eq=color_eq,
+                stabilize_basename=stabilize_basename,
+                stabilize_smoothing=(
+                    stabilize_directive.smoothing
+                    if stabilize_directive is not None
+                    else 30
+                ),
             )
         )
 
@@ -2586,4 +2685,5 @@ def build_plan(
         warnings=warnings,
         input_sources=input_sources,
         bgm_source=bgm_source_out,
+        stabilize_cwd=stabilize_cwd,
     )

@@ -541,6 +541,7 @@ def _render_inner(
     raw_denoise = clipwright_meta.get("denoise")
     raw_loudness = clipwright_meta.get("loudness")
     raw_color = clipwright_meta.get("color")
+    raw_stabilize = clipwright_meta.get("stabilize")  # §6-A
 
     # --- 5. build_plan ---
     # Pass source_probes to enable multi-source path (ADR-C2-r2 / ADR-C9-r2).
@@ -565,6 +566,7 @@ def _render_inner(
         denoise=raw_denoise,
         loudness=raw_loudness,
         color=raw_color,
+        stabilize=raw_stabilize,  # §6-B
         source_probes=source_probes,
         bgm=bgm_clip,
     )
@@ -613,9 +615,17 @@ def _render_inner(
     if plan.bgm_source is not None:
         inputs += ["-stream_loop", "-1", "-i", plan.bgm_source]
 
-    cmd = [ffmpeg] + overwrite_flag + inputs + plan.ffmpeg_args + [str(output)]
+    # F-4: When stabilize is enabled, output must be absolutised so that
+    # changing cwd to the trf parent directory does not redirect the output
+    # file into the wrong directory. -i (input_sources) is already absolute;
+    # subtitles/drawtext are absolutised by _escape_filtergraph; the only
+    # remaining relative path risk is the output argument. §6-C.
+    output_arg = (
+        str(Path(output).resolve()) if plan.stabilize_cwd is not None else str(output)
+    )
+    cmd = [ffmpeg] + overwrite_flag + inputs + plan.ffmpeg_args + [output_arg]
 
-    run(cmd, timeout=float(timeout))
+    run(cmd, timeout=float(timeout), cwd=plan.stabilize_cwd)  # §6-C
 
     # Verify output file exists
     if not output_path.exists():

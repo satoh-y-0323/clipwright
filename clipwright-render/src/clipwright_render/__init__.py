@@ -1,3 +1,3 @@
 """clipwright-render: MCP tool that materialises an OTIO timeline via FFmpeg."""
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"

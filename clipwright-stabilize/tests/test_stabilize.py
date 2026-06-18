@@ -569,23 +569,23 @@ class TestMultiSourceTimeline:
         media1.write_bytes(b"dummy")
         media2 = tmp_path / "video2.mp4"
         media2.write_bytes(b"dummy")
-        tl = otio.Timeline()
-        track = otio.Track()
+        tl = otio.schema.Timeline()
+        track = otio.schema.Track()
         tl.tracks.append(track)
-        clip1 = otio.Clip(
+        clip1 = otio.schema.Clip(
             name="clip1",
-            media_reference=otio.ExternalReference(target_url=str(media1)),
-            source_range=otio.TimeRange(
-                start_time=otio.RationalTime(0, 30),
-                duration=otio.RationalTime(150, 30),
+            media_reference=otio.schema.ExternalReference(target_url=str(media1)),
+            source_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0, 30),
+                duration=otio.opentime.RationalTime(150, 30),
             ),
         )
-        clip2 = otio.Clip(
+        clip2 = otio.schema.Clip(
             name="clip2",
-            media_reference=otio.ExternalReference(target_url=str(media2)),
-            source_range=otio.TimeRange(
-                start_time=otio.RationalTime(0, 30),
-                duration=otio.RationalTime(150, 30),
+            media_reference=otio.schema.ExternalReference(target_url=str(media2)),
+            source_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0, 30),
+                duration=otio.opentime.RationalTime(150, 30),
             ),
         )
         track.append(clip1)
