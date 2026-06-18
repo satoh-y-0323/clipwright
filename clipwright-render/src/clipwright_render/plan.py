@@ -1276,6 +1276,56 @@ def _build_force_style(
     return ",".join(parts)
 
 
+# ===========================================================================
+# Color eq schema (no dependency on clipwright-color; defined inline for render)
+# ADR-CO-3: re-declares the same ranges as EqParams in clipwright-color to avoid
+# satellite-to-satellite coupling. When changing ranges, update both copies.
+# ===========================================================================
+
+
+class _RenderEqParams(BaseModel):
+    """Reader-side validation of color["eq"] (no dependency on clipwright-color).
+
+    Ranges mirror clipwright-color's EqParams (writer). Reader must not be
+    stricter than writer. Unknown keys forbidden; inf/nan rejected (CWE-20).
+    """
+
+    model_config = {"extra": "forbid", "allow_inf_nan": False}
+
+    brightness: Annotated[float, Field(ge=-1.0, le=1.0)] = 0.0
+    contrast: Annotated[float, Field(ge=0.0, le=2.0)] = 1.0
+    saturation: Annotated[float, Field(ge=0.0, le=2.0)] = 1.0
+    gamma: Annotated[float, Field(ge=0.1, le=10.0)] = 1.0
+
+
+def _validate_color_eq(color: dict[str, Any]) -> _RenderEqParams | None:
+    """Validate the color directive's eq block; raises INVALID_INPUT on failure.
+
+    Only color["eq"] is consumed. tool / version / kind / target_luma / measured
+    are intentionally ignored (the render side only needs eq parameters). When eq
+    is absent or None, returns None (treated as no color correction; backward
+    compatible).
+    Security: input values are not included in error messages (CWE-209).
+    """
+    raw_eq = color.get("eq")
+    if raw_eq is None:
+        return None
+    try:
+        return _RenderEqParams(**raw_eq)
+    except (ValidationError, TypeError):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "Color eq directive validation failed."
+                " Check field names, types, and values."
+            ),
+            hint=(
+                "color['eq'] must have brightness in -1..1, contrast and"
+                " saturation in 0..2, and gamma in 0.1..10."
+            ),
+        ) from None
+
+
 def _append_eq_filter(
     filter_parts: list[str],
     video_map_label: str,
@@ -1435,56 +1485,6 @@ def _to_seconds(rt: otio.opentime.RationalTime) -> float:
     cast is used to satisfy mypy strict mode.
     """
     return round(float(rt.to_seconds()), 6)
-
-
-# ===========================================================================
-# Color eq schema (no dependency on clipwright-color; defined inline for render)
-# ADR-CO-3: re-declares the same ranges as EqParams in clipwright-color to avoid
-# satellite-to-satellite coupling. When changing ranges, update both copies.
-# ===========================================================================
-
-
-class _RenderEqParams(BaseModel):
-    """Reader-side validation of color["eq"] (no dependency on clipwright-color).
-
-    Ranges mirror clipwright-color's EqParams (writer). Reader must not be
-    stricter than writer. Unknown keys forbidden; inf/nan rejected (CWE-20).
-    """
-
-    model_config = {"extra": "forbid", "allow_inf_nan": False}
-
-    brightness: Annotated[float, Field(ge=-1.0, le=1.0)] = 0.0
-    contrast: Annotated[float, Field(ge=0.0, le=2.0)] = 1.0
-    saturation: Annotated[float, Field(ge=0.0, le=2.0)] = 1.0
-    gamma: Annotated[float, Field(ge=0.1, le=10.0)] = 1.0
-
-
-def _validate_color_eq(color: dict[str, Any]) -> _RenderEqParams | None:
-    """Validate the color directive's eq block; raises INVALID_INPUT on failure.
-
-    Only color["eq"] is consumed. tool / version / kind / target_luma / measured
-    are intentionally ignored (the render side only needs eq parameters). When eq
-    is absent or None, returns None (treated as no color correction; backward
-    compatible).
-    Security: input values are not included in error messages (CWE-209).
-    """
-    raw_eq = color.get("eq")
-    if raw_eq is None:
-        return None
-    try:
-        return _RenderEqParams(**raw_eq)
-    except (ValidationError, TypeError):
-        raise ClipwrightError(
-            code=ErrorCode.INVALID_INPUT,
-            message=(
-                "Color eq directive validation failed."
-                " Check field names, types, and values."
-            ),
-            hint=(
-                "color['eq'] must have brightness in -1..1, contrast and"
-                " saturation in 0..2, and gamma in 0.1..10."
-            ),
-        ) from None
 
 
 def _validate_denoise_directive(denoise: dict[str, Any]) -> DenoiseDirective:

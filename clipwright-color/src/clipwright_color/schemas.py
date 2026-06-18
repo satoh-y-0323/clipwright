@@ -18,7 +18,7 @@ class DetectColorOptions(BaseModel):
     sample_interval_sec: ffmpeg fps=1/interval downsampling step (seconds, >0).
     """
 
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "forbid", "allow_inf_nan": False}
 
     target_luma: Annotated[
         float,
@@ -87,7 +87,7 @@ class ColorDirective(BaseModel):
     (None when measurement failed; parity with loudness U-1).
     """
 
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "forbid", "allow_inf_nan": False}
 
     tool: Annotated[str, Field(max_length=64)] = "clipwright-color"
     version: Annotated[str, Field(max_length=64)]

@@ -284,6 +284,8 @@ src/clipwright/
 
 > 注: `clipwright-frames` は `CLIPWRIGHT_FFMPEG`（フレーム抽出）と `CLIPWRIGHT_FFPROBE`（`inspect_media` 経由のビデオストリーム検出・尺取得）の両方を使うため、両変数を設定する必要がある。
 
+> 注: `clipwright-color` は `CLIPWRIGHT_FFPROBE` を必要とする。`inspect_media` が ffprobe を使用して輝度測定前にビデオストリームの存在を検証するためである。
+
 ffmpeg が `PATH` 上にない場合は `CLIPWRIGHT_FFMPEG` / `CLIPWRIGHT_FFPROBE` 環境変数を設定する。
 
 ---

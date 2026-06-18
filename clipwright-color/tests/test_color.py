@@ -527,6 +527,59 @@ class TestBrightnessClamp:
 
 
 # ===========================================================================
+# (6b) BrightnessMeasured with ymin=None / ymax=None -> directive written normally
+# ===========================================================================
+
+
+class TestMeasuredYminYmaxNone:
+    """Directive must be written even when ymin=None and ymax=None in measured (optional fields)."""
+
+    def test_directive_written_when_ymin_ymax_none(self, tmp_path: Path) -> None:
+        """When measured has ymin=None and ymax=None, directive must still be written (FR-5)."""
+        from clipwright_color.color import (
+            detect_color,  # type: ignore[import-not-found]
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "out.otio"
+        opts = DetectColorOptions(target_luma=128.0)
+
+        # Arrange: measured with ymin=None and ymax=None (optional fields absent)
+        measured_no_minmax: dict[str, Any] = {
+            "measured": {
+                "yavg": 100.0,
+                "ymin": None,
+                "ymax": None,
+                "sampled_frames": 5,
+            },
+            "warnings": [],
+        }
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(
+                "clipwright_color.color.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_color.color.measure_brightness",
+                lambda media_path, options: measured_no_minmax,
+            )
+            # Act
+            result = detect_color(
+                media=str(media), output=str(output), options=opts, timeline=None
+            )
+
+        # Assert: directive must be written despite ymin/ymax being None
+        assert result["ok"] is True
+        tl = otio.adapters.read_from_file(str(output))
+        color_meta = tl.metadata.get("clipwright", {}).get("color")
+        assert color_meta is not None, (
+            "metadata['clipwright']['color'] must be written when ymin/ymax are None."
+        )
+
+
+# ===========================================================================
 # (7) summary contains measured_luma/target_luma/brightness
 # ===========================================================================
 

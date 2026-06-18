@@ -1,7 +1,7 @@
-"""test_color_eq.py — Red tests for color → eq filter extension in clipwright-render.
+"""test_color_eq.py — Tests for color → eq filter extension in clipwright-render.
 
-Target functions (not yet implemented; all tests are expected to fail):
-  - build_plan(..., color=color_dict) — new `color` argument (FR-6)
+Target functions (all implemented; all tests pass):
+  - build_plan(..., color=color_dict) — `color` argument (FR-6)
   - _validate_color_eq(color: dict) -> _RenderEqParams | None
   - _append_eq_filter(filter_parts, video_map_label, eq) -> str
   - _build_filter_complex(..., color_eq=...) — updated signature
@@ -10,15 +10,12 @@ Target functions (not yet implemented; all tests are expected to fail):
 Requirements: architecture-report-20260618-201024.md §6 + §7 render apply side
 FR-6: Apply the eq color-correction filter (scale-after, subtitle-before) when
       a color directive is present in the timeline's clipwright metadata.
-
-These tests are intentionally Red (will fail due to missing implementation).
-The correct Red reason is: `build_plan` does not yet accept a `color` argument,
-and `_validate_color_eq` / `_append_eq_filter` / `_RenderEqParams` do not yet exist.
 """
 
 from __future__ import annotations
 
 import math
+import re
 from typing import Any
 
 import opentimelineio as otio
@@ -578,3 +575,50 @@ class TestValidateColorEq:
         }
         result = self._validate(color)
         assert result is not None
+
+    # --- CWE-209: error message must not expose input values ---
+
+    def test_error_message_does_not_contain_input_value(self) -> None:
+        """INVALID_INPUT message must not expose input values (CWE-209).
+
+        Also verifies that from None cuts the exception chain (__cause__ is None).
+        """
+        color = {
+            "eq": {"brightness": 5.0, "contrast": 1.0, "saturation": 1.0, "gamma": 1.0}
+        }
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._validate(color)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+        assert "5.0" not in exc_info.value.message
+        assert exc_info.value.__cause__ is None
+
+
+# ===========================================================================
+# Aspect EQ-6: eq filter numeric format lock (SR-INJ-002)
+# ===========================================================================
+
+
+class TestEqFilterFormatLock:
+    """eq= filter values in filter_complex must be numeric-only (SR-INJ-002).
+
+    Ensures :g formatting does not allow filtergraph special characters
+    (`:`, `[`, `]`, `,` etc.) to be injected into the filter chain.
+    """
+
+    def test_eq_filter_format_is_numeric_only(self) -> None:
+        """eq= filter values must be numeric (no filtergraph special chars injected)."""
+        plan = _single_source_plan(color=_COLOR_DICT)
+        fc = plan.filter_complex
+        # Extract the eq=...[outveq] block
+        m = re.search(r"eq=([^\[]+)\[outveq\]", fc)
+        assert m is not None, (
+            f"eq=...[outveq] block not found in filter_complex: {fc!r}"
+        )
+        eq_part = m.group(1)
+        # Each param=value pair must have a numeric-only value
+        for param in eq_part.split(":"):
+            key, sep, val = param.partition("=")
+            assert sep == "=", f"Unexpected param format (no '='): {param!r}"
+            assert re.fullmatch(r"-?[\d.]+(?:e[+-]?\d+)?", val), (
+                f"Non-numeric value in eq filter: {param!r}"
+            )

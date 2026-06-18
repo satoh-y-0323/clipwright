@@ -87,7 +87,7 @@ def _detect_color_inner(
     if output_path.suffix.lower() != ".otio":
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message=f"Unsupported output extension: {output_path.suffix!r}",
+            message="Output file must use the .otio extension.",
             hint="Set the output file extension to .otio.",
         )
 
@@ -176,13 +176,20 @@ def _detect_color_inner(
     # --- 5. Derive brightness offset and annotate ColorDirective ---
     # (U-1: skip when measured is None)
 
-    brightness: float = 0.0
+    final_luma: float | None = None
+    final_brightness: float | None = None
+    final_frames: int = 0
+    summary: str
 
     if measured_raw is None:
         # U-1: measurement not possible — skip directive, still save timeline
         warnings.append(
             "Could not retrieve brightness measurement."
             " color directive will not be written (U-1)."
+        )
+        summary = (
+            f"Color analysis of {media_path.name} attempted but no YAVG could be"
+            f" measured. color directive was not written (U-1)."
         )
     else:
         try:
@@ -195,7 +202,7 @@ def _detect_color_inner(
                 hint="Check the return value of measure_brightness.",
             ) from None
 
-        brightness = _clamp(
+        brightness: float = _clamp(
             (options.target_luma - measured_obj.yavg) / 255.0, -1.0, 1.0
         )
 
@@ -212,19 +219,6 @@ def _detect_color_inner(
         existing_meta["color"] = directive.model_dump()
         set_clipwright_metadata(tl, existing_meta)
 
-    # --- 6. save_timeline (atomic) ---
-
-    save_timeline(tl, str(output_path))
-
-    # --- 7. ok_result ---
-
-    # Resolve final measured values for summary/data.
-    # measured_obj is defined iff measured_raw is not None (set in step 5 else branch).
-    final_luma: float | None = None
-    final_brightness: float | None = None
-    final_frames: int = 0
-
-    if measured_raw is not None:
         final_luma = measured_obj.yavg
         final_brightness = brightness
         final_frames = measured_obj.sampled_frames
@@ -236,11 +230,10 @@ def _detect_color_inner(
             f" computed brightness offset={brightness:+.3f}."
             f" color directive written to {output_path.name}."
         )
-    else:
-        summary = (
-            f"Color analysis of {media_path.name} attempted but no YAVG could be"
-            f" measured. color directive was not written (U-1)."
-        )
+
+    # --- 6. save_timeline (atomic) ---
+
+    save_timeline(tl, str(output_path))
 
     return ok_result(
         summary,
@@ -427,5 +420,28 @@ def _check_source_within_timeline_dir(timeline_path: Path, source: str) -> None:
     except ClipwrightError:
         raise
     except OSError:
-        # Skip on resolve() failure as a best-effort fallback.
-        pass
+        # Fallback to absolute() comparison when resolve() fails (e.g. broken symlink).
+        # Prevents silently skipping boundary validation, reducing CWE-22 risk.
+        try:
+            allowed_base_abs = str(timeline_path.parent.absolute())
+            source_abs = str(Path(source).absolute())
+            if not (
+                source_abs == allowed_base_abs
+                or source_abs.startswith(allowed_base_abs + "/")
+                or source_abs.startswith(allowed_base_abs + "\\")
+            ):
+                raise ClipwrightError(
+                    code=ErrorCode.PATH_NOT_ALLOWED,
+                    message=(
+                        "Source file points outside the timeline directory boundary."
+                    ),
+                    hint=(
+                        "Use a source file located within the same directory"
+                        " as the OTIO timeline."
+                    ),
+                )
+        except ClipwrightError:
+            raise
+        except OSError:
+            # absolute() also failed (truly unresolvable path) — best-effort skip
+            pass

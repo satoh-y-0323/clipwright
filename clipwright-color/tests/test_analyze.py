@@ -710,10 +710,10 @@ class TestSubprocessContract:
 
 
 class TestInfNanYavg:
-    """When YAVG contains inf/nan, BrightnessMeasured validation fails -> measured=None."""
+    """When YAVG contains inf/nan, the regex does not match -> yavg_vals empty -> measured=None."""
 
     def test_inf_yavg_token_gives_measured_none(self, tmp_path: Path) -> None:
-        """YAVG=inf in stderr must result in measured=None (ValidationError degrade)."""
+        """YAVG=inf does not match _YAVG_RE (digits only) -> yavg_vals empty -> measured=None."""
         from clipwright_color.analyze import (
             measure_brightness,  # type: ignore[import-not-found]
         )
@@ -734,5 +734,6 @@ class TestInfNanYavg:
             result = measure_brightness(media, opts)
 
         assert result["measured"] is None, (
-            "YAVG=inf must degrade to measured=None via BrightnessMeasured validation."
+            "YAVG=inf is not matched by _YAVG_RE (digits only), so yavg_vals is empty"
+            " and _parse_signalstats returns None."
         )
