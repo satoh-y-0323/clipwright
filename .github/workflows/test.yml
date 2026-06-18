@@ -80,6 +80,7 @@ jobs:
             "clipwright-speed"
             "clipwright-text"
             "clipwright-wrap"
+            "clipwright-color"
           )
           for pkg in "${PACKAGES[@]}"; do
             echo "======================================================="

@@ -30,6 +30,7 @@ jobs:
         package:
           - clipwright
           - clipwright-bgm
+          - clipwright-color
           - clipwright-frames
           - clipwright-loudness
           - clipwright-noise

@@ -5,6 +5,23 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-06-18
+
+### Added
+
+- **`clipwright-color` package (v0.1.0)**: New MCP tool `clipwright_detect_color` that measures
+  average luma (brightness) in a video file using FFmpeg `signalstats` and writes an `eq`
+  color-correction directive to `metadata["clipwright"]["color"]` in an OTIO timeline. The
+  directive specifies a derived `brightness` offset (`(target_luma - measured_luma) / 255`,
+  clamped to `[-1, 1]`) alongside neutral `contrast`, `saturation`, and `gamma` values.
+  The annotation is non-destructive; the `eq` filter pass is materialized in a single render
+  pass by `clipwright-render`.
+- **`clipwright-render` color eq support (v0.5.0)**: `clipwright_render` now realizes color
+  correction annotations written by `clipwright_detect_color`. The `eq` filter is injected
+  after the scale stage and before any subtitle/drawtext burn-in, applying brightness, contrast,
+  saturation, and gamma adjustments in a single FFmpeg pass. Fully backward compatible: timelines
+  without a `color` directive render identically to before.
+
 ## [0.6.0] - 2026-06-18
 
 ### Added

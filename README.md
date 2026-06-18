@@ -227,6 +227,7 @@ For details, see [docs/clipwright-spec.md](docs/clipwright-spec.md).
 | `clipwright-wrap` | `clipwright_wrap_text` | Wrap long text lines with line-break annotations in OTIO timeline |
 | `clipwright-scene` | `clipwright_detect_scenes` | Detect shot boundaries via FFmpeg `scdet` or PySceneDetect and write OTIO markers |
 | `clipwright-frames` | `clipwright_extract_frames` | Extract still frames from video at specified times, scene boundaries, or fixed intervals; writes images, OTIO markers, and a JSON manifest |
+| `clipwright-color` | `clipwright_detect_color` | Measure average luma via FFmpeg `signalstats` and write an `eq` color-correction directive to OTIO timeline metadata; applied in a single render pass by `clipwright-render` |
 
 ---
 
@@ -272,6 +273,13 @@ Each clipwright tool is a standalone MCP server. Register them in your MCP clien
     },
     "clipwright-text": {
       "command": "clipwright-text"
+    },
+    "clipwright-color": {
+      "command": "clipwright-color",
+      "env": {
+        "CLIPWRIGHT_FFMPEG": "/path/to/ffmpeg",
+        "CLIPWRIGHT_FFPROBE": "/path/to/ffprobe"
+      }
     }
   }
 }

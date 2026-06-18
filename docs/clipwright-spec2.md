@@ -308,5 +308,5 @@ Before new tools are useful end-to-end, `clipwright-render` needs to handle:
 
 - [x] `LinearTimeWarp` effect → `setpts` + `atempo` filter chain
 - [x] `text_overlay` OTIO markers → `drawtext` filter chain
-- [ ] `color` OTIO metadata → `eq` filter
+- [x] `color` OTIO metadata → `eq` filter
 - [ ] `stabilize.trf_path` OTIO metadata → `vidstabtransform` filter

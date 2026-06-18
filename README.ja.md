@@ -224,6 +224,7 @@ src/clipwright/
 | `clipwright-wrap` | `clipwright_wrap_text` | 長いテキスト行に改行注記を付けて OTIO タイムラインで折り返す |
 | `clipwright-scene` | `clipwright_detect_scenes` | FFmpeg `scdet` または PySceneDetect でショット境界を検出し OTIO マーカーを書く |
 | `clipwright-frames` | `clipwright_extract_frames` | 指定時刻 / シーン境界 / 固定間隔で動画から静止画を抽出し、画像・OTIO マーカー・JSON マニフェストを出力する |
+| `clipwright-color` | `clipwright_detect_color` | FFmpeg `signalstats` で平均輝度を測定し、`eq` カラー補正ディレクティブを OTIO タイムラインのメタデータに書き込む。補正は `clipwright-render` が一括レンダリングパスで適用する |
 
 ---
 
@@ -269,6 +270,13 @@ src/clipwright/
     },
     "clipwright-text": {
       "command": "clipwright-text"
+    },
+    "clipwright-color": {
+      "command": "clipwright-color",
+      "env": {
+        "CLIPWRIGHT_FFMPEG": "/path/to/ffmpeg",
+        "CLIPWRIGHT_FFPROBE": "/path/to/ffprobe"
+      }
     }
   }
 }
