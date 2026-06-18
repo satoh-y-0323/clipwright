@@ -8,6 +8,11 @@ FFmpeg/OTIO をラップする MCP サーバー群。映像編集ワークフロ
 
 Clipwright は ffprobe（ランタイム）と ffmpeg（テスト素材生成）を PATH 上に要求する。バイナリは同梱しない。
 
+> **`clipwright-stabilize` は libvidstab 付きでビルドされた ffmpeg（`--enable-libvidstab`）が必須。**
+> apt / brew / choco / WinGet の標準パッケージは libvidstab を含まない場合がある。
+> libvidstab が存在しない場合、`clipwright_detect_shake` は `UNSUPPORTED_OPERATION` を返し、
+> libvidstab 入りビルドの導入方法を案内する。
+
 ### インストール（Windows / WinGet）
 
 ```bash
@@ -225,6 +230,7 @@ src/clipwright/
 | `clipwright-scene` | `clipwright_detect_scenes` | FFmpeg `scdet` または PySceneDetect でショット境界を検出し OTIO マーカーを書く |
 | `clipwright-frames` | `clipwright_extract_frames` | 指定時刻 / シーン境界 / 固定間隔で動画から静止画を抽出し、画像・OTIO マーカー・JSON マニフェストを出力する |
 | `clipwright-color` | `clipwright_detect_color` | FFmpeg `signalstats` で平均輝度を測定し、`eq` カラー補正ディレクティブを OTIO タイムラインのメタデータに書き込む。補正は `clipwright-render` が一括レンダリングパスで適用する |
+| `clipwright-stabilize` | `clipwright_detect_shake` | FFmpeg `vidstabdetect`（libvidstab 必須）でカメラ手ブレを解析し、`.trf` モーション解析ファイルと stabilize ディレクティブを OTIO タイムラインのメタデータに書き込む。`clipwright-render` が一括レンダリングパスで `vidstabtransform` として適用する |
 
 ---
 
@@ -277,6 +283,13 @@ src/clipwright/
         "CLIPWRIGHT_FFMPEG": "/path/to/ffmpeg",
         "CLIPWRIGHT_FFPROBE": "/path/to/ffprobe"
       }
+    },
+    "clipwright-stabilize": {
+      "command": "clipwright-stabilize",
+      "env": {
+        "CLIPWRIGHT_FFMPEG": "/path/to/ffmpeg",
+        "CLIPWRIGHT_FFPROBE": "/path/to/ffprobe"
+      }
     }
   }
 }
@@ -285,6 +298,8 @@ src/clipwright/
 > 注: `clipwright-frames` は `CLIPWRIGHT_FFMPEG`（フレーム抽出）と `CLIPWRIGHT_FFPROBE`（`inspect_media` 経由のビデオストリーム検出・尺取得）の両方を使うため、両変数を設定する必要がある。
 
 > 注: `clipwright-color` は `CLIPWRIGHT_FFPROBE` を必要とする。`inspect_media` が ffprobe を使用して輝度測定前にビデオストリームの存在を検証するためである。
+
+> 注: `clipwright-stabilize` は `--enable-libvidstab` 付きでコンパイルされた `CLIPWRIGHT_FFMPEG` を必要とする。`inspect_media` が vidstabdetect 実行前にビデオストリームの存在を検証するため、`CLIPWRIGHT_FFPROBE` も両方設定すること。
 
 ffmpeg が `PATH` 上にない場合は `CLIPWRIGHT_FFMPEG` / `CLIPWRIGHT_FFPROBE` 環境変数を設定する。
 

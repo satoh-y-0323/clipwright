@@ -78,10 +78,17 @@ jobs:
             "clipwright-render"
             "clipwright-scene"
             "clipwright-speed"
+            "clipwright-stabilize"
             "clipwright-text"
             "clipwright-wrap"
             "clipwright-color"
           )
+          # Note: clipwright-stabilize unit tests mock ffmpeg entirely and do not
+          # require a libvidstab-enabled ffmpeg build (policy A). Integration/e2e
+          # tests that exercise the real vidstabdetect/vidstabtransform filters are
+          # marked @pytest.mark.integration and auto-skipped when libvidstab is
+          # absent. Real libvidstab validation is performed on the dev machine via
+          # clipwright_test e2e (see CLAUDE.md §4).
           for pkg in "${PACKAGES[@]}"; do
             echo "======================================================="
             echo "Package: $pkg"

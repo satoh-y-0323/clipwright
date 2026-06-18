@@ -5,6 +5,27 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-06-18
+
+### Added
+
+- **`clipwright-stabilize` package (v0.1.0)**: New MCP tool `clipwright_detect_shake` that
+  analyses camera shake in a video file using FFmpeg `vidstabdetect` (requires an ffmpeg build
+  compiled with `--enable-libvidstab`). Generates a binary `.trf` motion-analysis file alongside
+  the output OTIO timeline. A `StabilizeDirective` is written to
+  `metadata["clipwright"]["stabilize"]` recording `trf_path`, `shakiness`, `accuracy`,
+  `smoothing`, and best-effort `severity` (0.0–1.0, `null` when the binary `.trf` cannot be
+  parsed). The annotation is non-destructive; the `vidstabtransform` filter pass is materialized
+  in a single render pass by `clipwright-render`. If libvidstab is absent, the tool returns
+  `UNSUPPORTED_OPERATION` with installation guidance.
+- **`clipwright-render` stabilize support (v0.6.0)**: `clipwright_render` now realizes
+  stabilization annotations written by `clipwright_detect_shake`. The `vidstabtransform` filter
+  is injected immediately after the `trim` stage and before `setpts` for each clip, ensuring
+  stabilization is applied to source frames before any timing adjustments (speed changes, etc.).
+  The `.trf` file is resolved via `cwd + relative basename` to work around vid.stab's inability
+  to parse Windows absolute paths in filtergraph strings. Fully backward compatible: timelines
+  without a `stabilize` directive render identically to before.
+
 ## [0.7.0] - 2026-06-18
 
 ### Added

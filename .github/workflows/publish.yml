@@ -38,6 +38,7 @@ jobs:
           - clipwright-scene
           - clipwright-silence
           - clipwright-speed
+          - clipwright-stabilize
           - clipwright-text
           - clipwright-transcribe
           - clipwright-wrap

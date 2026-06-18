@@ -8,6 +8,11 @@ MCP server group wrapping FFmpeg/OTIO. Provides primitives to manipulate video e
 
 Clipwright requires ffprobe (runtime) and ffmpeg (test fixture generation) on PATH. Binaries are not included.
 
+> **`clipwright-stabilize` requires an ffmpeg build compiled with libvidstab (`--enable-libvidstab`).**
+> Standard package-manager builds (apt/brew/choco/WinGet) may not include libvidstab.
+> If libvidstab is absent, `clipwright_detect_shake` returns `UNSUPPORTED_OPERATION` with
+> guidance on installing a libvidstab-enabled build.
+
 ### Installation (Windows / WinGet)
 
 ```bash
@@ -228,6 +233,7 @@ For details, see [docs/clipwright-spec.md](docs/clipwright-spec.md).
 | `clipwright-scene` | `clipwright_detect_scenes` | Detect shot boundaries via FFmpeg `scdet` or PySceneDetect and write OTIO markers |
 | `clipwright-frames` | `clipwright_extract_frames` | Extract still frames from video at specified times, scene boundaries, or fixed intervals; writes images, OTIO markers, and a JSON manifest |
 | `clipwright-color` | `clipwright_detect_color` | Measure average luma via FFmpeg `signalstats` and write an `eq` color-correction directive to OTIO timeline metadata; applied in a single render pass by `clipwright-render` |
+| `clipwright-stabilize` | `clipwright_detect_shake` | Analyse camera shake via FFmpeg `vidstabdetect` (requires libvidstab), write a `.trf` motion-analysis file and a stabilize directive to OTIO timeline metadata; applied as `vidstabtransform` in a single render pass by `clipwright-render` |
 
 ---
 
@@ -280,6 +286,13 @@ Each clipwright tool is a standalone MCP server. Register them in your MCP clien
         "CLIPWRIGHT_FFMPEG": "/path/to/ffmpeg",
         "CLIPWRIGHT_FFPROBE": "/path/to/ffprobe"
       }
+    },
+    "clipwright-stabilize": {
+      "command": "clipwright-stabilize",
+      "env": {
+        "CLIPWRIGHT_FFMPEG": "/path/to/ffmpeg",
+        "CLIPWRIGHT_FFPROBE": "/path/to/ffprobe"
+      }
     }
   }
 }
@@ -288,6 +301,8 @@ Each clipwright tool is a standalone MCP server. Register them in your MCP clien
 > Note: `clipwright-frames` lists both `CLIPWRIGHT_FFMPEG` (frame extraction) and `CLIPWRIGHT_FFPROBE` (video-stream detection and duration probing via `inspect_media`), so both variables must be configured.
 
 > Note: `clipwright-color` requires `CLIPWRIGHT_FFPROBE` because `inspect_media` uses ffprobe to validate video stream presence before measuring brightness.
+
+> Note: `clipwright-stabilize` requires `CLIPWRIGHT_FFMPEG` compiled with `--enable-libvidstab`. Both `CLIPWRIGHT_FFMPEG` and `CLIPWRIGHT_FFPROBE` must be set because `inspect_media` validates video stream presence before running vidstabdetect.
 
 Set `CLIPWRIGHT_FFMPEG` and `CLIPWRIGHT_FFPROBE` environment variables if ffmpeg is not in `PATH`.
 

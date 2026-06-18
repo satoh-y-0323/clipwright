@@ -294,10 +294,10 @@ clipwright (core)
   └─ clipwright-color          ← NEW (Medium)
   └─ clipwright-speed          ← NEW (Medium); writes to OTIO, render honours it
   └─ clipwright-text           ← NEW (Medium); writes to OTIO, render honours it
-  └─ clipwright-stabilize      ← NEW (Low); two-phase, render honours it
+  └─ clipwright-stabilize      ← IMPLEMENTED (v0.1.0); two-phase, render honours it (v0.6.0)
   └─ clipwright-bgm            ← existing
   └─ clipwright-wrap           ← existing
-  └─ clipwright-render         ← existing; must be extended for speed/text/color/stabilize
+  └─ clipwright-render         ← existing; extended for speed/text/color/stabilize (all implemented)
 ```
 
 ---
@@ -309,4 +309,4 @@ Before new tools are useful end-to-end, `clipwright-render` needs to handle:
 - [x] `LinearTimeWarp` effect → `setpts` + `atempo` filter chain
 - [x] `text_overlay` OTIO markers → `drawtext` filter chain
 - [x] `color` OTIO metadata → `eq` filter
-- [ ] `stabilize.trf_path` OTIO metadata → `vidstabtransform` filter
+- [x] `stabilize.trf_path` OTIO metadata → `vidstabtransform` filter
