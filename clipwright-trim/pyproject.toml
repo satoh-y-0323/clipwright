@@ -1,0 +1,84 @@
+[project]
+name = "clipwright-trim"
+version = "0.1.0"
+description = "MCP tool for explicit keep/drop range selection and OTIO timeline generation. Accepts time ranges in seconds and produces a kept-range OTIO timeline compatible with clipwright-render."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "satoh-y-0323", email = "shoma.papa.0323@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "clipwright>=0.2.0",
+    "mcp[cli]>=1.27.2",
+    "opentimelineio>=0.18",
+    "pydantic>=2",
+]
+
+[project.scripts]
+clipwright-trim = "clipwright_trim.server:main"
+
+[build-system]
+requires = ["uv_build>=0.11.19,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.1.0",
+    "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
+    "pytest-mock>=3.15.1",
+    "ruff>=0.15.16",
+]
+
+# Resolve clipwright (core) within workspace by path reference
+[tool.uv.sources]
+clipwright = { workspace = true }
+
+# --- Ruff ---
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+# Allow E501 for English docstrings/comments in test files
+"tests/*.py" = ["E501"]
+
+[tool.ruff.format]
+# Default ruff formatter is OK
+
+# --- mypy ---
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_any_generics = true
+
+# opentimelineio has no stubs, ignored with mypy strict
+[[tool.mypy.overrides]]
+module = "opentimelineio.*"
+ignore_missing_imports = true
+
+# --- pytest ---
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers -q"
+markers = [
+    "integration: integration test requiring actual ffprobe binary",
+    "slow: test with long execution time",
+]
+
+# --- coverage ---
+[tool.coverage.run]
+source = ["clipwright_trim"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
