@@ -5,6 +5,31 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`clipwright-render` caption & overlay re-timing (v0.7.0)**: `clipwright_render`
+  now re-times burned-in captions and text overlays from source-media time onto the
+  post-edit program timeline. When the timeline contains silence cuts or
+  `LinearTimeWarp` speed changes, subtitle cues (`.srt`) and `text_overlay` markers
+  no longer land at the wrong frames. Key behaviours:
+  - `retime_markers` option: `"auto"` (default) — re-time whenever the timeline
+    contains cuts or warps; `"off"` — skip re-timing unconditionally (legacy behaviour).
+  - **Non-destructive subtitle output**: when cues are re-timed a new file
+    `{output_stem}.retimed.srt` is written alongside the rendered video; the original
+    `.srt` is never modified.
+  - **Identity timelines** (no cuts, no warps, single clip at 1× speed) produce no
+    `.retimed.srt` and add no processing overhead.
+  - **Cut-spanning cues/overlays** are split at cut boundaries; cues/overlays that
+    fall entirely inside a removed range are dropped with a `warnings[]` entry.
+  - **Format support**: `.srt` only. `.vtt` and `.ass` are skipped with a
+    `warnings[]` entry (not yet supported).
+  - **Multi-source timelines** (more than one distinct source file) are skipped with
+    a `warnings[]` entry.
+  - Fully backward compatible: existing render calls without subtitle options behave
+    identically.
+
 ## [0.9.0] - 2026-06-20
 
 ### Added

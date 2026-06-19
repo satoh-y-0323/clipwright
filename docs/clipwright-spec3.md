@@ -209,7 +209,14 @@ GPU:
 
 ---
 
-### Caption & overlay re-timing across edits  *(render extension / core helper)*
+### Caption & overlay re-timing across edits  ✅ IMPLEMENTED (v0.7.0, 2026-06-20)  *(render extension / core helper)*
+
+> Shipped as a `clipwright-render` extension (v0.7.0). `retime_markers="auto"`
+> (default) re-times `.srt` subtitle cues and `text_overlay` markers to program time
+> whenever the timeline contains cuts or `LinearTimeWarp` warps. Writes a
+> non-destructive `{output_stem}.retimed.srt` alongside the output. Identity timelines
+> are a no-op. Cut-spanning cues are split; drop-range cues are dropped with a
+> `warnings[]` entry. `.vtt`/`.ass` and multi-source timelines are skipped with a warning.
 
 **What it does**
 Remaps subtitle cues and `text_overlay` marker timings from source-media time onto
@@ -461,8 +468,8 @@ as render filter/option work:
       encoder-aware rate control (map quality → `-cq`/`-crf`/`-global_quality`/`-qp`;
       never `-crf` for hardware encoders). NVENC verified-on-dev; others experimental.
 - [ ] Hardware decode (`-hwaccel cuda`/`qsv`/`vaapi`) with CPU-filter fallback / `hwdownload`
-- [ ] Re-time `text_overlay` markers through the kept-range + `LinearTimeWarp` map
-- [ ] Re-time / remap subtitle cues to program time when cuts or warps are present
+- [x] Re-time `text_overlay` markers through the kept-range + `LinearTimeWarp` map
+- [x] Re-time / remap subtitle cues to program time when cuts or warps are present
 - [ ] `reframe` metadata → `scale`/`crop`/`pad`/`overlay` (blur-pad) filter chain
 - [ ] `image_overlay` markers → extra `-i` + `overlay` filter with opacity/fade
 - [ ] `xfade` / `acrossfade` for transitions (depends on sequence assembly)
