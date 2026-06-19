@@ -231,6 +231,7 @@ src/clipwright/
 | `clipwright-frames` | `clipwright_extract_frames` | 指定時刻 / シーン境界 / 固定間隔で動画から静止画を抽出し、画像・OTIO マーカー・JSON マニフェストを出力する |
 | `clipwright-color` | `clipwright_detect_color` | FFmpeg `signalstats` で平均輝度を測定し、`eq` カラー補正ディレクティブを OTIO タイムラインのメタデータに書き込む。補正は `clipwright-render` が一括レンダリングパスで適用する |
 | `clipwright-stabilize` | `clipwright_detect_shake` | FFmpeg `vidstabdetect`（libvidstab 必須）でカメラ手ブレを解析し、`.trf` モーション解析ファイルと stabilize ディレクティブを OTIO タイムラインのメタデータに書き込む。`clipwright-render` が一括レンダリングパスで `vidstabtransform` として適用する |
+| `clipwright-trim` | `clipwright_trim` | 明示した keep/drop 時間範囲から kept-range の OTIO タイムラインを生成する（オプション省略時はクリップ全体をパススルー）。`clipwright-render` がそのまま連結する。「どの区間を残すか」を指定する最も基本的なプリミティブ |
 
 ---
 
@@ -288,6 +289,12 @@ src/clipwright/
       "command": "clipwright-stabilize",
       "env": {
         "CLIPWRIGHT_FFMPEG": "/path/to/ffmpeg",
+        "CLIPWRIGHT_FFPROBE": "/path/to/ffprobe"
+      }
+    },
+    "clipwright-trim": {
+      "command": "clipwright-trim",
+      "env": {
         "CLIPWRIGHT_FFPROBE": "/path/to/ffprobe"
       }
     }

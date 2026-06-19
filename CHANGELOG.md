@@ -5,6 +5,20 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-06-20
+
+### Added
+
+- **`clipwright-trim` package (v0.1.0)**: New MCP tool `clipwright_trim` that builds a
+  kept-range OTIO timeline from explicit time ranges. Specify `keep` ranges (segments to
+  retain, in listed order) or `drop` ranges (segments to remove; the complement is kept);
+  with no options it passes the whole clip through as a single renderable clip. Output is the
+  same kept-range shape produced by `clipwright-silence`, so `clipwright-render` concatenates
+  the segments with no changes. This fills the most basic editing gap — selecting which parts
+  of a clip to keep — which previously had no in-suite path. Non-destructive: only a new OTIO
+  file is written; the source media is never modified. Requires `CLIPWRIGHT_FFPROBE` to read
+  the source duration.
+
 ## [0.8.0] - 2026-06-18
 
 ### Added

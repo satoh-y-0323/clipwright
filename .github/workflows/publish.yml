@@ -41,6 +41,7 @@ jobs:
           - clipwright-stabilize
           - clipwright-text
           - clipwright-transcribe
+          - clipwright-trim
           - clipwright-wrap
     environment:
       name: pypi

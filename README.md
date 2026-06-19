@@ -234,6 +234,7 @@ For details, see [docs/clipwright-spec.md](docs/clipwright-spec.md).
 | `clipwright-frames` | `clipwright_extract_frames` | Extract still frames from video at specified times, scene boundaries, or fixed intervals; writes images, OTIO markers, and a JSON manifest |
 | `clipwright-color` | `clipwright_detect_color` | Measure average luma via FFmpeg `signalstats` and write an `eq` color-correction directive to OTIO timeline metadata; applied in a single render pass by `clipwright-render` |
 | `clipwright-stabilize` | `clipwright_detect_shake` | Analyse camera shake via FFmpeg `vidstabdetect` (requires libvidstab), write a `.trf` motion-analysis file and a stabilize directive to OTIO timeline metadata; applied as `vidstabtransform` in a single render pass by `clipwright-render` |
+| `clipwright-trim` | `clipwright_trim` | Build a kept-range OTIO timeline from explicit keep/drop time ranges (or pass through the whole clip); concatenated by `clipwright-render`. The basic "select which parts to keep" primitive |
 
 ---
 
@@ -291,6 +292,12 @@ Each clipwright tool is a standalone MCP server. Register them in your MCP clien
       "command": "clipwright-stabilize",
       "env": {
         "CLIPWRIGHT_FFMPEG": "/path/to/ffmpeg",
+        "CLIPWRIGHT_FFPROBE": "/path/to/ffprobe"
+      }
+    },
+    "clipwright-trim": {
+      "command": "clipwright-trim",
+      "env": {
         "CLIPWRIGHT_FFPROBE": "/path/to/ffprobe"
       }
     }
