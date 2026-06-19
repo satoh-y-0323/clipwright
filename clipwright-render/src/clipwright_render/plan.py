@@ -927,6 +927,33 @@ def _marker_to_text_overlay(
                 )
 
     # Re-validate value ranges (multi-layer defence)
+    # NL-1: reject non-finite values (inf/-inf/nan) before the < 0 / <= 0 checks,
+    # because inf passes both guards and propagates to RationalTime.from_seconds(inf)
+    # and ultimately generates 'between(t,inf,inf)' in the filtergraph, causing
+    # SUBPROCESS_FAILED in ffmpeg.
+    if not math.isfinite(start_sec):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an invalid text overlay:"
+                " start_sec is not finite."
+            ),
+            hint=(
+                "Re-annotate with clipwright_add_text using a finite start_sec value."
+            ),
+        )
+    if not math.isfinite(duration_sec):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an invalid text overlay:"
+                " duration_sec is not finite."
+            ),
+            hint=(
+                "Re-annotate with clipwright_add_text using a finite"
+                " duration_sec value."
+            ),
+        )
     if start_sec < 0:
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,

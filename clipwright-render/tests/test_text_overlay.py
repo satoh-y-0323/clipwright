@@ -561,6 +561,22 @@ class TestRenderSideRevalidation:
             self._build_with_bad_marker(x="(w-tw)/2\x00")
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
+    def test_inf_start_sec_raises_invalid_input(self) -> None:
+        """start_sec=inf in marker → INVALID_INPUT (NL-1: non-finite guard)."""
+        import math
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._build_with_bad_marker(start_sec=math.inf)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_nan_duration_sec_raises_invalid_input(self) -> None:
+        """duration_sec=nan in marker → INVALID_INPUT (NL-1: non-finite guard)."""
+        import math
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._build_with_bad_marker(duration_sec=math.nan)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
 
 # ---------------------------------------------------------------------------
 # Fade alpha expression: zero-division guard and normal form
