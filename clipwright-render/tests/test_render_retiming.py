@@ -1,8 +1,4 @@
-"""test_render_retiming.py — Red tests for plan.py / render.py integration layer.
-
-Target functions (not yet implemented):
-  - clipwright_render.plan.retime_text_overlays
-  - clipwright_render.render._generate_retimed_srt
+"""test_render_retiming.py — Integration tests for plan.py / render.py re-timing layer.
 
 Architecture references: architecture-report-20260620-030930.md §7-D
 Requirements satisfied:
@@ -22,7 +18,7 @@ Test groups:
       T1-B: marker drop -> 0 drawtext segments
       T1-C: identity (no cut/warp) -> overlay unchanged, no warnings
   T2: _generate_retimed_srt — render.py helper (direct import / attribute check)
-      T2-A: ImportError / AttributeError for missing function
+      T2-A: function is importable and callable
   T3: render_timeline subtitle integration (mocked build_plan / inspect_media)
       T3-A: retime_markers="auto" + .srt + cut -> retimed path in options.subtitle
       T3-B: retime_markers="off" -> re-timing skipped (AC-6)
@@ -40,8 +36,6 @@ Test isolation:
   - All tests that call render_timeline use dry_run=True or mock build_plan to
     avoid needing real ffmpeg binaries.
   - plan.py / render.py / schemas.py must NOT be modified by this test file.
-  - retime_text_overlays / _generate_retimed_srt are expected NOT to exist yet;
-    AttributeError / ImportError is the correct Red state.
 """
 
 from __future__ import annotations
@@ -210,26 +204,20 @@ _SIMPLE_SRT = textwrap.dedent("""\
 
 
 class TestRetimeTextOverlays:
-    """T1: retime_text_overlays in plan.py (function not yet implemented → Red).
+    """T1: retime_text_overlays in plan.py.
 
     The function signature is defined in architecture-report §2.1:
         retime_text_overlays(overlays, tmap, retime) -> tuple[list[TextOverlay], list[str]]
-
-    Expected Red reason: AttributeError on import (function does not exist in plan.py).
     """
 
     def _import_retime_text_overlays(self) -> Any:
-        """Import retime_text_overlays from plan; expected to raise AttributeError."""
-        from clipwright_render import plan as _plan  # type: ignore[import]
+        """Import retime_text_overlays from plan."""
+        from clipwright_render import plan as _plan
 
-        return _plan.retime_text_overlays  # AttributeError if not present
+        return _plan.retime_text_overlays
 
     def test_retime_text_overlays_exists_in_plan(self) -> None:
-        """retime_text_overlays must be importable from clipwright_render.plan.
-
-        Red state: AttributeError because the function does not exist yet.
-        """
-        # This will raise AttributeError until retime_text_overlays is implemented.
+        """retime_text_overlays must be importable from clipwright_render.plan."""
         fn = self._import_retime_text_overlays()
         assert callable(fn), "retime_text_overlays must be callable"
 
@@ -241,10 +229,6 @@ class TestRetimeTextOverlays:
           seg1: source 3-5s -> program 3-5s
           seg2: source 10-12s -> program 5-7s
         After retime_text_overlays, build_plan should produce >=2 drawtext entries.
-
-        Red reason: retime_text_overlays does not exist; build_plan will NOT call it
-        and will produce only 1 drawtext segment (the original marker in source time),
-        causing this test to fail with AssertionError.
         """
         # Build a timeline with two non-contiguous clips (cut at source 5s)
         tl = _make_timeline(
@@ -266,12 +250,9 @@ class TestRetimeTextOverlays:
                 RenderOptions(retime_markers="auto"),
             )
 
-        # With retime_text_overlays implemented: split -> >=2 drawtext segments
-        # Without it (current state): only 1 drawtext segment in source time
         drawtext_count = plan.filter_complex.count("drawtext=")
         assert drawtext_count >= 2, (
-            f"Expected >=2 drawtext segments after split re-timing, got {drawtext_count}. "
-            "retime_text_overlays is not implemented yet."
+            f"Expected >=2 drawtext segments after split re-timing, got {drawtext_count}."
         )
 
     def test_drop_marker_produces_zero_drawtext_segments(self) -> None:
@@ -279,9 +260,6 @@ class TestRetimeTextOverlays:
 
         Setup: source 0-5s kept, 5-10s cut, 10-20s kept.
         Marker: source 6-9s -> entirely in cut -> should be dropped (0 segments).
-
-        Red reason: retime_text_overlays not implemented; build_plan currently
-        produces 1 drawtext segment even for dropped markers.
         """
         tl = _make_timeline(
             [
@@ -302,18 +280,12 @@ class TestRetimeTextOverlays:
                 RenderOptions(retime_markers="auto"),
             )
 
-        # With retime_text_overlays: drop -> 0 drawtext in filter_complex
-        # Without it: 1 drawtext appears (source time, not remapped)
         assert "drawtext" not in plan.filter_complex, (
-            "Expected 0 drawtext segments for fully-dropped overlay, but found drawtext. "
-            "retime_text_overlays is not implemented yet."
+            "Expected 0 drawtext segments for fully-dropped overlay, but found drawtext."
         )
 
     def test_drop_marker_emits_warning(self) -> None:
-        """T1-B: Dropped overlay emits exactly 1 warning (FR-6 / B3).
-
-        Red reason: retime_text_overlays not implemented; no warnings generated.
-        """
+        """T1-B: Dropped overlay emits exactly 1 warning (FR-6 / B3)."""
         tl = _make_timeline(
             [
                 _make_clip("/src/clip.mp4", 0.0, 5.0),
@@ -335,15 +307,11 @@ class TestRetimeTextOverlays:
         # Warning must mention the drop (FR-6 text: "dropped (source range removed by cuts)")
         drop_warnings = [w for w in plan.warnings if "drop" in w.lower()]
         assert len(drop_warnings) == 1, (
-            f"Expected 1 drop warning, got {len(drop_warnings)}: {plan.warnings}. "
-            "retime_text_overlays is not implemented yet."
+            f"Expected 1 drop warning, got {len(drop_warnings)}: {plan.warnings}."
         )
 
     def test_split_marker_emits_warning(self) -> None:
-        """T1-A: Split overlay emits exactly 1 warning (FR-6 / B3).
-
-        Red reason: retime_text_overlays not implemented; no warnings generated.
-        """
+        """T1-A: Split overlay emits exactly 1 warning (FR-6 / B3)."""
         tl = _make_timeline(
             [
                 _make_clip("/src/clip.mp4", 0.0, 5.0),
@@ -364,15 +332,13 @@ class TestRetimeTextOverlays:
 
         split_warnings = [w for w in plan.warnings if "split" in w.lower()]
         assert len(split_warnings) == 1, (
-            f"Expected 1 split warning, got {len(split_warnings)}: {plan.warnings}. "
-            "retime_text_overlays is not implemented yet."
+            f"Expected 1 split warning, got {len(split_warnings)}: {plan.warnings}."
         )
 
     def test_warnings_reach_render_plan(self) -> None:
         """T1: Warnings from retime_text_overlays must appear in RenderPlan.warnings.
 
         Verifies the build_plan.warnings -> RenderPlan.warnings path (ADR-4 / §0-5).
-        Red reason: retime_text_overlays not implemented; plan.warnings is empty.
         """
         tl = _make_timeline(
             [
@@ -394,8 +360,7 @@ class TestRetimeTextOverlays:
             )
 
         assert len(plan.warnings) >= 1, (
-            "Expected >=1 warning in RenderPlan.warnings for dropped overlay. "
-            "retime_text_overlays is not implemented yet."
+            "Expected >=1 warning in RenderPlan.warnings for dropped overlay."
         )
 
 
@@ -405,20 +370,13 @@ class TestRetimeTextOverlays:
 
 
 class TestGenerateRetimedSrt:
-    """T2: _generate_retimed_srt in render.py (function not yet implemented -> Red).
-
-    Expected Red reason: AttributeError because _generate_retimed_srt does not
-    exist in render.py.
-    """
+    """T2: _generate_retimed_srt in render.py."""
 
     def test_generate_retimed_srt_exists_in_render(self) -> None:
-        """_generate_retimed_srt must be importable from clipwright_render.render.
+        """_generate_retimed_srt must be importable from clipwright_render.render."""
+        from clipwright_render import render as _render
 
-        Red state: AttributeError because the function does not exist yet.
-        """
-        from clipwright_render import render as _render  # type: ignore[import]
-
-        fn = _render._generate_retimed_srt  # AttributeError if missing
+        fn = _render._generate_retimed_srt
         assert callable(fn), "_generate_retimed_srt must be callable"
 
 
@@ -431,14 +389,7 @@ class TestRenderSubtitleRetiming:
     """T3: Subtitle re-timing integration via render_timeline (dry_run).
 
     render_timeline is called with dry_run=True (or build_plan is mocked) to avoid
-    requiring real ffmpeg binaries.  The subtitle re-timing stage in render.py
-    (_generate_retimed_srt / subtitle_warnings) is not yet implemented.
-
-    Red reason for all tests in this group:
-      - _generate_retimed_srt does not exist -> AttributeError when the
-        subtitle re-timing branch is entered.
-      - OR the expected postcondition (retimed .srt created / options path changed /
-        warning emitted) is not satisfied because the code path is absent.
+    requiring real ffmpeg binaries.
     """
 
     # -------------------------------------------------------------------
@@ -544,9 +495,6 @@ class TestRenderSubtitleRetiming:
 
         Decision B (corrected): retimed filename = output_stem.retimed.srt, not
         subtitle_stem.retimed.srt.
-
-        Red reason: _generate_retimed_srt does not exist in render.py -> the retimed
-        .srt file is never written.
         """
         from clipwright_render.render import render_timeline
 
@@ -570,8 +518,7 @@ class TestRenderSubtitleRetiming:
         # Decision B: retimed file must be named after OUTPUT stem (edited.retimed.srt)
         expected_retimed = tmp_path / "edited.retimed.srt"
         assert expected_retimed.exists(), (
-            f"Expected {expected_retimed} to be created by _generate_retimed_srt. "
-            "_generate_retimed_srt is not implemented yet."
+            f"Expected {expected_retimed} to be created by _generate_retimed_srt."
         )
 
     def test_auto_srt_cut_options_path_is_retimed(self, tmp_path: Path) -> None:
@@ -580,8 +527,6 @@ class TestRenderSubtitleRetiming:
         After _generate_retimed_srt, render.py should replace options.subtitle.path
         with the retimed file path before passing to build_plan.  The dry_run
         filter_complex / ffmpeg_args should reference the retimed path.
-
-        Red reason: _generate_retimed_srt not implemented; options.path not replaced.
         """
         from clipwright_render.render import render_timeline
 
@@ -606,20 +551,16 @@ class TestRenderSubtitleRetiming:
         fc: str = result["data"]["filter_complex"]
         # The filter_complex should reference "edited.retimed.srt", not "subs.srt"
         assert "edited.retimed.srt" in fc or "edited.retimed" in fc, (
-            f"Expected 'edited.retimed.srt' in filter_complex, but got:\n{fc}\n"
-            "_generate_retimed_srt is not implemented yet."
+            f"Expected 'edited.retimed.srt' in filter_complex, but got:\n{fc}"
         )
         assert "subs.srt" not in fc or "edited.retimed.srt" in fc, (
-            "filter_complex still references original subs.srt; options.path not replaced. "
-            "_generate_retimed_srt is not implemented yet."
+            "filter_complex still references original subs.srt; options.path not replaced."
         )
 
     def test_auto_srt_source_file_unchanged(self, tmp_path: Path) -> None:
         """T3-A / AC-7: Original .srt file must not be modified (non-destructive).
 
-        Red reason: not applicable (non-destructive is trivially true when the
-        function is absent, but this acts as a regression guard once implemented).
-        The test is written as a positive assertion: original content unchanged.
+        Regression guard: the source .srt content must be identical after render.
         """
         from clipwright_render.render import render_timeline
 
@@ -656,11 +597,7 @@ class TestRenderSubtitleRetiming:
         """T3-B / AC-6: retime_markers='off' -> retimed .srt NOT created.
 
         Even with a cut timeline + .srt, 'off' must skip re-timing completely.
-        Red reason: once _generate_retimed_srt exists, the 'off' guard must be
-        respected; if it is missing, the retimed file will be created unexpectedly.
-        Currently Red because _generate_retimed_srt does not exist, but the test
-        asserts the negative outcome (no file) which is trivially true now.
-        This is a regression guard.
+        Regression guard: the 'off' guard must not create the retimed file.
         """
         from clipwright_render.render import render_timeline
 
@@ -689,9 +626,7 @@ class TestRenderSubtitleRetiming:
     def test_off_filter_complex_uses_original_srt(self, tmp_path: Path) -> None:
         """T3-B / AC-6: retime_markers='off' -> filter_complex references original .srt.
 
-        Red reason: once _generate_retimed_srt is implemented, the 'off' branch must
-        not replace options.subtitle.path.  This test pins the correct behaviour.
-        Currently this test passes trivially (function absent = path never replaced).
+        Regression guard: the 'off' branch must not replace options.subtitle.path.
         """
         from clipwright_render.render import render_timeline
 
@@ -728,8 +663,6 @@ class TestRenderSubtitleRetiming:
 
         Warning text must contain: "retime_markers skipped: multi-source timeline
         is not supported" (§4.2 / FR-7).
-
-        Red reason: warning emission logic not yet implemented in render.py.
         """
         from clipwright_render.render import render_timeline
 
@@ -754,8 +687,7 @@ class TestRenderSubtitleRetiming:
         multi_source_warns = [w for w in warnings if "multi-source" in w.lower()]
         assert len(multi_source_warns) >= 1, (
             f"Expected warning containing 'multi-source' for multi-source timeline, "
-            f"got warnings={warnings}. "
-            "Multi-source skip warning not yet implemented in render.py (AC-9)."
+            f"got warnings={warnings}."
         )
 
     def test_multi_source_no_retimed_file_created(self, tmp_path: Path) -> None:
@@ -791,8 +723,6 @@ class TestRenderSubtitleRetiming:
 
         Warning text must contain: "subtitle re-timing skipped: only .srt is
         supported in this version".
-
-        Red reason: warning emission for non-.srt subtitles not yet implemented.
         """
         from clipwright_render.render import render_timeline
 
@@ -820,8 +750,7 @@ class TestRenderSubtitleRetiming:
         skip_warns = [w for w in warnings if "only .srt" in w.lower()]
         assert len(skip_warns) >= 1, (
             f"Expected warning 'only .srt is supported' for {suffix} subtitle, "
-            f"got warnings={warnings}. "
-            "Non-.srt skip warning not yet implemented."
+            f"got warnings={warnings}."
         )
 
     # -------------------------------------------------------------------
@@ -833,8 +762,6 @@ class TestRenderSubtitleRetiming:
 
         When every cue falls in removed region, no empty .srt is generated;
         instead the subtitle filter is skipped entirely + 1 warning is emitted.
-
-        Red reason: _generate_retimed_srt + all-drop handling not implemented.
         """
         from clipwright_render.render import render_timeline
 
@@ -883,8 +810,7 @@ class TestRenderSubtitleRetiming:
         # Decision A: subtitle filter must be skipped (not present in filter_complex)
         assert "subtitles=" not in fc, (
             "All-cue-drop must skip the subtitle filter entirely (Decision A), "
-            "but 'subtitles=' found in filter_complex. "
-            "_generate_retimed_srt not yet implemented."
+            "but 'subtitles=' found in filter_complex."
         )
 
         # 1 warning for the all-drop event
@@ -895,8 +821,7 @@ class TestRenderSubtitleRetiming:
             if "all" in w.lower() or "drop" in w.lower() or "no cues" in w.lower()
         ]
         assert len(all_drop_warns) >= 1, (
-            f"Expected >=1 warning for all-cues-dropped, got warnings={warnings}. "
-            "All-cue-drop warning not yet implemented."
+            f"Expected >=1 warning for all-cues-dropped, got warnings={warnings}."
         )
 
     # -------------------------------------------------------------------
@@ -909,8 +834,6 @@ class TestRenderSubtitleRetiming:
         Output = 'my_video.mp4' + subtitle = 'captions.srt'
         -> Retimed file must be 'my_video.retimed.srt' (output stem, NOT subtitle stem).
         So 'captions.retimed.srt' must NOT be created.
-
-        Red reason: _generate_retimed_srt not yet implemented.
         """
         from clipwright_render.render import render_timeline
 
@@ -938,12 +861,10 @@ class TestRenderSubtitleRetiming:
         expected_wrong = tmp_path / "subs.retimed.srt"
 
         assert expected_correct.exists(), (
-            f"Expected '{expected_correct}' (output-stem based name) to be created. "
-            "_generate_retimed_srt is not implemented yet."
+            f"Expected '{expected_correct}' (output-stem based name) to be created."
         )
         assert not expected_wrong.exists(), (
-            f"'{expected_wrong}' must NOT be created (subtitle-stem naming is wrong). "
-            "Decision B (corrected): output stem must be used."
+            f"'{expected_wrong}' must NOT be created (subtitle-stem naming is wrong)."
         )
 
     # -------------------------------------------------------------------
@@ -955,8 +876,6 @@ class TestRenderSubtitleRetiming:
 
         Decision B: if {output_stem}.retimed.srt already exists and overwrite=False,
         raise ClipwrightError(INVALID_INPUT) with hint to set overwrite=True.
-
-        Red reason: _generate_retimed_srt not yet implemented.
         """
         from clipwright_render.render import render_timeline
 
@@ -986,13 +905,11 @@ class TestRenderSubtitleRetiming:
             )
 
         assert exc_info.value.code == ErrorCode.INVALID_INPUT, (
-            f"Expected INVALID_INPUT, got {exc_info.value.code}. "
-            "_generate_retimed_srt overwrite guard not yet implemented."
+            f"Expected INVALID_INPUT, got {exc_info.value.code}."
         )
         # Hint must mention overwrite=True
         assert "overwrite" in exc_info.value.hint.lower(), (
-            f"Hint must mention 'overwrite=True', got: {exc_info.value.hint!r}. "
-            "_generate_retimed_srt overwrite guard not yet implemented."
+            f"Hint must mention 'overwrite=True', got: {exc_info.value.hint!r}."
         )
 
     # -------------------------------------------------------------------
@@ -1000,10 +917,7 @@ class TestRenderSubtitleRetiming:
     # -------------------------------------------------------------------
 
     def test_overwrite_true_existing_retimed_srt_replaces(self, tmp_path: Path) -> None:
-        """T3-I: overwrite=True + existing retimed .srt -> succeeds, replaces file.
-
-        Red reason: _generate_retimed_srt not yet implemented.
-        """
+        """T3-I: overwrite=True + existing retimed .srt -> succeeds, replaces file."""
         from clipwright_render.render import render_timeline
 
         tl_path, source, srt_path = self._make_cut_timeline_with_subtitle(tmp_path)
@@ -1029,13 +943,11 @@ class TestRenderSubtitleRetiming:
             )
 
         assert result["ok"] is True, (
-            "overwrite=True must not raise even when retimed .srt exists. "
-            "_generate_retimed_srt overwrite handling not yet implemented."
+            "overwrite=True must not raise even when retimed .srt exists."
         )
         # The retimed file must be overwritten (content changed)
         assert retimed_path.read_text(encoding="utf-8") != "old content", (
-            "Retimed .srt must be overwritten when overwrite=True. "
-            "_generate_retimed_srt not yet implemented."
+            "Retimed .srt must be overwritten when overwrite=True."
         )
 
 
@@ -1051,19 +963,9 @@ class TestIdentityTimelineRegression:
     no-op; text_overlay start_s/end_s must remain unchanged and warnings must be [].
     This test also verifies the build_plan.warnings path is clean.
 
-    For the identity case, retime_text_overlays would return overlays unchanged.
-    The test verifies:
+    Verifies:
       1. drawtext enable range matches the original source times (start_sec=2.0, end_sec=6.0).
       2. plan.warnings is empty.
-
-    Red reason for part (1): once retime_text_overlays is implemented, it might
-    incorrectly shift windows even for identity timelines if the no-op guard
-    (has_cut=False and has_warp=False) is missing.  Currently this test PASSES
-    (no retime_text_overlays call), so it acts as a regression guard that must
-    remain Green after implementation.
-
-    The test is included here to fulfil the spec requirement ("恒等タイムライン回帰
-    1ケース含める").
     """
 
     def test_identity_timeline_overlay_unchanged_no_warnings(self) -> None:

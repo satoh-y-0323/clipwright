@@ -55,6 +55,9 @@ _ALLOWED_EXTENSIONS = frozenset({".mp4", ".mkv", ".mov", ".webm"})
 # Subtitle file extension whitelist (ADR-S3)
 _ALLOWED_SUBTITLE_EXTENSIONS = frozenset({".srt", ".vtt", ".ass"})
 
+# Maximum .srt file size accepted for re-timing (SR-L-2)
+_MAX_SRT_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB
+
 
 def _probe(source: str) -> ProbeInfo:
     """Call inspect_media and return ProbeInfo (AD-3 / ADR-C2-r2).
@@ -253,7 +256,7 @@ def _generate_retimed_srt(
     tmap: _retiming.ProgramTimeMap,
     output_path: Path,
     overwrite: bool,
-) -> tuple[str, list[str]]:
+) -> tuple[str | None, list[str]]:
     """Generate a re-timed .srt file and return (retimed_path, warnings).
 
     Reads src_srt (UTF-8, non-destructive), remaps each cue via remap_window,
@@ -264,6 +267,10 @@ def _generate_retimed_srt(
     This uses the output file stem (not the subtitle source stem) to avoid
     name collisions when the same subtitle is used across multiple renders
     with different output names.
+
+    The retimed .srt is placed alongside the primary output file.  This keeps
+    all render outputs co-located and applies the same directory policy as the
+    main output (SR-L-1).
 
     Overwrite policy (Decision B):
       - overwrite=False + existing retimed .srt → INVALID_INPUT with hint.
@@ -293,9 +300,19 @@ def _generate_retimed_srt(
 
     Raises:
         ClipwrightError: INVALID_INPUT when retimed .srt exists and
-            overwrite=False.
+            overwrite=False, or the subtitle file is too large or unparseable.
     """
     retimed_path = output_path.parent / f"{output_path.stem}.retimed.srt"
+
+    # SR-M-3: guard single quote in output stem before model_copy replaces path.
+    # model_copy(update={"path": ...}) skips Pydantic field_validator, so
+    # _validate_path_no_single_quote would not run on the constructed path.
+    if "'" in output_path.stem:
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message="Output file name must not contain a single quote.",
+            hint="Rename the output file to avoid single quotes in its name.",
+        )
 
     # Overwrite guard (Decision B)
     if retimed_path.exists() and not overwrite:
@@ -308,17 +325,38 @@ def _generate_retimed_srt(
             ),
         )
 
-    # Parse source SRT (non-destructive — read only)
-    src_text = Path(src_srt).read_text(encoding="utf-8")
-    cues = _retiming.parse_srt(src_text)
+    # SR-L-2: reject oversized SRT files before reading into memory.
+    srt_stat = Path(src_srt).stat()
+    if srt_stat.st_size > _MAX_SRT_SIZE_BYTES:
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message="The subtitle file is too large to process.",
+            hint="Use a .srt file smaller than 50 MB.",
+        )
+
+    # Parse source SRT (non-destructive — read only).
+    # SR-M-1: catch parse / decode errors and re-raise as fixed-text ClipwrightError
+    # to prevent internal detail (timecode line content) from leaking (CWE-209).
+    try:
+        src_text = Path(src_srt).read_text(encoding="utf-8")
+        cues = _retiming.parse_srt(src_text)
+    except (ValueError, OSError, UnicodeDecodeError):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message="The subtitle file could not be parsed.",
+            hint=(
+                "Verify that the .srt file is valid UTF-8 and uses correct SRT format."
+            ),
+        ) from None
 
     new_cues: list[_retiming.SrtCue] = []
     warnings: list[str] = []
 
     for cue in cues:
         rr = _retiming.remap_window(tmap, cue.start, cue.end)
-        start_tc = _retiming._format_srt_timecode(cue.start)
-        end_tc = _retiming._format_srt_timecode(cue.end)
+        # CR-L-3: use the public format_srt_timecode instead of _format_srt_timecode.
+        start_tc = _retiming.format_srt_timecode(cue.start)
+        end_tc = _retiming.format_srt_timecode(cue.end)
         label = f"[{start_tc}-{end_tc}]"
 
         if rr.dropped:
@@ -352,7 +390,7 @@ def _generate_retimed_srt(
         warnings.append(
             "All subtitle cues were dropped by cuts; subtitle filter skipped."
         )
-        return ("", warnings)
+        return (None, warnings)
 
     # Write re-timed SRT
     srt_content = _retiming.serialize_srt(new_cues)
@@ -728,7 +766,7 @@ def _render_inner(
                 output_path,
                 options.overwrite,
             )
-            if retimed_path:
+            if retimed_path is not None:
                 # Re-timed SRT was written — replace subtitle path in options
                 retimed_abs = str(Path(retimed_path).resolve())
                 options = options.model_copy(

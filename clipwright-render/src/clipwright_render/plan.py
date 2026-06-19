@@ -735,6 +735,10 @@ _CONTROL_CHARS: frozenset[str] = frozenset(
     chr(c) for c in range(0x00, 0x20)
 ) | frozenset({chr(0x7F)})
 
+# Maximum overlay.text length used in warning strings (SR-M-2).
+# Prevents oversized MCP response payloads when overlay text is very long.
+_WARNING_TEXT_MAX_LEN: int = 80
+
 # Platform-default font paths searched when font_path is not specified.
 # Order: prefer the first existing path.  font_path kwarg always takes
 # precedence (ADR-T5).
@@ -1165,21 +1169,28 @@ def retime_text_overlays(
     result_overlays: list[TextOverlay] = []
     result_warnings: list[str] = []
 
-    # Use the rate of the first segment as the source rate for conversion.
-    # Fall back to 30 fps when there are no segments.
-    source_rate = tmap.segments[0].source_start.rate if tmap.segments else 30.0
-
     for overlay in overlays:
-        src_start = otio.opentime.RationalTime(
-            overlay.start_s * source_rate, source_rate
-        )
-        src_end = otio.opentime.RationalTime(overlay.end_s * source_rate, source_rate)
+        # CR-M-2: use RationalTime.from_seconds with a high fixed rate (1000) to
+        # avoid non-integer value when overlay.start_s * fps is not an integer.
+        # Markers carry float seconds; rate=1000 matches retiming.py's internal
+        # ms-rate convention (_parse_timecode).
+        src_start = otio.opentime.RationalTime.from_seconds(overlay.start_s, 1000)
+        src_end = otio.opentime.RationalTime.from_seconds(overlay.end_s, 1000)
 
         rr = retiming_mod.remap_window(tmap, src_start, src_end)
 
+        # SR-M-2: truncate overlay.text in warning strings to prevent large MCP
+        # response payloads when text content is excessively long.
+        _text = overlay.text
+        warn_text = (
+            _text[:_WARNING_TEXT_MAX_LEN] + "…"
+            if len(_text) > _WARNING_TEXT_MAX_LEN
+            else _text
+        )
+
         if rr.dropped:
             result_warnings.append(
-                f"text_overlay '{overlay.text}' dropped (source range removed by cuts)"
+                f"text_overlay '{warn_text}' dropped (source range removed by cuts)"
             )
             # Dropped overlays produce no output TextOverlay
             continue
@@ -1187,19 +1198,18 @@ def retime_text_overlays(
         if rr.split:
             n_wins = len(rr.windows)
             result_warnings.append(
-                f"text_overlay '{overlay.text}' split across cut boundary"
+                f"text_overlay '{warn_text}' split across cut boundary"
                 f" into {n_wins} windows"
             )
         elif rr.clipped:
             result_warnings.append(
-                f"text_overlay '{overlay.text}' clipped at cut boundary (context lost)"
+                f"text_overlay '{warn_text}' clipped at cut boundary (context lost)"
             )
         elif rr.shifted:
             first_prog_start_s = _to_seconds(rr.windows[0].program_start)
             delta = first_prog_start_s - overlay.start_s
             result_warnings.append(
-                f"text_overlay '{overlay.text}' shifted"
-                f" by {delta:.3f}s due to re-timing"
+                f"text_overlay '{warn_text}' shifted by {delta:.3f}s due to re-timing"
             )
 
         for win in rr.windows:

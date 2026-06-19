@@ -1,6 +1,4 @@
-"""test_retiming.py — Red tests for retiming.py (pure logic).
-
-Target module: clipwright_render.retiming (not yet implemented)
+"""test_retiming.py — Tests for retiming.py (pure logic).
 
 All assertions use opentime.RationalTime == or .almost_equal() comparisons.
 Float-second comparisons are forbidden (AC-8 / D7 / NFR-2).
@@ -18,11 +16,7 @@ import textwrap
 import opentimelineio as otio
 import pytest
 
-# ---------------------------------------------------------------------------
-# Import target — the module does not exist yet; collection will fail here
-# with ImportError which is the expected Red state.
-# ---------------------------------------------------------------------------
-from clipwright_render.retiming import (  # type: ignore[import]
+from clipwright_render.retiming import (
     ProgramSegment,
     ProgramTimeMap,
     ProgramWindow,
@@ -515,12 +509,11 @@ class TestSrtRoundTrip:
         result = serialize_srt(cues)
         assert result == self._CANONICAL_SRT
 
-    def test_ms_quantization_round_half_up(self) -> None:
-        """RationalTime -> ms must use round-half-up (int(round(sec*1000))).
+    def test_ms_quantization_round_half_even(self) -> None:
+        """RationalTime -> ms uses Python's round() (round-half-even / banker's rounding).
 
-        A timecode of 1.0005s at rate=1000 should round to 1001ms (not 1000ms),
-        but at standard display rates (30fps) the quantization matches _format_timecode.
-        This test verifies the SRT timecode string for a known ms value.
+        Python's round() uses banker's rounding, not round-half-up.  This test
+        verifies the SRT timecode string for a known exact ms value.
         """
         # 1.500s exactly -> "00:00:01,500"
         cue = SrtCue(
@@ -533,11 +526,12 @@ class TestSrtRoundTrip:
         assert "00:00:02,000" in result
 
     def test_ms_quantization_matches_format_timecode(self) -> None:
-        """serialize_srt ms output matches int(round(sec*1000)) round-half-up logic.
+        """serialize_srt ms output matches int(round(sec*1000)) round-half-even logic.
 
         Verifies two properties:
         1. HH:MM:SS,mmm formatting is correct for a known value (3723.456s -> 01:02:03,456).
-        2. Round-half-up boundary: 0.0015s rounds to 2ms (not 1ms), 0.0025s rounds to 3ms.
+        2. Round-half-even boundary: 0.0015s rounds to 2ms (nearest even),
+           0.0035s rounds to 4ms (nearest even).
         Expected strings are inlined directly; no cross-package import required.
         """
         # Property 1: HH:MM:SS,mmm formatting for 3723.456s = 01:02:03,456
@@ -550,7 +544,7 @@ class TestSrtRoundTrip:
         result = serialize_srt([cue])
         assert "01:02:03,456" in result, f"Expected '01:02:03,456' in:\n{result}"
 
-        # Property 2: rounding boundary — Python round() uses banker's rounding (round-half-even).
+        # Property 2: Python round() uses banker's rounding (round-half-even).
         # 0.0015s (1.5ms) -> rounds to 2ms (nearest even), 0.0035s (3.5ms) -> rounds to 4ms.
         cue_a = SrtCue(
             start=otio.opentime.RationalTime.from_seconds(0.0015, 1000),
@@ -564,3 +558,36 @@ class TestSrtRoundTrip:
         assert "00:00:00,004" in result_a, (
             f"Expected '00:00:00,004' (3.5ms->4ms) in:\n{result_a}"
         )
+
+
+# ---------------------------------------------------------------------------
+# D. Empty ranges — specification tests (CR-M-3 / AC-8)
+# ---------------------------------------------------------------------------
+
+
+class TestEmptyRanges:
+    """D. Specification tests for empty input to build_program_time_map / remap_window.
+
+    ADR-5: when ranges is empty, has_cut=False and has_warp=False (no edits).
+    remap_window on an empty tmap drops every window (no segments to intersect).
+    """
+
+    def test_build_program_time_map_empty_returns_empty_tmap(self) -> None:
+        """build_program_time_map([]) -> segments=[], has_cut=False, has_warp=False."""
+        tmap = build_program_time_map([])
+
+        assert isinstance(tmap, ProgramTimeMap)
+        assert tmap.segments == []
+        assert tmap.has_cut is False
+        assert tmap.has_warp is False
+
+    def test_remap_window_empty_tmap_drops_window(self) -> None:
+        """remap_window on empty tmap -> dropped=True, windows=[], clipped=False."""
+        tmap = build_program_time_map([])
+        result = remap_window(tmap, src_start=_rt(1.0), src_end=_rt(3.0))
+
+        assert isinstance(result, RemapResult)
+        assert result.dropped is True
+        assert result.windows == []
+        assert result.split is False
+        assert result.clipped is False

@@ -18,7 +18,8 @@ SRT I/O note (ADR-2):
   newline).
 
   Timecode quantisation (SRT vs drawtext):
-    SRT   -> millisecond integer: int(round(sec * 1000))  [round-half-up]
+    SRT   -> millisecond integer: int(round(sec * 1000))
+             [round-half-even / banker's rounding]
     drawtext -> second 6-decimal:  round(float(rt.to_seconds()), 6)
   Both conventions are documented in callers; this module implements only the
   SRT path.
@@ -389,8 +390,9 @@ def _parse_timecode(tc: str, srt_rate: float = 1000.0) -> otio.opentime.Rational
 def _format_srt_timecode(rt: otio.opentime.RationalTime) -> str:
     """Format a RationalTime as "HH:MM:SS,mmm" for SRT output.
 
-    Milliseconds are quantised with round-half-up (int(round(sec * 1000))),
-    matching transcribe._format_timecode(sec, ms_separator=",") (ADR-2).
+    Milliseconds are quantised using Python's round() built-in
+    (round-half-even / banker's rounding), matching
+    transcribe._format_timecode(sec, ms_separator=",") (ADR-2).
 
     Note: SRT uses ms-integer rounding; drawtext uses second-6-decimal rounding
     (_to_seconds). Both are correct for their respective outputs.
@@ -406,6 +408,22 @@ def _format_srt_timecode(rt: otio.opentime.RationalTime) -> str:
     minutes, rem = divmod(rem, 60_000)
     seconds, ms = divmod(rem, 1000)
     return f"{hours:02d}:{minutes:02d}:{seconds:02d},{ms:03d}"
+
+
+def format_srt_timecode(rt: otio.opentime.RationalTime) -> str:
+    """Public wrapper for SRT timecode formatting (CR-L-3).
+
+    Delegates to _format_srt_timecode.  Provided so that render.py (and any
+    other caller) can access the formatter without reaching into a private
+    symbol across module boundaries.
+
+    Args:
+        rt: RationalTime to format.
+
+    Returns:
+        Timecode string "HH:MM:SS,mmm".
+    """
+    return _format_srt_timecode(rt)
 
 
 def parse_srt(text: str) -> list[SrtCue]:
@@ -482,8 +500,9 @@ def serialize_srt(cues: list[SrtCue]) -> str:
       - Blank line separator between blocks
       - Single trailing newline (last block ends with "\\n", no extra blank line)
 
-    Millisecond quantisation uses round-half-up (int(round(sec * 1000))),
-    matching transcribe._format_timecode(sec, ms_separator=",") (ADR-2).
+    Millisecond quantisation uses Python's round() built-in
+    (round-half-even / banker's rounding), matching
+    transcribe._format_timecode(sec, ms_separator=",") (ADR-2).
 
     Note: SRT uses ms-integer rounding; drawtext uses second-6-decimal rounding.
     See _format_srt_timecode for details.
