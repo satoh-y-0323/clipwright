@@ -41,6 +41,7 @@ Design decisions:
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import os
 import re
@@ -1116,6 +1117,99 @@ def _build_drawtext_segment(o: TextOverlay) -> str:
     if o.box:
         seg += f":box=1:boxcolor={o.box_color}"
     return seg
+
+
+def retime_text_overlays(
+    overlays: list[TextOverlay],
+    tmap: Any,  # ProgramTimeMap from clipwright_render.retiming (inline import)
+    retime: bool,
+) -> tuple[list[TextOverlay], list[str]]:
+    """Return re-timed overlays (1 marker -> N windows) and warning strings.
+
+    When retime is False or tmap has no cut and no warp (identity), returns
+    overlays unchanged and an empty warning list.
+
+    Each output TextOverlay is produced by converting (start_s, end_s) to
+    RationalTime, calling remap_window, then converting each ProgramWindow back
+    to seconds via _to_seconds (final edge only — NFR-2 / D7).
+
+    1 marker -> N copies (one per ProgramWindow).  Windows are flattened into
+    the returned list so that _append_drawtext_filter receives N independent
+    TextOverlay objects (ADR-1: no OR-enable concatenation).
+
+    Warning text follows FR-6 / §5 (B3):
+      - drop:  "text_overlay '{text}' dropped (source range removed by cuts)"
+      - split: "text_overlay '{text}' split across cut boundary into {N} windows"
+      - clip:  "text_overlay '{text}' clipped at cut boundary (context lost)"
+      - shift: "text_overlay '{text}' shifted by {delta:.3f}s due to re-timing"
+
+    Warning strings are composed here (ADR-4); remap_window returns only
+    disposition flags.
+
+    Args:
+        overlays: List of TextOverlay objects from _collect_text_overlays.
+        tmap:     ProgramTimeMap built by retiming.build_program_time_map.
+        retime:   False -> skip re-timing regardless of tmap content.
+
+    Returns:
+        Tuple of (re-timed overlays, warning strings).
+    """
+    # Inline import to break the circular dependency: retiming imports plan for
+    # KeptRange / _is_warp_identity; plan imports retiming only at runtime here.
+    import clipwright_render.retiming as retiming_mod
+
+    # No-op conditions
+    if not retime or (not tmap.has_cut and not tmap.has_warp):
+        return overlays, []
+
+    result_overlays: list[TextOverlay] = []
+    result_warnings: list[str] = []
+
+    # Use the rate of the first segment as the source rate for conversion.
+    # Fall back to 30 fps when there are no segments.
+    source_rate = tmap.segments[0].source_start.rate if tmap.segments else 30.0
+
+    for overlay in overlays:
+        src_start = otio.opentime.RationalTime(
+            overlay.start_s * source_rate, source_rate
+        )
+        src_end = otio.opentime.RationalTime(overlay.end_s * source_rate, source_rate)
+
+        rr = retiming_mod.remap_window(tmap, src_start, src_end)
+
+        if rr.dropped:
+            result_warnings.append(
+                f"text_overlay '{overlay.text}' dropped (source range removed by cuts)"
+            )
+            # Dropped overlays produce no output TextOverlay
+            continue
+
+        if rr.split:
+            n_wins = len(rr.windows)
+            result_warnings.append(
+                f"text_overlay '{overlay.text}' split across cut boundary"
+                f" into {n_wins} windows"
+            )
+        elif rr.clipped:
+            result_warnings.append(
+                f"text_overlay '{overlay.text}' clipped at cut boundary (context lost)"
+            )
+        elif rr.shifted:
+            first_prog_start_s = _to_seconds(rr.windows[0].program_start)
+            delta = first_prog_start_s - overlay.start_s
+            result_warnings.append(
+                f"text_overlay '{overlay.text}' shifted"
+                f" by {delta:.3f}s due to re-timing"
+            )
+
+        for win in rr.windows:
+            new_start_s = _to_seconds(win.program_start)
+            new_end_s = _to_seconds(win.program_end)
+            result_overlays.append(
+                dataclasses.replace(overlay, start_s=new_start_s, end_s=new_end_s)
+            )
+
+    return result_overlays, result_warnings
 
 
 def _append_drawtext_filter(
@@ -2427,6 +2521,26 @@ def build_plan(
         tl_ref: otio.schema.Timeline | None = getattr(ranges, "_timeline", None)
         text_overlays = _collect_text_overlays(tl_ref) if tl_ref is not None else []
 
+    # Re-time text_overlays from source time to program time (§2.1 / ADR-1).
+    # Build the source→program map from kept ranges, then apply retime_text_overlays.
+    # retime is True only when retime_markers=="auto" AND (has_cut OR has_warp) AND
+    # single source (multi-source skip warning is emitted in render.py — ADR-4).
+    _retime_overlay_warnings: list[str] = []
+    if text_overlays:
+        import clipwright_render.retiming as _retiming_mod
+
+        _tmap = _retiming_mod.build_program_time_map(ranges)
+        _input_sources_pre = unique_sources_in_order(ranges)
+        _is_single_source = len(_input_sources_pre) <= 1
+        _do_retime = (
+            options.retime_markers == "auto"
+            and (_tmap.has_cut or _tmap.has_warp)
+            and _is_single_source
+        )
+        text_overlays, _retime_overlay_warnings = retime_text_overlays(
+            text_overlays, _tmap, _do_retime
+        )
+
     # Validate the denoise directive (raises INVALID_INPUT /
     # UNSUPPORTED_OPERATION on failure)
     denoise_directive: DenoiseDirective | None = None
@@ -2652,6 +2766,9 @@ def build_plan(
 
     estimated_size: float | None = None
     warnings: list[str] = []
+
+    # Merge re-timing warnings from text_overlay adapter (ADR-4 / §5).
+    warnings.extend(_retime_overlay_warnings)
 
     # has_main_audio=False + denoise directive → denoise skipped (no main
     # audio; DC-AM-004). Note: regardless of BGM presence, denoise does not

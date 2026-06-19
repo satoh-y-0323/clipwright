@@ -38,6 +38,7 @@ from clipwright.process import resolve_tool, run
 from clipwright.schemas import ToolResult
 from pydantic import ValidationError as PydanticValidationError
 
+from clipwright_render import retiming as _retiming
 from clipwright_render.plan import (
     BgmClip,
     ProbeInfo,
@@ -247,6 +248,163 @@ def _check_subtitle_within_timeline_dir(timeline_path: Path, subtitle: str) -> N
     )
 
 
+def _generate_retimed_srt(
+    src_srt: str,
+    tmap: _retiming.ProgramTimeMap,
+    output_path: Path,
+    overwrite: bool,
+) -> tuple[str, list[str]]:
+    """Generate a re-timed .srt file and return (retimed_path, warnings).
+
+    Reads src_srt (UTF-8, non-destructive), remaps each cue via remap_window,
+    then writes the re-timed cues to {output_path.stem}.retimed.srt in the
+    same directory as output_path (Decision B / ADR-3).
+
+    Naming: output_path.parent / f"{output_path.stem}.retimed.srt".
+    This uses the output file stem (not the subtitle source stem) to avoid
+    name collisions when the same subtitle is used across multiple renders
+    with different output names.
+
+    Overwrite policy (Decision B):
+      - overwrite=False + existing retimed .srt → INVALID_INPUT with hint.
+      - overwrite=True → replace silently.
+
+    Decision A (all cues dropped):
+      - Returns (None, warnings) when every cue is remapped to dropped.
+      - Caller must skip the subtitle filter entirely and emit a warning.
+      - No empty .srt is written.
+
+    Warning format (FR-6 / §5 / B3):
+      - dropped: "caption cue [{start}-{end}] dropped (source range removed)"
+      - split:   "caption cue [{start}-{end}] split across cut boundary into
+                  {N} windows"
+      - clipped: "caption cue [{start}-{end}] clipped at cut boundary"
+      - shifted: "caption cue [{start}-{end}] shifted by {delta:.3f}s"
+
+    Args:
+        src_srt:     Absolute path to the source .srt file.
+        tmap:        ProgramTimeMap built from kept ranges.
+        output_path: Output video path (supplies stem and parent directory).
+        overwrite:   Whether to allow overwriting an existing retimed .srt.
+
+    Returns:
+        (retimed_path, warnings) where retimed_path is the absolute path
+        string of the written .srt, or None when all cues were dropped.
+
+    Raises:
+        ClipwrightError: INVALID_INPUT when retimed .srt exists and
+            overwrite=False.
+    """
+    retimed_path = output_path.parent / f"{output_path.stem}.retimed.srt"
+
+    # Overwrite guard (Decision B)
+    if retimed_path.exists() and not overwrite:
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(f"Re-timed subtitle file already exists: {retimed_path.name}"),
+            hint=(
+                "Specify overwrite=True to allow replacing the existing"
+                " re-timed subtitle file."
+            ),
+        )
+
+    # Parse source SRT (non-destructive — read only)
+    src_text = Path(src_srt).read_text(encoding="utf-8")
+    cues = _retiming.parse_srt(src_text)
+
+    new_cues: list[_retiming.SrtCue] = []
+    warnings: list[str] = []
+
+    for cue in cues:
+        rr = _retiming.remap_window(tmap, cue.start, cue.end)
+        start_tc = _retiming._format_srt_timecode(cue.start)
+        end_tc = _retiming._format_srt_timecode(cue.end)
+        label = f"[{start_tc}-{end_tc}]"
+
+        if rr.dropped:
+            warnings.append(f"caption cue {label} dropped (source range removed)")
+            continue
+
+        if rr.split:
+            n_wins = len(rr.windows)
+            warnings.append(
+                f"caption cue {label} split across cut boundary into {n_wins} windows"
+            )
+        elif rr.clipped:
+            warnings.append(f"caption cue {label} clipped at cut boundary")
+        elif rr.shifted:
+            first_start_s = float(rr.windows[0].program_start.to_seconds())
+            orig_start_s = float(cue.start.to_seconds())
+            delta = first_start_s - orig_start_s
+            warnings.append(f"caption cue {label} shifted by {delta:.3f}s")
+
+        for win in rr.windows:
+            new_cues.append(
+                _retiming.SrtCue(
+                    start=win.program_start,
+                    end=win.program_end,
+                    text=cue.text,
+                )
+            )
+
+    # Decision A: all cues dropped — do not write empty SRT, skip subtitle filter
+    if not new_cues:
+        warnings.append(
+            "All subtitle cues were dropped by cuts; subtitle filter skipped."
+        )
+        return ("", warnings)
+
+    # Write re-timed SRT
+    srt_content = _retiming.serialize_srt(new_cues)
+    retimed_path.write_text(srt_content, encoding="utf-8")
+
+    return (str(retimed_path.resolve()), warnings)
+
+
+def _subtitle_skip_warnings(
+    options: RenderOptions,
+    tmap: _retiming.ProgramTimeMap,
+    unique_sources: list[str],
+) -> list[str]:
+    """Return skip-warning strings for conditions that prevent subtitle re-timing.
+
+    Emitted when options.subtitle is non-None and retime_markers=="auto" but
+    re-timing cannot proceed (ADR-4: global skip warnings in render.py only).
+
+    Conditions (evaluated in order; first match returns):
+      1. Multi-source timeline → "retime_markers skipped: multi-source
+         timeline is not supported" (AC-9 / §4.2)
+      2. Non-.srt subtitle → "subtitle re-timing skipped: only .srt is
+         supported in this version"
+
+    If retime_markers=="off" or has_cut=False/has_warp=False (identity), no
+    skip warning is emitted (those are silent no-ops, not degradations).
+
+    Args:
+        options:        Current RenderOptions (after subtitle absolutisation).
+        tmap:           ProgramTimeMap for the current timeline.
+        unique_sources: list of unique source strings from unique_sources_in_order.
+
+    Returns:
+        List of skip-warning strings (may be empty).
+    """
+    if options.subtitle is None or options.retime_markers != "auto":
+        return []
+    if not (tmap.has_cut or tmap.has_warp):
+        return []
+
+    # Multi-source check
+    if len(unique_sources) >= 2:
+        return ["retime_markers skipped: multi-source timeline is not supported"]
+
+    # Non-.srt subtitle
+    sub_ext = Path(options.subtitle.path).suffix.lower()
+    if sub_ext != ".srt":
+        return ["subtitle re-timing skipped: only .srt is supported in this version"]
+
+    return []
+
+
 def _check_path_not_allowed(output_path: Path, source: str) -> None:
     """Verify that output and source do not point to the same path
     (DC-AM-002).
@@ -320,8 +478,43 @@ def render_timeline(
         ok_result or error_result envelope dict.
 
     Raises:
-        None (all ClipwrightErrors are converted to error_result and returned).
+        ClipwrightError: INVALID_INPUT when a pre-existing re-timed subtitle
+            file would be overwritten but overwrite=False.  This case is raised
+            directly (not converted to error_result) so that callers that use
+            render as a building block can distinguish it from an ok=False
+            envelope.  All other ClipwrightErrors are converted to error_result.
     """
+    # Pre-check: subtitle re-timing overwrite collision.
+    # Performed BEFORE the try/except so that ClipwrightError propagates to the
+    # caller instead of being converted to error_result.  The retimed path is
+    # deterministic (output_stem.retimed.srt in the output directory) and can be
+    # checked here without loading the timeline (Decision B / ADR-3).
+    #
+    # Only check when retime_markers=="auto" + subtitle set + overwrite=False.
+    # The full do_retime condition (single source / has_cut / .srt) is evaluated
+    # later inside _render_inner; the pre-check errs on the conservative side and
+    # checks only the minimal necessary conditions.  A false-positive (retimed file
+    # exists but re-timing would be skipped) is intentionally avoided by also
+    # requiring suffix==".srt" here.
+    if (
+        options.subtitle is not None
+        and options.retime_markers == "auto"
+        and not options.overwrite
+        and Path(options.subtitle.path).suffix.lower() == ".srt"
+    ):
+        _retimed_candidate = Path(output).parent / f"{Path(output).stem}.retimed.srt"
+        if _retimed_candidate.exists():
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message=(
+                    f"Re-timed subtitle file already exists: {_retimed_candidate.name}"
+                ),
+                hint=(
+                    "Specify overwrite=True to allow replacing the existing"
+                    " re-timed subtitle file."
+                ),
+            )
+
     try:
         return _render_inner(timeline, output, options, dry_run)
     except ClipwrightError as exc:
@@ -513,6 +706,44 @@ def _render_inner(
         updated_subtitle = options.subtitle.model_copy(update=update_dict)
         options = options.model_copy(update={"subtitle": updated_subtitle})
 
+    # --- 4e. Subtitle re-timing stage (§2.2 / ADR-3 / ADR-4) ---
+    # Inserted after subtitle absolutisation (step 4c) and before build_plan (step 5).
+    # At this point options.subtitle.path is an absolute .srt/.vtt/.ass path.
+    # Build the source→program map once for this timeline; use it for both the
+    # do_retime decision and the skip-warning evaluation.
+    subtitle_warnings: list[str] = []
+    if options.subtitle is not None:
+        _tmap = _retiming.build_program_time_map(ranges)
+        sub_suffix = Path(options.subtitle.path).suffix.lower()
+        do_retime = (
+            options.retime_markers == "auto"
+            and (_tmap.has_cut or _tmap.has_warp)
+            and len(unique_sources) == 1
+            and sub_suffix == ".srt"
+        )
+        if do_retime:
+            retimed_path, subtitle_warnings = _generate_retimed_srt(
+                options.subtitle.path,
+                _tmap,
+                output_path,
+                options.overwrite,
+            )
+            if retimed_path:
+                # Re-timed SRT was written — replace subtitle path in options
+                retimed_abs = str(Path(retimed_path).resolve())
+                options = options.model_copy(
+                    update={
+                        "subtitle": options.subtitle.model_copy(
+                            update={"path": retimed_abs}
+                        )
+                    }
+                )
+            else:
+                # Decision A: all cues dropped — skip subtitle filter
+                options = options.model_copy(update={"subtitle": None})
+        else:
+            subtitle_warnings = _subtitle_skip_warnings(options, _tmap, unique_sources)
+
     # output exists + overwrite=False → INVALID_INPUT (DC-AM-002)
     if output_path.exists() and not options.overwrite:
         raise ClipwrightError(
@@ -626,7 +857,7 @@ def _render_inner(
                 "total_duration_seconds": plan.total_duration_seconds,
                 "estimated_size_bytes": plan.estimated_size_bytes,
             },
-            warnings=plan.warnings,
+            warnings=plan.warnings + subtitle_warnings,
         )
 
     # --- 6b. Execute ---
@@ -689,5 +920,5 @@ def _render_inner(
                 "format": Path(output_path).suffix.lstrip("."),
             }
         ],
-        warnings=plan.warnings,
+        warnings=plan.warnings + subtitle_warnings,
     )

@@ -222,7 +222,7 @@ class TestRetimeTextOverlays:
         """Import retime_text_overlays from plan; expected to raise AttributeError."""
         from clipwright_render import plan as _plan  # type: ignore[import]
 
-        return getattr(_plan, "retime_text_overlays")  # AttributeError if not present
+        return _plan.retime_text_overlays  # AttributeError if not present
 
     def test_retime_text_overlays_exists_in_plan(self) -> None:
         """retime_text_overlays must be importable from clipwright_render.plan.
@@ -418,7 +418,7 @@ class TestGenerateRetimedSrt:
         """
         from clipwright_render import render as _render  # type: ignore[import]
 
-        fn = getattr(_render, "_generate_retimed_srt")  # AttributeError if missing
+        fn = _render._generate_retimed_srt  # AttributeError if missing
         assert callable(fn), "_generate_retimed_srt must be callable"
 
 
@@ -557,7 +557,7 @@ class TestRenderSubtitleRetiming:
             "clipwright_render.render.inspect_media",
             side_effect=lambda p: self._make_media_info_for(p),
         ):
-            result = render_timeline(
+            render_timeline(
                 str(tl_path),
                 str(output_path),
                 options=RenderOptions(
@@ -627,11 +627,13 @@ class TestRenderSubtitleRetiming:
         original_content = srt_path.read_text(encoding="utf-8")
         output_path = tmp_path / "edited.mp4"
 
+        import contextlib
+
         with patch(
             "clipwright_render.render.inspect_media",
             side_effect=lambda p: self._make_media_info_for(p),
         ):
-            try:
+            with contextlib.suppress(AttributeError, NotImplementedError):
                 render_timeline(
                     str(tl_path),
                     str(output_path),
@@ -641,8 +643,6 @@ class TestRenderSubtitleRetiming:
                     ),
                     dry_run=True,
                 )
-            except (AttributeError, NotImplementedError):
-                pass  # Expected Red failure; still check file
 
         assert srt_path.read_text(encoding="utf-8") == original_content, (
             "Original .srt was modified! Non-destructive invariant (AC-7) violated."
@@ -751,9 +751,7 @@ class TestRenderSubtitleRetiming:
             f"render_timeline must succeed for multi-source. error={result.get('error')}"
         )
         warnings: list[str] = result.get("warnings", [])
-        multi_source_warns = [
-            w for w in warnings if "multi-source" in w.lower()
-        ]
+        multi_source_warns = [w for w in warnings if "multi-source" in w.lower()]
         assert len(multi_source_warns) >= 1, (
             f"Expected warning containing 'multi-source' for multi-source timeline, "
             f"got warnings={warnings}. "
@@ -788,9 +786,7 @@ class TestRenderSubtitleRetiming:
     # -------------------------------------------------------------------
 
     @pytest.mark.parametrize("suffix", [".vtt", ".ass"])
-    def test_non_srt_subtitle_skip_warning(
-        self, suffix: str, tmp_path: Path
-    ) -> None:
+    def test_non_srt_subtitle_skip_warning(self, suffix: str, tmp_path: Path) -> None:
         """T3-D/E: .vtt or .ass subtitle -> re-timing skipped + warning emitted.
 
         Warning text must contain: "subtitle re-timing skipped: only .srt is
@@ -894,7 +890,8 @@ class TestRenderSubtitleRetiming:
         # 1 warning for the all-drop event
         warnings: list[str] = result.get("warnings", [])
         all_drop_warns = [
-            w for w in warnings
+            w
+            for w in warnings
             if "all" in w.lower() or "drop" in w.lower() or "no cues" in w.lower()
         ]
         assert len(all_drop_warns) >= 1, (
@@ -925,7 +922,7 @@ class TestRenderSubtitleRetiming:
             "clipwright_render.render.inspect_media",
             side_effect=lambda p: self._make_media_info_for(p),
         ):
-            result = render_timeline(
+            render_timeline(
                 str(tl_path),
                 str(output_path),
                 options=RenderOptions(
@@ -1002,9 +999,7 @@ class TestRenderSubtitleRetiming:
     # T3-I: overwrite=True + existing retimed .srt -> succeeds (replaces)
     # -------------------------------------------------------------------
 
-    def test_overwrite_true_existing_retimed_srt_replaces(
-        self, tmp_path: Path
-    ) -> None:
+    def test_overwrite_true_existing_retimed_srt_replaces(self, tmp_path: Path) -> None:
         """T3-I: overwrite=True + existing retimed .srt -> succeeds, replaces file.
 
         Red reason: _generate_retimed_srt not yet implemented.
@@ -1081,9 +1076,7 @@ class TestIdentityTimelineRegression:
           - plan.warnings == [].
         """
         tl = _make_timeline([_make_clip("/src/clip.mp4", 0.0, 10.0)])
-        _add_text_overlay_marker(
-            tl, text="Identity", start_sec=2.0, duration_sec=4.0
-        )
+        _add_text_overlay_marker(tl, text="Identity", start_sec=2.0, duration_sec=4.0)
 
         ranges = resolve_kept_ranges(tl)
         probe = _make_probe(audio_count=0)
@@ -1107,12 +1100,12 @@ class TestIdentityTimelineRegression:
 
         # 3. No re-timing warnings for identity map (AC-5)
         retime_warns = [
-            w for w in plan.warnings
+            w
+            for w in plan.warnings
             if any(kw in w.lower() for kw in ("drop", "split", "shift", "clip"))
         ]
         assert retime_warns == [], (
-            f"Identity timeline must produce 0 re-timing warnings. "
-            f"Got: {retime_warns}"
+            f"Identity timeline must produce 0 re-timing warnings. Got: {retime_warns}"
         )
 
     def test_identity_timeline_subtitle_no_retimed_file(self, tmp_path: Path) -> None:
