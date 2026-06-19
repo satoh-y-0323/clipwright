@@ -366,6 +366,19 @@ class RenderOptions(BaseModel):
         ),
     ] = "contain"
 
+    retime_markers: Annotated[
+        Literal["auto", "off"],
+        Field(
+            default="auto",
+            description=(
+                "Re-time burned captions/overlays from source time onto the"
+                " post-edit program when the timeline has cuts or speed warps."
+                " 'auto' (default) re-times when cuts/warps exist and is a no-op"
+                " for identity timelines; 'off' keeps legacy source-time burn-in."
+            ),
+        ),
+    ] = "auto"
+
     @model_validator(mode="after")
     def _validate_resolution_pair(self) -> Self:
         """width and height must both be specified or both be None.
