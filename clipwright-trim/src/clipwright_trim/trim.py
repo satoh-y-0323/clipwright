@@ -71,10 +71,7 @@ def _trim_inner(media: str, output: str, options: TrimOptions) -> ToolResult:
     if output_path.suffix.lower() != ".otio":
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message=(
-                f"Invalid output file extension: {output_path.suffix!r}. "
-                "Only .otio is allowed."
-            ),
+            message="Invalid output file extension. Only .otio is allowed.",
             hint="Change the output file path extension to .otio.",
         )
 
@@ -88,28 +85,23 @@ def _trim_inner(media: str, output: str, options: TrimOptions) -> ToolResult:
 
     # output must not equal media
     try:
-        if output_path.resolve() == media_path.resolve():
-            raise ClipwrightError(
-                code=ErrorCode.INVALID_INPUT,
-                message="Output path equals input media path.",
-                hint="Choose an output path different from the media.",
-            )
-    except ClipwrightError:
-        raise
-    except OSError as os_err:
-        # Fall back to string comparison when resolve() fails (network paths, etc.)
-        if str(output_path) == str(media_path):
-            raise ClipwrightError(
-                code=ErrorCode.INVALID_INPUT,
-                message="Output path equals input media path.",
-                hint="Choose an output path different from the media.",
-            ) from os_err
+        out_abs = output_path.resolve()
+        media_abs = media_path.resolve()
+    except OSError:
+        # Fall back to absolute() when resolve() fails (network/UNC paths, etc.)
+        out_abs = output_path.absolute()
+        media_abs = media_path.absolute()
+    if out_abs == media_abs:
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message="Output path equals input media path.",
+            hint="Choose an output path different from the media.",
+        )
 
     # ------------------------------------------------------------------
     # 2. inspect_media (ffprobe)
     # ------------------------------------------------------------------
 
-    # SR L-2: replace FILE_NOT_FOUND message with basename only (no full path)
     try:
         media_info = inspect_media(media)
     except ClipwrightError as exc:
@@ -117,7 +109,7 @@ def _trim_inner(media: str, output: str, options: TrimOptions) -> ToolResult:
             raise ClipwrightError(
                 code=ErrorCode.FILE_NOT_FOUND,
                 message=f"File not found: {media_path.name}",
-                hint=exc.hint,
+                hint="Check that the path is correct and the file exists.",
             ) from exc
         raise
 
@@ -142,8 +134,24 @@ def _trim_inner(media: str, output: str, options: TrimOptions) -> ToolResult:
     except ClipwrightError:
         raise
     except OSError:
-        # Best-effort: skip on network paths where resolve() fails
-        pass
+        # Best-effort: fall back to absolute() when resolve() fails (network/UNC paths)
+        try:
+            media_dir = media_path.absolute().parent
+            output_dir = output_path.parent.absolute()
+            if media_dir != output_dir:
+                raise ClipwrightError(
+                    code=ErrorCode.PATH_NOT_ALLOWED,
+                    message=(
+                        "The output timeline must be placed in the same directory "
+                        f"as the input media ({media_path.name})."
+                    ),
+                    hint=(
+                        "Change the output path to be in the same"
+                        " directory as the media."
+                    ),
+                )
+        except OSError:
+            pass  # Truly unresolvable paths; accept the risk
 
     # ------------------------------------------------------------------
     # 4. Extract duration and rate; derive keep ranges
@@ -162,16 +170,7 @@ def _trim_inner(media: str, output: str, options: TrimOptions) -> ToolResult:
     duration_sec = media_info.duration.value / media_info.duration.rate
     rate = media_info.duration.rate
 
-    keep_ranges, warnings = derive_keep_ranges(duration_sec, options)
-
-    # Determine mode from options (used for metadata and data.mode)
-    if options.keep:
-        mode = "keep"
-    elif options.drop:
-        mode = "drop"
-    else:
-        # Both empty -> passthrough, report as keep mode
-        mode = "keep"
+    keep_ranges, warnings, mode = derive_keep_ranges(duration_sec, options)
 
     # ------------------------------------------------------------------
     # 5. Build OTIO timeline (mirrors silence detect.py §4.1)

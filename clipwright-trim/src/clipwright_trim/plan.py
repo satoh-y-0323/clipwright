@@ -17,19 +17,20 @@ from clipwright.errors import ClipwrightError, ErrorCode
 
 from clipwright_trim.schemas import TrimOptions
 
-# Floating-point comparison tolerance (same role as silence plan.py _EPSILON).
-_EPS = 1e-9
+# Floating-point comparison tolerance (same name as silence plan.py _EPSILON — ADR-7).
+_EPSILON = 1e-9
 
 
 def derive_keep_ranges(
     duration_sec: float,
     options: TrimOptions,
-) -> tuple[list[tuple[float, float]], list[str]]:
+) -> tuple[list[tuple[float, float]], list[str], str]:
     """Convert keep/drop TrimOptions into normalized keep ranges in seconds.
 
-    Returns a tuple of (keep_ranges, warnings).
+    Returns a 3-tuple of (keep_ranges, warnings, mode).
     keep_ranges is a list of (start_sec, end_sec) float tuples.
     warnings contains non-fatal clamp notices.
+    mode is "keep" or "drop" (passthrough is represented as "keep").
 
     Raises:
         ClipwrightError(INVALID_INPUT) for:
@@ -50,13 +51,16 @@ def derive_keep_ranges(
         )
 
     # Both empty -> full-duration passthrough (FR-2 literal, override of ADR-4)
+    # Passthrough is reported as "keep" mode (ADR-1).
     if not has_keep and not has_drop:
-        return [(0.0, duration_sec)], []
+        return [(0.0, duration_sec)], [], "keep"
 
     if has_keep:
-        return _process_keep(duration_sec, options)
+        keep_ranges, warnings = _process_keep(duration_sec, options)
+        return keep_ranges, warnings, "keep"
     else:
-        return _process_drop(duration_sec, options)
+        keep_ranges, warnings = _process_drop(duration_sec, options)
+        return keep_ranges, warnings, "drop"
 
 
 def _process_keep(
@@ -72,7 +76,7 @@ def _process_keep(
         s, e = r.start_sec, r.end_sec
 
         # Pre-validation: start_sec >= end_sec (AC-3)
-        if s >= e - _EPS:
+        if s >= e - _EPSILON:
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
                 message="A trim range has start_sec >= end_sec.",
@@ -84,19 +88,17 @@ def _process_keep(
         pe = e + padding
 
         # Detect if clamping will be needed (before clamping)
-        needs_clamp = ps < 0.0 - _EPS or pe > duration + _EPS
+        needs_clamp = ps < 0.0 - _EPSILON or pe > duration + _EPSILON
 
         # Clamp to [0, duration]
         cs = max(0.0, ps)
         ce = min(duration, pe)
 
         if needs_clamp:
-            warnings.append(
-                f"A keep range was clamped to the media boundary [{cs:.6g}, {ce:.6g}]."
-            )
+            warnings.append("A keep range was clamped to the media boundary.")
 
         # After clamp, check for degenerate range (entirely outside [0, duration])
-        if ce - cs <= _EPS:
+        if ce - cs <= _EPSILON:
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
                 message="A trim range falls entirely outside the media duration.",
@@ -122,7 +124,7 @@ def _process_drop(
 
     # Pre-validate all drop ranges: start_sec >= end_sec is an error
     for r in options.drop:
-        if r.start_sec >= r.end_sec - _EPS:
+        if r.start_sec >= r.end_sec - _EPSILON:
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
                 message="A trim range has start_sec >= end_sec.",
@@ -138,7 +140,7 @@ def _process_drop(
         ds = max(0.0, ds)
         de = min(duration, de)
         # Discard degenerate drops (after padding they became start >= end)
-        if ds >= de - _EPS:
+        if ds >= de - _EPSILON:
             continue
         padded_drops.append((ds, de))
 
@@ -149,10 +151,10 @@ def _process_drop(
     keep: list[tuple[float, float]] = []
     cursor = 0.0
     for ds, de in merged_drops:
-        if ds > cursor + _EPS:
+        if ds > cursor + _EPSILON:
             keep.append((cursor, ds))
         cursor = max(cursor, de)
-    if cursor < duration - _EPS:
+    if cursor < duration - _EPSILON:
         keep.append((cursor, duration))
 
     # Empty result means drop covered full duration (AC-5)
@@ -181,7 +183,7 @@ def _merge_intervals(
 
     for start, end in sorted_ivs[1:]:
         prev_start, prev_end = merged[-1]
-        if start <= prev_end + _EPS:
+        if start <= prev_end + _EPSILON:
             # Overlapping or adjacent -> merge
             merged[-1] = (prev_start, max(prev_end, end))
         else:

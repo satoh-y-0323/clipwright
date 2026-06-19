@@ -1,4 +1,4 @@
-"""test_trim.py — Red tests for trim.py orchestration (inspect_media mocked).
+"""test_trim.py — Tests for trim.py orchestration (inspect_media mocked).
 
 Target API:
   clipwright_trim.trim.trim_media(
@@ -30,9 +30,11 @@ from unittest.mock import patch
 import opentimelineio as otio
 import pytest
 from clipwright.errors import ClipwrightError, ErrorCode
+from clipwright.otio_utils import load_timeline
 from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo
 
 from clipwright_trim.schemas import TrimOptions, TrimRange
+from clipwright_trim.trim import trim_media
 
 # ===========================================================================
 # Constants
@@ -101,9 +103,6 @@ class TestOtioStructure:
 
     def test_v1_track_is_video_track(self, tmp_path: Path) -> None:
         """V1 (tracks[0]) must be a Video track."""
-        from clipwright.otio_utils import load_timeline
-        from clipwright_trim.trim import trim_media
-
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
         output = str(tmp_path / "out.otio")
@@ -121,9 +120,6 @@ class TestOtioStructure:
 
     def test_keep_two_ranges_produces_two_clips(self, tmp_path: Path) -> None:
         """Keep mode with 2 ranges produces exactly 2 clips in V1 (AC-1: clip_count=2)."""
-        from clipwright.otio_utils import load_timeline
-        from clipwright_trim.trim import trim_media
-
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
         output = str(tmp_path / "out.otio")
@@ -145,9 +141,6 @@ class TestOtioStructure:
 
         keep [(2.0, 5.0)], rate=30.0 -> start_time.value=60.0, duration.value=90.0.
         """
-        from clipwright.otio_utils import load_timeline
-        from clipwright_trim.trim import trim_media
-
         rate = 30.0
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
@@ -174,9 +167,6 @@ class TestOtioStructure:
 
     def test_keep_two_ranges_source_ranges_in_order(self, tmp_path: Path) -> None:
         """Two keep ranges produce clips with source_range values in enumeration order."""
-        from clipwright.otio_utils import load_timeline
-        from clipwright_trim.trim import trim_media
-
         rate = 25.0
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
@@ -210,9 +200,6 @@ class TestOtioStructure:
 
     def test_drop_single_range_produces_two_clips(self, tmp_path: Path) -> None:
         """Drop mode: drop [(3.0, 7.0)] from 10s -> clips (0, 3) and (7, 10) (AC-2)."""
-        from clipwright.otio_utils import load_timeline
-        from clipwright_trim.trim import trim_media
-
         rate = 30.0
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
@@ -246,9 +233,6 @@ class TestOtioStructure:
 
     def test_target_url_is_absolute_path(self, tmp_path: Path) -> None:
         """Each clip's target_url must be the absolute path of the media file."""
-        from clipwright.otio_utils import load_timeline
-        from clipwright_trim.trim import trim_media
-
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
         output = str(tmp_path / "out.otio")
@@ -278,9 +262,6 @@ class TestClipMetadata:
 
     def test_keep_mode_metadata(self, tmp_path: Path) -> None:
         """Keep mode: metadata["clipwright"] must have tool/version/kind='keep'/mode='keep'."""
-        from clipwright.otio_utils import load_timeline
-        from clipwright_trim.trim import trim_media
-
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
         output = str(tmp_path / "out.otio")
@@ -305,9 +286,6 @@ class TestClipMetadata:
 
     def test_drop_mode_metadata_kind_is_keep(self, tmp_path: Path) -> None:
         """Drop mode: kind='keep' even though mode='drop' (ADR-1 — render uses V1 clips, not kind)."""
-        from clipwright.otio_utils import load_timeline
-        from clipwright_trim.trim import trim_media
-
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
         output = str(tmp_path / "out.otio")
@@ -339,8 +317,6 @@ class TestEnvelope:
 
     def test_success_envelope_keys_present(self, tmp_path: Path) -> None:
         """On success, ok/summary/data/artifacts/warnings must all be present."""
-        from clipwright_trim.trim import trim_media
-
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
         output = str(tmp_path / "out.otio")
@@ -359,8 +335,6 @@ class TestEnvelope:
 
     def test_data_fields_keep_mode(self, tmp_path: Path) -> None:
         """data must contain clip_count / kept_duration_sec / source_duration_sec / mode."""
-        from clipwright_trim.trim import trim_media
-
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
         output = str(tmp_path / "out.otio")
@@ -380,8 +354,6 @@ class TestEnvelope:
 
     def test_data_values_keep_mode(self, tmp_path: Path) -> None:
         """data values must match expected counts and durations for keep mode (AC-1)."""
-        from clipwright_trim.trim import trim_media
-
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
         output = str(tmp_path / "out.otio")
@@ -400,8 +372,6 @@ class TestEnvelope:
 
     def test_data_values_drop_mode(self, tmp_path: Path) -> None:
         """data.mode='drop' and kept_duration_sec=D-(e-s) for drop mode (AC-2)."""
-        from clipwright_trim.trim import trim_media
-
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
         output = str(tmp_path / "out.otio")
@@ -419,8 +389,6 @@ class TestEnvelope:
 
     def test_artifacts_contain_timeline_otio(self, tmp_path: Path) -> None:
         """artifacts must contain one entry with role='timeline' and format='otio'."""
-        from clipwright_trim.trim import trim_media
-
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
         output = str(tmp_path / "out.otio")
@@ -448,8 +416,6 @@ class TestEnvelope:
 
     def test_summary_contains_clip_count_and_duration(self, tmp_path: Path) -> None:
         """summary must be a non-empty string mentioning clip count and durations (FR-8)."""
-        from clipwright_trim.trim import trim_media
-
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
         output = str(tmp_path / "out.otio")
@@ -475,12 +441,8 @@ class TestErrorMapping:
 
     # ---- Output path validation (must run BEFORE inspect_media) ----
 
-    def test_output_wrong_extension_returns_invalid_input(
-        self, tmp_path: Path
-    ) -> None:
+    def test_output_wrong_extension_returns_invalid_input(self, tmp_path: Path) -> None:
         """output extension != .otio -> INVALID_INPUT (§5)."""
-        from clipwright_trim.trim import trim_media
-
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
         output = str(tmp_path / "out.mp4")  # wrong extension
@@ -503,8 +465,6 @@ class TestErrorMapping:
         self, tmp_path: Path
     ) -> None:
         """output parent directory missing -> INVALID_INPUT, inspect_media not called (§5)."""
-        from clipwright_trim.trim import trim_media
-
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
         output = str(tmp_path / "nonexistent_dir" / "out.otio")
@@ -524,8 +484,6 @@ class TestErrorMapping:
 
     def test_output_equals_media_returns_invalid_input(self, tmp_path: Path) -> None:
         """output == media path -> INVALID_INPUT, inspect_media not called (§5)."""
-        from clipwright_trim.trim import trim_media
-
         # The output must be .otio so the extension check passes first,
         # but the path must resolve to the same file as media.
         media = str(tmp_path / "video.otio")
@@ -549,8 +507,6 @@ class TestErrorMapping:
 
     def test_media_not_found_returns_file_not_found(self, tmp_path: Path) -> None:
         """inspect_media raises FILE_NOT_FOUND -> propagated with basename only (§5)."""
-        from clipwright_trim.trim import trim_media
-
         media = str(tmp_path / "missing.mp4")
         output = str(tmp_path / "out.otio")
 
@@ -573,8 +529,6 @@ class TestErrorMapping:
 
     def test_duration_none_returns_probe_failed(self, tmp_path: Path) -> None:
         """MediaInfo.duration is None -> PROBE_FAILED (§5)."""
-        from clipwright_trim.trim import trim_media
-
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
         output = str(tmp_path / "out.otio")
@@ -597,8 +551,6 @@ class TestErrorMapping:
 
         Same-directory check runs after inspect_media (inspect_media IS called).
         """
-        from clipwright_trim.trim import trim_media
-
         media_dir = tmp_path / "src"
         media_dir.mkdir()
         other_dir = tmp_path / "other"
@@ -613,9 +565,7 @@ class TestErrorMapping:
             inspect_called.append(path)
             return _make_media_info(path=path)
 
-        with patch(
-            "clipwright_trim.trim.inspect_media", side_effect=_tracking_inspect
-        ):
+        with patch("clipwright_trim.trim.inspect_media", side_effect=_tracking_inspect):
             result = trim_media(media, output, _keep_opts((2.0, 5.0)))
 
         assert result["ok"] is False
@@ -630,8 +580,6 @@ class TestErrorMapping:
 
     def test_both_keep_and_drop_returns_invalid_input(self, tmp_path: Path) -> None:
         """Both keep and drop non-empty -> INVALID_INPUT (AC-4)."""
-        from clipwright_trim.trim import trim_media
-
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
         output = str(tmp_path / "out.otio")
@@ -652,8 +600,6 @@ class TestErrorMapping:
 
     def test_drop_full_duration_returns_invalid_input(self, tmp_path: Path) -> None:
         """Drop covers full duration -> computed keep is empty -> INVALID_INPUT (AC-5)."""
-        from clipwright_trim.trim import trim_media
-
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
         output = str(tmp_path / "out.otio")
@@ -677,9 +623,6 @@ class TestErrorMapping:
         Per task spec and FR-2 literal reading: options=TrimOptions() (no ranges)
         produces a single clip covering the full media duration (no error).
         """
-        from clipwright.otio_utils import load_timeline
-        from clipwright_trim.trim import trim_media
-
         rate = 30.0
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
@@ -708,18 +651,21 @@ class TestErrorMapping:
 
     def test_error_has_hint(self, tmp_path: Path) -> None:
         """Every error response must include a non-empty hint (§6.4 / §5)."""
-        from clipwright_trim.trim import trim_media
-
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
         output = str(tmp_path / "out.json")  # wrong extension
 
-        with patch("clipwright_trim.trim.inspect_media", return_value=_make_media_info(path=media)):
+        with patch(
+            "clipwright_trim.trim.inspect_media",
+            return_value=_make_media_info(path=media),
+        ):
             result = trim_media(media, output, _keep_opts((2.0, 5.0)))
 
         assert result["ok"] is False
-        hint = result["error"].get("hint") if isinstance(result["error"], dict) else result["error"].hint
-        assert isinstance(hint, str) and len(hint) > 0
+        assert (
+            isinstance(result["error"]["hint"], str)
+            and len(result["error"]["hint"]) > 0
+        )
 
 
 # ===========================================================================
@@ -734,8 +680,6 @@ class TestOutputPathValidationOrder:
         self, tmp_path: Path
     ) -> None:
         """Wrong output extension -> fails before inspect_media is called."""
-        from clipwright_trim.trim import trim_media
-
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
         output = str(tmp_path / "out.json")
@@ -750,14 +694,14 @@ class TestOutputPathValidationOrder:
 
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.INVALID_INPUT
-        assert len(calls) == 0, "inspect_media should not be called on invalid extension"
+        assert len(calls) == 0, (
+            "inspect_media should not be called on invalid extension"
+        )
 
     def test_missing_parent_dir_does_not_call_inspect_media(
         self, tmp_path: Path
     ) -> None:
         """Missing output parent directory -> fails before inspect_media is called."""
-        from clipwright_trim.trim import trim_media
-
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
         output = str(tmp_path / "ghost_dir" / "out.otio")
@@ -784,8 +728,6 @@ class TestClampWarning:
 
     def test_range_beyond_duration_produces_warning(self, tmp_path: Path) -> None:
         """Keep range that extends past duration -> ok=True + non-empty warnings (AC-3)."""
-        from clipwright_trim.trim import trim_media
-
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
         output = str(tmp_path / "out.otio")
@@ -811,8 +753,6 @@ class TestNonDestructive:
 
     def test_media_file_unchanged_after_trim(self, tmp_path: Path) -> None:
         """Media file content is unmodified after trim_media completes."""
-        from clipwright_trim.trim import trim_media
-
         media_path = tmp_path / "video.mp4"
         media_path.write_bytes(b"dummy media content")
         original_bytes = media_path.read_bytes()

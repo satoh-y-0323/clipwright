@@ -1,7 +1,6 @@
-"""test_schemas.py — Red tests for TrimRange and TrimOptions.
+"""test_schemas.py — Tests for TrimRange and TrimOptions.
 
 Covers FR-3, FR-4, AC-9 and ADR-6.
-Target: clipwright_trim.schemas.TrimRange / TrimOptions (not yet implemented).
 """
 
 from __future__ import annotations
@@ -112,7 +111,9 @@ class TestTrimRangeFieldDescriptions:
 
     def test_start_sec_has_description(self) -> None:
         field_info = TrimRange.model_fields["start_sec"]
-        assert field_info.description, "start_sec field must have a non-empty description"
+        assert field_info.description, (
+            "start_sec field must have a non-empty description"
+        )
 
     def test_end_sec_has_description(self) -> None:
         field_info = TrimRange.model_fields["end_sec"]
@@ -271,7 +272,9 @@ class TestTrimOptionsFieldDescriptions:
 
     def test_padding_sec_has_description(self) -> None:
         field_info = TrimOptions.model_fields["padding_sec"]
-        assert field_info.description, "padding_sec field must have a non-empty description"
+        assert field_info.description, (
+            "padding_sec field must have a non-empty description"
+        )
 
 
 # ===========================================================================
@@ -286,6 +289,12 @@ def test_trim_schemas_does_not_redefine_core_types() -> None:
 
     import clipwright_trim.schemas as trim_schemas
 
-    assert not hasattr(trim_schemas, "MediaRef"), "schemas.py redefines MediaRef from core"
-    assert not hasattr(trim_schemas, "Artifact"), "schemas.py redefines Artifact from core"
-    assert not hasattr(trim_schemas, "ToolResult"), "schemas.py redefines ToolResult from core"
+    assert not hasattr(trim_schemas, "MediaRef"), (
+        "schemas.py redefines MediaRef from core"
+    )
+    assert not hasattr(trim_schemas, "Artifact"), (
+        "schemas.py redefines Artifact from core"
+    )
+    assert not hasattr(trim_schemas, "ToolResult"), (
+        "schemas.py redefines ToolResult from core"
+    )
