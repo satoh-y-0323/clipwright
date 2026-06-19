@@ -575,6 +575,11 @@ class TestErrorMapping:
         )
         # inspect_media must have been called (same-dir check is post-probe)
         assert len(inspect_called) == 1
+        # Absolute path must not be exposed in error message or hint (CWE-209)
+        error_msg = result["error"]["message"]
+        error_hint = result["error"]["hint"]
+        assert str(media_dir) not in error_msg
+        assert str(media_dir) not in error_hint
 
     # ---- Range validation errors ----
 

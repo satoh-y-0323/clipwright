@@ -1,4 +1,4 @@
-"""test_server.py — Red tests for clipwright-trim server.py (MCP wrapper).
+"""test_server.py — Tests for clipwright-trim server.py (MCP wrapper).
 
 Target:
   - clipwright_trim tool must be registered in MCP and delegate to trim.trim_media
@@ -18,6 +18,8 @@ from unittest.mock import patch
 
 import pytest
 from clipwright.schemas import ToolError, ToolResult
+
+from clipwright_trim.schemas import TrimOptions, TrimRange
 
 # ---------------------------------------------------------------------------
 # Attempt to import server.py (_SERVER_AVAILABLE = False if not implemented)
@@ -128,8 +130,6 @@ class TestOptionsNoneResolution:
 
     def test_options_none_passes_trim_options_instance_to_trim_media(self) -> None:
         """options=None must be resolved to TrimOptions() and passed to trim_media."""
-        from clipwright_trim.schemas import TrimOptions
-
         expected = _ok_tool_result(
             summary="Kept 1 range(s) (total 10.0s) from source duration 10.0s (keep mode). Generated out.otio.",
             data={
@@ -163,8 +163,6 @@ class TestOptionsNoneResolution:
 
     def test_options_none_resolved_options_has_empty_keep_drop(self) -> None:
         """Resolved TrimOptions() from options=None must have empty keep and drop lists."""
-        from clipwright_trim.schemas import TrimOptions
-
         with patch(
             "clipwright_trim.server.trim_media",
             return_value=_ok_tool_result(),
@@ -210,8 +208,6 @@ class TestOptionsNoneResolution:
 
     def test_explicit_trim_options_passed_through_unchanged(self) -> None:
         """When options is already a TrimOptions instance, it must be passed to trim_media as-is."""
-        from clipwright_trim.schemas import TrimOptions, TrimRange
-
         opts = TrimOptions(keep=[TrimRange(start_sec=1.0, end_sec=5.0)])
 
         with patch(
