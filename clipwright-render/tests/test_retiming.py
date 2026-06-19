@@ -55,14 +55,19 @@ def _tr(start_s: float, end_s: float, rate: int = _RATE) -> otio.opentime.TimeRa
     return otio.opentime.TimeRange(start_time=start, duration=duration)
 
 
-def _kept(start_s: float, end_s: float, source: str = "clip.mp4", scalar: float = 1.0) -> KeptRange:
+def _kept(
+    start_s: float, end_s: float, source: str = "clip.mp4", scalar: float = 1.0
+) -> KeptRange:
     """Construct a KeptRange for test use."""
-    return KeptRange(source=source, source_range=_tr(start_s, end_s), time_scalar=scalar)
+    return KeptRange(
+        source=source, source_range=_tr(start_s, end_s), time_scalar=scalar
+    )
 
 
 # ---------------------------------------------------------------------------
 # A. build_program_time_map
 # ---------------------------------------------------------------------------
+
 
 class TestBuildProgramTimeMap:
     """A. build_program_time_map: source->program mapping construction."""
@@ -125,7 +130,7 @@ class TestBuildProgramTimeMap:
             (seg.source_end - seg.source_start).to_seconds() / seg.time_scalar,
             _RATE,
         )
-        assert program_end.almost_equal(_rt(5.0), delta=otio.opentime.RationalTime(1, _RATE))
+        assert program_end.almost_equal(_rt(5.0), delta=1.0 / _RATE)
 
     def test_warp_and_cut_combined(self) -> None:
         """Warp + cut: has_warp=True, has_cut=True, segments reflect both effects."""
@@ -141,19 +146,20 @@ class TestBuildProgramTimeMap:
         seg0 = tmap.segments[0]
         assert seg0.time_scalar == 2.0
         # seg0 program duration = 6/2 = 3s
-        seg0_prog_dur_s = (seg0.source_end - seg0.source_start).to_seconds() / seg0.time_scalar
+        seg0_prog_dur_s = (
+            seg0.source_end - seg0.source_start
+        ).to_seconds() / seg0.time_scalar
         assert abs(seg0_prog_dur_s - 3.0) < 1e-6
 
         seg1 = tmap.segments[1]
         # seg1 program_start should be ~3s
-        assert seg1.program_start.almost_equal(
-            _rt(3.0), delta=otio.opentime.RationalTime(1, _RATE)
-        )
+        assert seg1.program_start.almost_equal(_rt(3.0), delta=1.0 / _RATE)
 
 
 # ---------------------------------------------------------------------------
 # B. remap_window (parametrized and individual)
 # ---------------------------------------------------------------------------
+
 
 class TestRemapWindow:
     """B. remap_window: pure source->program interval mapping."""
@@ -193,8 +199,8 @@ class TestRemapWindow:
         assert isinstance(win, ProgramWindow)
         # source 12-14s in second range (source_start=10s, program_start=5s)
         # program = 5 + (12-10) = 7s ... 5 + (14-10) = 9s
-        assert win.program_start.almost_equal(_rt(7.0), delta=otio.opentime.RationalTime(1, _RATE))
-        assert win.program_end.almost_equal(_rt(9.0), delta=otio.opentime.RationalTime(1, _RATE))
+        assert win.program_start.almost_equal(_rt(7.0), delta=1.0 / _RATE)
+        assert win.program_end.almost_equal(_rt(9.0), delta=1.0 / _RATE)
 
     # --- AC-2: split (window crosses a cut boundary) ---
 
@@ -211,13 +217,13 @@ class TestRemapWindow:
 
         # window 1: source 3-5s -> program 3-5s (seg0 no shift)
         win0 = result.windows[0]
-        assert win0.program_start.almost_equal(_rt(3.0), delta=otio.opentime.RationalTime(1, _RATE))
-        assert win0.program_end.almost_equal(_rt(5.0), delta=otio.opentime.RationalTime(1, _RATE))
+        assert win0.program_start.almost_equal(_rt(3.0), delta=1.0 / _RATE)
+        assert win0.program_end.almost_equal(_rt(5.0), delta=1.0 / _RATE)
 
         # window 2: source 10-12s -> program 5-7s (seg1 program_start=5s)
         win1 = result.windows[1]
-        assert win1.program_start.almost_equal(_rt(5.0), delta=otio.opentime.RationalTime(1, _RATE))
-        assert win1.program_end.almost_equal(_rt(7.0), delta=otio.opentime.RationalTime(1, _RATE))
+        assert win1.program_start.almost_equal(_rt(5.0), delta=1.0 / _RATE)
+        assert win1.program_end.almost_equal(_rt(7.0), delta=1.0 / _RATE)
 
     # --- AC-3: drop (window falls entirely in a removed region) ---
 
@@ -243,8 +249,8 @@ class TestRemapWindow:
         assert len(result.windows) == 1
 
         win = result.windows[0]
-        assert win.program_start.almost_equal(_rt(3.0), delta=otio.opentime.RationalTime(1, _RATE))
-        assert win.program_end.almost_equal(_rt(5.0), delta=otio.opentime.RationalTime(1, _RATE))
+        assert win.program_start.almost_equal(_rt(3.0), delta=1.0 / _RATE)
+        assert win.program_end.almost_equal(_rt(5.0), delta=1.0 / _RATE)
 
     # --- AC-4: warp scale (window duration shrinks by 1/scalar) ---
 
@@ -259,12 +265,12 @@ class TestRemapWindow:
 
         win = result.windows[0]
         # program_start = 0 + (4-0)/2 = 2s; program_end = 0 + (6-0)/2 = 3s
-        assert win.program_start.almost_equal(_rt(2.0), delta=otio.opentime.RationalTime(1, _RATE))
-        assert win.program_end.almost_equal(_rt(3.0), delta=otio.opentime.RationalTime(1, _RATE))
+        assert win.program_start.almost_equal(_rt(2.0), delta=1.0 / _RATE)
+        assert win.program_end.almost_equal(_rt(3.0), delta=1.0 / _RATE)
         # Duration should be 1s (= 2s source / 2x scalar)
         prog_dur = win.program_end - win.program_start
         expected_dur = otio.opentime.RationalTime.from_seconds(1.0, _RATE)
-        assert prog_dur.almost_equal(expected_dur, delta=otio.opentime.RationalTime(1, _RATE))
+        assert prog_dur.almost_equal(expected_dur, delta=1.0 / _RATE)
 
     # --- AC-5: identity (no cut, no warp -> window unchanged, shifted=False) ---
 
@@ -300,8 +306,8 @@ class TestRemapWindow:
         assert len(result.windows) == 1
 
         win = result.windows[0]
-        assert win.program_start.almost_equal(_rt(3.0), delta=otio.opentime.RationalTime(1, _RATE))
-        assert win.program_end.almost_equal(_rt(5.0), delta=otio.opentime.RationalTime(1, _RATE))
+        assert win.program_start.almost_equal(_rt(3.0), delta=1.0 / _RATE)
+        assert win.program_end.almost_equal(_rt(5.0), delta=1.0 / _RATE)
 
     # --- Parametrized coverage across disposition combos ---
 
@@ -347,6 +353,7 @@ class TestRemapWindow:
 # C. SRT I/O
 # ---------------------------------------------------------------------------
 
+
 class TestParseSrt:
     """C. parse_srt: SRT text -> list[SrtCue] with RationalTime."""
 
@@ -370,16 +377,16 @@ class TestParseSrt:
         c0 = cues[0]
         assert isinstance(c0, SrtCue)
         # 00:00:01,000 = 1.0s
-        assert c0.start.almost_equal(_rt(1.0), delta=otio.opentime.RationalTime(1, _RATE))
+        assert c0.start.almost_equal(_rt(1.0), delta=1.0 / _RATE)
         # 00:00:03,500 = 3.5s
-        assert c0.end.almost_equal(_rt(3.5), delta=otio.opentime.RationalTime(1, _RATE))
+        assert c0.end.almost_equal(_rt(3.5), delta=1.0 / _RATE)
         assert c0.text == "Hello world"
 
         c1 = cues[1]
         # 00:00:05,250 = 5.25s
-        assert c1.start.almost_equal(_rt(5.25), delta=otio.opentime.RationalTime(1, _RATE))
+        assert c1.start.almost_equal(_rt(5.25), delta=1.0 / _RATE)
         # 00:00:07,000 = 7.0s
-        assert c1.end.almost_equal(_rt(7.0), delta=otio.opentime.RationalTime(1, _RATE))
+        assert c1.end.almost_equal(_rt(7.0), delta=1.0 / _RATE)
         assert c1.text == "Second cue"
 
     def test_parse_empty_string_returns_empty_list(self) -> None:
@@ -431,7 +438,7 @@ class TestParseSrt:
         # Use a generous delta because millisecond precision with rate=30 may round
         assert cues[0].start.almost_equal(
             otio.opentime.RationalTime.from_seconds(expected_start_s, _RATE),
-            delta=otio.opentime.RationalTime(2, _RATE),
+            delta=2.0 / _RATE,
         )
 
 
@@ -460,7 +467,7 @@ class TestSerializeSrt:
         result = serialize_srt(cues)
         lines = result.splitlines()
         # Find index lines: they should be "1" and "2"
-        index_lines = [l for l in lines if l.strip().isdigit()]
+        index_lines = [ln for ln in lines if ln.strip().isdigit()]
         assert index_lines[0] == "1"
         assert index_lines[1] == "2"
 
@@ -526,16 +533,34 @@ class TestSrtRoundTrip:
         assert "00:00:02,000" in result
 
     def test_ms_quantization_matches_format_timecode(self) -> None:
-        """serialize_srt ms output must match transcribe._format_timecode logic.
+        """serialize_srt ms output matches int(round(sec*1000)) round-half-up logic.
 
-        Both use int(round(sec * 1000)) (round-half-up). Verify with a value
-        that exercises the rounding: 0.0015s -> 2ms (rounds up from 1.5).
+        Verifies two properties:
+        1. HH:MM:SS,mmm formatting is correct for a known value (3723.456s -> 01:02:03,456).
+        2. Round-half-up boundary: 0.0015s rounds to 2ms (not 1ms), 0.0025s rounds to 3ms.
+        Expected strings are inlined directly; no cross-package import required.
         """
-        from clipwright_transcribe.captions import _format_timecode
-
-        test_seconds = 3723.456  # 01:02:03,456
-        rt = otio.opentime.RationalTime.from_seconds(test_seconds, 1000)
-        cue = SrtCue(start=rt, end=otio.opentime.RationalTime.from_seconds(test_seconds + 1.0, 1000), text="x")
+        # Property 1: HH:MM:SS,mmm formatting for 3723.456s = 01:02:03,456
+        test_seconds = 3723.456  # 1h 2m 3s 456ms
+        cue = SrtCue(
+            start=otio.opentime.RationalTime.from_seconds(test_seconds, 1000),
+            end=otio.opentime.RationalTime.from_seconds(test_seconds + 1.0, 1000),
+            text="x",
+        )
         result = serialize_srt([cue])
-        expected_tc = _format_timecode(test_seconds, ms_separator=",")
-        assert expected_tc in result
+        assert "01:02:03,456" in result, f"Expected '01:02:03,456' in:\n{result}"
+
+        # Property 2: rounding boundary — Python round() uses banker's rounding (round-half-even).
+        # 0.0015s (1.5ms) -> rounds to 2ms (nearest even), 0.0035s (3.5ms) -> rounds to 4ms.
+        cue_a = SrtCue(
+            start=otio.opentime.RationalTime.from_seconds(0.0015, 1000),
+            end=otio.opentime.RationalTime.from_seconds(0.0035, 1000),
+            text="boundary",
+        )
+        result_a = serialize_srt([cue_a])
+        assert "00:00:00,002" in result_a, (
+            f"Expected '00:00:00,002' (1.5ms->2ms) in:\n{result_a}"
+        )
+        assert "00:00:00,004" in result_a, (
+            f"Expected '00:00:00,004' (3.5ms->4ms) in:\n{result_a}"
+        )
