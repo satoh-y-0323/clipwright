@@ -379,6 +379,45 @@ class RenderOptions(BaseModel):
         ),
     ] = "auto"
 
+    hw_encoder: Annotated[
+        Literal["none", "auto", "nvenc", "amf", "qsv", "vaapi", "videotoolbox"],
+        Field(
+            default="none",
+            description=(
+                "Hardware video encoder to use. 'none' (default) uses the software"
+                " encoder specified by video_codec. 'auto' lets ffmpeg select the"
+                " best available hardware encoder. Other values select a specific"
+                " hardware encoder: 'nvenc' (NVIDIA), 'amf' (AMD), 'qsv' (Intel"
+                " Quick Sync), 'vaapi' (Linux VA-API), 'videotoolbox' (Apple)."
+            ),
+        ),
+    ] = "none"
+
+    hwaccel_decode: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "When True, enables hardware-accelerated decoding. Requires"
+                " compatible hardware and drivers. Default is False (software decode)."
+            ),
+        ),
+    ] = False
+
+    quality: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            le=51,
+            description=(
+                "Hardware encoder quality preset (0–51). Lower values produce higher"
+                " quality at the cost of speed. Only applies when hw_encoder is not"
+                " 'none'. Uses the hardware encoder default when unspecified (None)."
+            ),
+        ),
+    ] = None
+
     @model_validator(mode="after")
     def _validate_resolution_pair(self) -> Self:
         """width and height must both be specified or both be None.
