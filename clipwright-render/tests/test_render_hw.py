@@ -1,7 +1,8 @@
-"""test_render_hw.py — Red tests for render.py HW encoder integration.
+"""test_render_hw.py — Tests for render.py HW encoder integration.
 
 Covers the wiring in render.py for hardware-accelerated encoding and decoding:
   - _resolve_hw_encoder() is called before build_plan (ADR-4)
+  - resolved_encoder is passed to build_plan so HW encoder flags reach ffmpeg (H-1)
   - -hwaccel <value> is prepended to each video -i (ADR-6, AC-7)
   - multi-source: every video -i gets the same -hwaccel prefix
   - BGM -i (-stream_loop -1 -i bgm) does NOT get -hwaccel
@@ -191,10 +192,8 @@ _FALLBACK_RESOLVED = ResolvedEncoder(
 class TestHwaccelPrependedToVideoInputs:
     """When hwaccel_decode=True, -hwaccel <value> is prepended to each video -i.
 
-    Verifies AC-7 / ADR-6: render.py must inject -hwaccel before each
-    element of plan.input_sources; -hwaccel_output_format must NOT appear.
-    The test is Red because render.py does not yet call _resolve_hw_encoder
-    or insert the -hwaccel prefix.
+    Verifies AC-7 / ADR-6: render.py injects -hwaccel before each element of
+    plan.input_sources; -hwaccel_output_format must NOT appear.
     """
 
     def test_hwaccel_cuda_before_single_video_i(self, tmp_path: Path) -> None:
@@ -308,8 +307,14 @@ class TestHwaccelPrependedToVideoInputs:
             f"-hwaccel must not appear when hwaccel_decode=False: {captured_cmd}"
         )
 
-    def test_dry_run_hwaccel_cuda_in_ffmpeg_args(self, tmp_path: Path) -> None:
-        """dry_run path: -hwaccel cuda must appear in data['ffmpeg_args'] (AC-7)."""
+    def test_dry_run_hwaccel_cuda_absent_from_ffmpeg_args(self, tmp_path: Path) -> None:
+        """dry_run: ffmpeg_args (plan args) do not include -hwaccel; -hwaccel_output_format absent.
+
+        render.py injects -hwaccel tokens into the -i inputs list, not into
+        plan.ffmpeg_args. dry_run exposes plan.ffmpeg_args only, so -hwaccel
+        does not appear there; -hwaccel_output_format must never appear (ADR-6).
+        The execution-path test above verifies -hwaccel cuda placement in the full cmd.
+        """
         from clipwright_render.render import render_timeline
 
         src = str(tmp_path / "src.mp4")
@@ -344,10 +349,6 @@ class TestHwaccelPrependedToVideoInputs:
 
         assert result["ok"] is True, f"expected ok=True, got: {result.get('error')}"
 
-        # In dry_run, the actual ffmpeg command assembled in render.py includes the
-        # -hwaccel prefix before -i. The only way to verify the prefix is via the
-        # captured_cmd in the execution path test above; for dry_run we verify that
-        # -hwaccel_output_format is absent from the planned args.
         ffmpeg_args: list[str] = result["data"].get("ffmpeg_args", [])
         assert "-hwaccel_output_format" not in ffmpeg_args, (
             f"-hwaccel_output_format must not appear in dry_run args: {ffmpeg_args}"
@@ -360,10 +361,7 @@ class TestHwaccelPrependedToVideoInputs:
 
 
 class TestMultiSourceHwaccelPrefix:
-    """All video input_sources get -hwaccel prepended (multi-source scenario).
-
-    Red because render.py does not yet inject -hwaccel before each -i.
-    """
+    """All video input_sources get -hwaccel prepended (multi-source scenario)."""
 
     def test_all_video_inputs_get_hwaccel_prefix(self, tmp_path: Path) -> None:
         """2-source timeline with hwaccel_decode=True -> each -i has -hwaccel cuda."""
@@ -447,7 +445,6 @@ class TestBgmInputNoHwaccel:
 
     The -hwaccel option is only prepended to elements of plan.input_sources
     (the video sources). The BGM input is appended separately after the loop.
-    Red because render.py HW wiring is not implemented yet.
     """
 
     def test_bgm_i_has_no_hwaccel_prefix(self, tmp_path: Path) -> None:
@@ -581,7 +578,6 @@ class TestNoneEncoderWithHwaccelDecode:
     _resolve_hw_encoder returns None for hw_encoder='none', but render.py must
     still emit '-hwaccel auto' before each video -i when hwaccel_decode=True.
     Encode path stays CPU (resolved=None -> existing -c:v/-crf path).
-    Red because render.py does not yet implement this logic.
     """
 
     def test_none_encoder_with_hwaccel_decode_emits_hwaccel_auto(
@@ -702,8 +698,6 @@ class TestAutoFallbackWarningMerged:
     When _resolve_hw_encoder returns a ResolvedEncoder with non-empty warnings
     (the libx264 fall-back case), render.py must merge those warnings into the
     ok_result envelope's warnings field — for both dry_run and execution paths.
-
-    Red because render.py does not yet call _resolve_hw_encoder.
     """
 
     def test_fallback_warning_in_ok_result_warnings_execution_path(
@@ -856,8 +850,6 @@ class TestExplicitVendorFailureEnvelope:
       - error.code == "UNSUPPORTED_OPERATION"
       - error.message contains the failing encoder name
       - error.hint contains 'auto' or 'none'
-
-    Red because render.py does not yet call _resolve_hw_encoder.
     """
 
     def test_unsupported_operation_envelope_structure(self, tmp_path: Path) -> None:
@@ -969,4 +961,91 @@ class TestExplicitVendorFailureEnvelope:
         ffmpeg_calls = [c for c in run_calls if "ffmpeg" in (c[0] if c else "")]
         assert len(ffmpeg_calls) == 0, (
             f"ffmpeg must not be called after UNSUPPORTED_OPERATION: {run_calls}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# H-1 regression: resolved_encoder is passed to build_plan (H-1)
+# ---------------------------------------------------------------------------
+
+
+class TestH1ResolvedEncoderPassedToBuildPlan:
+    """H-1 regression: build_plan must receive resolved_encoder so HW flags reach ffmpeg.
+
+    Verifies that when _resolve_hw_encoder returns a ResolvedEncoder with
+    encoder_name='h264_nvenc' and rate_control_flags=['-cq','23','-rc','vbr'],
+    the actual ffmpeg command assembled by render.py contains '-c:v h264_nvenc'
+    and '-cq 23', and does NOT contain '-crf'.
+
+    This regression guards against the bug where build_plan was called without
+    resolved_encoder, causing the HW encoder to be silently ignored (H-1).
+    """
+
+    _NVENC_CQ23 = ResolvedEncoder(
+        encoder_name="h264_nvenc",
+        rate_control_flags=["-cq", "23", "-rc", "vbr"],
+        hwaccel_value="cuda",
+        warnings=[],
+    )
+
+    def test_h264_nvenc_and_cq23_in_ffmpeg_cmd(self, tmp_path: Path) -> None:
+        """-c:v h264_nvenc and -cq 23 must appear in the ffmpeg cmd (H-1 regression)."""
+        from clipwright_render.render import render_timeline
+
+        src = str(tmp_path / "src.mp4")
+        Path(src).touch()
+        tl_path = _write_single_source_timeline(tmp_path, src)
+        output = str(tmp_path / "out.mp4")
+        Path(output).touch()
+
+        captured_cmd: list[str] = []
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            captured_cmd.extend(cmd)
+            return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=src),
+            ),
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
+            patch(
+                "clipwright_render.render._resolve_hw_encoder",
+                return_value=self._NVENC_CQ23,
+                create=True,
+            ),
+            patch("clipwright_render.render.run", side_effect=_fake_run),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(
+                    hw_encoder="nvenc",
+                    quality=23,
+                    overwrite=True,
+                ),
+            )
+
+        assert result["ok"] is True, f"expected ok=True, got: {result.get('error')}"
+
+        # H-1 regression assertions: HW encoder name and CQ flag must be in cmd
+        assert "-c:v" in captured_cmd, f"-c:v not found in cmd: {captured_cmd}"
+        cv_idx = captured_cmd.index("-c:v")
+        assert captured_cmd[cv_idx + 1] == "h264_nvenc", (
+            f"expected 'h264_nvenc' after -c:v, got: {captured_cmd[cv_idx + 1]!r}"
+        )
+
+        assert "-cq" in captured_cmd, f"-cq not found in cmd: {captured_cmd}"
+        cq_idx = captured_cmd.index("-cq")
+        assert captured_cmd[cq_idx + 1] == "23", (
+            f"expected '23' after -cq, got: {captured_cmd[cq_idx + 1]!r}"
+        )
+
+        # -crf must NOT appear (H-1: HW path must not fall back to -crf)
+        assert "-crf" not in captured_cmd, (
+            f"-crf must not appear when HW encoder is resolved (H-1): {captured_cmd}"
         )

@@ -37,10 +37,11 @@ from clipwright_render.schemas import RenderOptions
 
 @pytest.fixture(autouse=True)
 def clear_capability_cache() -> None:
-    """Clear _CAPABILITY_CACHE before each test to prevent cross-test pollution."""
+    """Clear _CAPABILITY_CACHE and _ENCODERS_OUTPUT_CACHE before each test."""
     import clipwright_render.encoders as enc
 
     enc._CAPABILITY_CACHE.clear()  # type: ignore[attr-defined]
+    enc._ENCODERS_OUTPUT_CACHE = None  # type: ignore[attr-defined]
 
 
 # ===========================================================================
@@ -376,6 +377,10 @@ class TestHwaccelValue:
         """auto → 'auto' (used when hwaccel_decode=True in auto mode, Q1)."""
         assert hwaccel_value("auto") == "auto"
 
+    def test_software_returns_none(self) -> None:
+        """software → None (libx264 uses no -hwaccel flag, CR-L-3)."""
+        assert hwaccel_value("software") is None
+
 
 # ===========================================================================
 # auto_priority — OS → ordered vendor list (FR-4)
@@ -606,8 +611,15 @@ class TestResolveHwEncoderExplicitFail:
         err = exc_info.value
         assert err.code == ErrorCode.UNSUPPORTED_OPERATION
 
-    def test_qsv_fail_message_contains_encoder_name(self) -> None:
-        """ClipwrightError message must contain the failing encoder name (AC-4)."""
+    def test_qsv_fail_message_fixed_and_hint_has_detail(self) -> None:
+        """ClipwrightError message is fixed text; encoder/vendor details are in hint (SR-M-1).
+
+        SR-M-1 specification:
+          - message is fixed to "Hardware encoder initialisation failed."
+            and must NOT contain the encoder name or vendor name.
+          - hint must contain the encoder name, vendor name, and remediation
+            (hw_encoder='auto' or 'none').
+        """
         opts = RenderOptions(hw_encoder="qsv")  # type: ignore[call-arg]
         encoders_with_qsv = (
             _ENCODERS_WITHOUT_HW + " V..... h264_qsv            Intel QSV H.264\n"
@@ -621,8 +633,26 @@ class TestResolveHwEncoderExplicitFail:
         ):
             _resolve_hw_encoder(opts)
 
-        # message must include the concrete encoder name (e.g. 'h264_qsv')
-        assert "qsv" in exc_info.value.message.lower()
+        err = exc_info.value
+        message = err.message
+        hint = err.hint
+
+        # message must be the fixed string — no encoder or vendor name
+        assert message == "Hardware encoder initialisation failed."
+        assert "qsv" not in message.lower(), (
+            f"message must not contain encoder/vendor name, got: {message!r}"
+        )
+        assert "h264_qsv" not in message.lower(), (
+            f"message must not contain concrete encoder name, got: {message!r}"
+        )
+
+        # hint must contain the encoder name, vendor name, and remediation
+        assert "h264_qsv" in hint or "qsv" in hint.lower(), (
+            f"hint must contain encoder/vendor name, got: {hint!r}"
+        )
+        assert "hw_encoder='auto'" in hint or "hw_encoder='none'" in hint, (
+            f"hint must contain remediation suggestion, got: {hint!r}"
+        )
 
     def test_qsv_fail_hint_suggests_auto_or_none(self) -> None:
         """ClipwrightError hint must suggest hw_encoder='auto' or 'none' (AC-4)."""
@@ -721,4 +751,75 @@ class TestResolveHwEncoderCache:
         # Same concrete encoder → should only dry-encode once
         assert encode_call_count == 1, (
             f"Expected 1 dry-encode call (cache hit), got {encode_call_count}"
+        )
+
+
+# ===========================================================================
+# Additional coverage tests (CR-L-1, CR-L-2, SR-I-1)
+# ===========================================================================
+
+
+class TestResolveEncoderNameUnknownVendor:
+    """CR-L-1: resolve_encoder_name raises on unknown vendor (FR-3)."""
+
+    def test_unknown_vendor_raises_value_error(self) -> None:
+        """resolve_encoder_name with unknown vendor 'foo' must raise ValueError."""
+        with pytest.raises(ValueError, match="Unknown vendor/family combination"):
+            resolve_encoder_name("foo", "h264")
+
+    def test_unknown_family_raises_value_error(self) -> None:
+        """resolve_encoder_name with unknown family 'vp9' must raise ValueError."""
+        with pytest.raises(ValueError, match="Unknown vendor/family combination"):
+            resolve_encoder_name("nvenc", "vp9")
+
+
+class TestRateControlFlagsQualityNoneWithCrf:
+    """CR-L-2: quality=None + crf fallback resolves via _resolve_hw_encoder (FR-5).
+
+    rate_control_flags(encoder, quality=None) always returns [] regardless of crf.
+    The crf → quality resolution is handled in _resolve_hw_encoder's caller logic.
+    This test verifies that quality=None always yields [] from rate_control_flags
+    and that a non-None quality with a HW encoder yields crf-derived flags (e.g. -cq).
+    """
+
+    def test_nvenc_quality_none_returns_empty(self) -> None:
+        """quality=None for nvenc → empty list (CR-L-2: no implicit crf fallback in flags)."""
+        flags = rate_control_flags("h264_nvenc", None)  # type: ignore[arg-type]
+        assert flags == []
+
+    def test_nvenc_quality_23_returns_cq_flags(self) -> None:
+        """quality=23 for nvenc → ['-cq','23','-rc','vbr'] (crf-derived quality value, CR-L-2)."""
+        flags = rate_control_flags("h264_nvenc", 23)
+        assert flags == ["-cq", "23", "-rc", "vbr"]
+        assert "-crf" not in flags, (
+            "HW encoder must not emit -crf even for crf-derived quality"
+        )
+
+
+class TestRateControlFlagsAllStrings:
+    """SR-I-1: All elements of rate_control_flags() output must be str."""
+
+    @pytest.mark.parametrize(
+        "encoder_name,quality",
+        [
+            ("h264_nvenc", 28),
+            ("hevc_nvenc", 20),
+            ("av1_nvenc", 28),
+            ("h264_qsv", 28),
+            ("hevc_qsv", 23),
+            ("h264_vaapi", 28),
+            ("hevc_vaapi", 23),
+            ("h264_amf", 28),
+            ("hevc_amf", 23),
+            ("h264_videotoolbox", 28),
+            ("hevc_videotoolbox", 23),
+            ("libx264", 21),
+            ("libx265", 28),
+        ],
+    )
+    def test_all_flags_are_str(self, encoder_name: str, quality: int) -> None:
+        """All elements of rate_control_flags() must be str, not int (SR-I-1)."""
+        flags = rate_control_flags(encoder_name, quality)
+        assert all(isinstance(t, str) for t in flags), (
+            f"{encoder_name}: non-str element in flags: {flags!r}"
         )

@@ -884,6 +884,7 @@ def _render_inner(
         stabilize=raw_stabilize,  # §6-B
         source_probes=source_probes,
         bgm=bgm_clip,
+        resolved_encoder=resolved,
     )
 
     # --- 6a. dry_run ---

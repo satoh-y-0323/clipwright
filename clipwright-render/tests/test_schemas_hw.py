@@ -1,11 +1,9 @@
-"""test_schemas_hw.py — Red tests for RenderOptions HW encoder fields (FR-1/D1).
+"""test_schemas_hw.py — Tests for RenderOptions HW encoder fields (FR-1/D1).
 
-Tests the three new hardware-acceleration fields on RenderOptions:
+Tests the three hardware-acceleration fields on RenderOptions:
   - hw_encoder: Literal["none","auto","nvenc","amf","qsv","vaapi","videotoolbox"]
   - hwaccel_decode: bool
   - quality: int | None, ge=0, le=51
-
-These tests are expected to FAIL (Red) until the fields are added to schemas.py.
 """
 
 from __future__ import annotations

@@ -56,9 +56,21 @@ _ENCODER_NAME_MAP: dict[tuple[str, str], str] = {
     ("videotoolbox", "h264"): "h264_videotoolbox",
     ("videotoolbox", "hevc"): "hevc_videotoolbox",
     ("videotoolbox", "av1"): "av1_videotoolbox",
-    # software
+    # software — auto fallback only; not a user-selectable vendor (libx264 path)
     ("software", "h264"): "libx264",
     ("software", "hevc"): "libx265",
+}
+
+# Rate-control flag map: vendor → argv tokens template (values use placeholder "Q")
+# Lifted to module level to avoid per-call reconstruction (CR-M-2).
+# Actual quality value is substituted at call time in rate_control_flags().
+_RC_FLAG_TEMPLATES: dict[str, list[str]] = {
+    "software": ["-crf", "Q"],
+    "nvenc": ["-cq", "Q", "-rc", "vbr"],
+    "qsv": ["-global_quality", "Q"],
+    "vaapi": ["-rc_mode", "CQP", "-global_quality", "Q"],
+    "amf": ["-rc", "cqp", "-qp_i", "Q", "-qp_p", "Q"],
+    "videotoolbox": ["-q:v", "Q", "-b:v", "0"],
 }
 
 # Reverse map: concrete encoder name → vendor (ADR-3: explicit dict, no suffix matching)
@@ -171,16 +183,12 @@ def rate_control_flags(encoder_name: str, quality: int | None) -> list[str]:
 
     q = str(quality)
 
-    # Map vendor → rate-control flags builder (ADR-3: explicit dict, no suffix matching)
-    _RC_FLAGS: dict[str, list[str]] = {
-        "software": ["-crf", q],
-        "nvenc": ["-cq", q, "-rc", "vbr"],
-        "qsv": ["-global_quality", q],
-        "vaapi": ["-rc_mode", "CQP", "-global_quality", q],
-        "amf": ["-rc", "cqp", "-qp_i", q, "-qp_p", q],
-        "videotoolbox": ["-q:v", q, "-b:v", "0"],
-    }
-    return _RC_FLAGS.get(vendor or "", [])
+    # Substitute quality value into the per-vendor template (ADR-3: explicit map,
+    # no suffix matching). Template uses "Q" as a placeholder.
+    template = _RC_FLAG_TEMPLATES.get(vendor or "")
+    if template is None:
+        return []
+    return [q if tok == "Q" else tok for tok in template]
 
 
 def hwaccel_value(vendor: str) -> str | None:
@@ -414,13 +422,10 @@ def _resolve_hw_encoder(options: RenderOptions) -> ResolvedEncoder | None:
         # Explicit vendor failed — raise, do NOT fall back (FR-9/AC-4)
         raise ClipwrightError(
             code=ErrorCode.UNSUPPORTED_OPERATION,
-            message=(
-                f"Hardware encoder '{candidate}' (vendor '{vendor}') is not"
-                " available or failed the capability check on this system."
-            ),
+            message="Hardware encoder initialisation failed.",
             hint=(
-                f"The encoder '{candidate}' is either not compiled into this"
-                " ffmpeg build or the GPU/driver is missing."
+                f"Encoder '{candidate}' (vendor '{vendor}') is present but"
+                " failed to initialise; the GPU or driver may be unavailable."
                 " Try hw_encoder='auto' or 'none'."
             ),
         )
