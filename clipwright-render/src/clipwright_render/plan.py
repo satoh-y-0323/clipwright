@@ -56,6 +56,7 @@ from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.otio_utils import get_markers
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+from clipwright_render.encoders import ResolvedEncoder
 from clipwright_render.schemas import RenderOptions, SubtitleOptions
 
 # ===========================================================================
@@ -2448,6 +2449,7 @@ def _build_ffmpeg_args(
     has_audio: bool,
     options: RenderOptions,
     use_multi_source: bool = False,
+    resolved_encoder: ResolvedEncoder | None = None,
 ) -> list[str]:
     """Assemble and return the ffmpeg argument list from filter_complex and map
     labels (M-2).
@@ -2460,6 +2462,10 @@ def _build_ffmpeg_args(
     fps filter in filter_complex, so -r is skipped to avoid unintended double
     resampling (CR M-2). For single-source paths (use_multi_source=False), -r is
     added as before (backward compatible).
+
+    When resolved_encoder is not None, the HW encoder path is used: -c:v is set
+    to resolved_encoder.encoder_name and rate_control_flags are expanded verbatim.
+    The legacy -c:v video_codec / -crf crf block is bypassed (AC-1/ADR-7).
     """
     ffmpeg_args: list[str] = [
         "-filter_complex",
@@ -2471,21 +2477,35 @@ def _build_ffmpeg_args(
         ffmpeg_args += ["-map", audio_map_label]
 
     # Map RenderOptions fields to ffmpeg arguments
-    if options.video_codec is not None:
-        ffmpeg_args += ["-c:v", options.video_codec]
-    if options.audio_codec is not None:
-        ffmpeg_args += ["-c:a", options.audio_codec]
-    # width/height are integrated into filter_complex; -vf is not added (L-4).
-    if options.fps is not None:
-        if use_multi_source:
-            # Multi-source path: fps is already normalised by the per-clip fps filter;
-            # -r would cause unintended double resampling (CR M-2)
-            pass
-        else:
-            # Single-source path: add -r as before (backward compatible; ADR-C3).
-            ffmpeg_args += ["-r", str(options.fps)]
-    if options.crf is not None:
-        ffmpeg_args += ["-crf", str(options.crf)]
+    if resolved_encoder is None:
+        # Existing (software) path — preserved byte-for-byte (AC-1/NFR-1).
+        if options.video_codec is not None:
+            ffmpeg_args += ["-c:v", options.video_codec]
+        if options.audio_codec is not None:
+            ffmpeg_args += ["-c:a", options.audio_codec]
+        # width/height are integrated into filter_complex; -vf is not added (L-4).
+        if options.fps is not None:
+            if use_multi_source:
+                # fps already normalised by per-clip filter; -r skipped (CR M-2).
+                pass
+            else:
+                # Single-source path: add -r as before (backward compatible; ADR-C3).
+                ffmpeg_args += ["-r", str(options.fps)]
+        if options.crf is not None:
+            ffmpeg_args += ["-crf", str(options.crf)]
+    else:
+        # HW encoder path (ADR-7): use resolved encoder name and rate-control flags.
+        # -crf is never emitted here (AC-3); rate_control_flags carries the HW
+        # equivalent (e.g. -cq/-rc for nvenc).
+        ffmpeg_args += ["-c:v", resolved_encoder.encoder_name]
+        ffmpeg_args += resolved_encoder.rate_control_flags
+        if options.audio_codec is not None:
+            ffmpeg_args += ["-c:a", options.audio_codec]
+        if options.fps is not None:
+            if use_multi_source:
+                pass
+            else:
+                ffmpeg_args += ["-r", str(options.fps)]
 
     return ffmpeg_args
 
@@ -2501,6 +2521,7 @@ def build_plan(
     source_probes: dict[str, ProbeInfo] | None = None,
     bgm: BgmClip | None = None,
     text_overlays: list[TextOverlay] | None = None,
+    resolved_encoder: ResolvedEncoder | None = None,
 ) -> RenderPlan:
     """Return filter_complex string and ffmpeg argument list as a RenderPlan
     (ADR-1/ADR-7).
@@ -2786,6 +2807,7 @@ def build_plan(
         has_audio,
         options,
         use_multi_source=use_multi_source,
+        resolved_encoder=resolved_encoder,
     )
 
     # ---------- Dry-run estimate ----------
