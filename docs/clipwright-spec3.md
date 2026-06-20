@@ -268,7 +268,7 @@ None for the render-side burn (extend `clipwright_render`). A standalone helper
 
 ## Medium Priority
 
-### `clipwright-reframe`
+### `clipwright-reframe` ✅ IMPLEMENTED (v0.1.0)
 
 **What it does**
 Crops, pads, scales, and rotates video to a target aspect ratio / resolution —
@@ -460,7 +460,7 @@ clipwright (core)
   ├─ clipwright-text           ← shipped
   ├─ clipwright-stabilize      ← shipped (skip for screen-capture sources)
   ├─ clipwright-bgm            ← shipped
-  ├─ clipwright-reframe        ← NEW (Medium); aspect/crop/pad, vertical formats
+  ├─ clipwright-reframe        ← ✅ IMPLEMENTED (v0.1.0); aspect/crop/pad, vertical formats
   ├─ clipwright-sequence       ← NEW (Medium); multi-source assembly over render's existing concat
   ├─ clipwright-overlay        ← NEW (Medium); image/logo/watermark overlay
   ├─ clipwright-transition     ← NEW (Low); xfade/acrossfade
@@ -482,7 +482,7 @@ as render filter/option work:
 - [x] Hardware decode (`-hwaccel cuda`/`qsv`/`vaapi`) with CPU-filter fallback / `hwdownload`
 - [x] Re-time `text_overlay` markers through the kept-range + `LinearTimeWarp` map
 - [x] Re-time / remap subtitle cues to program time when cuts or warps are present
-- [ ] `reframe` metadata → `scale`/`crop`/`pad`/`overlay` (blur-pad) filter chain
+- [x] `reframe` metadata → `scale`/`crop`/`pad`/`overlay` (blur-pad) filter chain
 - [ ] `image_overlay` markers → extra `-i` + `overlay` filter with opacity/fade
 - [ ] `xfade` / `acrossfade` for transitions (depends on sequence assembly)
 ```

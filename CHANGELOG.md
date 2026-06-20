@@ -5,6 +5,35 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-06-21
+
+### Added
+
+- **`clipwright-reframe` package (v0.1.0)**: New MCP tool `clipwright_reframe` that
+  annotates a reframe directive (target resolution / fit mode / anchor) to
+  `metadata["clipwright"]["reframe"]` in an OTIO timeline. The directive is applied
+  as an FFmpeg filter chain by `clipwright-render` in a single render pass. Three fit
+  modes are supported:
+  - `crop` — scale to cover, then crop to the target aspect ratio (content at the
+    edges may be lost; controlled by `anchor`).
+  - `pad` — scale to fit (letterbox / pillarbox), then pad with a solid color
+    (configurable via `pad_color`, default `"black"`).
+  - `blur_pad` — scale the foreground to fit and overlay it over a blurred,
+    cover-scaled background; popular for 16:9 → 9:16 vertical conversions for
+    Shorts / Reels.
+  - `anchor` controls the crop / pad alignment (9-direction: `top-left`, `top`,
+    `top-right`, `left`, `center`, `right`, `bottom-left`, `bottom`, `bottom-right`).
+  - Target dimensions (`target_w` / `target_h`) must be even and in the range 2–7680.
+  - Accepts an optional existing `timeline` path; appends the directive to it
+    (accumulate pattern, compatible with `clipwright-color`, `clipwright-stabilize`).
+  - Non-destructive: only a new OTIO file is written; source media is never modified.
+
+- **`clipwright-render` reframe support (v0.9.0)**: `clipwright_render` now reads the
+  `reframe` directive from OTIO timeline metadata and inserts the corresponding FFmpeg
+  filter chain (`scale`/`crop`/`pad`/`split→blur→overlay`) into the filtergraph before
+  `drawtext`, so text positions resolve against the final frame size. Fully backward
+  compatible: existing render calls without a reframe directive behave identically.
+
 ## [0.11.0] - 2026-06-20
 
 ### Added

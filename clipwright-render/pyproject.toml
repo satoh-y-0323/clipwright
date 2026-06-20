@@ -1,6 +1,6 @@
 [project]
 name = "clipwright-render"
-version = "0.8.0"
+version = "0.9.0"
 description = "MCP tool to realize OTIO timelines with FFmpeg. Completes segment extraction, concatenation, and trimming in a single transcode pass."
 readme = "README.md"
 license = { text = "MIT" }

@@ -235,6 +235,7 @@ For details, see [docs/clipwright-spec.md](docs/clipwright-spec.md).
 | `clipwright-color` | `clipwright_detect_color` | Measure average luma via FFmpeg `signalstats` and write an `eq` color-correction directive to OTIO timeline metadata; applied in a single render pass by `clipwright-render` |
 | `clipwright-stabilize` | `clipwright_detect_shake` | Analyse camera shake via FFmpeg `vidstabdetect` (requires libvidstab), write a `.trf` motion-analysis file and a stabilize directive to OTIO timeline metadata; applied as `vidstabtransform` in a single render pass by `clipwright-render` |
 | `clipwright-trim` | `clipwright_trim` | Build a kept-range OTIO timeline from explicit keep/drop time ranges (or pass through the whole clip); concatenated by `clipwright-render`. The basic "select which parts to keep" primitive |
+| `clipwright-reframe` | `clipwright_reframe` | Annotate a reframe directive (target resolution / fit mode / anchor) to OTIO timeline metadata; applied as an FFmpeg filter chain by `clipwright-render`. Three fit modes: `crop` (scale-to-cover + crop), `pad` (scale-to-fit + solid-color letterbox/pillarbox, configurable `pad_color`), `blur_pad` (foreground-over-blurred-background, popular for 16:9 → 9:16 vertical Shorts/Reels). `target_w` / `target_h` must be even (2–7680). `anchor` controls alignment (9-direction, default `center`) |
 
 ---
 
@@ -300,6 +301,9 @@ Each clipwright tool is a standalone MCP server. Register them in your MCP clien
       "env": {
         "CLIPWRIGHT_FFPROBE": "/path/to/ffprobe"
       }
+    },
+    "clipwright-reframe": {
+      "command": "clipwright-reframe"
     }
   }
 }

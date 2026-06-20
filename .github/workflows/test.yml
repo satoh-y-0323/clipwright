@@ -83,6 +83,7 @@ jobs:
             "clipwright-wrap"
             "clipwright-color"
             "clipwright-trim"
+            "clipwright-reframe"
           )
           # Note: clipwright-stabilize unit tests mock ffmpeg entirely and do not
           # require a libvidstab-enabled ffmpeg build (policy A). Integration/e2e

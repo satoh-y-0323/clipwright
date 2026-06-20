@@ -232,6 +232,7 @@ src/clipwright/
 | `clipwright-color` | `clipwright_detect_color` | FFmpeg `signalstats` で平均輝度を測定し、`eq` カラー補正ディレクティブを OTIO タイムラインのメタデータに書き込む。補正は `clipwright-render` が一括レンダリングパスで適用する |
 | `clipwright-stabilize` | `clipwright_detect_shake` | FFmpeg `vidstabdetect`（libvidstab 必須）でカメラ手ブレを解析し、`.trf` モーション解析ファイルと stabilize ディレクティブを OTIO タイムラインのメタデータに書き込む。`clipwright-render` が一括レンダリングパスで `vidstabtransform` として適用する |
 | `clipwright-trim` | `clipwright_trim` | 明示した keep/drop 時間範囲から kept-range の OTIO タイムラインを生成する（オプション省略時はクリップ全体をパススルー）。`clipwright-render` がそのまま連結する。「どの区間を残すか」を指定する最も基本的なプリミティブ |
+| `clipwright-reframe` | `clipwright_reframe` | リフレーム指令（目標解像度 / フィットモード / アンカー）を OTIO タイムラインのメタデータに注記する。実体化は `clipwright-render` が FFmpeg フィルタチェーンとして一括適用する。3 つのフィットモード: `crop`（スケールしてクロップ）/ `pad`（スケールしてソリッドカラーでレターボックス/ピラーボックス、`pad_color` で色指定可）/ `blur_pad`（ぼかした背景の上にフォアグラウンドを重ね合わせ；16:9 → 9:16 縦型 Shorts/Reels で人気）。`target_w` / `target_h` は偶数 (2–7680)。`anchor` は配置アンカー（9 方向、デフォルト `center`） |
 
 ---
 
@@ -297,6 +298,9 @@ src/clipwright/
       "env": {
         "CLIPWRIGHT_FFPROBE": "/path/to/ffprobe"
       }
+    },
+    "clipwright-reframe": {
+      "command": "clipwright-reframe"
     }
   }
 }

@@ -34,6 +34,7 @@ jobs:
           - clipwright-frames
           - clipwright-loudness
           - clipwright-noise
+          - clipwright-reframe
           - clipwright-render
           - clipwright-scene
           - clipwright-silence
