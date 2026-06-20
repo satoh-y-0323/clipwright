@@ -115,7 +115,19 @@ to 13:00" or "drop the first two minutes" has no tool to express that today.
 
 ---
 
-### Hardware-accelerated encode/decode  *(render extension)*
+### Hardware-accelerated encode/decode  ✅ IMPLEMENTED (render v0.8.0, 2026-06-20)  *(render extension)*
+
+> Shipped as a `clipwright-render` extension (v0.8.0). Three new `RenderOptions`
+> fields: `hw_encoder` (none/auto/nvenc/amf/qsv/vaapi/videotoolbox, default `"none"`),
+> `hwaccel_decode` (bool, default `False`), and `quality` (int 0–51, encoder-neutral
+> quality knob). `"auto"` uses probe-then-test (checks `ffmpeg -encoders`, runs a
+> 1-frame throwaway encode to `-f null -`) and falls back to `libx264` with a
+> `warnings[]` entry. Explicit vendor failure returns `UNSUPPORTED_OPERATION`.
+> `hwaccel_decode` v1 downloads frames to system memory before CPU filters so all
+> existing filter chains remain compatible. Full HW↔HW filtergraph is out of v1 scope.
+> **NVENC verified on the maintainer's dev box; AMD AMF / Intel QSV / VAAPI /
+> Apple VideoToolbox are experimental — community verification needed.**
+> Fully backward compatible.
 
 **What it does**
 Lets `clipwright-render` use GPU encoders (NVENC / QSV / VideoToolbox / AMF) and
@@ -463,11 +475,11 @@ clipwright (core)
 `clipwright-render` is the single materialisation point, so most new features land
 as render filter/option work:
 
-- [ ] Hardware encoders, multi-vendor (`nvenc`/`amf`/`qsv`/`vaapi`/`videotoolbox`)
+- [x] Hardware encoders, multi-vendor (`nvenc`/`amf`/`qsv`/`vaapi`/`videotoolbox`)
       with `auto` probe-then-test detection + guaranteed `libx264` fallback, and
       encoder-aware rate control (map quality → `-cq`/`-crf`/`-global_quality`/`-qp`;
       never `-crf` for hardware encoders). NVENC verified-on-dev; others experimental.
-- [ ] Hardware decode (`-hwaccel cuda`/`qsv`/`vaapi`) with CPU-filter fallback / `hwdownload`
+- [x] Hardware decode (`-hwaccel cuda`/`qsv`/`vaapi`) with CPU-filter fallback / `hwdownload`
 - [x] Re-time `text_overlay` markers through the kept-range + `LinearTimeWarp` map
 - [x] Re-time / remap subtitle cues to program time when cuts or warps are present
 - [ ] `reframe` metadata → `scale`/`crop`/`pad`/`overlay` (blur-pad) filter chain

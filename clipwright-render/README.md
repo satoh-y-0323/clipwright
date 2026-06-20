@@ -137,10 +137,36 @@ Invoked from Claude / agents via MCP.
 | `width` | int \| null | Output width (must be set with `height`) |
 | `height` | int \| null | Output height (must be set with `width`) |
 | `fps` | float \| null | Output frame rate |
-| `crf` | int \| null | Quality CRF value (0-51) |
+| `crf` | int \| null | Quality CRF value (0-51, software encoders only) |
 | `overwrite` | bool | If `true`, overwrite existing output file (default `false`) |
+| `hw_encoder` | string | Hardware encoder selection: `"none"` (default) / `"auto"` / `"nvenc"` / `"amf"` / `"qsv"` / `"vaapi"` / `"videotoolbox"` |
+| `hwaccel_decode` | bool | If `true`, use GPU-accelerated decode (default `false`). v1: frames are downloaded to system memory before CPU filters. Full HW↔HW filtergraph is out of v1 scope. |
+| `quality` | int \| null | Encoder-neutral quality (0-51). When unset, `crf` is used for software encoders. Maps to `-crf` (x264/x265), `-cq` + `-rc vbr` (NVENC), `-global_quality` (QSV/VAAPI), `-qp_i/-qp_p` (AMF). `-crf` is never emitted for hardware encoders. |
 
 `width` / `height` must both be specified or both `null`. Specifying only one is an error.
+
+**Hardware Encoder Behaviour**
+
+- `hw_encoder="auto"`: probe-then-test detection — checks `ffmpeg -encoders`, runs a 1-frame
+  throwaway encode to `-f null -`, picks the first vendor that succeeds. Falls back to `libx264`
+  with a `warnings[]` entry if no hardware encoder is usable. Render always completes.
+- `hw_encoder="nvenc"` (or any explicit vendor): if the encoder fails to initialise, returns
+  `UNSUPPORTED_OPERATION` with an actionable hint.
+- `hw_encoder="none"` (default): uses the software encoder path unchanged (backward compatible).
+
+**Hardware Encoder Verification Status**
+
+| Vendor | Option | Status |
+|--------|--------|--------|
+| NVIDIA (`h264_nvenc`, `hevc_nvenc`) | `"nvenc"` | **Verified on maintainer's dev box** (RTX-class GPU, Windows) |
+| AMD Radeon (`h264_amf`, `hevc_amf`) | `"amf"` | **Experimental** — community verification needed |
+| Intel Arc / iGPU (`h264_qsv`, `hevc_qsv`) | `"qsv"` | **Experimental** — community verification needed |
+| Linux VAAPI (`h264_vaapi`, `hevc_vaapi`) | `"vaapi"` | **Experimental** — community verification needed |
+| Apple VideoToolbox (`h264_videotoolbox`) | `"videotoolbox"` | **Experimental** — community verification needed |
+
+> Note: hardware encoders trade some size/quality fidelity for speed. NVENC default rate control
+> produced a notably smaller file than `libx264 -crf 21` at comparable subjective quality during
+> verification (not a rigorous quality-matched comparison).
 
 **Return Value (Success)**
 

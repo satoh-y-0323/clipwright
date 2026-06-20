@@ -5,6 +5,34 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-06-20
+
+### Added
+
+- **`clipwright-render` hardware-accelerated encode/decode (v0.8.0)**: `clipwright_render`
+  now supports GPU encoders and hardware-accelerated decode via three new `RenderOptions`
+  fields:
+  - `hw_encoder` (`"none"` / `"auto"` / `"nvenc"` / `"amf"` / `"qsv"` / `"vaapi"` /
+    `"videotoolbox"`, default `"none"`): selects the hardware encoder.
+    `"auto"` uses probe-then-test detection (checks `ffmpeg -encoders`, runs a
+    1-frame throwaway encode to `-f null -`) and picks the first available vendor;
+    falls back to `libx264` with a `warnings[]` entry if no hardware encoder is usable.
+    Explicitly naming a vendor (e.g. `"nvenc"`) that fails to initialise returns
+    `UNSUPPORTED_OPERATION` with an actionable hint. Render always completes.
+  - `hwaccel_decode` (`bool`, default `false`): prepends `-hwaccel cuda/qsv/vaapi`
+    before the input. v1 scope: frames are downloaded to system memory
+    (`hwdownload`/`format`) before CPU filters (vidstab / eq / drawtext) so all
+    existing filter chains remain compatible. Full HW↔HW filtergraph is out of v1 scope.
+  - `quality` (`int` 0–51, optional): encoder-neutral quality knob. When unset,
+    `crf` is used as before. For software encoders maps to `-crf`; for NVENC to
+    `-cq` (+ `-rc vbr`); for QSV/VAAPI to `-global_quality`; for AMF to `-qp_i/-qp_p`.
+    `-crf` is never emitted for hardware encoders.
+  - **Verification status**: NVENC (`h264_nvenc` / `hevc_nvenc`) is **verified on the
+    maintainer's dev box** (RTX-class GPU, Windows). AMD AMF, Intel QSV, VAAPI, and
+    Apple VideoToolbox are **experimental — community verification needed**.
+  - Fully backward compatible: existing calls without `hw_encoder` / `hwaccel_decode`
+    / `quality` render identically to before (software `libx264` path unchanged).
+
 ## [0.10.0] - 2026-06-20
 
 ### Added

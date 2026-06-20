@@ -223,7 +223,7 @@ src/clipwright/
 | `clipwright-noise` | `clipwright_reduce_noise` | FFmpeg `afftdn` のノイズ低減設定を OTIO タイムラインに注記する |
 | `clipwright-transcribe` | `clipwright_transcribe` | whisper-cli で音声をテキスト化し、単語単位の OTIO マーカーを書き込む |
 | `clipwright-bgm` | `clipwright_place_bgm` | BGM の配置注記（音量 / フェード / ダッキング）を OTIO タイムラインに書く |
-| `clipwright-render` | `clipwright_render` | OTIO の編集オペレーション（トリム / 連結 / フィルタ / LinearTimeWarp 速度変換 / drawtext テキストオーバーレイ）を FFmpeg で出力メディアに実体化する。タイムラインに無音カットやスピード変換が含まれる場合、`.srt` 字幕キューと `text_overlay` マーカーをプログラム時間へ再タイミングする（デフォルト `retime_markers="auto"`）。再タイミング時は非破壊で `{output_stem}.retimed.srt` を出力する。`.vtt` / `.ass` およびマルチソースタイムラインは warning 付きでスキップする。 |
+| `clipwright-render` | `clipwright_render` | OTIO の編集オペレーション（トリム / 連結 / フィルタ / LinearTimeWarp 速度変換 / drawtext テキストオーバーレイ）を FFmpeg で出力メディアに実体化する。タイムラインに無音カットやスピード変換が含まれる場合、`.srt` 字幕キューと `text_overlay` マーカーをプログラム時間へ再タイミングする（デフォルト `retime_markers="auto"`）。再タイミング時は非破壊で `{output_stem}.retimed.srt` を出力する。`.vtt` / `.ass` およびマルチソースタイムラインは warning 付きでスキップする。ハードウェアエンコード（`hw_encoder`: none/auto/nvenc/amf/qsv/vaapi/videotoolbox）および GPU デコード（`hwaccel_decode`）をサポート。NVENC は開発機で動作確認済み。AMF / QSV / VAAPI / VideoToolbox は experimental（コミュニティ検証待ち）。 |
 | `clipwright-speed` | `clipwright_set_speed` | OTIO の `LinearTimeWarp` でクリップに速度倍率を注記する。実体化は `clipwright-render` が行う |
 | `clipwright-text` | `clipwright_add_text` | OTIO タイムラインにテキストオーバーレイ設定（drawtext）を注記する。映像への描画は `clipwright-render` が行う |
 | `clipwright-wrap` | `clipwright_wrap_text` | 長いテキスト行に改行注記を付けて OTIO タイムラインで折り返す |
