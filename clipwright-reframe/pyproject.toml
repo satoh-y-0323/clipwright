@@ -1,7 +1,7 @@
 [project]
-name = "clipwright"
-version = "0.3.0"
-description = "MCP server group wrapping FFmpeg/OTIO. Provides primitives to manipulate video editing workflows from AI agents."
+name = "clipwright-reframe"
+version = "0.1.0"
+description = "MCP tool for video reframing and OTIO timeline reframe annotation generation. Annotates a reframe directive (target resolution / fit mode / anchor) to timeline-level metadata for clipwright-render to apply."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
@@ -9,13 +9,13 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
+    "clipwright>=0.2.0",
     "mcp[cli]>=1.27.2",
-    "opentimelineio>=0.18",
     "pydantic>=2",
 ]
 
 [project.scripts]
-clipwright-mcp = "clipwright.server:main"
+clipwright-reframe = "clipwright_reframe.server:main"
 
 [build-system]
 requires = ["uv_build>=0.11.19,<0.12.0"]
@@ -30,25 +30,22 @@ dev = [
     "ruff>=0.15.16",
 ]
 
-# --- Ruff ---
+[tool.uv.sources]
+clipwright = { workspace = true }
+
 [tool.ruff]
 target-version = "py311"
 line-length = 88
-# templates/ is a template containing placeholders (__TOOL__ etc). Excluded from lint/format.
-extend-exclude = ["templates"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
 ignore = []
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["E501"]
-"*/tests/**" = ["E501"]
+"tests/*.py" = ["E501"]
 
 [tool.ruff.format]
-# Default ruff formatter is OK
 
-# --- mypy ---
 [tool.mypy]
 python_version = "3.11"
 strict = true
@@ -56,32 +53,24 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 disallow_any_generics = true
-# templates/ is a template containing placeholders. Excluded from type checking.
-exclude = ["^templates/"]
 
-# opentimelineio has no stubs, ignored with mypy strict
 [[tool.mypy.overrides]]
 module = "opentimelineio.*"
 ignore_missing_imports = true
 
-# --- pytest ---
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--strict-markers -q"
 markers = [
     "integration: integration test requiring actual ffmpeg/ffprobe binaries",
     "slow: test with long execution time",
+    "e2e: e2e test using actual ffmpeg binary",
 ]
 
-# --- coverage ---
 [tool.coverage.run]
-source = ["clipwright"]
+source = ["clipwright_reframe"]
 omit = ["tests/*"]
 
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
-
-# --- uv workspace ---
-[tool.uv.workspace]
-members = ["clipwright-bgm", "clipwright-color", "clipwright-frames", "clipwright-loudness", "clipwright-noise", "clipwright-reframe", "clipwright-render", "clipwright-scene", "clipwright-silence", "clipwright-speed", "clipwright-stabilize", "clipwright-text", "clipwright-transcribe", "clipwright-trim", "clipwright-wrap"]
