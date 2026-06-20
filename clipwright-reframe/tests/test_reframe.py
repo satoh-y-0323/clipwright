@@ -1,6 +1,6 @@
-"""test_reframe.py — Red-phase tests for clipwright_reframe.reframe and server.
+"""test_reframe.py — Tests for clipwright_reframe.reframe and server.
 
-Verification points (TDD Red — tests are written before full implementation):
+Verification points:
   A. Envelope / happy path
      A-1: ToolResult {ok, summary, data, artifacts, warnings} returned (AC-14)
      A-2: target_w=1080, target_h=1920, mode='pad' — new .otio generated (AC-02)
@@ -14,6 +14,7 @@ Verification points (TDD Red — tests are written before full implementation):
      B-4: output == timeline path -> INVALID_INPUT
      B-5: timeline path specified but not found -> INVALID_INPUT (not raw FileNotFoundError)
      B-6: timeline path is not a valid .otio -> OTIO_ERROR (wrapped, not raw exception)
+     B-7: output outside media directory -> PATH_NOT_ALLOWED
 
   C. Directive annotation (FR-2.1 / AC-06 / D3)
      C-1: metadata['clipwright']['reframe'] written with all D3 keys
@@ -34,10 +35,14 @@ Verification points (TDD Red — tests are written before full implementation):
      E-2: input timeline file unchanged after run
 
   F. Input validation errors (FR-5)
-     F-1: odd target_w -> INVALID_INPUT with 'even' in hint (AC-03)
-     F-2: odd target_h -> INVALID_INPUT with 'even' in hint (AC-03)
-     F-3: target_w < 2 -> INVALID_INPUT (AC-04)
-     F-4: pad_color outside allowlist -> INVALID_INPUT (AC-05)
+     F-1: odd target_w -> INVALID_INPUT via reframe() (AC-03)
+     F-2: odd target_h -> INVALID_INPUT via reframe() (AC-03)
+     F-3: target_w < 2 -> INVALID_INPUT via reframe() (AC-04)
+     F-4: pad_color outside allowlist -> INVALID_INPUT via reframe() (AC-05)
+     F-1s: odd target_w -> ValidationError from schema (AC-03, schema contract)
+     F-2s: odd target_h -> ValidationError from schema (AC-03, schema contract)
+     F-3s: target_w < 2 -> ValidationError from schema (AC-04, schema contract)
+     F-4s: pad_color injection -> ValidationError from schema (AC-05, schema contract)
 
   G. MCP server annotations (NFR-2.1 / NFR-2.2)
      G-1: tool name is 'clipwright_reframe'
@@ -48,15 +53,15 @@ Verification points (TDD Red — tests are written before full implementation):
 
 AC coverage:
   AC-02 -> A-2, A-3
-  AC-03 -> F-1, F-2
-  AC-04 -> F-3
-  AC-05 -> F-4
+  AC-03 -> F-1, F-2, F-1s, F-2s
+  AC-04 -> F-3, F-3s
+  AC-05 -> F-4, F-4s
   AC-06 -> C-1 through C-8
   AC-14 -> A-1
   NFR-1 -> E-1, E-2
   NFR-2.1 -> G-2 through G-5
   NFR-2.2 -> G-1
-  D1 -> B-1 through B-6
+  D1 -> B-1 through B-7
 """
 
 from __future__ import annotations
@@ -86,11 +91,14 @@ def _make_media_info(
     path: str,
     *,
     has_video: bool = True,
+    has_audio: bool = True,
 ) -> MediaInfo:
     """Build a minimal MediaInfo for monkeypatching inspect_media."""
     streams: list[StreamInfo] = []
     if has_video:
         streams.append(StreamInfo(index=0, codec_type="video", codec_name="h264"))
+    if has_audio:
+        streams.append(StreamInfo(index=1, codec_type="audio", codec_name="aac"))
     return MediaInfo(
         path=path,
         container="mov,mp4,m4a,3gp,3g2,mj2",
@@ -114,6 +122,7 @@ def _run_reframe(
     anchor: str = "center",
     pad_color: str = "black",
     timeline: str | None = None,
+    has_audio: bool = True,
 ) -> dict[str, Any]:
     """Helper: create dummy media, patch inspect_media, call reframe, return result."""
     media_path = tmp_path / media_name
@@ -128,7 +137,7 @@ def _run_reframe(
     )
     with patch(
         "clipwright_reframe.reframe.inspect_media",
-        side_effect=lambda p: _make_media_info(str(p)),
+        side_effect=lambda p: _make_media_info(str(p), has_audio=has_audio),
     ):
         result = reframe(
             media=str(media_path),
@@ -275,10 +284,7 @@ class TestOutputValidation:
     def test_nonexistent_timeline_returns_invalid_input(self, tmp_path: Path) -> None:
         """Specified timeline path that does not exist must return INVALID_INPUT (B-5).
 
-        D1 specifies: timeline 存在 check before load.
-        Currently the scaffold skips this check and propagates a raw
-        FileNotFoundError from load_timeline.  This test is Red until
-        impl-reframe-pkg adds the existence guard.
+        D1 specifies: timeline existence check before load.
         """
         media = tmp_path / "video.mp4"
         media.write_bytes(b"dummy")
@@ -327,6 +333,31 @@ class TestOutputValidation:
             ErrorCode.OTIO_ERROR.value,
             ErrorCode.INVALID_INPUT.value,
         ), f"Expected OTIO_ERROR or INVALID_INPUT, got: {result['error']['code']}"
+
+    def test_output_outside_media_dir_rejected(self, tmp_path: Path) -> None:
+        """output outside the media directory must return PATH_NOT_ALLOWED (B-7).
+
+        _check_output_within_media_dir enforces CWE-22 path-traversal prevention.
+        """
+        media_dir = tmp_path / "media"
+        media_dir.mkdir()
+        other_dir = tmp_path / "other"
+        other_dir.mkdir()
+
+        media = media_dir / "video.mp4"
+        media.write_bytes(b"dummy")
+        opts = ReframeOptions(target_w=1080, target_h=1920)
+        result = reframe(
+            media=str(media),
+            output=str(other_dir / "out.otio"),
+            options=opts,
+            timeline=None,
+        )
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED.value, (
+            f"Expected PATH_NOT_ALLOWED for output outside media dir, "
+            f"got: {result['error']['code']}"
+        )
 
 
 # ===========================================================================
@@ -432,13 +463,6 @@ class TestDirectiveAnnotation:
 
 class TestIdempotency:
     """Same inputs applied twice must not duplicate the directive (idempotentHint=True)."""
-
-    def _make_valid_otio(self, tmp_path: Path, name: str = "base.otio") -> Path:
-        """Create a minimal valid OTIO timeline file for use as input timeline."""
-        tl = otio.schema.Timeline(name="test")
-        path = tmp_path / name
-        otio.adapters.write_to_file(tl, str(path))
-        return path
 
     def test_directive_not_duplicated_on_second_run(self, tmp_path: Path) -> None:
         """Two consecutive runs must not cause the directive to become a list (D-1).
@@ -576,33 +600,35 @@ class TestNonDestructive:
 
 # ===========================================================================
 # F. Input validation errors (FR-5)
+#
+# Two layers of tests:
+#   - test_*_raises_validation_error: schema-level tests (ValidationError from pydantic)
+#   - test_*_returns_invalid_input: contract-level tests (reframe() -> ok=False / INVALID_INPUT)
+#
+# The contract tests use model_construct() to bypass schema validation and produce
+# invalid ReframeOptions, then call reframe() to verify _reframe_inner's defensive
+# re-validation (step 0) returns the correct error envelope.
 # ===========================================================================
 
 
 class TestInputValidationErrors:
-    """Pydantic validation errors must be caught and returned as INVALID_INPUT (FR-5)."""
+    """Schema and contract validation for input constraints (FR-5)."""
 
-    def test_odd_target_w_returns_invalid_input(self, tmp_path: Path) -> None:
-        """Odd target_w must return INVALID_INPUT with 'even' in hint (AC-03 / F-1).
+    # ---
+    # Schema-level tests (ValidationError from Pydantic)
+    # ---
 
-        ReframeOptions raises ValidationError for odd target_w.
-        The server/orchestrator must convert this to an INVALID_INPUT error_result.
-        This test verifies the user-facing contract: the caller (MCP client)
-        receives ok=False with an INVALID_INPUT code, not an unhandled exception.
-        """
-        media = tmp_path / "video.mp4"
-        media.write_bytes(b"dummy")
+    def test_odd_target_w_raises_validation_error(self) -> None:
+        """Odd target_w must raise ValidationError with 'even' in message (AC-03 / F-1s)."""
         with pytest.raises(ValidationError) as exc_info:
-            # ReframeOptions must raise ValidationError for odd values (AC-03)
             ReframeOptions(target_w=1081, target_h=1920)
-        # ValidationError message must include 'even'
         errors_str = str(exc_info.value)
         assert "even" in errors_str.lower(), (
             f"Expected 'even' in ValidationError for odd target_w, got: {errors_str}"
         )
 
-    def test_odd_target_h_returns_invalid_input(self, tmp_path: Path) -> None:
-        """Odd target_h must raise ValidationError with 'even' in message (AC-03 / F-2)."""
+    def test_odd_target_h_raises_validation_error(self) -> None:
+        """Odd target_h must raise ValidationError with 'even' in message (AC-03 / F-2s)."""
         with pytest.raises(ValidationError) as exc_info:
             ReframeOptions(target_w=1080, target_h=1081)
         errors_str = str(exc_info.value)
@@ -610,17 +636,133 @@ class TestInputValidationErrors:
             f"Expected 'even' in ValidationError for odd target_h, got: {errors_str}"
         )
 
-    def test_target_w_below_minimum_raises(self, tmp_path: Path) -> None:
-        """target_w=1 (odd and < 2) must raise ValidationError (AC-04 / F-3)."""
+    def test_target_w_below_minimum_raises_validation_error(self) -> None:
+        """target_w=1 (odd and < 2) must raise ValidationError (AC-04 / F-3s)."""
         with pytest.raises(ValidationError):
             ReframeOptions(target_w=1, target_h=1080)
 
-    def test_pad_color_outside_allowlist_raises(self, tmp_path: Path) -> None:
-        """pad_color with injection attempt must raise ValidationError (AC-05 / F-4)."""
-        with pytest.raises(ValidationError) as exc_info:
+    def test_pad_color_injection_raises_validation_error(self) -> None:
+        """pad_color with injection attempt must raise ValidationError (AC-05 / F-4s)."""
+        with pytest.raises(ValidationError):
             ReframeOptions(target_w=1080, target_h=1920, pad_color="red;scale=1:1")
-        # Injection attempt must be caught
-        assert exc_info.value is not None
+
+    # ---
+    # Contract-level tests: reframe() returns INVALID_INPUT (via defensive re-validation)
+    #
+    # model_construct() bypasses Pydantic validators, producing invalid options.
+    # _reframe_inner step 0 calls model_validate() and converts ValidationError
+    # to ClipwrightError(INVALID_INPUT), which the public reframe() wraps as ok=False.
+    # ---
+
+    def test_odd_target_w_returns_invalid_input(self, tmp_path: Path) -> None:
+        """Odd target_w passed via model_construct must return INVALID_INPUT (AC-03 / F-1)."""
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "out.otio"
+        opts = ReframeOptions.model_construct(
+            target_w=1081,
+            target_h=1920,
+            mode="pad",
+            anchor="center",
+            pad_color="black",
+        )
+        with patch(
+            "clipwright_reframe.reframe.inspect_media",
+            side_effect=lambda p: _make_media_info(str(p)),
+        ):
+            result = reframe(
+                media=str(media),
+                output=str(output),
+                options=opts,
+                timeline=None,
+            )
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.INVALID_INPUT.value, (
+            f"Expected INVALID_INPUT for odd target_w, got: {result['error']['code']}"
+        )
+
+    def test_odd_target_h_returns_invalid_input(self, tmp_path: Path) -> None:
+        """Odd target_h passed via model_construct must return INVALID_INPUT (AC-03 / F-2)."""
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "out.otio"
+        opts = ReframeOptions.model_construct(
+            target_w=1080,
+            target_h=1081,
+            mode="pad",
+            anchor="center",
+            pad_color="black",
+        )
+        with patch(
+            "clipwright_reframe.reframe.inspect_media",
+            side_effect=lambda p: _make_media_info(str(p)),
+        ):
+            result = reframe(
+                media=str(media),
+                output=str(output),
+                options=opts,
+                timeline=None,
+            )
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.INVALID_INPUT.value, (
+            f"Expected INVALID_INPUT for odd target_h, got: {result['error']['code']}"
+        )
+
+    def test_target_w_below_minimum_returns_invalid_input(self, tmp_path: Path) -> None:
+        """target_w=1 via model_construct must return INVALID_INPUT (AC-04 / F-3)."""
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "out.otio"
+        opts = ReframeOptions.model_construct(
+            target_w=1,
+            target_h=1920,
+            mode="pad",
+            anchor="center",
+            pad_color="black",
+        )
+        with patch(
+            "clipwright_reframe.reframe.inspect_media",
+            side_effect=lambda p: _make_media_info(str(p)),
+        ):
+            result = reframe(
+                media=str(media),
+                output=str(output),
+                options=opts,
+                timeline=None,
+            )
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.INVALID_INPUT.value, (
+            f"Expected INVALID_INPUT for target_w=1, got: {result['error']['code']}"
+        )
+
+    def test_pad_color_outside_allowlist_returns_invalid_input(
+        self, tmp_path: Path
+    ) -> None:
+        """pad_color injection via model_construct must return INVALID_INPUT (AC-05 / F-4)."""
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "out.otio"
+        opts = ReframeOptions.model_construct(
+            target_w=1080,
+            target_h=1920,
+            mode="pad",
+            anchor="center",
+            pad_color="red;scale=1:1",
+        )
+        with patch(
+            "clipwright_reframe.reframe.inspect_media",
+            side_effect=lambda p: _make_media_info(str(p)),
+        ):
+            result = reframe(
+                media=str(media),
+                output=str(output),
+                options=opts,
+                timeline=None,
+            )
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.INVALID_INPUT.value, (
+            f"Expected INVALID_INPUT for unsafe pad_color, got: {result['error']['code']}"
+        )
 
 
 # ===========================================================================
@@ -634,6 +776,11 @@ class TestMcpAnnotations:
     def _get_tool_and_annotations(self) -> tuple[object, object]:
         from clipwright_reframe.server import mcp
 
+        # FastMCP does not expose a stable public API for retrieving a registered
+        # tool by name.  We access the private _tool_manager here because there is
+        # no public alternative as of FastMCP 2.x.  This may break on a FastMCP
+        # major version upgrade — if it does, update the accessor to match the
+        # then-current API.
         tool = mcp._tool_manager.get_tool("clipwright_reframe")  # noqa: SLF001
         assert tool is not None, (
             "clipwright_reframe must be registered in mcp (NFR-2.2)"
@@ -644,19 +791,16 @@ class TestMcpAnnotations:
         """MCP tool must be registered as 'clipwright_reframe' (NFR-2.2)."""
         from clipwright_reframe.server import mcp
 
+        # FastMCP does not expose a stable public API for tool lookup; accessing
+        # _tool_manager is necessary (see _get_tool_and_annotations for rationale).
         tool = mcp._tool_manager.get_tool("clipwright_reframe")  # noqa: SLF001
         assert tool is not None, "clipwright_reframe tool is not registered."
 
     def test_read_only_hint_is_false(self) -> None:
-        """readOnlyHint must be False: clipwright_reframe creates a new .otio file (NFR-2.1).
-
-        This test is Red because the current scaffold sets readOnlyHint=True.
-        impl-reframe-pkg must change it to False.
-        """
+        """readOnlyHint must be False: clipwright_reframe creates a new .otio file (NFR-2.1)."""
         _tool, annotations = self._get_tool_and_annotations()
         assert annotations.readOnlyHint is False, (  # type: ignore[union-attr]
-            "readOnlyHint must be False — clipwright_reframe writes a new .otio file, "
-            "it is not read-only. Current value: True (scaffold default)."
+            "readOnlyHint must be False — clipwright_reframe writes a new .otio file."
         )
 
     def test_destructive_hint_is_false(self) -> None:

@@ -79,7 +79,7 @@ class ReframeOptions(BaseModel):
     target_w: Annotated[
         int,
         Field(
-            ge=1,
+            ge=2,
             le=7680,
             description="Target output width in pixels (must be even, 2-7680).",
         ),
@@ -87,7 +87,7 @@ class ReframeOptions(BaseModel):
     target_h: Annotated[
         int,
         Field(
-            ge=1,
+            ge=2,
             le=7680,
             description="Target output height in pixels (must be even, 2-7680).",
         ),
@@ -169,8 +169,8 @@ class ReframeDirective(BaseModel):
     tool: Annotated[str, Field(max_length=64)] = "clipwright-reframe"
     version: Annotated[str, Field(max_length=64)]
     kind: Literal["reframe"]
-    target_w: Annotated[int, Field(ge=1, le=7680)]
-    target_h: Annotated[int, Field(ge=1, le=7680)]
+    target_w: Annotated[int, Field(ge=2, le=7680)]
+    target_h: Annotated[int, Field(ge=2, le=7680)]
     mode: Literal["crop", "pad", "blur_pad"] = "pad"
     anchor: Literal[
         "center",

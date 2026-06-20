@@ -1,13 +1,12 @@
-"""test_reframe_filter.py — Red-phase tests for render reframe filter helpers.
+"""test_reframe_filter.py — Tests for render reframe filter helpers.
 
-Target functions (NOT YET IMPLEMENTED — all tests must FAIL with ImportError or
-AttributeError):
+Target functions:
   - _append_reframe_filter(filter_parts, video_map_label, reframe) -> str
   - _RenderReframe     (Pydantic BaseModel, extra="forbid")
   - _validate_reframe  (directive dict -> _RenderReframe | None)
 
 Architecture reference: architecture-report-20260621-004050.md §2/§3/§6/§7.4
-Plan reference: plan-report-20260621-004050.md W2b-Red (test-render-filter)
+Plan reference: plan-report-20260621-004050.md W2b (test-render-filter)
 """
 
 from __future__ import annotations
@@ -17,9 +16,6 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-# Direct import — no skipif/try-except wrappers (Red-phase rule).
-# These symbols do not exist yet; ImportError/AttributeError is the expected
-# failure mode for this Red phase.
 from clipwright_render.plan import (  # type: ignore[attr-defined]
     _RenderReframe,
     _append_reframe_filter,
@@ -769,3 +765,38 @@ class TestAppendReframeFilterShared:
         """Last segment ends with '[outvrf]' for all modes."""
         parts, _ = _run_filter(_make_reframe(mode=mode))
         assert parts[-1].endswith("[outvrf]")
+
+
+# ===========================================================================
+# SR M-1 — writer/reader pad_color allowlist parity
+# ===========================================================================
+
+
+from clipwright_render.plan import _RF_NAMED_COLORS, _RF_HEX_COLOR_RE  # noqa: E402
+from clipwright_reframe.schemas import _NAMED_COLORS, _HEX_COLOR_RE  # noqa: E402
+
+
+class TestWriterReaderPadColorParity:
+    """Verify that clipwright-render's pad_color constants match clipwright-reframe's.
+
+    The reader (plan.py) and writer (schemas.py) maintain independent copies of
+    the named-color allowlist and hex-color regex.  This test ensures they stay
+    in sync so that a color accepted by the writer is never rejected by the reader
+    (and vice versa).  (SR M-1 CI guard.)
+    """
+
+    def test_named_color_allowlists_identical(self) -> None:
+        """_RF_NAMED_COLORS (reader) == _NAMED_COLORS (writer)."""
+        assert _RF_NAMED_COLORS == _NAMED_COLORS, (
+            f"Named color allowlist mismatch.\n"
+            f"  render (reader): {sorted(_RF_NAMED_COLORS)}\n"
+            f"  reframe (writer): {sorted(_NAMED_COLORS)}"
+        )
+
+    def test_hex_color_patterns_identical(self) -> None:
+        """_RF_HEX_COLOR_RE.pattern (reader) == _HEX_COLOR_RE.pattern (writer)."""
+        assert _RF_HEX_COLOR_RE.pattern == _HEX_COLOR_RE.pattern, (
+            f"Hex color regex mismatch.\n"
+            f"  render (reader): {_RF_HEX_COLOR_RE.pattern!r}\n"
+            f"  reframe (writer): {_HEX_COLOR_RE.pattern!r}"
+        )

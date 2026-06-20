@@ -1691,7 +1691,7 @@ class _RenderReframe(BaseModel):
     target_h: Annotated[int, Field(ge=2, le=7680)]
     mode: Literal["crop", "pad", "blur_pad"] = "pad"
     anchor: _AnchorLiteral = "center"
-    pad_color: str = "black"
+    pad_color: Annotated[str, Field(max_length=64)] = "black"
 
     @field_validator("target_w")
     @classmethod
@@ -1746,7 +1746,7 @@ def _validate_reframe(raw: dict[str, Any] | None) -> _RenderReframe | None:
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
                 message=f"Reframe directive {dim} must be even.",
-                hint=f"Set {dim} to an even integer (e.g. {v + 1} instead of {v}).",
+                hint=f"Set {dim} to an even integer (2, 4, 6, ...).",
             )
 
     # Reader-side pad_color allowlist (AC-05 defence-in-depth).
@@ -1774,9 +1774,8 @@ def _validate_reframe(raw: dict[str, Any] | None) -> _RenderReframe | None:
                 " Check field names, types, and values."
             ),
             hint=(
-                "target_w/h must be even integers in 2..7680;"
-                " mode must be 'crop', 'pad', or 'blur_pad';"
-                " anchor must be one of 9 direction values."
+                "Check reframe directive fields: even target_w/h,"
+                " valid mode and anchor values."
             ),
         ) from None
 
@@ -1800,6 +1799,15 @@ def _append_reframe_filter(
     - blur_pad (§3.3 / FR-3.3): 4 segments — split, background (scale+crop+blur),
       foreground (scale), overlay+setsar.  Anchor is ignored for the background
       crop (center-fixed; AC-15).
+
+    Caller contract:
+        - ``video_map_label`` must be the terminal label of the video chain
+          *after* concat/audio-pipe stages and *before* the eq filter.
+          Typical value: ``"[outv]"``.
+        - This function consumes ``video_map_label`` and emits ``[outvrf]``.
+        - Insertion order (D4): reframe → eq → subtitle → drawtext.
+          Callers must pass the output of this function as the input label
+          to the subsequent eq/subtitle/drawtext stages.
 
     Args:
         filter_parts: list of filter_complex segments (mutated in place).

@@ -1,20 +1,9 @@
-"""test_reframe_integration.py — W3-Red tests for reframe integration.
+"""test_reframe_integration.py — Integration tests for reframe wiring.
 
 Target: build_plan / _build_filter_complex reframe wiring + render.py passthrough.
 
-These tests are written BEFORE the wiring exists (W3-Red phase).  All tests must
-FAIL because:
-  - build_plan() does not yet accept a ``reframe`` keyword argument.
-  - _build_filter_complex() does not yet accept a ``reframe`` keyword argument.
-  - render.py does not yet read clipwright_meta["reframe"] or forward it to
-    build_plan().
-
-Expected failure mode: TypeError ("unexpected keyword argument 'reframe'") for
-build_plan / _build_filter_complex tests, and AssertionError for render.py tests
-(reframe stage absent from filter_complex).
-
 Architecture reference: architecture-report-20260621-004050.md §4/§5/§7/§8/§9
-Plan reference: plan-report-20260621-004050.md W3-Red (test-render-plan)
+Plan reference: plan-report-20260621-004050.md W3 (test-render-plan)
 Requirements: FR-3/FR-4/NFR-4, AC-07~13/16
 """
 
@@ -178,14 +167,10 @@ class TestBuildPlanReframeStageEmitted:
     """build_plan(..., reframe=D3_dict) emits the reframe filter stage.
 
     Verifies that the reframe stage appears in filter_complex (AC-07/08/09).
-    These tests fail because build_plan does not yet accept 'reframe' kwarg (W3-Red).
     """
 
     def test_pad_mode_produces_reframe_filter_in_filter_complex(self) -> None:
-        """reframe=D3(pad) -> filter_complex contains pad-based reframe segment.
-
-        Expected Red: TypeError — 'reframe' is not a valid keyword for build_plan.
-        """
+        """reframe=D3(pad) -> filter_complex contains pad-based reframe segment."""
         from clipwright_render.plan import build_plan
 
         ranges = _make_ranges()
@@ -198,10 +183,7 @@ class TestBuildPlanReframeStageEmitted:
         assert "[outvrf]" in plan.filter_complex
 
     def test_crop_mode_produces_reframe_filter_in_filter_complex(self) -> None:
-        """reframe=D3(crop) -> filter_complex contains crop-based reframe segment.
-
-        Expected Red: TypeError — 'reframe' is not a valid keyword for build_plan.
-        """
+        """reframe=D3(crop) -> filter_complex contains crop-based reframe segment."""
         from clipwright_render.plan import build_plan
 
         ranges = _make_ranges()
@@ -214,10 +196,7 @@ class TestBuildPlanReframeStageEmitted:
         assert "crop" in plan.filter_complex
 
     def test_blur_pad_mode_produces_reframe_filter_in_filter_complex(self) -> None:
-        """reframe=D3(blur_pad) -> filter_complex contains blur_pad reframe segments.
-
-        Expected Red: TypeError — 'reframe' is not a valid keyword for build_plan.
-        """
+        """reframe=D3(blur_pad) -> filter_complex contains blur_pad reframe segments."""
         from clipwright_render.plan import build_plan
 
         ranges = _make_ranges()
@@ -241,7 +220,6 @@ class TestBuildPlanReframeInsertionOrder:
 
     AC requirement: reframe is inserted concat-after, eq-before (D4).
     Tests use index comparison on the filter_complex string.
-    Expected Red: TypeError — 'reframe' is not a valid keyword for build_plan.
     """
 
     def test_reframe_appears_before_eq_in_filter_complex(self) -> None:
@@ -303,10 +281,7 @@ class TestBuildPlanReframeInsertionOrder:
 
 
 class TestBuildPlanUseScaleSuppression:
-    """width/height + reframe -> scale stage suppressed; warning added (AC-11).
-
-    Expected Red: TypeError — 'reframe' is not a valid keyword for build_plan.
-    """
+    """width/height + reframe -> scale stage suppressed; warning added (AC-11)."""
 
     def test_scale_stage_not_emitted_when_reframe_and_size_specified(self) -> None:
         """width/height + reframe present -> scale= not in filter_complex (D5)."""
@@ -388,8 +363,6 @@ class TestBuildPlanSubtitleFrameH:
     _counter_scale(font_size, target_h) would produce vs. _counter_scale(font_size,
     probe_height). When frame_h == target_h, the injected value matches target_h-based
     counter-scaling (not probe_height-based).
-
-    Expected Red: TypeError — 'reframe' is not a valid keyword for build_plan.
     """
 
     def test_subtitle_force_style_fontsize_uses_target_h(self, tmp_path: Path) -> None:
@@ -439,10 +412,7 @@ class TestBuildPlanSubtitleFrameH:
 
 
 class TestBuildPlanCropWarning:
-    """mode='crop' emits an information-loss warning (AC-13).
-
-    Expected Red: TypeError — 'reframe' is not a valid keyword for build_plan.
-    """
+    """mode='crop' emits an information-loss warning (AC-13)."""
 
     def test_crop_mode_emits_information_loss_warning(self) -> None:
         """mode='crop' -> 1 warning about cropped content (AC-13)."""
@@ -505,8 +475,6 @@ class TestBuildPlanMultiSourceUnsupported:
     Validation order: _validate_reframe (INVALID_INPUT on bad directive) runs before
     multi-source check (UNSUPPORTED_OPERATION), so invalid directive wins even when
     multiple sources are present (§5.2).
-
-    Expected Red: TypeError — 'reframe' is not a valid keyword for build_plan.
     """
 
     def _make_two_source_ranges(self) -> list[KeptRange]:
@@ -550,7 +518,6 @@ class TestBuildPlanMultiSourceUnsupported:
 
         Validation order: _validate_reframe runs first regardless of source count (§5.2).
         An odd target_w must raise INVALID_INPUT even when multi-source.
-        Expected Red: TypeError — 'reframe' is not a valid keyword for build_plan.
         """
         from clipwright_render.plan import build_plan
 
@@ -579,10 +546,7 @@ class TestBuildPlanMultiSourceUnsupported:
         )
 
     def test_single_source_with_reframe_does_not_raise(self) -> None:
-        """Single source + valid reframe -> no error (AC-12 negative case).
-
-        Expected Red: TypeError — 'reframe' is not a valid keyword for build_plan.
-        """
+        """Single source + valid reframe -> no error (AC-12 negative case)."""
         from clipwright_render.plan import build_plan
 
         ranges = _make_ranges()
@@ -605,11 +569,6 @@ class TestBuildPlanBackwardCompatibility:
     Compares the output of build_plan with no reframe against build_plan with
     reframe=None, then verifies that [outvrf] does NOT appear and [outv] remains
     the terminal video label.
-
-    Note: The absence of 'reframe' keyword argument in the current build_plan is
-    the Red-phase failure condition; once wired (W3-Green), these tests confirm
-    backward compatibility by asserting byte-equivalent output.
-    Expected Red: TypeError — 'reframe' is not a valid keyword for build_plan.
     """
 
     def test_reframe_none_yields_same_filter_complex_as_no_reframe_arg(self) -> None:
@@ -689,18 +648,12 @@ class TestRenderPyReframePassthrough:
     When an OTIO file has metadata["clipwright"]["reframe"] = D3 directive,
     the resulting build_plan call must include reframe=... so that the reframe
     stage appears in the returned filter_complex.
-
-    Expected Red: AssertionError — render.py does not yet read raw_reframe or
-    forward it to build_plan, so [outvrf] is absent from filter_complex.
     """
 
     def test_render_dry_run_with_reframe_otio_contains_outvrf(
         self, tmp_path: Path
     ) -> None:
-        """dry_run on a reframe-annotated OTIO -> filter_complex contains [outvrf].
-
-        Expected Red: [outvrf] absent (render.py wiring not yet done).
-        """
+        """dry_run on a reframe-annotated OTIO -> filter_complex contains [outvrf]."""
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "src.mp4")
@@ -729,10 +682,7 @@ class TestRenderPyReframePassthrough:
     def test_render_dry_run_with_reframe_otio_contains_pad_filter(
         self, tmp_path: Path
     ) -> None:
-        """dry_run on reframe(pad) OTIO -> filter_complex contains 'pad=' stage.
-
-        Expected Red: pad not present (render.py wiring not yet done).
-        """
+        """dry_run on reframe(pad) OTIO -> filter_complex contains 'pad=' stage."""
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "src.mp4")
@@ -754,9 +704,12 @@ class TestRenderPyReframePassthrough:
 
         assert result["ok"] is True
         fc = result["data"]["filter_complex"]
-        # pad= from reframe (not from scale/contain) must be present
-        assert "pad=" in fc or "pad=" in fc, (
+        # pad= from reframe must be present and the reframe stage must be wired
+        assert "pad=" in fc, (
             f"Expected pad= in filter_complex for reframe(pad) OTIO; got fc={fc!r}"
+        )
+        assert "[outvrf]" in fc, (
+            f"Expected [outvrf] (reframe stage) in filter_complex; got fc={fc!r}"
         )
 
     def test_render_dry_run_without_reframe_otio_no_outvrf(
@@ -765,7 +718,6 @@ class TestRenderPyReframePassthrough:
         """dry_run on plain OTIO (no reframe) -> filter_complex has no [outvrf].
 
         This confirms backward compatibility at the render.py level (AC-10).
-        Expected: PASS even in Red phase (plain OTIO is unaffected).
         """
         from clipwright_render.render import render_timeline
 
@@ -795,10 +747,7 @@ class TestRenderPyReframePassthrough:
     def test_render_dry_run_crop_otio_contains_crop_warning(
         self, tmp_path: Path
     ) -> None:
-        """dry_run on reframe(crop) OTIO -> warnings contain crop-discard info (AC-13).
-
-        Expected Red: no crop warning (render.py wiring not yet done).
-        """
+        """dry_run on reframe(crop) OTIO -> warnings contain crop-discard info (AC-13)."""
         from clipwright_render.render import render_timeline
 
         source = str(tmp_path / "src.mp4")

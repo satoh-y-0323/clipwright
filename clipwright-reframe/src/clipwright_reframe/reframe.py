@@ -1,7 +1,8 @@
 """reframe.py — clipwright-reframe orchestration layer (architecture-report §1.1).
 
 Flow (3-layer: public API → _inner → error boundary):
-  1. Output validation (extension, parent dir, output != media, output != timeline)
+  1. Output validation (extension, parent dir, output != media, output != timeline,
+     output within media dir boundary)
   2. inspect_media: require video stream
   3. Timeline resolution (None -> create new / path -> load + validate)
   4. Annotate ReframeDirective to timeline metadata["clipwright"]["reframe"]
@@ -12,12 +13,13 @@ Design decisions:
 - Non-destructive: input media and OTIO are never modified.
 - Directive dict shape is the only contract between this package and clipwright-render.
   render's reader-side _RenderReframe validates independently (defence-in-depth).
-- W2a will implement the full body; this scaffold provides the 3-layer skeleton
-  with error boundary so `import clipwright_reframe` and server startup both work.
+- 3-layer skeleton (public API / _inner / error boundary) keeps the MCP server
+  startup clean; all ClipwrightError raised inside _inner are caught at the boundary.
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import opentimelineio as otio
@@ -32,6 +34,7 @@ from clipwright.otio_utils import (
     set_clipwright_metadata,
 )
 from clipwright.schemas import ToolResult
+from pydantic import ValidationError
 
 import clipwright_reframe
 from clipwright_reframe.schemas import ReframeDirective, ReframeOptions
@@ -66,11 +69,21 @@ def _reframe_inner(
     options: ReframeOptions,
     timeline: str | None,
 ) -> ToolResult:
-    """Internal implementation of reframe. Raises ClipwrightError directly.
+    """Internal implementation of reframe. Raises ClipwrightError directly."""
+    # --- 0. Defensive re-validation of options ---
+    # Catches model_construct-bypassed invalid values before any path I/O.
+    try:
+        ReframeOptions.model_validate(options.model_dump())
+    except ValidationError as exc:
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message="Invalid reframe options.",
+            hint=(
+                "target_w/h must be even integers in 2..7680; mode must be"
+                " crop/pad/blur_pad; anchor must be a valid 9-direction value."
+            ),
+        ) from exc
 
-    W2a will replace the TODO body with full logic.
-    Scaffold: validates paths and returns a minimal ok_result for import smoke tests.
-    """
     media_path = Path(media)
     output_path = Path(output)
 
@@ -104,6 +117,8 @@ def _reframe_inner(
             hint="Change the output file path to differ from the input timeline.",
         )
 
+    _check_output_within_media_dir(media_path, output_path)
+
     # --- 2. inspect_media: video required ---
 
     if not media_path.exists():
@@ -115,6 +130,7 @@ def _reframe_inner(
 
     media_info = inspect_media(media)
     has_video = any(s.codec_type == "video" for s in media_info.streams)
+    has_audio = any(s.codec_type == "audio" for s in media_info.streams)
 
     if not has_video:
         raise ClipwrightError(
@@ -131,7 +147,7 @@ def _reframe_inner(
 
     if timeline is None:
         tl = new_timeline(media_path.name)
-        _add_full_clip(tl, media_path, duration_sec, media_info.duration)
+        _add_full_clip(tl, media_path, duration_sec, media_info.duration, has_audio)
     else:
         # D1: timeline existence check before load (B-5).
         # FileNotFoundError from load_timeline must not escape as a raw exception.
@@ -160,7 +176,6 @@ def _reframe_inner(
 
     # --- 4. Annotate ReframeDirective ---
 
-    # TODO (W2a): add full validation and idempotency checks here.
     directive = ReframeDirective(
         tool="clipwright-reframe",
         version=clipwright_reframe.__version__,
@@ -214,15 +229,69 @@ def _same_path(a: Path, b: Path) -> bool:
         return str(a) == str(b)
 
 
+def _check_output_within_media_dir(media_path: Path, output_path: Path) -> None:
+    """Verify that output_path resolves within the same directory as media_path.
+
+    Prevents path-traversal when AI-provided output paths contain '..' components
+    (CWE-22 prevention, mirrors frames/_check_within_boundary contract).
+
+    Args:
+        media_path: Input media file path (directory is the allowed base).
+        output_path: Output .otio file path to validate.
+
+    Raises:
+        ClipwrightError: PATH_NOT_ALLOWED when output is outside the media directory.
+    """
+    try:
+        media_dir = media_path.resolve().parent
+        output_dir = output_path.resolve().parent
+        media_dir_str = str(media_dir)
+        output_dir_str = str(output_dir)
+        allowed = (
+            output_dir_str == media_dir_str
+            or output_dir_str.startswith(media_dir_str + "/")
+            or output_dir_str.startswith(media_dir_str + os.sep)
+        )
+    except OSError:
+        media_dir = media_path.absolute().parent
+        output_dir = output_path.absolute().parent
+        media_dir_str = str(media_dir)
+        output_dir_str = str(output_dir)
+        allowed = (
+            output_dir_str == media_dir_str
+            or output_dir_str.startswith(media_dir_str + "/")
+            or output_dir_str.startswith(media_dir_str + os.sep)
+        )
+
+    if not allowed:
+        raise ClipwrightError(
+            code=ErrorCode.PATH_NOT_ALLOWED,
+            message="Output path is outside the media directory.",
+            hint=(
+                "Place the output .otio file in the same directory as the input media."
+            ),
+        )
+
+
 def _add_full_clip(
     tl: otio.schema.Timeline,
     media_path: Path,
     duration_sec: float,
     duration_rt: object | None,
+    has_audio: bool,
 ) -> None:
-    """Add one full-length keep clip to V1/A1 tracks of the timeline (new creation).
+    """Add one full-length clip to V1 (always) and A1 (only when has_audio) tracks.
 
-    target_url is set to the absolute path of media_path.resolve().
+    Prevents spurious audio tracks when the source media has no audio stream,
+    which would cause clipwright-render to incorrectly treat the timeline as
+    having audio (has_audio=True on the render side).
+
+    Args:
+        tl: Target timeline (new creation; must have V1/A1 tracks per §13.5 DC-AS-001).
+        media_path: Source media file path (used for target_url and clip name).
+        duration_sec: Duration in seconds derived from inspect_media.
+        duration_rt: RationalTimeModel from clipwright.schemas (provides .rate).
+        has_audio: True when the source media has at least one audio stream.
     """
     try:
         target_url = str(media_path.resolve())
@@ -239,9 +308,12 @@ def _add_full_clip(
     ref = otio.schema.ExternalReference(target_url=target_url)
 
     for track in tl.tracks:
-        clip = otio.schema.Clip(
-            name=media_path.name,
-            media_reference=ref,
-            source_range=source_range,
-        )
-        track.append(clip)
+        if track.kind == otio.schema.TrackKind.Video or (
+            track.kind == otio.schema.TrackKind.Audio and has_audio
+        ):
+            clip = otio.schema.Clip(
+                name=media_path.name,
+                media_reference=ref,
+                source_range=source_range,
+            )
+            track.append(clip)

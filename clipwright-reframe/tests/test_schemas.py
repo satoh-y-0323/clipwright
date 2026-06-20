@@ -1,4 +1,4 @@
-"""test_schemas.py — Red-phase tests for ReframeOptions and ReframeDirective.
+"""test_schemas.py — Schema tests for ReframeOptions and ReframeDirective.
 
 Tests cover:
 - AC-03: even-pixel enforcement (target_w / target_h)
@@ -6,9 +6,6 @@ Tests cover:
 - AC-05: pad_color allowlist (filtergraph injection prevention)
 - Literal validation for mode / anchor
 - D3: directive dict shape freeze (both-sides contract)
-
-These tests are intentionally written BEFORE the constraints are implemented
-(TDD Red phase).  Each test exercises one acceptance criterion.
 """
 
 from __future__ import annotations
@@ -38,7 +35,7 @@ def _make_options(**overrides: object) -> ReframeOptions:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("odd_value", [1, 3, 101, 1081, 1279, 7679])
+@pytest.mark.parametrize("odd_value", [3, 101, 1081, 1279, 7679])
 def test_target_w_odd_raises(odd_value: int) -> None:
     """Odd target_w must raise ValidationError with 'even' in the message (AC-03)."""
     with pytest.raises(ValidationError) as exc_info:
@@ -50,7 +47,7 @@ def test_target_w_odd_raises(odd_value: int) -> None:
     )
 
 
-@pytest.mark.parametrize("odd_value", [1, 3, 101, 1081, 1079, 7679])
+@pytest.mark.parametrize("odd_value", [3, 101, 1081, 1079, 7679])
 def test_target_h_odd_raises(odd_value: int) -> None:
     """Odd target_h must raise ValidationError with 'even' in the message (AC-03)."""
     with pytest.raises(ValidationError) as exc_info:
@@ -95,16 +92,16 @@ def test_target_h_below_minimum_raises(bad_h: int) -> None:
         _make_options(target_h=bad_h)
 
 
-@pytest.mark.parametrize("bad_w", [7682, 8000, 10000])
+@pytest.mark.parametrize("bad_w", [7681, 7682, 8000, 10000])
 def test_target_w_above_maximum_raises(bad_w: int) -> None:
-    """target_w > 7680 must raise ValidationError (AC-04)."""
+    """target_w > 7680 must raise ValidationError (AC-04), including off-by-one 7681."""
     with pytest.raises(ValidationError):
         _make_options(target_w=bad_w)
 
 
-@pytest.mark.parametrize("bad_h", [7682, 8000, 10000])
+@pytest.mark.parametrize("bad_h", [7681, 7682, 8000, 10000])
 def test_target_h_above_maximum_raises(bad_h: int) -> None:
-    """target_h > 7680 must raise ValidationError (AC-04)."""
+    """target_h > 7680 must raise ValidationError (AC-04), including off-by-one 7681."""
     with pytest.raises(ValidationError):
         _make_options(target_h=bad_h)
 
@@ -119,6 +116,18 @@ def test_target_h_boundary_min_accepts() -> None:
     """target_h == 2 (lower boundary) must be accepted (AC-04)."""
     opts = _make_options(target_h=2)
     assert opts.target_h == 2
+
+
+def test_target_w_below_boundary_min_raises() -> None:
+    """target_w == 1 (one below lower boundary) must raise ValidationError (AC-04)."""
+    with pytest.raises(ValidationError):
+        _make_options(target_w=1)
+
+
+def test_target_h_below_boundary_min_raises() -> None:
+    """target_h == 1 (one below lower boundary) must raise ValidationError (AC-04)."""
+    with pytest.raises(ValidationError):
+        _make_options(target_h=1)
 
 
 def test_target_w_boundary_max_accepts() -> None:
