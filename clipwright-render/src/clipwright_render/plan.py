@@ -2210,6 +2210,7 @@ def _build_filter_complex(
     color_eq: _RenderEqParams | None = None,
     stabilize_basename: str | None = None,
     stabilize_smoothing: int = _DEFAULT_STABILIZE_SMOOTHING,
+    reframe: _RenderReframe | None = None,
 ) -> tuple[str, str, str, bool, bool]:
     """Build the filter_complex string, video_map_label, and audio_map_label
     (M-2).
@@ -2313,9 +2314,18 @@ def _build_filter_complex(
     # [outvscaled], and -map [outvscaled] is used instead.
     # Even-rounding applied to W/H (ADR-F4; yuv420p even constraint).
     # fit-based branching: contain / cover / stretch (ADR-F2).
-    use_scale = options.width is not None and options.height is not None
+    # D5: reframe present suppresses the regular scale stage; reframe uses its
+    # own internal scale (architecture §8).
+    use_scale = (
+        options.width is not None and options.height is not None
+    ) and reframe is None
     frame_h: int | None = None
-    if use_scale:
+    if reframe is not None:
+        # Reframe path: insert reframe segments after concat (§4.2).
+        # frame_h = target_h for subtitle counter-scaling (AC-16).
+        frame_h = reframe.target_h
+        video_map_label = _append_reframe_filter(filter_parts, "[outv]", reframe)
+    elif use_scale:
         raw_w: int = options.width  # type: ignore[assignment]
         raw_h: int = options.height  # type: ignore[assignment]
         W = (raw_w // 2) * 2
@@ -2343,7 +2353,7 @@ def _build_filter_complex(
         if probe_info is not None:
             frame_h = probe_info.height  # may be None → counter-scale skipped
 
-    # Inject eq color-correction stage after scale, before subtitle
+    # Inject eq color-correction stage after scale/reframe, before subtitle
     # (ADR-CO-4: geometry normalise → colour correct → overlay burn-in).
     # When color_eq is None, this is a no-op (backward compatible).
     video_map_label = _append_eq_filter(filter_parts, video_map_label, color_eq)
@@ -2832,6 +2842,7 @@ def build_plan(
     bgm: BgmClip | None = None,
     text_overlays: list[TextOverlay] | None = None,
     resolved_encoder: ResolvedEncoder | None = None,
+    reframe: dict[str, Any] | None = None,
 ) -> RenderPlan:
     """Return filter_complex string and ffmpeg argument list as a RenderPlan
     (ADR-1/ADR-7).
@@ -2944,6 +2955,12 @@ def build_plan(
     if stabilize is not None:
         stabilize_directive = _validate_stabilize(stabilize)
 
+    # Validate the reframe directive (raises INVALID_INPUT on failure).
+    # Must run before multi-source check so that invalid directive wins (§5.2).
+    reframe_directive: _RenderReframe | None = None
+    if reframe is not None:
+        reframe_directive = _validate_reframe(reframe)
+
     # Unique source list (single source of truth for ADR-C9-r2)
     input_sources = unique_sources_in_order(ranges)
     n = len(ranges)
@@ -2959,6 +2976,17 @@ def build_plan(
             hint=(
                 "Use a single-source timeline for stabilization, "
                 "or remove the stabilize directive."
+            ),
+        )
+
+    # multi-source + reframe → UNSUPPORTED_OPERATION (§5.2/D6/AC-12)
+    if use_multi_source and reframe_directive is not None:
+        raise ClipwrightError(
+            code=ErrorCode.UNSUPPORTED_OPERATION,
+            message="Reframing is not supported for multi-source timelines.",
+            hint=(
+                "v1 supports single-source only."
+                " Trim/render to a single source first, then apply reframe."
             ),
         )
 
@@ -3069,6 +3097,7 @@ def build_plan(
                     if stabilize_directive is not None
                     else _DEFAULT_STABILIZE_SMOOTHING
                 ),
+                reframe=reframe_directive,
             )
         )
 
@@ -3138,6 +3167,26 @@ def build_plan(
 
     # Merge re-timing warnings from text_overlay adapter (ADR-4 / §5).
     warnings.extend(_retime_overlay_warnings)
+
+    # reframe + width/height → scale suppressed; warn that resolution options are
+    # ignored (AC-11 / §8). Output resolution is fixed by reframe.target_w/h.
+    if (
+        reframe_directive is not None
+        and options.width is not None
+        and options.height is not None
+    ):
+        w_out = reframe_directive.target_w
+        h_out = reframe_directive.target_h
+        warnings.append(
+            f"width/height ignored; output fixed to {w_out}x{h_out} by the reframe"
+            " directive."
+        )
+
+    # reframe mode=crop → content outside target aspect ratio is lost (AC-13 / §8).
+    if reframe_directive is not None and reframe_directive.mode == "crop":
+        warnings.append(
+            "content outside the target aspect ratio is cropped and discarded."
+        )
 
     # has_main_audio=False + denoise directive → denoise skipped (no main
     # audio; DC-AM-004). Note: regardless of BGM presence, denoise does not

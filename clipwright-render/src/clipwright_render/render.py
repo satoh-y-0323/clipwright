@@ -816,6 +816,7 @@ def _render_inner(
     raw_loudness = clipwright_meta.get("loudness")
     raw_color = clipwright_meta.get("color")
     raw_stabilize = clipwright_meta.get("stabilize")  # §6-A
+    raw_reframe = clipwright_meta.get("reframe")  # §7.2
 
     # --- 4d. Boundary and existence checks for trf_path (CR-E-001 / SR-V-002) ---
     # When stabilize directive is present and trf_path is non-None, apply the same
@@ -885,6 +886,7 @@ def _render_inner(
         source_probes=source_probes,
         bgm=bgm_clip,
         resolved_encoder=resolved,
+        reframe=raw_reframe,  # §7.2
     )
 
     # --- 6a. dry_run ---

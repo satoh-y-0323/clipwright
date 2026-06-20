@@ -52,7 +52,7 @@ ignore = []
 # C408: dict() calls in test helpers are acceptable for readability.
 # SIM108: nested with statements in tests are intentional for clarity.
 # SIM117: nested with statements in tests are intentional for clarity.
-"tests/*.py" = ["E501", "F401", "I001", "C408", "SIM108", "SIM117"]
+"tests/*.py" = ["E501", "F401", "I001", "C408", "SIM108", "SIM117", "B007"]
 
 [tool.ruff.format]
 # Default ruff formatter is OK
