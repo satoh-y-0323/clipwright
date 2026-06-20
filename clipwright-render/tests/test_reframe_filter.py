@@ -321,6 +321,49 @@ class TestValidateReframe:
             _validate_reframe(bad)
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
+    # --- NL-1 [SR-R-001] CWE-209: hint must not echo user-supplied integer value ---
+
+    def test_odd_target_w_hint_does_not_echo_input_value(self) -> None:
+        """Odd target_w hint must not contain the raw input value (CWE-209 lock).
+
+        R1 changed the hint to a fixed string.  This test locks that invariant so
+        that a future refactor cannot accidentally re-introduce value echoing.
+        """
+        odd_w = 1081
+        bad = {**_D3_DICT, "target_w": odd_w}
+        with pytest.raises(ClipwrightError) as exc_info:
+            _validate_reframe(bad)
+        err = exc_info.value
+        assert err.code == ErrorCode.INVALID_INPUT
+        # The raw value and its neighbour must not appear in hint or message.
+        assert str(odd_w) not in err.hint, (
+            f"hint must not echo input value {odd_w!r}: {err.hint!r}"
+        )
+        assert str(odd_w + 1) not in err.hint, (
+            f"hint must not suggest v+1 ({odd_w + 1!r}): {err.hint!r}"
+        )
+        assert str(odd_w) not in err.message, (
+            f"message must not echo input value {odd_w!r}: {err.message!r}"
+        )
+
+    def test_odd_target_h_hint_does_not_echo_input_value(self) -> None:
+        """Odd target_h hint must not contain the raw input value (CWE-209 lock)."""
+        odd_h = 1921
+        bad = {**_D3_DICT, "target_h": odd_h}
+        with pytest.raises(ClipwrightError) as exc_info:
+            _validate_reframe(bad)
+        err = exc_info.value
+        assert err.code == ErrorCode.INVALID_INPUT
+        assert str(odd_h) not in err.hint, (
+            f"hint must not echo input value {odd_h!r}: {err.hint!r}"
+        )
+        assert str(odd_h + 1) not in err.hint, (
+            f"hint must not suggest v+1 ({odd_h + 1!r}): {err.hint!r}"
+        )
+        assert str(odd_h) not in err.message, (
+            f"message must not echo input value {odd_h!r}: {err.message!r}"
+        )
+
 
 # ===========================================================================
 # §3.4 / §2.2 — crop mode: single segment filter string

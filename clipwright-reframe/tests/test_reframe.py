@@ -455,6 +455,78 @@ class TestDirectiveAnnotation:
         meta = self._load_reframe_meta(tmp_path / "out.otio")
         assert meta["pad_color"] == "white"
 
+    def test_audio_less_media_no_audio_clip_in_timeline(self, tmp_path: Path) -> None:
+        """Audio-less media must not populate the Audio track in the new timeline.
+
+        Regression guard for L-1 fix: _add_full_clip skips Audio tracks when
+        has_audio=False, preventing render from treating the timeline as audio-bearing.
+
+        Verification:
+          - Video track has exactly 1 full-length clip (V1 always populated).
+          - Audio track has 0 clips (A1 must remain empty for audio-less sources).
+        """
+        result = _run_reframe(tmp_path, has_audio=False)
+        assert result["ok"] is True, f"Expected ok=True, got: {result}"
+
+        tl = otio.adapters.read_from_file(str(tmp_path / "out.otio"))
+
+        video_clips = [
+            clip
+            for track in tl.video_tracks()
+            for clip in track
+            if isinstance(clip, otio.schema.Clip)
+        ]
+        audio_clips = [
+            clip
+            for track in tl.audio_tracks()
+            for clip in track
+            if isinstance(clip, otio.schema.Clip)
+        ]
+
+        assert len(video_clips) == 1, (
+            f"Video track must have exactly 1 clip for audio-less media, "
+            f"got {len(video_clips)}."
+        )
+        assert len(audio_clips) == 0, (
+            f"Audio track must have 0 clips for audio-less media (L-1 regression), "
+            f"got {len(audio_clips)}."
+        )
+
+    def test_audio_bearing_media_has_audio_clip_in_timeline(
+        self, tmp_path: Path
+    ) -> None:
+        """Audio-bearing media must populate both V1 and A1 tracks in the new timeline.
+
+        Contrast guard: when has_audio=True (default), the Audio track must also
+        receive a full-length clip alongside the Video track.
+        """
+        result = _run_reframe(tmp_path, has_audio=True, output_name="out_audio.otio")
+        assert result["ok"] is True, f"Expected ok=True, got: {result}"
+
+        tl = otio.adapters.read_from_file(str(tmp_path / "out_audio.otio"))
+
+        video_clips = [
+            clip
+            for track in tl.video_tracks()
+            for clip in track
+            if isinstance(clip, otio.schema.Clip)
+        ]
+        audio_clips = [
+            clip
+            for track in tl.audio_tracks()
+            for clip in track
+            if isinstance(clip, otio.schema.Clip)
+        ]
+
+        assert len(video_clips) == 1, (
+            f"Video track must have exactly 1 clip for audio-bearing media, "
+            f"got {len(video_clips)}."
+        )
+        assert len(audio_clips) == 1, (
+            f"Audio track must have exactly 1 clip for audio-bearing media, "
+            f"got {len(audio_clips)}."
+        )
+
 
 # ===========================================================================
 # D. Idempotency
