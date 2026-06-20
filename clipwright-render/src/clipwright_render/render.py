@@ -39,6 +39,11 @@ from clipwright.schemas import ToolResult
 from pydantic import ValidationError as PydanticValidationError
 
 from clipwright_render import retiming as _retiming
+from clipwright_render.encoders import (
+    ResolvedEncoder,
+    _resolve_hw_encoder,
+    hwaccel_value,
+)
 from clipwright_render.plan import (
     BgmClip,
     ProbeInfo,
@@ -846,7 +851,14 @@ def _render_inner(
                     ),
                 )
 
-    # --- 5. build_plan ---
+    # --- 5. Resolve hardware encoder (ADR-4) ---
+    # Called before build_plan so that UNSUPPORTED_OPERATION is raised early and
+    # ffmpeg is never invoked on encoder resolution failure (AC-4).
+    # The call is inside _render_inner which is wrapped by render_timeline's
+    # try/except ClipwrightError, so the error is converted to ok=False envelope.
+    resolved: ResolvedEncoder | None = _resolve_hw_encoder(options)
+
+    # --- 5b. build_plan ---
     # Pass source_probes to enable multi-source path (ADR-C2-r2 / ADR-C9-r2).
     # Pass bgm_clip for BGM audio chain integration (ADR-B5-r2; bgm=None for
     # backward compat).
@@ -886,6 +898,7 @@ def _render_inner(
             f" total duration {plan.total_duration_seconds:.2f}s{size_info}."
             f" Running ffmpeg would generate {output_path.name}."
         )
+        hw_warnings: list[str] = resolved.warnings if resolved is not None else []
         return ok_result(
             summary,
             data={
@@ -895,7 +908,7 @@ def _render_inner(
                 "total_duration_seconds": plan.total_duration_seconds,
                 "estimated_size_bytes": plan.estimated_size_bytes,
             },
-            warnings=plan.warnings + subtitle_warnings,
+            warnings=plan.warnings + subtitle_warnings + hw_warnings,
         )
 
     # --- 6b. Execute ---
@@ -905,10 +918,32 @@ def _render_inner(
     # Overwrite flag (-y / -n)
     overwrite_flag = ["-y"] if options.overwrite else ["-n"]
 
+    # Determine -hwaccel value for decode acceleration (ADR-6 / AC-7).
+    # Only emitted when hwaccel_decode=True; BGM input is excluded (ADR-6).
+    # Vendor mapping:
+    #   explicit vendor → hwaccel_value(vendor) (amf yields None → skip)
+    #   auto            → resolved.hwaccel_value or "auto" (libx264 fallback → "auto")
+    #   none            → "auto" (parent confirmed Q1)
+    _hw_decode_value: str | None = None
+    if options.hwaccel_decode:
+        _vendor = options.hw_encoder
+        if _vendor in ("nvenc", "amf", "qsv", "vaapi", "videotoolbox"):
+            _hw_decode_value = hwaccel_value(_vendor)
+        elif _vendor == "auto":
+            _hw_decode_value = (
+                resolved.hwaccel_value if resolved is not None else None
+            ) or "auto"
+        else:
+            # hw_encoder == "none"
+            _hw_decode_value = "auto"
+
     # -i list taken directly from plan.input_sources (ADR-C9-r2).
-    # Order is not recalculated in render.py (eliminates duplicate logic)
+    # Order is not recalculated in render.py (eliminates duplicate logic).
+    # When _hw_decode_value is set, prepend -hwaccel <value> before each -i (ADR-6).
     inputs: list[str] = []
     for src in plan.input_sources:
+        if _hw_decode_value is not None:
+            inputs += ["-hwaccel", _hw_decode_value]
         inputs += ["-i", src]
 
     # When BGM is present, prepend -stream_loop -1 and append BGM as the last
@@ -958,5 +993,7 @@ def _render_inner(
                 "format": Path(output_path).suffix.lstrip("."),
             }
         ],
-        warnings=plan.warnings + subtitle_warnings,
+        warnings=plan.warnings
+        + subtitle_warnings
+        + (resolved.warnings if resolved is not None else []),
     )
