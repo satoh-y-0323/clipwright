@@ -29,7 +29,7 @@ mcp = FastMCP("clipwright-reframe")
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        readOnlyHint=True,
+        readOnlyHint=False,
         destructiveHint=False,
         idempotentHint=True,
         openWorldHint=False,

@@ -54,7 +54,7 @@ from typing import Annotated, Any, Literal
 import opentimelineio as otio
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.otio_utils import get_markers
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from clipwright_render.encoders import ResolvedEncoder
 from clipwright_render.schemas import RenderOptions, SubtitleOptions
@@ -1561,6 +1561,316 @@ def _append_eq_filter(
     )
     filter_parts.append(f"{video_map_label}{seg}[outveq]")
     return "[outveq]"
+
+
+# ===========================================================================
+# Reframe schema and filter helpers (no dependency on clipwright-reframe; inline)
+# Architecture §7.4 / §2 / §3 / §6.
+# ADR-RF-1: ranges and color lists are intentionally re-declared here to avoid
+# satellite-to-satellite coupling.  When changing, update both copies.
+# ===========================================================================
+
+# CSS named colors accepted as pad_color — curated safe subset (AC-05 / CWE-78).
+_RF_NAMED_COLORS: frozenset[str] = frozenset(
+    {
+        "black",
+        "blue",
+        "cyan",
+        "gray",
+        "green",
+        "grey",
+        "magenta",
+        "red",
+        "white",
+        "yellow",
+    }
+)
+
+# Hex color pattern: #RRGGBB or 0xRRGGBB (exactly 6 hex digits; case-insensitive).
+_RF_HEX_COLOR_RE: re.Pattern[str] = re.compile(r"^(#|0x)[0-9A-Fa-f]{6}$")
+
+
+def _rf_validate_pad_color(value: str) -> str:
+    """Accept only allowlisted color names or #RRGGBB / 0xRRGGBB hex (AC-05).
+
+    Rejects filtergraph special characters to prevent command injection (CWE-78).
+    """
+    stripped = value.strip()
+    if stripped != value or not stripped:
+        raise ValueError(
+            f"pad_color must not be empty or contain leading/trailing whitespace:"
+            f" {value!r}"
+        )
+    if value in _RF_NAMED_COLORS:
+        return value
+    if _RF_HEX_COLOR_RE.match(value):
+        return value
+    raise ValueError(
+        f"pad_color {value!r} is not in the allowed list."
+        " Use a CSS color name (black, white, red, …) or #RRGGBB / 0xRRGGBB hex."
+    )
+
+
+# Crop offset dict: anchor → (ox_expr, oy_expr) in iw/ih coordinates (§2.2).
+# Max clamp bounds: ox_max = iw-W, oy_max = ih-H (replaced with literal integers
+# at call time; ffmpeg crop does not expose W/H as variables).
+_CROP_OX: dict[str, str] = {
+    "center": "(iw-{W})/2",
+    "top": "(iw-{W})/2",
+    "bottom": "(iw-{W})/2",
+    "left": "0",
+    "right": "iw-{W}",
+    "top_left": "0",
+    "top_right": "iw-{W}",
+    "bottom_left": "0",
+    "bottom_right": "iw-{W}",
+}
+_CROP_OY: dict[str, str] = {
+    "center": "(ih-{H})/2",
+    "top": "0",
+    "bottom": "ih-{H}",
+    "left": "(ih-{H})/2",
+    "right": "(ih-{H})/2",
+    "top_left": "0",
+    "top_right": "0",
+    "bottom_left": "ih-{H}",
+    "bottom_right": "ih-{H}",
+}
+
+# Pad offset dict: anchor → (ox_expr, oy_expr) in ow/oh coordinates (§2.3).
+# Max clamp bounds: ox_max = ow-iw, oy_max = oh-ih.
+_PAD_OX: dict[str, str] = {
+    "center": "(ow-iw)/2",
+    "top": "(ow-iw)/2",
+    "bottom": "(ow-iw)/2",
+    "left": "0",
+    "right": "ow-iw",
+    "top_left": "0",
+    "top_right": "ow-iw",
+    "bottom_left": "0",
+    "bottom_right": "ow-iw",
+}
+_PAD_OY: dict[str, str] = {
+    "center": "(oh-ih)/2",
+    "top": "0",
+    "bottom": "oh-ih",
+    "left": "(oh-ih)/2",
+    "right": "(oh-ih)/2",
+    "top_left": "0",
+    "top_right": "0",
+    "bottom_left": "oh-ih",
+    "bottom_right": "oh-ih",
+}
+
+# Anchor Literal type (9 values; §7.4).
+_AnchorLiteral = Literal[
+    "center",
+    "top",
+    "bottom",
+    "left",
+    "right",
+    "top_left",
+    "top_right",
+    "bottom_left",
+    "bottom_right",
+]
+
+
+class _RenderReframe(BaseModel):
+    """Reader-side validation model for the reframe directive (architecture §7.4).
+
+    No dependency on clipwright-reframe; field ranges mirror ReframeOptions
+    (writer).  Reader must not be stricter than writer on range; even-number
+    constraint is defence-in-depth (AC-03).  Unknown keys forbidden; inf/nan
+    rejected (CWE-20).
+    """
+
+    model_config = {"extra": "forbid", "allow_inf_nan": False}
+
+    target_w: Annotated[int, Field(ge=2, le=7680)]
+    target_h: Annotated[int, Field(ge=2, le=7680)]
+    mode: Literal["crop", "pad", "blur_pad"] = "pad"
+    anchor: _AnchorLiteral = "center"
+    pad_color: str = "black"
+
+    @field_validator("target_w")
+    @classmethod
+    def target_w_must_be_even(cls, v: int) -> int:
+        """Defence-in-depth: reject odd target_w (AC-03)."""
+        if v % 2 != 0:
+            raise ValueError(f"target_w must be an even number, got {v}")
+        return v
+
+    @field_validator("target_h")
+    @classmethod
+    def target_h_must_be_even(cls, v: int) -> int:
+        """Defence-in-depth: reject odd target_h (AC-03)."""
+        if v % 2 != 0:
+            raise ValueError(f"target_h must be an even number, got {v}")
+        return v
+
+    @field_validator("pad_color")
+    @classmethod
+    def pad_color_must_be_safe(cls, v: str) -> str:
+        """Reject unsafe pad_color values (AC-05 / CWE-78)."""
+        return _rf_validate_pad_color(v)
+
+
+def _validate_reframe(raw: dict[str, Any] | None) -> _RenderReframe | None:
+    """Validate a reframe directive dict and return a _RenderReframe, or None.
+
+    Only target_w / target_h / mode / anchor / pad_color are consumed.
+    tool / version / kind are intentionally stripped (extra=forbid on
+    _RenderReframe).  Returns None when raw is None (backward compatible).
+
+    Reader-side defence-in-depth (AC-03 / AC-05 / CWE-78):
+    - Even-dimension check raises INVALID_INPUT before Pydantic sees the value.
+    - pad_color allowlist re-checked inside _RenderReframe field_validator.
+    - All ValidationError / TypeError → INVALID_INPUT (CWE-209: no raw value
+      echoed in error messages).
+    """
+    if raw is None:
+        return None
+
+    # Extract only the keys _RenderReframe accepts.
+    filtered: dict[str, Any] = {
+        k: raw[k]
+        for k in ("target_w", "target_h", "mode", "anchor", "pad_color")
+        if k in raw
+    }
+
+    # Reader-side even validation before Pydantic (AC-03 defence-in-depth).
+    for dim in ("target_w", "target_h"):
+        v = filtered.get(dim)
+        if isinstance(v, int) and v % 2 != 0:
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message=f"Reframe directive {dim} must be even.",
+                hint=f"Set {dim} to an even integer (e.g. {v + 1} instead of {v}).",
+            )
+
+    # Reader-side pad_color allowlist (AC-05 defence-in-depth).
+    pc = filtered.get("pad_color")
+    if pc is not None:
+        try:
+            _rf_validate_pad_color(pc)
+        except ValueError:
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message="Reframe directive pad_color failed allowlist validation.",
+                hint=(
+                    "Use a CSS color name (black, white, red, …)"
+                    " or #RRGGBB / 0xRRGGBB hex."
+                ),
+            ) from None
+
+    try:
+        return _RenderReframe(**filtered)
+    except (ValidationError, TypeError):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "Reframe directive validation failed."
+                " Check field names, types, and values."
+            ),
+            hint=(
+                "target_w/h must be even integers in 2..7680;"
+                " mode must be 'crop', 'pad', or 'blur_pad';"
+                " anchor must be one of 9 direction values."
+            ),
+        ) from None
+
+
+def _append_reframe_filter(
+    filter_parts: list[str],
+    video_map_label: str,
+    reframe: _RenderReframe,
+) -> str:
+    """Append reframe filter segment(s) to filter_parts and return the terminal label.
+
+    Architecture §3.3/§3.4/§6.  Each appended element must not contain ';'
+    (individual-segment rule §3.1).  The terminal label is always '[outvrf]'.
+    Intermediate labels use the 'reframe_' prefix (§3.2 non-collision).
+
+    Modes:
+    - crop (§3.4 / §2.2): 1 segment — scale increase, crop with anchor offset,
+      setsar=1.
+    - pad  (§3.4 / §2.3): 1 segment — scale decrease, pad with anchor offset and
+      color, setsar=1.
+    - blur_pad (§3.3 / FR-3.3): 4 segments — split, background (scale+crop+blur),
+      foreground (scale), overlay+setsar.  Anchor is ignored for the background
+      crop (center-fixed; AC-15).
+
+    Args:
+        filter_parts: list of filter_complex segments (mutated in place).
+        video_map_label: terminal label of the preceding video chain.
+        reframe: validated _RenderReframe instance.
+
+    Returns:
+        '[outvrf]'
+    """
+    w = reframe.target_w
+    h = reframe.target_h
+    anchor = reframe.anchor
+
+    if reframe.mode == "crop":
+        # Resolve anchor offset expressions (§2.2); substitute literal integers.
+        ox_expr = _CROP_OX[anchor].format(W=w, H=h)
+        oy_expr = _CROP_OY[anchor].format(W=w, H=h)
+        # Clamp to valid crop origin range (defence-in-depth §2.1).
+        # Commas inside min/max are escaped as \, (§2.1 ffmpeg filtergraph rule).
+        ox = rf"min(max({ox_expr}\,0)\,iw-{w})"
+        oy = rf"min(max({oy_expr}\,0)\,ih-{h})"
+        seg = (
+            f"{video_map_label}"
+            f"scale={w}:{h}:force_original_aspect_ratio=increase,"
+            f"crop={w}:{h}:{ox}:{oy},"
+            f"setsar=1"
+            f"[outvrf]"
+        )
+        filter_parts.append(seg)
+
+    elif reframe.mode == "pad":
+        # Resolve anchor offset expressions (§2.3); output coordinates ow/oh.
+        ox_expr = _PAD_OX[anchor]
+        oy_expr = _PAD_OY[anchor]
+        # Clamp (defence-in-depth §2.1); commas escaped as \,.
+        ox = rf"min(max({ox_expr}\,0)\,ow-iw)"
+        oy = rf"min(max({oy_expr}\,0)\,oh-ih)"
+        color = reframe.pad_color
+        seg = (
+            f"{video_map_label}"
+            f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+            f"pad={w}:{h}:{ox}:{oy}:color={color},"
+            f"setsar=1"
+            f"[outvrf]"
+        )
+        filter_parts.append(seg)
+
+    else:  # blur_pad (§3.3 / FR-3.3)
+        # Segment 0: split into background and foreground streams.
+        filter_parts.append(f"{video_map_label}split=2[reframe_bg][reframe_fg]")
+        # Segment 1: background — scale to cover, center-crop (AC-15: anchor ignored),
+        # blur.
+        filter_parts.append(
+            f"[reframe_bg]"
+            f"scale={w}:{h}:force_original_aspect_ratio=increase,"
+            f"crop={w}:{h},"
+            f"boxblur=20:2"
+            f"[reframe_bgb]"
+        )
+        # Segment 2: foreground — scale to fit (decrease).
+        filter_parts.append(
+            f"[reframe_fg]"
+            f"scale={w}:{h}:force_original_aspect_ratio=decrease"
+            f"[reframe_fgs]"
+        )
+        # Segment 3: overlay foreground centered on blurred background, fix SAR.
+        filter_parts.append(
+            f"[reframe_bgb][reframe_fgs]overlay=({w}-w)/2:({h}-h)/2,setsar=1[outvrf]"
+        )
+
+    return "[outvrf]"
 
 
 def _append_subtitle_filter(

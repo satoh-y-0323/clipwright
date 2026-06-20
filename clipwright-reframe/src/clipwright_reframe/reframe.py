@@ -133,7 +133,30 @@ def _reframe_inner(
         tl = new_timeline(media_path.name)
         _add_full_clip(tl, media_path, duration_sec, media_info.duration)
     else:
-        tl = load_timeline(timeline)
+        # D1: timeline existence check before load (B-5).
+        # FileNotFoundError from load_timeline must not escape as a raw exception.
+        if not Path(timeline).exists():
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message=f"Timeline file not found: {Path(timeline).name}",
+                hint=(
+                    "Specify an existing .otio timeline file or omit"
+                    " the timeline argument."
+                ),
+            )
+        # D1: invalid .otio content must be wrapped as ClipwrightError (B-6).
+        # load_timeline wraps OTIOError, but OTIO may raise ValueError for JSON parse
+        # errors on some adapters; catch it here and convert to OTIO_ERROR.
+        try:
+            tl = load_timeline(timeline)
+        except ClipwrightError:
+            raise
+        except (ValueError, OSError) as exc:
+            raise ClipwrightError(
+                code=ErrorCode.OTIO_ERROR,
+                message=f"Failed to load OTIO file: {Path(timeline).name}",
+                hint="Specify a valid .otio timeline file.",
+            ) from exc
 
     # --- 4. Annotate ReframeDirective ---
 
