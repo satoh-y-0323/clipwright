@@ -366,6 +366,371 @@ class TextOverlay:
     font_path: str | None  # resolved absolute path, or None
 
 
+# ===========================================================================
+# Image overlay constants and dataclass (ADR-OV-4 / V2-1 / V2-5 / V2-9)
+# ===========================================================================
+
+# Allowed image file extensions for overlay inputs (V2-3 / render.py re-validates).
+# Keep in sync with render._ALLOWED_IMAGE_EXTENSIONS (cross-layer defence-in-depth).
+_ALLOWED_IMAGE_EXTENSIONS: frozenset[str] = frozenset(
+    {".png", ".jpg", ".jpeg", ".webp"}
+)
+
+# Maximum number of image_overlay markers per timeline (V2-9).
+_MAX_IMAGE_OVERLAYS: int = 64
+
+# Allowlist regex for overlay x/y position expressions (V2-5 / CWE-78).
+# Accepts common ffmpeg expression tokens: identifiers, digits, parentheses,
+# arithmetic operators, dots, and spaces.  Colons, semicolons, quotes, etc.
+# are rejected to prevent filtergraph injection.
+_XY_ALLOWLIST_RE: re.Pattern[str] = re.compile(r"^[A-Za-z0-9_()+\-*/. ]+$")
+
+
+@dataclass(frozen=True)
+class ImageOverlay:
+    """Immutable value object representing a single image overlay instruction.
+
+    Constructed from an OTIO image_overlay marker in _marker_to_image_overlay.
+    All fields are validated on construction; invalid values raise INVALID_INPUT
+    before this dataclass is instantiated (multi-layer defence; V2-3).
+
+    image_path: reconstructed absolute path to the overlay image file.
+        Stored as an absolute path; used as the -i input for ffmpeg.
+    start_s: overlay start time in seconds (program time).
+    end_s: overlay end time in seconds (= start_s + duration_s).
+    x: ffmpeg overlay x= expression (allowlist-validated; V2-5).
+    y: ffmpeg overlay y= expression (allowlist-validated; V2-5).
+    scale: width scale factor relative to the image's own width (iw*scale; V2-2).
+    opacity: constant alpha channel multiplier 0.0–1.0 (colorchannelmixer aa; V2-1/G1).
+    fade_in_s: fade-in duration in seconds; 0 means no fade (V2-1/G2).
+    fade_out_s: fade-out duration in seconds; 0 means no fade (V2-1/G2).
+    input_index: ffmpeg stream index for this image input (ADR-OV-5/G4).
+    """
+
+    image_path: str
+    start_s: float
+    end_s: float
+    x: str
+    y: str
+    scale: float
+    opacity: float
+    fade_in_s: float
+    fade_out_s: float
+    input_index: int
+
+
+def _marker_to_image_overlay(
+    marker: otio.schema.Marker,
+    timeline_path: str | None,
+    input_index: int,
+) -> ImageOverlay:
+    """Convert an OTIO image_overlay marker to a validated ImageOverlay.
+
+    Re-validates all fields on the render side (multi-layer defence; V2-3).
+    When timeline_path is provided, reconstructs the absolute image path by
+    resolving the marker's relative image_path relative to the timeline directory.
+    When timeline_path is None, image_path is stored as-is.
+
+    Args:
+        marker: OTIO Marker with kind=="image_overlay" in metadata["clipwright"].
+        timeline_path: absolute path to the OTIO timeline file, or None.
+        input_index: ffmpeg stream index for this image input (ADR-OV-5/G4).
+
+    Returns:
+        Validated ImageOverlay value object.
+
+    Raises:
+        ClipwrightError(INVALID_INPUT): when any field fails validation.
+    """
+    cw: Any = marker.metadata.get("clipwright", {})
+    if not isinstance(cw, Mapping):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an image_overlay marker with missing metadata."
+            ),
+            hint="Re-annotate with clipwright_add_image_overlay.",
+        )
+
+    raw_image_path: str = str(cw.get("image_path", ""))
+    start_sec: float = float(cw.get("start_sec", 0.0))
+    duration_sec: float = float(cw.get("duration_sec", 1.0))
+    x: str = str(cw.get("x", "(W-w)/2"))
+    y: str = str(cw.get("y", "(H-h)/2"))
+    scale: float = float(cw.get("scale", 1.0))
+    opacity: float = float(cw.get("opacity", 1.0))
+    fade_in_s: float = float(cw.get("fade_in_sec", 0.0))
+    fade_out_s: float = float(cw.get("fade_out_sec", 0.0))
+
+    # V2-3: reconstruct absolute path when timeline_path is available.
+    if timeline_path is not None:
+        reconstructed = (
+            Path(timeline_path).resolve().parent / raw_image_path
+        ).resolve()
+        image_path_abs = str(reconstructed)
+    else:
+        image_path_abs = raw_image_path
+
+    # Multi-layer re-validation (V2-3 / defence-in-depth).
+
+    # Non-finite guard for start/duration (same pattern as text_overlay NL-1).
+    if not math.isfinite(start_sec):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an invalid image overlay:"
+                " start_sec is not finite."
+            ),
+            hint="Re-annotate with a finite start_sec value.",
+        )
+    if not math.isfinite(duration_sec):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an invalid image overlay:"
+                " duration_sec is not finite."
+            ),
+            hint="Re-annotate with a finite duration_sec value.",
+        )
+
+    # Range checks.
+    if start_sec < 0:
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=("The timeline contains an invalid image overlay: start_sec < 0."),
+            hint="Re-annotate with a non-negative start_sec.",
+        )
+    if duration_sec <= 0:
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an invalid image overlay: duration_sec <= 0."
+            ),
+            hint="Re-annotate with a positive duration_sec.",
+        )
+    if not (0 < scale <= 8.0):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an invalid image overlay:"
+                " scale must be in (0, 8.0]."
+            ),
+            hint="Re-annotate with a scale value in the range (0, 8.0].",
+        )
+    if not (0 <= opacity <= 1):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an invalid image overlay:"
+                " opacity must be in [0, 1]."
+            ),
+            hint="Re-annotate with an opacity value in the range [0, 1].",
+        )
+    if fade_in_s + fade_out_s > (duration_sec + 1e-9):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an invalid image overlay:"
+                " fade_in_sec + fade_out_sec exceeds duration_sec."
+            ),
+            hint="Re-annotate so that fade_in_sec + fade_out_sec <= duration_sec.",
+        )
+
+    # x/y allowlist (V2-5 / CWE-78).
+    for xy_val in (x, y):
+        if not _XY_ALLOWLIST_RE.match(xy_val):
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message=(
+                    "The timeline contains an invalid image overlay:"
+                    " x or y contains a disallowed character."
+                ),
+                hint=(
+                    "x/y must contain only alphanumeric characters, parentheses,"
+                    " arithmetic operators (+,-,*,/,.), and spaces."
+                ),
+            )
+
+    # image_path safety: single-quote and control character check (CWE-78).
+    for ch in image_path_abs:
+        if ch == "'":
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message=(
+                    "The timeline contains an invalid image overlay:"
+                    " image_path contains a single quote."
+                ),
+                hint="image_path must not contain single quotes.",
+            )
+        if ch in _CONTROL_CHARS:
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message=(
+                    "The timeline contains an invalid image overlay:"
+                    " image_path contains a control character."
+                ),
+                hint="image_path must not contain control characters.",
+            )
+
+    end_s = start_sec + duration_sec
+
+    return ImageOverlay(
+        image_path=image_path_abs,
+        start_s=start_sec,
+        end_s=end_s,
+        x=x,
+        y=y,
+        scale=scale,
+        opacity=opacity,
+        fade_in_s=fade_in_s,
+        fade_out_s=fade_out_s,
+        input_index=input_index,
+    )
+
+
+def _collect_image_overlays(
+    timeline: otio.schema.Timeline,
+    image_index_base: int,
+    timeline_path: str | None = None,
+) -> list[ImageOverlay]:
+    """Read image_overlay markers from the timeline and convert to ImageOverlay objects.
+
+    Called by build_plan when a KeptRangeList with an attached timeline is received.
+    Returns an empty list when there are no image_overlay markers (backward compat).
+
+    Args:
+        timeline: OTIO timeline object.
+        image_index_base: ffmpeg stream index for the first image input (ADR-OV-5/G4).
+            = len(input_sources) + (1 if bgm else 0).
+        timeline_path: absolute path to the OTIO timeline file, or None.
+            When provided, relative image_paths are reconstructed to absolute.
+
+    Returns:
+        List of validated ImageOverlay objects, or [].
+
+    Raises:
+        ClipwrightError(INVALID_INPUT): when more than _MAX_IMAGE_OVERLAYS markers
+            are present, or when any marker fails validation (V2-9).
+    """
+    markers = get_markers(timeline, kind="image_overlay")
+    if not markers:
+        return []
+
+    if len(markers) > _MAX_IMAGE_OVERLAYS:
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                f"The timeline contains more than {_MAX_IMAGE_OVERLAYS}"
+                " image_overlay markers."
+            ),
+            hint=(
+                f"Reduce the number of image_overlay markers to"
+                f" {_MAX_IMAGE_OVERLAYS} or fewer."
+            ),
+        )
+
+    overlays: list[ImageOverlay] = []
+    for i, marker in enumerate(markers):
+        input_index = image_index_base + i
+        overlays.append(_marker_to_image_overlay(marker, timeline_path, input_index))
+    return overlays
+
+
+def _build_overlay_segment(
+    o: ImageOverlay,
+    base_label: str,
+    i: int | None = None,
+) -> tuple[list[str], str]:
+    """Build two filter segment strings for one image overlay (V2-1 confirmed chain).
+
+    Segment 1: image processing chain.
+        [{input_index}:v]scale=iw*{scale}:-2,format=rgba,colorchannelmixer=aa={opacity}
+        [,fade=t=in:st={start_s}:d={fade_in_s}:alpha=1]
+        [,fade=t=out:st={end_s-fade_out_s}:d={fade_out_s}:alpha=1]
+        [ov{i}]
+
+    Segment 2: overlay composition.
+        {base_label}[ov{i}]overlay=x='{x}':y='{y}':enable='between(t,{start_s},{end_s})'
+        [outvimg{i}]
+
+    Note on fade alpha=1: the fade filter with alpha=1 multiplies the existing
+    alpha channel (set by colorchannelmixer=aa={opacity}) so the effective alpha
+    ramps 0 -> opacity -> 0 (G2 confirmed on ffmpeg 8.1.1).
+
+    DO NOT pass d=0 fades to ffmpeg — omit fade stages entirely when d==0 (V2-1).
+
+    Args:
+        o: validated ImageOverlay value object.
+        base_label: current terminal video label consumed as the background input.
+        i: overlay loop index used for label naming (ov{i} / outvimg{i}).
+            When None, uses o.input_index as a fallback (avoids AttributeError
+            in direct unit-test calls that pass a single overlay).
+
+    Returns:
+        (segments, new_label) where segments is a list of two filter strings and
+        new_label is '[outvimg{i}]'.
+    """
+    # Determine loop index for label naming.
+    # Unit tests call _build_overlay_segment directly without a loop index;
+    # _append_overlay_filter always passes the explicit loop position.
+    idx = i if i is not None else 0
+
+    seg1 = (
+        f"[{o.input_index}:v]"
+        f"scale=iw*{o.scale:g}:-2,"
+        f"format=rgba,"
+        f"colorchannelmixer=aa={o.opacity:g}"
+    )
+    if o.fade_in_s > 0:
+        seg1 += f",fade=t=in:st={o.start_s:g}:d={o.fade_in_s:g}:alpha=1"
+    if o.fade_out_s > 0:
+        fade_out_st = o.end_s - o.fade_out_s
+        seg1 += f",fade=t=out:st={fade_out_st:g}:d={o.fade_out_s:g}:alpha=1"
+    seg1 += f"[ov{idx}]"
+
+    seg2 = (
+        f"{base_label}"
+        f"[ov{idx}]overlay="
+        f"x='{o.x}':y='{o.y}':"
+        f"enable='between(t,{o.start_s:g},{o.end_s:g})'"
+        f"[outvimg{idx}]"
+    )
+
+    return [seg1, seg2], f"[outvimg{idx}]"
+
+
+def _append_overlay_filter(
+    filter_parts: list[str],
+    video_map_label: str,
+    overlays: list[ImageOverlay],
+) -> str:
+    """Append image overlay stages to filter_parts and return the new video label.
+
+    No-op when overlays is empty (backward compatible — output byte-identical
+    to existing render when image_overlays is absent).
+
+    Image overlays are stacked sequentially: each overlay consumes the previous
+    output label as its base_label, so [outv] → [outvimg0] → [outvimg1] → ...
+
+    Args:
+        filter_parts: mutable list of filter_complex segments.
+        video_map_label: current terminal video label.
+        overlays: list of validated ImageOverlay objects.
+
+    Returns:
+        New video_map_label (last '[outvimg{N}]') when overlays is non-empty;
+        original video_map_label otherwise.
+    """
+    if not overlays:
+        return video_map_label
+
+    for i, o in enumerate(overlays):
+        segs, video_map_label = _build_overlay_segment(o, video_map_label, i)
+        filter_parts.extend(segs)
+
+    return video_map_label
+
+
 @dataclass(frozen=True)
 class BgmClip:
     """Value object representing BGM clip information (ADR-B4-r2).
@@ -415,6 +780,8 @@ class RenderPlan:
     bgm_source: BGM source path. None when there is no BGM (ADR-B5/B7).
     stabilize_cwd: trf parent directory for run(cwd=...) when stabilize is
         enabled. None when stabilize is absent (backward compatible; §6-E).
+    image_sources: ordered list of absolute image overlay paths (ADR-OV-5).
+        Images are appended as -i after bgm. Empty by default (backward compat).
     """
 
     filter_complex: str
@@ -426,6 +793,7 @@ class RenderPlan:
     input_sources: list[str] = field(default_factory=list)
     bgm_source: str | None = None
     stabilize_cwd: str | None = None
+    image_sources: list[str] = field(default_factory=list)
 
 
 # ===========================================================================
@@ -2219,6 +2587,7 @@ def _build_filter_complex(
     stabilize_basename: str | None = None,
     stabilize_smoothing: int = _DEFAULT_STABILIZE_SMOOTHING,
     reframe: _RenderReframe | None = None,
+    image_overlays: list[ImageOverlay] | None = None,
 ) -> tuple[str, str, str, bool, bool]:
     """Build the filter_complex string, video_map_label, and audio_map_label
     (M-2).
@@ -2234,6 +2603,10 @@ def _build_filter_complex(
 
     text_overlays: when non-empty, _append_drawtext_filter is called after the
         subtitle stage to inject the drawtext filter chain (WP-2; ADR-T3).
+
+    image_overlays: when non-empty, _append_overlay_filter is called immediately
+        after drawtext to compose image overlays (topmost layer; ADR-OV-5).
+        None or empty list is a no-op (backward compatible).
 
     Returns:
         (filter_complex, video_map_label, audio_map_label, use_afftdn,
@@ -2379,6 +2752,13 @@ def _build_filter_complex(
     if text_overlays:
         video_map_label = _append_drawtext_filter(
             filter_parts, video_map_label, text_overlays
+        )
+
+    # Inject image overlay stage after drawtext (topmost layer; ADR-OV-5).
+    # None or empty list is a no-op (backward compatible).
+    if image_overlays:
+        video_map_label = _append_overlay_filter(
+            filter_parts, video_map_label, image_overlays
         )
 
     filter_complex = ";".join(filter_parts)
@@ -2574,6 +2954,7 @@ def _build_multi_source_filter_complex(
     first_source: str,
     text_overlays: list[TextOverlay] | None = None,
     color_eq: _RenderEqParams | None = None,
+    image_overlays: list[ImageOverlay] | None = None,
 ) -> tuple[str, str, str, bool, bool]:
     """Build the filter_complex for the multi-source path
     (ADR-C1/C5-r2/C7-r2/C11-r2).
@@ -2591,6 +2972,10 @@ def _build_multi_source_filter_complex(
 
     text_overlays: when non-empty, _append_drawtext_filter is called after the
         subtitle stage (WP-2; ADR-T3).
+
+    image_overlays: when non-empty, _append_overlay_filter is called immediately
+        after drawtext to compose image overlays (topmost layer; ADR-OV-5).
+        None or empty list is a no-op (backward compatible).
 
     Returns:
         (filter_complex, video_map_label, audio_map_label, use_afftdn,
@@ -2662,6 +3047,13 @@ def _build_multi_source_filter_complex(
     if text_overlays:
         video_map_label = _append_drawtext_filter(
             filter_parts, video_map_label, text_overlays
+        )
+
+    # Inject image overlay stage after drawtext (topmost layer; ADR-OV-5).
+    # None or empty list is a no-op (backward compatible).
+    if image_overlays:
+        video_map_label = _append_overlay_filter(
+            filter_parts, video_map_label, image_overlays
         )
 
     filter_complex = ";".join(filter_parts)
@@ -2899,6 +3291,11 @@ def build_plan(
       explicitly set to [] (empty list), no overlays are applied (backward
       compatible; FR-6-6).  When non-empty, drawtext is appended after subtitle
       (ADR-T3; WP-2).
+    - image_overlays: auto-collected from timeline markers (kind=="image_overlay")
+      when ranges is a KeptRangeList with _timeline. image_index_base =
+      len(input_sources) + (1 if bgm else 0) (ADR-OV-5/G4). Reconstructed
+      absolute image paths are stored in RenderPlan.image_sources.
+      None/empty → no-op (backward compatible; output byte-identical).
     """
     # Resolve text_overlays: prefer the explicit argument; fall back to reading
     # markers from the attached timeline (KeptRangeList._timeline).
@@ -2927,6 +3324,21 @@ def build_plan(
         text_overlays, _retime_overlay_warnings = retime_text_overlays(
             text_overlays, _tmap, _do_retime
         )
+
+    # Collect image_overlays from the attached timeline (ADR-OV-5).
+    # image_index_base is computed after input_sources is known (after bgm check),
+    # but we need to know bgm presence before we have input_sources.  Use a sentinel
+    # list here and compute the base index below after input_sources is determined.
+    # _image_overlays_raw: collected with a temporary base=0; input_index will be
+    # corrected below once image_index_base is known.
+    _tl_ref_img: otio.schema.Timeline | None = getattr(ranges, "_timeline", None)
+    # Collect raw overlays now (validates all fields except input_index); we will
+    # reconstruct with the correct base index below.
+    _image_overlays_raw: list[ImageOverlay] = (
+        _collect_image_overlays(_tl_ref_img, image_index_base=0)
+        if _tl_ref_img is not None
+        else []
+    )
 
     # Validate the denoise directive (raises INVALID_INPUT /
     # UNSUPPORTED_OPERATION on failure)
@@ -2972,6 +3384,19 @@ def build_plan(
     # Unique source list (single source of truth for ADR-C9-r2)
     input_sources = unique_sources_in_order(ranges)
     n = len(ranges)
+
+    # Resolve image_overlays with correct input_index (ADR-OV-5/G4).
+    # image_index_base = len(input_sources) + (1 if bgm else 0).
+    # Re-collect from the timeline with the correct base so that input_index values
+    # in each ImageOverlay match the actual ffmpeg -i order.
+    _image_index_base = len(input_sources) + (1 if bgm is not None else 0)
+    if _tl_ref_img is not None and _image_overlays_raw:
+        _image_overlays = _collect_image_overlays(
+            _tl_ref_img,
+            image_index_base=_image_index_base,
+        )
+    else:
+        _image_overlays = []
 
     # Branch on source count (ADR-C3)
     use_multi_source = source_probes is not None and len(input_sources) >= 2
@@ -3060,6 +3485,7 @@ def build_plan(
                 first_source,
                 text_overlays=text_overlays,
                 color_eq=color_eq,
+                image_overlays=_image_overlays,
             )
         )
 
@@ -3106,6 +3532,7 @@ def build_plan(
                     else _DEFAULT_STABILIZE_SMOOTHING
                 ),
                 reframe=reframe_directive,
+                image_overlays=_image_overlays,
             )
         )
 
@@ -3273,4 +3700,5 @@ def build_plan(
         input_sources=input_sources,
         bgm_source=bgm_source_out,
         stabilize_cwd=stabilize_cwd,
+        image_sources=[o.image_path for o in _image_overlays],
     )

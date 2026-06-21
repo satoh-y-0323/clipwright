@@ -49,6 +49,7 @@ from pathlib import Path
 
 import opentimelineio as otio
 import pytest
+
 from clipwright_overlay.overlay import add_overlay
 from clipwright_overlay.schemas import AddOverlayOptions
 
@@ -667,17 +668,31 @@ class TestValueRangeViolations:
             )
 
     def test_scale_zero_returns_invalid_input(self) -> None:
-        """scale <= 0 must return INVALID_INPUT (V2-9 manual recheck)."""
+        """scale=0 must return INVALID_INPUT via defense-in-depth recheck (V2-9).
+
+        Uses model_construct to bypass schema Field(gt=0) so the manual recheck
+        in overlay.py _validate_overlay_fields is exercised (scale check fires
+        before image_path validation, so no real image file is required).
+        """
         with tempfile.TemporaryDirectory() as tmpd:
             tmp = Path(tmpd)
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
             _write_timeline(tl, inp)
-            img = tmp / "logo.png"
-            _write_dummy_png(img)
 
-            opts = _default_opts(tmp, img, scale=0.0)
+            # Bypass Pydantic Field(gt=0) to reach overlay.py manual recheck
+            opts = AddOverlayOptions.model_construct(
+                image_path=str(tmp / "logo.png"),
+                start_sec=1.0,
+                duration_sec=3.0,
+                x="(W-w)/2",
+                y="(H-h)/2",
+                scale=0.0,
+                opacity=1.0,
+                fade_in_sec=0.0,
+                fade_out_sec=0.0,
+            )
             result = add_overlay(str(inp), str(out), opts)
 
             assert result["ok"] is False
@@ -685,20 +700,33 @@ class TestValueRangeViolations:
             assert error.get("code") == "INVALID_INPUT", (
                 f"Expected INVALID_INPUT for scale=0.0, got {error.get('code')!r}"
             )
-            assert error.get("hint"), "hint must be non-empty for scale<=0"
+            assert error.get("hint"), "hint must be non-empty for scale=0"
 
     def test_scale_negative_returns_invalid_input(self) -> None:
-        """scale < 0 must return INVALID_INPUT (V2-9 manual recheck)."""
+        """scale<0 must return INVALID_INPUT via defense-in-depth recheck (V2-9).
+
+        Uses model_construct to bypass schema Field(gt=0) so the manual recheck
+        in overlay.py _validate_overlay_fields is exercised.
+        """
         with tempfile.TemporaryDirectory() as tmpd:
             tmp = Path(tmpd)
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
             _write_timeline(tl, inp)
-            img = tmp / "logo.png"
-            _write_dummy_png(img)
 
-            opts = _default_opts(tmp, img, scale=-0.5)
+            # Bypass Pydantic Field(gt=0) to reach overlay.py manual recheck
+            opts = AddOverlayOptions.model_construct(
+                image_path=str(tmp / "logo.png"),
+                start_sec=1.0,
+                duration_sec=3.0,
+                x="(W-w)/2",
+                y="(H-h)/2",
+                scale=-0.5,
+                opacity=1.0,
+                fade_in_sec=0.0,
+                fade_out_sec=0.0,
+            )
             result = add_overlay(str(inp), str(out), opts)
 
             assert result["ok"] is False
@@ -706,20 +734,33 @@ class TestValueRangeViolations:
             assert error.get("code") == "INVALID_INPUT", (
                 f"Expected INVALID_INPUT for scale=-0.5, got {error.get('code')!r}"
             )
-            assert error.get("hint")
+            assert error.get("hint"), "hint must be non-empty for scale<0"
 
     def test_scale_exceeds_8_returns_invalid_input(self) -> None:
-        """scale > 8.0 must return INVALID_INPUT with precise hint (V2-9 manual recheck)."""
+        """scale>8.0 must return INVALID_INPUT with precise hint (V2-9 manual recheck).
+
+        Uses model_construct to bypass schema Field(le=8.0) so the manual recheck
+        in overlay.py _validate_overlay_fields is exercised.
+        """
         with tempfile.TemporaryDirectory() as tmpd:
             tmp = Path(tmpd)
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
             _write_timeline(tl, inp)
-            img = tmp / "logo.png"
-            _write_dummy_png(img)
 
-            opts = _default_opts(tmp, img, scale=8.001)
+            # Bypass Pydantic Field(le=8.0) to reach overlay.py manual recheck
+            opts = AddOverlayOptions.model_construct(
+                image_path=str(tmp / "logo.png"),
+                start_sec=1.0,
+                duration_sec=3.0,
+                x="(W-w)/2",
+                y="(H-h)/2",
+                scale=8.001,
+                opacity=1.0,
+                fade_in_sec=0.0,
+                fade_out_sec=0.0,
+            )
             result = add_overlay(str(inp), str(out), opts)
 
             assert result["ok"] is False
@@ -727,7 +768,7 @@ class TestValueRangeViolations:
             assert error.get("code") == "INVALID_INPUT", (
                 f"Expected INVALID_INPUT for scale=8.001, got {error.get('code')!r}"
             )
-            # V2-9: manual recheck owns the precise hint
+            # V2-9: manual recheck owns the precise hint mentioning 8.0
             assert error.get("hint"), "hint must be non-empty for scale>8.0"
 
     def test_scale_exactly_8_is_valid(self) -> None:

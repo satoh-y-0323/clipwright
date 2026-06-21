@@ -60,6 +60,12 @@ _ALLOWED_EXTENSIONS = frozenset({".mp4", ".mkv", ".mov", ".webm"})
 # Subtitle file extension whitelist (ADR-S3)
 _ALLOWED_SUBTITLE_EXTENSIONS = frozenset({".srt", ".vtt", ".ass"})
 
+# Image overlay file extension whitelist (V2-3 / ADR-OV-4).
+# Keep in sync with plan._ALLOWED_IMAGE_EXTENSIONS (cross-layer defence-in-depth).
+_ALLOWED_IMAGE_EXTENSIONS: frozenset[str] = frozenset(
+    {".png", ".jpg", ".jpeg", ".webp"}
+)
+
 # Maximum .srt file size accepted for re-timing (SR-L-2)
 _MAX_SRT_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB
 
@@ -254,6 +260,136 @@ def _check_subtitle_within_timeline_dir(timeline_path: Path, subtitle: str) -> N
         kind="subtitle file",
         hint_detail="subtitle file",
     )
+
+
+def _check_image_overlay_within_timeline_dir(
+    timeline_path: Any,
+    image_path: str,
+) -> None:
+    """Verify that the image overlay path is within the timeline's parent directory
+    and that the file exists with an allowed extension (V2-3 / ADR-OV-4).
+
+    Thin wrapper over _check_within_timeline_dir (DRY). Also validates:
+    - File exists (FILE_NOT_FOUND; basename only / CWE-209).
+    - Extension is in _ALLOWED_IMAGE_EXTENSIONS (INVALID_INPUT).
+
+    Args:
+        timeline_path: path to the OTIO timeline file (str or Path).
+        image_path: reconstructed absolute path to the image overlay file.
+
+    Raises:
+        ClipwrightError: PATH_NOT_ALLOWED when image_path is outside the project
+            boundary; FILE_NOT_FOUND when the file does not exist; INVALID_INPUT
+            when the extension is not allowed.
+    """
+    tl_path = (
+        Path(timeline_path) if not isinstance(timeline_path, Path) else timeline_path
+    )
+
+    # Boundary check: image must be inside the timeline directory tree (V2-3).
+    _check_within_timeline_dir(
+        tl_path,
+        image_path,
+        kind="image overlay file",
+        hint_detail="image overlay file",
+    )
+
+    # Extension allowlist (INVALID_INPUT; before existence check to fail-fast on
+    # bad extension without leaking path in the error).
+    img_ext = Path(image_path).suffix.lower()
+    if img_ext not in _ALLOWED_IMAGE_EXTENSIONS:
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(f"Image overlay file extension is not allowed: {img_ext!r}."),
+            hint=(
+                "Use an image overlay file with extension .png, .jpg, .jpeg, or .webp."
+            ),
+        )
+
+    # Existence check: file must already exist (CWE-209: basename only in message).
+    if not Path(image_path).exists():
+        raise ClipwrightError(
+            code=ErrorCode.FILE_NOT_FOUND,
+            message=f"Image overlay file not found: {Path(image_path).name}",
+            hint=(
+                "Place the image overlay file referenced in the OTIO timeline"
+                " in the expected location."
+            ),
+        )
+
+
+def _build_ffmpeg_inputs(
+    plan: Any,
+    hw_decode_value: str | None,
+) -> list[str]:
+    """Build the ffmpeg -i input list from a RenderPlan.
+
+    Order: input_sources → bgm (with -stream_loop -1) → image_sources.
+    When hw_decode_value is set, prepend -hwaccel <value> before each source -i.
+    BGM and image inputs do NOT receive -hwaccel (mirrors existing behaviour).
+
+    Args:
+        plan: RenderPlan with input_sources, bgm_source, image_sources.
+        hw_decode_value: hwaccel flag value (e.g. 'cuda', 'auto') or None.
+
+    Returns:
+        List of ffmpeg input arguments (flat list of strings).
+    """
+    inputs: list[str] = []
+
+    # Regular video/audio sources (with optional hwaccel)
+    for src in plan.input_sources:
+        if hw_decode_value is not None:
+            inputs += ["-hwaccel", hw_decode_value]
+        inputs += ["-i", src]
+
+    # BGM: -stream_loop -1 -i <bgm_source> (ADR-B6-r2; NO -hwaccel on BGM)
+    if plan.bgm_source is not None:
+        inputs += ["-stream_loop", "-1", "-i", plan.bgm_source]
+
+    # Image overlays: -i <image_path> (NO -stream_loop; static images; ADR-OV-5)
+    for img in plan.image_sources:
+        inputs += ["-i", img]
+
+    return inputs
+
+
+def render_plan(
+    plan: Any,
+    output: str,
+    overwrite: bool = False,
+) -> None:
+    """Execute a pre-built RenderPlan via ffmpeg.
+
+    Minimal orchestration layer used by tests (Section 9 / V2-7): validates
+    output path, builds the ffmpeg command from plan, and calls run().
+
+    Does NOT perform boundary validation, probe, or OTIO analysis — those are
+    handled upstream by render_timeline / _render_inner.
+
+    Args:
+        plan: RenderPlan (from build_plan).
+        output: output video file path.
+        overwrite: when True, pass -y to ffmpeg; otherwise -n.
+
+    Raises:
+        ClipwrightError: SUBPROCESS_FAILED when ffmpeg fails (propagated from run()).
+    """
+    import math as _math
+
+    ffmpeg = resolve_tool("ffmpeg", "CLIPWRIGHT_FFMPEG")
+    overwrite_flag = ["-y"] if overwrite else ["-n"]
+
+    inputs = _build_ffmpeg_inputs(plan, hw_decode_value=None)
+
+    # F-4: absolutise output when stabilize_cwd is set (mirroring _render_inner).
+    output_arg = (
+        str(Path(output).resolve()) if plan.stabilize_cwd is not None else str(output)
+    )
+
+    timeout = max(300, _math.ceil(plan.total_duration_seconds * 10))
+    cmd = [ffmpeg] + overwrite_flag + inputs + plan.ffmpeg_args + [output_arg]
+    run(cmd, timeout=float(timeout), cwd=plan.stabilize_cwd)
 
 
 def _generate_retimed_srt(
@@ -955,6 +1091,14 @@ def _render_inner(
     # is maintained (DC-AS-005).
     if plan.bgm_source is not None:
         inputs += ["-stream_loop", "-1", "-i", plan.bgm_source]
+
+    # Image overlay inputs: appended AFTER bgm (ADR-OV-5/G4).
+    # NO -stream_loop on static images; NO -hwaccel on image inputs.
+    # Boundary, extension, and existence checks are applied here (defence-in-depth;
+    # OTIO is untrusted; V2-7/DC-AM-004).
+    for img in plan.image_sources:
+        _check_image_overlay_within_timeline_dir(timeline_path, img)
+        inputs += ["-i", img]
 
     # F-4: When stabilize is enabled, output must be absolutised so that
     # changing cwd to the trf parent directory does not redirect the output

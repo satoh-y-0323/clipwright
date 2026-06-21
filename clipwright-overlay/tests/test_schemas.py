@@ -22,8 +22,9 @@ from __future__ import annotations
 import math
 
 import pytest
-from clipwright_overlay.schemas import AddOverlayOptions
 from pydantic import ValidationError
+
+from clipwright_overlay.schemas import AddOverlayOptions
 
 # ===========================================================================
 # Required fields: image_path, start_sec, duration_sec
