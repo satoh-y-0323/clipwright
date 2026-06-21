@@ -328,15 +328,22 @@ class KeptRangeList(list):  # type: ignore[type-arg]
     _timeline is accessed via getattr(ranges, '_timeline', None) so that plain
     list arguments (e.g. in existing tests that construct ranges manually) also
     work safely (getattr returns None and no marker lookup is attempted).
+
+    _timeline_path: absolute path to the OTIO file (str or None). Set by
+    resolve_kept_ranges via render.py so that _collect_image_overlays can
+    reconstruct relative image_paths stored in image_overlay markers (V2-3).
+    Accessed via getattr so that plain list callers remain unaffected.
     """
 
     def __init__(
         self,
         ranges: list[KeptRange],
         timeline: otio.schema.Timeline | None = None,
+        timeline_path: str | None = None,
     ) -> None:
         super().__init__(ranges)
         self._timeline: otio.schema.Timeline | None = timeline
+        self._timeline_path: str | None = timeline_path
 
 
 @dataclass(frozen=True)
@@ -3332,10 +3339,15 @@ def build_plan(
     # _image_overlays_raw: collected with a temporary base=0; input_index will be
     # corrected below once image_index_base is known.
     _tl_ref_img: otio.schema.Timeline | None = getattr(ranges, "_timeline", None)
+    # timeline_path for V2-3 relative image_path reconstruction (V2-3 round-trip).
+    # Obtained from KeptRangeList._timeline_path when set by render.py.
+    _tl_path_img: str | None = getattr(ranges, "_timeline_path", None)
     # Collect raw overlays now (validates all fields except input_index); we will
     # reconstruct with the correct base index below.
     _image_overlays_raw: list[ImageOverlay] = (
-        _collect_image_overlays(_tl_ref_img, image_index_base=0)
+        _collect_image_overlays(
+            _tl_ref_img, image_index_base=0, timeline_path=_tl_path_img
+        )
         if _tl_ref_img is not None
         else []
     )
@@ -3394,6 +3406,7 @@ def build_plan(
         _image_overlays = _collect_image_overlays(
             _tl_ref_img,
             image_index_base=_image_index_base,
+            timeline_path=_tl_path_img,
         )
     else:
         _image_overlays = []

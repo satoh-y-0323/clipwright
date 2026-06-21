@@ -37,6 +37,7 @@ jobs:
           - clipwright-reframe
           - clipwright-render
           - clipwright-scene
+          - clipwright-overlay
           - clipwright-sequence
           - clipwright-silence
           - clipwright-speed

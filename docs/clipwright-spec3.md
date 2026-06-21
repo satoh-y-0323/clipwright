@@ -337,7 +337,7 @@ program.
 
 ---
 
-### `clipwright-overlay`  (image / logo / watermark)
+### `clipwright-overlay`  ✅ IMPLEMENTED (v0.1.0, 2026-06-22)  (image / logo / watermark)
 
 **What it does**
 Overlays a static image (PNG logo, watermark, lower-third graphic, end card) onto
@@ -355,11 +355,25 @@ graphic lower-thirds are standard in published video and have no path today.
 - Store overlay markers like text overlays:
   `metadata["clipwright"]["kind"] = "image_overlay"` with
   `{image_path, x, y, scale, opacity, start_sec, duration_sec, fade_in_sec, fade_out_sec}`.
-- render: add the image as an extra `-i`, then chain
-  `[ov]format=rgba,colorchannelmixer=aa={opacity}[a];[base][a]overlay=x:y:enable='between(t,…)'`.
-- Validate `image_path` is `.png`/`.jpg`, exists, and is within the timeline
-  directory (same boundary policy as sources/subtitles).
-- Reuse the fade/`enable` timing approach already proven for `drawtext`.
+  `image_path` is stored as a POSIX relative path from the output timeline's parent
+  directory (round-trip portability — V2-3).
+- render: reconstruct the absolute image path from the relative stored path, add
+  the image as an extra `-i` after BGM (preserving `bgm_index = len(input_sources)`
+  invariant — ADR-OV-5). For each overlay, emit two filter segments:
+  ```
+  [{N}:v]scale=iw*{scale}:-2,format=rgba,colorchannelmixer=aa={opacity},
+  fade=t=in:st={start}:d={fade_in}:alpha=1,fade=t=out:st={end-fade_out}:d={fade_out}:alpha=1[ov{i}];
+  {base}[ov{i}]overlay=x='{x}':y='{y}':enable='between(t,{start},{end})'[outvimg{i}]
+  ```
+  `scale=iw*{scale}:-2` (even-rounding for yuv420p). `colorchannelmixer=aa={opacity}`
+  sets constant opacity (aa does not accept time-varying expressions — G1 confirmed).
+  `fade:alpha=1` multiplies the existing alpha, ramping 0 → opacity → 0.
+  `x`/`y` are single-quoted (consistent with `enable` and drawtext — G5 confirmed).
+  Insert this chain after `drawtext` so image overlays appear on top of text.
+- Validate `image_path` is `.png`/`.jpg`/`.jpeg`/`.webp`, exists, and is within the
+  timeline directory (same boundary policy as sources/subtitles). x/y allowlist:
+  `^[A-Za-z0-9_()+\-*/. ]+$` (prohibits `:`, `;`, `[`, `]`, `,`, `'`, control chars).
+- Maximum 64 image overlays per timeline (scale `(0, 8]`).
 
 ---
 
@@ -470,7 +484,7 @@ clipwright (core)
   ├─ clipwright-bgm            ← shipped
   ├─ clipwright-reframe        ← ✅ IMPLEMENTED (v0.1.0); aspect/crop/pad, vertical formats
   ├─ clipwright-sequence       ← ✅ IMPLEMENTED (v0.1.0); multi-source assembly over render's existing concat
-  ├─ clipwright-overlay        ← NEW (Medium); image/logo/watermark overlay
+  ├─ clipwright-overlay        ← ✅ IMPLEMENTED (v0.1.0, 2026-06-22); image/logo/watermark overlay
   ├─ clipwright-transition     ← NEW (Low); xfade/acrossfade
   └─ clipwright-render         ← shipped; extend for HW encode/decode, caption/overlay re-timing,
                                   reframe, image overlay, transitions
@@ -491,6 +505,6 @@ as render filter/option work:
 - [x] Re-time `text_overlay` markers through the kept-range + `LinearTimeWarp` map
 - [x] Re-time / remap subtitle cues to program time when cuts or warps are present
 - [x] `reframe` metadata → `scale`/`crop`/`pad`/`overlay` (blur-pad) filter chain
-- [ ] `image_overlay` markers → extra `-i` + `overlay` filter with opacity/fade
+- [x] `image_overlay` markers → extra `-i` + `overlay` filter with opacity/fade (render v0.10.0)
 - [ ] `xfade` / `acrossfade` for transitions (depends on sequence assembly)
 ```

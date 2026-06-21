@@ -262,6 +262,50 @@ def _check_subtitle_within_timeline_dir(timeline_path: Path, subtitle: str) -> N
     )
 
 
+def _verify_image_magic(image_path: str) -> None:
+    """Check the magic bytes of an image file to detect corrupt or non-image files.
+
+    Reads only the first 12 bytes; raises SUBPROCESS_FAILED when the header
+    does not match any known image signature, so that callers receive an immediate
+    error rather than waiting for -loop 1 to hang indefinitely on corrupt input
+    (V2-7 / DC-AM-004).
+
+    Supported magic signatures:
+      PNG  : b'\\x89PNG'
+      JPEG : b'\\xff\\xd8\\xff'
+      WebP : bytes 0-3 == b'RIFF' AND bytes 8-12 == b'WEBP'
+
+    Args:
+        image_path: Absolute path to the image file (already validated to exist).
+
+    Raises:
+        ClipwrightError: SUBPROCESS_FAILED when the file header does not match
+            any supported image signature (corrupt or wrong format).
+    """
+    try:
+        with open(image_path, "rb") as fh:
+            header = fh.read(12)
+    except OSError:
+        # If we can't even read the file, let ffmpeg produce the error normally.
+        return
+
+    basename = Path(image_path).name
+
+    is_png = header[:4] == b"\x89PNG"
+    is_jpeg = header[:3] == b"\xff\xd8\xff"
+    is_webp = header[:4] == b"RIFF" and header[8:12] == b"WEBP"
+
+    if not (is_png or is_jpeg or is_webp):
+        raise ClipwrightError(
+            code=ErrorCode.SUBPROCESS_FAILED,
+            message=(f"Image overlay file appears corrupt or unsupported: {basename}"),
+            hint=(
+                "The image overlay file does not have a valid PNG / JPEG / WebP header."
+                " Replace it with a valid image file."
+            ),
+        )
+
+
 def _check_image_overlay_within_timeline_dir(
     timeline_path: Any,
     image_path: str,
@@ -347,8 +391,20 @@ def _build_ffmpeg_inputs(
     if plan.bgm_source is not None:
         inputs += ["-stream_loop", "-1", "-i", plan.bgm_source]
 
-    # Image overlays: -i <image_path> (NO -stream_loop; static images; ADR-OV-5)
+    # Image overlays: -loop 1 -t {total_duration} -i <image_path>
+    # -loop 1 repeats the single-frame PNG so that its internal timestamps advance
+    # with the output clock.  Without this, all PNG frames carry timestamp=0 and
+    # fade=t=in:st=N:d=D:alpha=1 never fires because st>0 is never reached.
+    # -t caps the loop at the output duration so ffmpeg does not run indefinitely
+    # (ADR-OV-5 / V2-1 fade fix).
+    img_dur: str | None = (
+        f"{plan.total_duration_seconds:g}"
+        if hasattr(plan, "total_duration_seconds") and plan.image_sources
+        else None
+    )
     for img in plan.image_sources:
+        if img_dur is not None:
+            inputs += ["-loop", "1", "-t", img_dur]
         inputs += ["-i", img]
 
     return inputs
@@ -742,6 +798,10 @@ def _render_inner(
     # for output==BGM takes precedence).
     tl = load_timeline(timeline)
     ranges = resolve_kept_ranges(tl)
+    # V2-3: propagate the timeline file path into KeptRangeList so that
+    # build_plan -> _collect_image_overlays can reconstruct relative image_paths
+    # stored in image_overlay markers (DC-AS-003 / round-trip stability).
+    ranges._timeline_path = str(timeline_path.resolve())
 
     # Obtain all unique sources in order of appearance (ADR-C9-r2).
     # unique_sources_in_order is the single source of truth in plan.py
@@ -1093,11 +1153,22 @@ def _render_inner(
         inputs += ["-stream_loop", "-1", "-i", plan.bgm_source]
 
     # Image overlay inputs: appended AFTER bgm (ADR-OV-5/G4).
-    # NO -stream_loop on static images; NO -hwaccel on image inputs.
+    # -loop 1 -t {total_duration} is prepended so the single-frame PNG's internal
+    # timestamps advance with the output clock; without this, fade=t=in:st=N fires
+    # at timestamp 0 only and the alpha channel is 0 for the entire clip (V2-1 fix).
+    # NO -hwaccel on image inputs.
     # Boundary, extension, and existence checks are applied here (defence-in-depth;
     # OTIO is untrusted; V2-7/DC-AM-004).
+    _img_dur: str | None = (
+        f"{plan.total_duration_seconds:g}"
+        if hasattr(plan, "total_duration_seconds") and plan.image_sources
+        else None
+    )
     for img in plan.image_sources:
         _check_image_overlay_within_timeline_dir(timeline_path, img)
+        _verify_image_magic(img)  # fast corrupt-check before -loop 1 can hang
+        if _img_dur is not None:
+            inputs += ["-loop", "1", "-t", _img_dur]
         inputs += ["-i", img]
 
     # F-4: When stabilize is enabled, output must be absolutised so that

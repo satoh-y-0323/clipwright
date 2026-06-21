@@ -5,6 +5,61 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-06-22
+
+### Added
+
+- **`clipwright-overlay` package (v0.1.0)**: New MCP tool `clipwright_add_overlay`
+  that annotates an OTIO timeline with a static image overlay (PNG/JPEG logo,
+  watermark, lower-third graphic, end card) for a specified time range.
+  Key characteristics:
+  - Parameters: `image_path`, `start_sec`, `duration_sec`, `x` (default `(W-w)/2`),
+    `y` (default `(H-h)/2`), `scale` (default `1.0`, range `(0, 8]`), `opacity`
+    (default `1.0`, range `[0, 1]`), `fade_in_sec` (default `0.3`),
+    `fade_out_sec` (default `0.3`).
+  - `image_path` must be a `.png`, `.jpg`, `.jpeg`, or `.webp` file co-located
+    under the output OTIO timeline's parent directory (same co-location boundary as
+    `clipwright-render` sources, enabling round-trip portability). The path is stored
+    as a POSIX relative path in the OTIO marker, so projects remain portable when
+    moved between directories.
+  - Maximum 64 image overlays per timeline (DC-GP-002).
+  - Accumulate pattern: each call appends a new `image_overlay` marker
+    (`image_0`, `image_1`, …) to the first video track (V1). Duplicate detection
+    (idempotency) prevents adding the same overlay twice.
+  - `x` / `y` accept FFmpeg overlay position expressions (e.g. `(W-w)/2`,
+    `main_w-overlay_w-10`). Characters `: ; [ ] , '` and control characters are
+    prohibited to prevent filtergraph injection.
+  - Subprocess-free at annotation time; all FFmpeg calls are deferred to
+    `clipwright-render`.
+  - Non-destructive: input media and timeline are never modified; only a new `.otio`
+    is written.
+  - MCP annotations: `readOnlyHint=true`, `destructiveHint=false`,
+    `idempotentHint=true`, `openWorldHint=false`.
+  - Error codes: `PATH_NOT_ALLOWED`, `FILE_NOT_FOUND`, `INVALID_INPUT`,
+    `UNSUPPORTED_OPERATION`.
+
+- **`clipwright-render` image_overlay support (v0.10.0)**: `clipwright_render` now
+  reads `image_overlay` markers from the OTIO timeline and materialises them into
+  video. For each overlay the render pipeline:
+  - Adds the image file as an extra `-i` input (after BGM, preserving the existing
+    `bgm_index = len(input_sources)` invariant).
+  - Inserts a two-segment FFmpeg filter chain per overlay (after `drawtext`, so image
+    overlays appear on top of text):
+    ```
+    [{N}:v]scale=iw*{scale}:-2,format=rgba,colorchannelmixer=aa={opacity},
+    fade=t=in:st={start}:d={fade_in}:alpha=1,fade=t=out:st={end-fade_out}:d={fade_out}:alpha=1[ov{i}];
+    {base}[ov{i}]overlay=x='{x}':y='{y}':enable='between(t,{start},{end})'[outvimg{i}]
+    ```
+  - `scale=iw*{scale}:-2` (even-rounding for yuv420p compatibility).
+  - `colorchannelmixer=aa={opacity}` sets constant opacity; `fade:alpha=1` multiplies
+    the existing alpha, ramping it 0 → opacity → 0 over the fade windows.
+  - `x` / `y` are single-quoted inside the overlay filter (consistent with `enable`
+    and `drawtext`).
+  - Backward compatible: existing render calls without `image_overlay` markers
+    produce identical output.
+  - Corrupt or undecodable image files cause `SUBPROCESS_FAILED` with a basename-only
+    message and an actionable hint (CWE-209 compliant).
+
 ## [0.13.0] - 2026-06-22
 
 ### Added
