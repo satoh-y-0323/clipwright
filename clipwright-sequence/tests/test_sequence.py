@@ -569,6 +569,10 @@ class TestFileNotFoundPathNonExposure:
         assert str(tmp_path) not in error_msg, (
             "FILE_NOT_FOUND message must not expose the absolute path (CWE-209)"
         )
+        assert (
+            result["error"]["hint"]
+            == "Check that the path is correct and the file exists."
+        )
 
 
 # ===========================================================================

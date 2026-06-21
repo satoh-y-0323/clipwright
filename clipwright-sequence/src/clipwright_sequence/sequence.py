@@ -96,9 +96,9 @@ def _build_sequence_inner(clips: list[SequenceClip], output: str) -> ToolResult:
     if len(clips) > _MAX_CLIPS:
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message=f"Too many clips: {len(clips)} (maximum is {_MAX_CLIPS}).",
+            message="Too many clips were provided.",
             hint=(
-                f"Reduce the number of clips to at most {_MAX_CLIPS}, "
+                f"Received {len(clips)} clips; reduce to at most {_MAX_CLIPS} clips, "
                 "or split into multiple sequences."
             ),
         )
