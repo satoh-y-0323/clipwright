@@ -26,11 +26,10 @@ Target contract:
       (V2-4 MANDATE: so the True choice is recorded and not re-flagged in
       review. The text/bgm asymmetry is intentional.)
 
-Note: clipwright_overlay.server does NOT currently exist (Wave 4 deliverable).
-All tests are expected to FAIL (Red) until impl-overlay-server lands —
-specifically because the module is missing (ImportError), NOT due to a logic bug.
-The conditional-xfail pattern below auto-deactivates once server.py is
-implemented, so no test edit is needed in Wave 4.
+Note: All tests in this file are GREEN (server.py implemented as of
+clipwright-overlay v0.1.0, _SERVER_AVAILABLE=True). The conditional-xfail
+guard below remains as a safety net for future package-split scenarios where
+the server module might not be available; it is currently inactive.
 """
 
 from __future__ import annotations

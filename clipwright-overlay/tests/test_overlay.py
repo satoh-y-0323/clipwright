@@ -49,7 +49,7 @@ from pathlib import Path
 
 import opentimelineio as otio
 import pytest
-from conftest import _DUMMY_PNG_BYTES
+from _imgbytes import DUMMY_PNG_BYTES as _DUMMY_PNG_BYTES
 
 from clipwright_overlay.overlay import add_overlay
 from clipwright_overlay.schemas import AddOverlayOptions
