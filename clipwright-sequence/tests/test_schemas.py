@@ -20,8 +20,9 @@ from __future__ import annotations
 import math
 
 import pytest
-from clipwright_sequence.schemas import SequenceClip
 from pydantic import ValidationError
+
+from clipwright_sequence.schemas import SequenceClip
 
 # ===========================================================================
 # SequenceClip — default construction and valid values
@@ -269,8 +270,9 @@ class TestSequenceOptionsNotDefined:
 def test_sequence_schemas_does_not_redefine_core_types() -> None:
     """clipwright_sequence.schemas must not redefine core common types."""
     # core types must be importable
-    import clipwright_sequence.schemas as seq_schemas
     from clipwright.schemas import Artifact, MediaRef, ToolResult  # noqa: F401
+
+    import clipwright_sequence.schemas as seq_schemas
 
     assert not hasattr(seq_schemas, "MediaRef"), (
         "schemas.py must not redefine MediaRef from core"

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import pytest
 from clipwright.errors import ClipwrightError, ErrorCode
+
 from clipwright_sequence.plan import (
     _EPSILON,
     ResolvedClip,
