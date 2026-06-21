@@ -65,9 +65,12 @@ at realisation time.
 | Code | Cause |
 |------|-------|
 | `INVALID_INPUT` | `clips` is empty, exceeds 1000 entries, contains an invalid range (`start_sec >= end_sec`, `end_sec > source duration`), or `output` has a non-`.otio` extension |
+| `INVALID_INPUT` | `output` parent directory does not exist |
+| `INVALID_INPUT` | A source file has no video stream (audio-only file) |
+| `INVALID_INPUT` | A source file's frame rate is undetermined (e.g. still-image stream or unusual capture device) |
 | `FILE_NOT_FOUND` | A source media path does not exist |
 | `PATH_NOT_ALLOWED` | A source file is located outside the output directory tree (co-location violation) |
-| `INVALID_INPUT` | `output` path and a source media path resolve to the same file |
+| `PATH_NOT_ALLOWED` | `output` path and a source media path resolve to the same file |
 | `PROBE_FAILED` | ffprobe could not determine a source's duration (corrupted file) |
 | `DEPENDENCY_MISSING` | ffprobe binary not found (`CLIPWRIGHT_FFPROBE` unset and not on `PATH`) |
 

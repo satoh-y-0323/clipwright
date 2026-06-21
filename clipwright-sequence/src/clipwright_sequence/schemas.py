@@ -30,10 +30,11 @@ class SequenceClip(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     media: str = Field(
+        max_length=4096,  # OS path length upper bound
         description=(
             "Absolute or relative path to the source media file. "
             "The path is resolved by the orchestration layer before probe."
-        )
+        ),
     )
     start_sec: float | None = Field(
         default=None,

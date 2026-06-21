@@ -38,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `clip_count`, `total_duration_sec` (approximate — DC-AM-003), `unique_source_count`
     in `data`.
   - `artifacts`: `[{"role": "timeline", "path": "<output>", "format": "otio"}]`.
-  - `warnings`: per-clip range-clamp notices (e.g. `end_sec` clamped to source duration).
+  - `warnings`: always empty in v0.1.0 (probe-error tolerance absorption is silent; no clamping warnings are emitted — DC-AS-003).
 
 - **MCP annotations**: `readOnlyHint=true`, `destructiveHint=false`,
   `idempotentHint=true`, `openWorldHint=false`.

@@ -128,6 +128,14 @@ def _build_sequence_inner(clips: list[SequenceClip], output: str) -> ToolResult:
     # key for dedup; the canonical abs_path used as target_url comes from
     # _resolve_and_check_colocation in the probe loop (DC-AS-001: single resolve).
     #
+    # TOCTOU note: this pre-resolve and the second resolve in
+    # _resolve_and_check_colocation create a two-resolve window per source path.
+    # The window is closed by the inspect_media call (step 1 in the probe loop)
+    # which runs between the two resolves: inspect_media -> _validate_existing_file
+    # rejects symlinks and non-existent paths with FILE_NOT_FOUND, so any path
+    # manipulation between the two resolves is caught before the canonical abs_path
+    # is used as target_url (SR L-1 / DC-AS-005).
+    #
     # pre_resolved_map: maps every clip.media string -> its temporary resolved key.
     # This is used both for dedup and for mapping back after probing.
     pre_resolved_map: dict[str, str] = {}  # clip.media -> resolved/absolute key
@@ -156,8 +164,20 @@ def _build_sequence_inner(clips: list[SequenceClip], output: str) -> ToolResult:
 
     for media in ordered_unique_media:
         # (1) inspect_media (existence check, FILE_NOT_FOUND, DEPENDENCY_MISSING, etc.)
-        #     All ClipwrightError propagate transparently (§V2.10).
-        info = inspect_media(media)
+        #     FILE_NOT_FOUND is caught here to replace the core message (which may
+        #     contain a full path from _validate_existing_file) with a basename-only
+        #     fixed message (CWE-209 / DC-AM-004/005). All other ClipwrightError codes
+        #     (DEPENDENCY_MISSING / SUBPROCESS_*) propagate transparently (§V2.10).
+        try:
+            info = inspect_media(media)
+        except ClipwrightError as exc:
+            if exc.code == ErrorCode.FILE_NOT_FOUND:
+                raise ClipwrightError(
+                    code=ErrorCode.FILE_NOT_FOUND,
+                    message=f"File not found: {Path(media).name}",
+                    hint="Check that the path is correct and the file exists.",
+                ) from None
+            raise  # DEPENDENCY_MISSING / SUBPROCESS_* stay transparent
 
         # (2) duration None -> PROBE_FAILED
         if info.duration is None:
@@ -368,7 +388,13 @@ def _resolve_and_check_colocation(media: str, output_path: Path) -> str:
         except ClipwrightError:
             raise
         except OSError:
-            # Truly unresolvable: accept and defer to subsequent existence checks.
+            # Truly unresolvable (e.g. extremely long path, network path, or symlink
+            # loop where both resolve() and absolute() fail): accept the raw absolute
+            # path and skip boundary comparison. This is an intentional best-effort
+            # boundary-skip, consistent with the render/color/loudness precedent
+            # (SR L-2 / §V2.11 DC-GP-002). Only triggers under extreme path conditions
+            # not present in normal operation; real existence is verified upstream by
+            # inspect_media.
             return str(Path(media).absolute())
 
 

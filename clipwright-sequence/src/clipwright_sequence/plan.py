@@ -24,17 +24,15 @@ from clipwright_sequence.schemas import SequenceClip
 # Floating-point epsilon for near-zero comparisons (same convention as trim/silence).
 _EPSILON = 1e-9
 
-# Sentinel frame rate used when a source has no video stream.
-# Keep in sync with clipwright.media inspect_media sentinel (1000.0).
-_SENTINEL_RATE = 1000.0
-
 
 @dataclass(frozen=True)
 class SourceProbe:
     """Probe result for a single source media file.
 
     abs_path is the resolved absolute path used as the probes dict key.
-    rate is frames-per-second (video) or _SENTINEL_RATE for audio-only sources.
+    rate is frames-per-second (video). Audio-only sources never reach plan.py —
+    they are rejected by sequence.py before resolve_clip_specs is called.
+    The sentinel check (rate >= 1000.0) is performed by sequence.py.
     """
 
     abs_path: str
@@ -109,14 +107,11 @@ def resolve_clip_specs(
         if end > duration + tolerance:
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
-                message=(
-                    f"end_sec ({end:.6f}) exceeds source duration "
-                    f"({duration:.6f}) beyond the one-frame tolerance "
-                    f"({tolerance:.6f}) for clip index {index}."
-                ),
+                message="A clip's end_sec exceeds the source duration.",
                 hint=(
-                    "Set end_sec within the source duration, or omit end_sec "
-                    "to use the full duration."
+                    f"Clip at index {index}: end_sec={end:.3f}s exceeds "
+                    f"source duration={duration:.3f}s (tolerance={tolerance:.6f}s). "
+                    "Set end_sec within the source duration, or omit end_sec."
                 ),
             )
 
@@ -124,11 +119,10 @@ def resolve_clip_specs(
         if start >= end - _EPSILON:
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
-                message=(
-                    f"start_sec ({start:.6f}) >= end_sec ({end:.6f}) "
-                    f"for clip index {index}: zero-length or inverted range."
-                ),
+                message="A clip's start_sec is greater than or equal to its end_sec.",
                 hint=(
+                    f"Clip at index {index}: start_sec={start:.3f}s >= "
+                    f"end_sec={end:.3f}s — zero-length or inverted range. "
                     "Ensure start_sec < end_sec for every clip. "
                     "Omit end_sec to use the full source duration."
                 ),

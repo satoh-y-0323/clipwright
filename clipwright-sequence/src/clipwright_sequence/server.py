@@ -29,6 +29,8 @@ mcp = FastMCP("clipwright-sequence")
 
 @mcp.tool(
     annotations=ToolAnnotations(
+        # readOnlyHint=True: OTIO-only output; input media unchanged.
+        # Convention for non-render tools (render uses readOnlyHint=False).
         readOnlyHint=True,
         destructiveHint=False,
         idempotentHint=True,

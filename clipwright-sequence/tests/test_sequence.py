@@ -1,8 +1,7 @@
-"""test_sequence.py — Red-phase tests for clipwright_sequence.sequence.build_sequence.
+"""test_sequence.py — Tests for clipwright_sequence.sequence.build_sequence.
 
-All tests are expected to FAIL (ImportError / ModuleNotFoundError) until
-impl-sequence lands, because clipwright_sequence.sequence (and build_sequence)
-do not yet exist.  The correct Red reason is: the module is missing.
+Verifies the build_sequence orchestration layer: happy-path OTIO assembly,
+error envelopes, path security, dedup, tolerance, and co-location enforcement.
 
 Architecture references:
   - architecture-report-20260621-205501.md §4 ADR-SEQ-4
@@ -35,9 +34,9 @@ import pytest
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.otio_utils import load_timeline
 from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo
-from clipwright_sequence.sequence import build_sequence
 
 from clipwright_sequence.schemas import SequenceClip
+from clipwright_sequence.sequence import build_sequence
 
 # ===========================================================================
 # Constants
@@ -531,6 +530,48 @@ class TestPrecedence:
 
 
 # ===========================================================================
+# CWE-209 regression: FILE_NOT_FOUND message must not expose full path
+# ===========================================================================
+
+
+class TestFileNotFoundPathNonExposure:
+    """SR H-1 / SR L-3 regression: FILE_NOT_FOUND message must not contain the
+    absolute path from the core _validate_existing_file (CWE-209)."""
+
+    def test_file_not_found_message_does_not_expose_full_path(
+        self, tmp_path: Path
+    ) -> None:
+        """FILE_NOT_FOUND error message must not contain the absolute path (CWE-209).
+
+        Patches inspect_media to raise the real core format — which includes the full
+        path in the message — and asserts that build_sequence sanitizes it so that the
+        absolute path is not present in the returned error message.
+        """
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        media = str(tmp_path / "missing.mp4")
+        output = str(project_dir / "out.otio")
+        clips = [_clip(media, 0.0, 5.0)]
+
+        with patch(
+            "clipwright_sequence.sequence.inspect_media",
+            side_effect=ClipwrightError(
+                code=ErrorCode.FILE_NOT_FOUND,
+                message=f"Symbolic links are not accepted: {media}",  # real core format
+                hint="Specify the path to a real file, not a symbolic link.",
+            ),
+        ):
+            result = build_sequence(clips=clips, output=output)
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
+        error_msg = result["error"]["message"]
+        assert str(tmp_path) not in error_msg, (
+            "FILE_NOT_FOUND message must not expose the absolute path (CWE-209)"
+        )
+
+
+# ===========================================================================
 # DC-AS-004: rate sentinel (rate >= 1000.0 with has_video=True) -> INVALID_INPUT
 # ===========================================================================
 
@@ -863,11 +904,11 @@ class TestOsErrorFallback:
 
         original_resolve = Path.resolve
 
-        def _patched_resolve(self: Path, **kwargs: object) -> Path:
+        def _patched_resolve(self: Path, strict: bool = False) -> Path:
             # Raise OSError for source paths to trigger fallback
             if str(self).endswith(".mp4"):
                 raise OSError("simulated network path failure")
-            return original_resolve(self, **kwargs)
+            return original_resolve(self, strict=strict)
 
         with (
             patch(
@@ -919,10 +960,10 @@ class TestOsErrorFallback:
 
         original_resolve = Path.resolve
 
-        def _patched_resolve(self: Path, **kwargs: object) -> Path:
+        def _patched_resolve(self: Path, strict: bool = False) -> Path:
             if str(self).endswith(".mp4"):
                 raise OSError("simulated failure")
-            return original_resolve(self, **kwargs)
+            return original_resolve(self, strict=strict)
 
         with (
             patch(

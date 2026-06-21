@@ -4,10 +4,6 @@ Covers the contract of clipwright_sequence.plan:
   - SourceProbe / ResolvedClip dataclasses (frozen)
   - resolve_clip_specs(probes, clips) -> (list[ResolvedClip], list[str] warnings)
 
-All tests are expected to FAIL (Red phase) until impl-schemas-plan lands,
-because clipwright_sequence.plan (and its symbols) do not yet exist.
-Failure reason: ModuleNotFoundError / ImportError — not a test logic error.
-
 Architecture references:
   - architecture-report-20260621-205501.md §3 ADR-SEQ-3
   - §V2.3 (DC-AS-003 tolerance: end within 1 frame is accepted and clipped)

@@ -1,8 +1,7 @@
-"""test_server.py — Red-phase tests for clipwright-sequence server.py (MCP wrapper).
+"""test_server.py — Tests for clipwright-sequence server.py (MCP wrapper).
 
-All tests are expected to FAIL (ImportError / ModuleNotFoundError) until
-impl-server lands, because clipwright_sequence.server does not yet exist.
-The correct Red reason is: the server module is missing.
+Validates the FastMCP registration, MCP annotations, delegation contract,
+and docstring content requirements for clipwright_build_sequence.
 
 Architecture references:
   - architecture-report-20260621-205501.md §2 ADR-SEQ-2 (server signature / annotations)

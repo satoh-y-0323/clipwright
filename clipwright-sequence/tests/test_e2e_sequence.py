@@ -3,8 +3,8 @@
 Design rationale:
   - §8.3, §V2.1 (DC-AS-001 round-trip co-location): sources produced by build_sequence
     must be accepted by clipwright-render without PATH_NOT_ALLOWED.
-  - §V2.5 (DC-AS-006 empty A1 / resolve_bgm harmless): a timeline with no Audio
-    tracks produces zero BGM clips; render must succeed.
+  - §V2.5 (DC-AS-006 empty A1 / resolve_bgm harmless): a timeline with an empty
+    A1 audio track (no clips added to A1) produces zero BGM clips; render must succeed.
   - §V2.9 (DC-AM-003 approx duration): rendered output duration ≈ sum of input
     clip source_range durations within ±a few frames.
 
@@ -304,9 +304,10 @@ class TestBuildSequenceRenderRoundTrip:
     def test_dc_as_006_empty_audio_track_resolve_bgm_harmless(
         self, tmp_path: Path
     ) -> None:
-        """DC-AS-006: resolve_bgm returns None for a V1-only timeline (no BGM clips).
+        """DC-AS-006: resolve_bgm returns None for a timeline with an empty A1 track.
 
-        build_sequence produces a V1 (video) track with no Audio tracks.
+        build_sequence produces a V1 (video) track and an empty A1 audio track
+        (no clips added to A1; new_timeline always creates V1+A1).
         resolve_bgm must return None — meaning 0 BGM clips — and render must
         succeed without any side-effects from the empty audio path.
         """
