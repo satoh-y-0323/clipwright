@@ -1,9 +1,9 @@
-"""test_image_overlay.py — Red-phase tests for image_overlay render extension.
+"""test_image_overlay.py — Green-phase tests for image_overlay render extension.
 
-Target symbols (ALL DO NOT EXIST YET — tests MUST FAIL until impl-render-overlay lands):
+All target symbols are implemented and this suite is expected to PASS:
   - ImageOverlay (frozen dataclass in clipwright_render.plan)
   - _collect_image_overlays(timeline, image_index_base) -> list[ImageOverlay]
-  - _build_overlay_segment(o, base_label) -> tuple[list[str], str]
+  - _build_overlay_segment(o, base_label, i) -> tuple[list[str], str]
   - _append_overlay_filter(filter_parts, video_map_label, overlays) -> str
   - _check_image_overlay_within_timeline_dir(timeline_path, image_path) in render.py
   - _ALLOWED_IMAGE_EXTENSIONS in render.py
@@ -59,13 +59,14 @@ try:
 except ImportError:
     _RENDER_HAS_IMAGE_CHECK = False
 
-# All tests in this file are xfail(strict=True) until the symbols exist.
-# Using the module-level sentinel for parameterised xfail is the same pattern
-# as clipwright-sequence/tests/test_server.py.
+# Guard: xfail(strict=True) activates only when the symbols are absent (i.e. if
+# the package is installed without the image_overlay extension).  Currently all
+# symbols exist and this marker is inactive.  Using the module-level sentinel
+# is the same pattern as clipwright-sequence/tests/test_server.py.
 pytestmark = pytest.mark.xfail(
     not _PLAN_HAS_IMAGE_OVERLAY,
     strict=True,
-    reason="ImageOverlay not yet implemented (Red phase — impl-render-overlay pending)",
+    reason="ImageOverlay symbols not found (image_overlay extension not installed)",
 )
 
 # ---------------------------------------------------------------------------
@@ -533,7 +534,7 @@ class TestBuildOverlaySegment:
         )
 
         o = self._make_both_fades()
-        result = _build_overlay_segment(o, base_label="[outv]")
+        result = _build_overlay_segment(o, base_label="[outv]", i=0)
         assert isinstance(result, tuple)
         assert len(result) == 2
         segs, new_label = result
@@ -547,7 +548,7 @@ class TestBuildOverlaySegment:
         )
 
         o = self._make_both_fades()
-        segs, _ = _build_overlay_segment(o, base_label="[outv]")
+        segs, _ = _build_overlay_segment(o, base_label="[outv]", i=0)
         assert len(segs) == 2
 
     # --- Segment 1: image processing chain ---
@@ -559,7 +560,7 @@ class TestBuildOverlaySegment:
         )
 
         o = _make_image_overlay(input_index=3)
-        segs, _ = _build_overlay_segment(o, base_label="[outv]")
+        segs, _ = _build_overlay_segment(o, base_label="[outv]", i=0)
         assert segs[0].startswith("[3:v]")
 
     def test_segment1_uses_scale_iw_times_scale_colon_minus_2(self) -> None:
@@ -569,7 +570,7 @@ class TestBuildOverlaySegment:
         )
 
         o = _make_image_overlay(scale=0.5, input_index=2)
-        segs, _ = _build_overlay_segment(o, base_label="[outv]")
+        segs, _ = _build_overlay_segment(o, base_label="[outv]", i=0)
         seg1 = segs[0]
         # Must contain :-2
         assert ":-2" in seg1, f"Expected :-2 in segment 1, got: {seg1!r}"
@@ -583,7 +584,7 @@ class TestBuildOverlaySegment:
         )
 
         o = self._make_both_fades()
-        segs, _ = _build_overlay_segment(o, base_label="[outv]")
+        segs, _ = _build_overlay_segment(o, base_label="[outv]", i=0)
         assert "format=rgba" in segs[0]
 
     def test_segment1_colorchannelmixer_aa_is_constant_opacity(self) -> None:
@@ -596,7 +597,7 @@ class TestBuildOverlaySegment:
         )
 
         o = _make_image_overlay(opacity=0.8, input_index=2)
-        segs, _ = _build_overlay_segment(o, base_label="[outv]")
+        segs, _ = _build_overlay_segment(o, base_label="[outv]", i=0)
         seg1 = segs[0]
         # Must contain the constant opacity value
         assert "colorchannelmixer=aa=" in seg1, (
@@ -617,7 +618,7 @@ class TestBuildOverlaySegment:
         )
 
         o = _make_image_overlay(fade_in_s=0.5, fade_out_s=0.0, input_index=2)
-        segs, _ = _build_overlay_segment(o, base_label="[outv]")
+        segs, _ = _build_overlay_segment(o, base_label="[outv]", i=0)
         assert "fade=t=in" in segs[0], (
             f"fade=t=in should be present when fade_in_s>0: {segs[0]!r}"
         )
@@ -631,7 +632,7 @@ class TestBuildOverlaySegment:
         o = _make_image_overlay(
             start_s=2.0, end_s=7.0, fade_in_s=0.0, fade_out_s=0.5, input_index=2
         )
-        segs, _ = _build_overlay_segment(o, base_label="[outv]")
+        segs, _ = _build_overlay_segment(o, base_label="[outv]", i=0)
         assert "fade=t=out" in segs[0], (
             f"fade=t=out should be present when fade_out_s>0: {segs[0]!r}"
         )
@@ -643,7 +644,7 @@ class TestBuildOverlaySegment:
         )
 
         o = _make_image_overlay(fade_in_s=0.0, fade_out_s=0.3, input_index=2)
-        segs, _ = _build_overlay_segment(o, base_label="[outv]")
+        segs, _ = _build_overlay_segment(o, base_label="[outv]", i=0)
         assert "fade=t=in" not in segs[0], (
             f"fade=t=in should be OMITTED when fade_in_s==0: {segs[0]!r}"
         )
@@ -657,7 +658,7 @@ class TestBuildOverlaySegment:
         o = _make_image_overlay(
             start_s=2.0, end_s=7.0, fade_in_s=0.3, fade_out_s=0.0, input_index=2
         )
-        segs, _ = _build_overlay_segment(o, base_label="[outv]")
+        segs, _ = _build_overlay_segment(o, base_label="[outv]", i=0)
         assert "fade=t=out" not in segs[0], (
             f"fade=t=out should be OMITTED when fade_out_s==0: {segs[0]!r}"
         )
@@ -669,7 +670,7 @@ class TestBuildOverlaySegment:
         )
 
         o = _make_image_overlay(fade_in_s=0.0, fade_out_s=0.0, input_index=2)
-        segs, _ = _build_overlay_segment(o, base_label="[outv]")
+        segs, _ = _build_overlay_segment(o, base_label="[outv]", i=0)
         seg1 = segs[0]
         assert "fade=t=in" not in seg1
         assert "fade=t=out" not in seg1
@@ -683,7 +684,7 @@ class TestBuildOverlaySegment:
         )
 
         o = _make_image_overlay(fade_in_s=0.5, fade_out_s=0.0, input_index=2)
-        segs, _ = _build_overlay_segment(o, base_label="[outv]")
+        segs, _ = _build_overlay_segment(o, base_label="[outv]", i=0)
         assert ":alpha=1" in segs[0], (
             f"fade stage must have :alpha=1 (G2 — multiplies aa constant): {segs[0]!r}"
         )
@@ -697,7 +698,7 @@ class TestBuildOverlaySegment:
         # The overlay index 'i' is implicit in the label naming;
         # we verify the label pattern [ov0] or [ov{N}] appears.
         o = _make_image_overlay(input_index=2)
-        segs, _ = _build_overlay_segment(o, base_label="[outv]")
+        segs, _ = _build_overlay_segment(o, base_label="[outv]", i=0)
         seg1 = segs[0]
         # Segment 1 must end with something like [ov0] or [ov2] etc.
         import re
@@ -715,7 +716,7 @@ class TestBuildOverlaySegment:
         )
 
         o = self._make_both_fades()
-        segs, _ = _build_overlay_segment(o, base_label="[outv]")
+        segs, _ = _build_overlay_segment(o, base_label="[outv]", i=0)
         assert "overlay=" in segs[1]
 
     def test_segment2_x_y_are_single_quoted(self) -> None:
@@ -728,7 +729,7 @@ class TestBuildOverlaySegment:
         )
 
         o = _make_image_overlay(x="(W-w)/2", y="(H-h)/2", input_index=2)
-        segs, _ = _build_overlay_segment(o, base_label="[outv]")
+        segs, _ = _build_overlay_segment(o, base_label="[outv]", i=0)
         seg2 = segs[1]
         # x value must appear as x='(W-w)/2'
         assert "x='(W-w)/2'" in seg2, f"x must be single-quoted (V2-6): {seg2!r}"
@@ -741,7 +742,7 @@ class TestBuildOverlaySegment:
         )
 
         o = _make_image_overlay(start_s=2.0, end_s=7.0, input_index=2)
-        segs, _ = _build_overlay_segment(o, base_label="[outv]")
+        segs, _ = _build_overlay_segment(o, base_label="[outv]", i=0)
         seg2 = segs[1]
         assert "enable=" in seg2
         assert "between(t," in seg2
@@ -754,7 +755,7 @@ class TestBuildOverlaySegment:
         )
 
         o = self._make_both_fades()
-        segs, _ = _build_overlay_segment(o, base_label="[outvtext]")
+        segs, _ = _build_overlay_segment(o, base_label="[outvtext]", i=0)
         assert segs[1].startswith("[outvtext]")
 
     def test_segment2_output_label_is_outvimg_i(self) -> None:
@@ -766,7 +767,7 @@ class TestBuildOverlaySegment:
         import re
 
         o = self._make_both_fades()
-        segs, new_label = _build_overlay_segment(o, base_label="[outv]")
+        segs, new_label = _build_overlay_segment(o, base_label="[outv]", i=0)
         assert re.search(r"\[outvimg\d+\]$", segs[1]), (
             f"Segment 2 must end with [outvimg{{i}}]: {segs[1]!r}"
         )
@@ -782,7 +783,7 @@ class TestBuildOverlaySegment:
         )
 
         o = self._make_both_fades()
-        segs, new_label = _build_overlay_segment(o, base_label="[outv]")
+        segs, new_label = _build_overlay_segment(o, base_label="[outv]", i=0)
         # The label at end of segment 2 should match new_label
         assert segs[1].endswith(new_label), (
             f"Segment 2 tail {segs[1]!r} must end with new_label {new_label!r}"
@@ -813,7 +814,7 @@ class TestBuildOverlaySegment:
             fade_out_s=0.5,
             input_index=2,
         )
-        segs, new_label = _build_overlay_segment(o, base_label="[outv]")
+        segs, new_label = _build_overlay_segment(o, base_label="[outv]", i=0)
         seg1 = segs[0]
 
         # Key structural assertions (not exact string match since float formatting may vary)
@@ -851,7 +852,7 @@ class TestBuildOverlaySegment:
             fade_out_s=0.5,
             input_index=2,
         )
-        segs, _ = _build_overlay_segment(o, base_label="[outv]")
+        segs, _ = _build_overlay_segment(o, base_label="[outv]", i=0)
         seg2 = segs[1]
 
         assert "[outv]" in seg2  # base_label
@@ -1247,6 +1248,9 @@ class TestRenderCoLocationValidation:
         with pytest.raises(ClipwrightError) as exc_info:
             _check_image_overlay_within_timeline_dir(timeline_path, str(outside_image))
         assert exc_info.value.code == ErrorCode.PATH_NOT_ALLOWED
+        # CWE-209: fixed message must NOT contain any directory path
+        assert str(tmp_path) not in exc_info.value.message
+        assert str(outside_image) not in exc_info.value.message
 
     def test_image_inside_timeline_dir_passes(self, tmp_path: Path) -> None:
         """Image path inside timeline parent dir -> no error."""
@@ -1367,6 +1371,9 @@ class TestRenderCoLocationValidation:
         with pytest.raises(ClipwrightError) as exc_info:
             _check_image_overlay_within_timeline_dir(timeline_path, str(outside_image))
         assert exc_info.value.code == ErrorCode.PATH_NOT_ALLOWED
+        # CWE-209: fixed message must NOT contain any directory path
+        assert str(tmp_path) not in exc_info.value.message
+        assert str(outside_image) not in exc_info.value.message
 
 
 # ===========================================================================
@@ -1469,3 +1476,89 @@ class TestCorruptImageSubprocessFailed:
         assert ".png" in err.hint or "png" in err.hint.lower()
         assert ".jpg" in err.hint or "jpg" in err.hint.lower()
         assert ".webp" in err.hint or "webp" in err.hint.lower()
+
+
+# ===========================================================================
+# Section 10: _verify_image_magic direct unit tests (SR-M-1 / CWE-209)
+# ===========================================================================
+
+
+class TestVerifyImageMagic:
+    """Direct unit tests for _verify_image_magic (SR-AS-002 / CWE-209 guard)."""
+
+    def test_valid_png_header_passes(self, tmp_path: Path) -> None:
+        """A file with a valid PNG magic header does not raise."""
+        from clipwright_render.render import _verify_image_magic  # type: ignore[attr-defined]
+
+        img = tmp_path / "logo.png"
+        # Real PNG magic: \x89PNG\r\n\x1a\n (8 bytes) + 4 padding bytes
+        img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 4)
+        _verify_image_magic(str(img))  # must not raise
+
+    def test_valid_jpeg_header_passes(self, tmp_path: Path) -> None:
+        """A file with a valid JPEG magic header does not raise."""
+        from clipwright_render.render import _verify_image_magic  # type: ignore[attr-defined]
+
+        img = tmp_path / "logo.jpg"
+        # Real JPEG magic: \xff\xd8\xff (3 bytes) + padding
+        img.write_bytes(b"\xff\xd8\xff" + b"\x00" * 9)
+        _verify_image_magic(str(img))  # must not raise
+
+    def test_valid_webp_header_passes(self, tmp_path: Path) -> None:
+        """A file with a valid WebP magic header does not raise."""
+        from clipwright_render.render import _verify_image_magic  # type: ignore[attr-defined]
+
+        img = tmp_path / "logo.webp"
+        # Real WebP magic: RIFF (4 bytes) + file-size (4 bytes) + WEBP (4 bytes)
+        img.write_bytes(b"RIFF" + b"\x00\x00\x00\x00" + b"WEBP")
+        _verify_image_magic(str(img))  # must not raise
+
+    def test_garbage_bytes_raises_subprocess_failed(self, tmp_path: Path) -> None:
+        """Garbage bytes -> ClipwrightError(SUBPROCESS_FAILED)."""
+        from clipwright.errors import ClipwrightError, ErrorCode
+        from clipwright_render.render import _verify_image_magic  # type: ignore[attr-defined]
+
+        img = tmp_path / "logo.png"
+        img.write_bytes(b"GARBAGE_NOT_AN_IMAGE_\x00\x01\x02")
+        with pytest.raises(ClipwrightError) as exc_info:
+            _verify_image_magic(str(img))
+        err = exc_info.value
+        assert err.code == ErrorCode.SUBPROCESS_FAILED
+
+    def test_garbage_bytes_message_contains_basename(self, tmp_path: Path) -> None:
+        """Corrupt image error message contains the basename (not the full path)."""
+        from clipwright.errors import ClipwrightError
+        from clipwright_render.render import _verify_image_magic  # type: ignore[attr-defined]
+
+        img = tmp_path / "secret_logo.png"
+        img.write_bytes(b"GARBAGE_NOT_AN_IMAGE_\x00\x01\x02")
+        with pytest.raises(ClipwrightError) as exc_info:
+            _verify_image_magic(str(img))
+        err = exc_info.value
+        # basename must appear in the message
+        assert "secret_logo.png" in err.message
+
+    def test_garbage_bytes_message_excludes_full_path(self, tmp_path: Path) -> None:
+        """Corrupt image error message must NOT contain the parent directory path (CWE-209)."""
+        from clipwright.errors import ClipwrightError
+        from clipwright_render.render import _verify_image_magic  # type: ignore[attr-defined]
+
+        img = tmp_path / "secret_logo.png"
+        img.write_bytes(b"GARBAGE_NOT_AN_IMAGE_\x00\x01\x02")
+        with pytest.raises(ClipwrightError) as exc_info:
+            _verify_image_magic(str(img))
+        err = exc_info.value
+        # parent directory path must NOT appear in the message
+        assert str(tmp_path) not in err.message
+
+    def test_garbage_bytes_hint_mentions_replacement(self, tmp_path: Path) -> None:
+        """Corrupt image error hint provides actionable guidance."""
+        from clipwright.errors import ClipwrightError
+        from clipwright_render.render import _verify_image_magic  # type: ignore[attr-defined]
+
+        img = tmp_path / "logo.png"
+        img.write_bytes(b"GARBAGE_NOT_AN_IMAGE_\x00\x01\x02")
+        with pytest.raises(ClipwrightError) as exc_info:
+            _verify_image_magic(str(img))
+        err = exc_info.value
+        assert err.hint is not None and len(err.hint) > 0

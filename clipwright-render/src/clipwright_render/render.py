@@ -338,19 +338,8 @@ def _check_image_overlay_within_timeline_dir(
         hint_detail="image overlay file",
     )
 
-    # Extension allowlist (INVALID_INPUT; before existence check to fail-fast on
-    # bad extension without leaking path in the error).
-    img_ext = Path(image_path).suffix.lower()
-    if img_ext not in _ALLOWED_IMAGE_EXTENSIONS:
-        raise ClipwrightError(
-            code=ErrorCode.INVALID_INPUT,
-            message=(f"Image overlay file extension is not allowed: {img_ext!r}."),
-            hint=(
-                "Use an image overlay file with extension .png, .jpg, .jpeg, or .webp."
-            ),
-        )
-
-    # Existence check: file must already exist (CWE-209: basename only in message).
+    # Existence check: file must already exist (ADR-OV-3 order: existence before
+    # extension; CWE-209: basename only in message).
     if not Path(image_path).exists():
         raise ClipwrightError(
             code=ErrorCode.FILE_NOT_FOUND,
@@ -358,6 +347,17 @@ def _check_image_overlay_within_timeline_dir(
             hint=(
                 "Place the image overlay file referenced in the OTIO timeline"
                 " in the expected location."
+            ),
+        )
+
+    # Extension allowlist (INVALID_INPUT; after existence check per ADR-OV-3).
+    img_ext = Path(image_path).suffix.lower()
+    if img_ext not in _ALLOWED_IMAGE_EXTENSIONS:
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(f"Image overlay file extension is not allowed: {img_ext!r}."),
+            hint=(
+                "Use an image overlay file with extension .png, .jpg, .jpeg, or .webp."
             ),
         )
 
@@ -398,9 +398,7 @@ def _build_ffmpeg_inputs(
     # -t caps the loop at the output duration so ffmpeg does not run indefinitely
     # (ADR-OV-5 / V2-1 fade fix).
     img_dur: str | None = (
-        f"{plan.total_duration_seconds:g}"
-        if hasattr(plan, "total_duration_seconds") and plan.image_sources
-        else None
+        f"{plan.total_duration_seconds:g}" if plan.image_sources else None
     )
     for img in plan.image_sources:
         if img_dur is not None:
@@ -1160,9 +1158,7 @@ def _render_inner(
     # Boundary, extension, and existence checks are applied here (defence-in-depth;
     # OTIO is untrusted; V2-7/DC-AM-004).
     _img_dur: str | None = (
-        f"{plan.total_duration_seconds:g}"
-        if hasattr(plan, "total_duration_seconds") and plan.image_sources
-        else None
+        f"{plan.total_duration_seconds:g}" if plan.image_sources else None
     )
     for img in plan.image_sources:
         _check_image_overlay_within_timeline_dir(timeline_path, img)

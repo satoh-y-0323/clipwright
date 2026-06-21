@@ -638,14 +638,11 @@ def _add_overlay_inner(
     if len(existing_markers) >= _MAX_IMAGE_OVERLAYS:
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message=(
-                f"Cannot add image overlay: the timeline already has "
-                f"{len(existing_markers)} image overlays "
-                f"(maximum is {_MAX_IMAGE_OVERLAYS})."
-            ),
+            message="Too many image overlays on this timeline.",
             hint=(
-                f"Remove some image_overlay markers before adding more. "
-                f"The limit is {_MAX_IMAGE_OVERLAYS} per timeline."
+                f"The timeline already has {len(existing_markers)} image overlays "
+                f"and the maximum is {_MAX_IMAGE_OVERLAYS}. "
+                f"Remove some image_overlay markers before adding more."
             ),
         )
 

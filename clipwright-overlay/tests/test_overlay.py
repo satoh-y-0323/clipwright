@@ -37,8 +37,8 @@ Covered contracts:
     marker rate -> fallback 1000.0 + warning
 
 Note: This file does NOT import server.py (tested separately). No subprocess —
-overlay.py is subprocess-free. All tests expected to FAIL (Red) until
-impl-overlay-schemas lands (clipwright_overlay.overlay is missing).
+overlay.py is subprocess-free. All tests in this file are GREEN (implementation
+complete as of clipwright-overlay v0.1.0).
 """
 
 from __future__ import annotations
@@ -49,6 +49,7 @@ from pathlib import Path
 
 import opentimelineio as otio
 import pytest
+from conftest import _DUMMY_PNG_BYTES
 
 from clipwright_overlay.overlay import add_overlay
 from clipwright_overlay.schemas import AddOverlayOptions
@@ -58,11 +59,10 @@ from clipwright_overlay.schemas import AddOverlayOptions
 # ---------------------------------------------------------------------------
 
 _RATE = 24.0
-_DUMMY_PNG_BYTES = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
 
 
 # ---------------------------------------------------------------------------
-# Fixture helpers (inline — conftest.py owned by impl-overlay-schemas wave)
+# Fixture helpers
 # ---------------------------------------------------------------------------
 
 
@@ -135,10 +135,15 @@ def _write_dummy_png(path: Path) -> None:
 def _default_opts(tmp: Path, img: Path, **overrides: object) -> AddOverlayOptions:
     """Return AddOverlayOptions with valid defaults.
 
+    fade_in_sec and fade_out_sec are intentionally pinned to 0.0 (rather than
+    the schema defaults of 0.3) so that tests which do not specifically exercise
+    fades are not accidentally constrained by the fade-sum <= duration_sec rule.
+    Tests that need to verify fade behaviour pass explicit values via overrides.
+
     Args:
         tmp: Temporary directory used as output parent.
         img: Path to the co-located image file (must already exist).
-        **overrides: Field overrides.
+        **overrides: Field overrides applied on top of the defaults above.
     """
     base: dict[str, object] = {
         "image_path": str(img),

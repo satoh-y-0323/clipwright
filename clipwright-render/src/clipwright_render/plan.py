@@ -456,7 +456,7 @@ def _marker_to_image_overlay(
             message=(
                 "The timeline contains an image_overlay marker with missing metadata."
             ),
-            hint="Re-annotate with clipwright_add_image_overlay.",
+            hint="Re-annotate with clipwright_add_overlay.",
         )
 
     raw_image_path: str = str(cw.get("image_path", ""))
@@ -545,7 +545,7 @@ def _marker_to_image_overlay(
 
     # x/y allowlist (V2-5 / CWE-78).
     for xy_val in (x, y):
-        if not _XY_ALLOWLIST_RE.match(xy_val):
+        if not _XY_ALLOWLIST_RE.fullmatch(xy_val):
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
                 message=(
@@ -646,7 +646,7 @@ def _collect_image_overlays(
 def _build_overlay_segment(
     o: ImageOverlay,
     base_label: str,
-    i: int | None = None,
+    i: int,
 ) -> tuple[list[str], str]:
     """Build two filter segment strings for one image overlay (V2-1 confirmed chain).
 
@@ -669,18 +669,15 @@ def _build_overlay_segment(
     Args:
         o: validated ImageOverlay value object.
         base_label: current terminal video label consumed as the background input.
-        i: overlay loop index used for label naming (ov{i} / outvimg{i}).
-            When None, uses o.input_index as a fallback (avoids AttributeError
-            in direct unit-test calls that pass a single overlay).
+        i: overlay loop index (position in the overlays list) used for label
+            naming (ov{i} / outvimg{i}). Must be passed explicitly by
+            _append_overlay_filter; never defaults.
 
     Returns:
         (segments, new_label) where segments is a list of two filter strings and
         new_label is '[outvimg{i}]'.
     """
-    # Determine loop index for label naming.
-    # Unit tests call _build_overlay_segment directly without a loop index;
-    # _append_overlay_filter always passes the explicit loop position.
-    idx = i if i is not None else 0
+    idx = i
 
     seg1 = (
         f"[{o.input_index}:v]"
