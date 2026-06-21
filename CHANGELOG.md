@@ -5,6 +5,34 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-06-22
+
+### Added
+
+- **`clipwright-sequence` package (v0.1.0)**: New MCP tool `clipwright_build_sequence`
+  that assembles an ordered list of source media files into a single multi-source OTIO
+  timeline (single V1 video track, A1 left empty) for concatenation by `clipwright-render`.
+  Key characteristics:
+  - Each `SequenceClip` entry specifies a source media path and an optional sub-range
+    (`start_sec` / `end_sec`); omitting either defaults to the beginning / full source
+    duration respectively.
+  - Maximum 1000 clips per call (DC-GP-003).
+  - All source files must be co-located under the output `.otio` file's parent
+    directory (recursive subdirectories allowed). This mirrors `clipwright-render`'s
+    source co-location boundary so that a sequence-produced `.otio` round-trips
+    through render without `PATH_NOT_ALLOWED` errors (ADR-SEQ-6).
+  - Symlink sources are unsupported; resolve symlinks before passing to this tool
+    (DC-AS-005).
+  - `total_duration_sec` in the result `data` is an approximate estimate based on
+    the input clip ranges; the rendered output duration may differ slightly after
+    per-frame normalization (DC-AM-003).
+  - Non-destructive: input media files and existing OTIO files are never modified;
+    only the new `.otio` is written.
+  - Requires `CLIPWRIGHT_FFPROBE` (ffprobe is used to probe each source's duration
+    and confirm video stream presence before building the timeline).
+  - MCP annotations: `readOnlyHint=true`, `destructiveHint=false`,
+    `idempotentHint=true`, `openWorldHint=false`.
+
 ## [0.12.0] - 2026-06-21
 
 ### Added

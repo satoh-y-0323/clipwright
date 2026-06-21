@@ -300,7 +300,15 @@ square formats dominate social distribution, and the source in verification was
 
 ---
 
-### `clipwright-sequence`  (multi-source assembly)
+### `clipwright-sequence`  ✅ IMPLEMENTED (v0.1.0, 2026-06-22)  (multi-source assembly)
+
+> Shipped as the `clipwright-sequence` package (MCP tool `clipwright_build_sequence`).
+> Accepts up to 1000 ordered `SequenceClip` entries (source path + optional
+> `start_sec` / `end_sec`). Emits a single V1 video track OTIO timeline consumed by
+> `clipwright-render` with no changes.  Co-location constraint matches render's
+> boundary: sources must live under the output `.otio` parent directory (recursive
+> subdirs allowed — ADR-SEQ-6).  Symlink sources unsupported (DC-AS-005).
+> `total_duration_sec` is approximate (DC-AM-003).  Requires `CLIPWRIGHT_FFPROBE`.
 
 **What it does**
 Assembles a single OTIO timeline from multiple source files in order — intro +
@@ -315,14 +323,14 @@ way to, say, prepend a title card clip or splice two gameplay segments into one
 program.
 
 **MCP tool name(s)**
-`clipwright_append_clip` / `clipwright_build_sequence`
+`clipwright_build_sequence`
 
 **Implementation hints**
 - Pure OTIO construction over core `add_clip`; append clips (each a source + source
   range) to the V1 track in order; optionally carry per-clip transition hints (see
   `clipwright-transition`).
 - Validate every source exists and lives under the timeline directory (render's
-  boundary check requires co-location — document or relax this for multi-source).
+  boundary check requires co-location — mirrored, not relaxed).
 - This is largely a thin authoring layer over capabilities render already has;
   most effort is path/boundary validation and OTIO bookkeeping.
 - MCP annotations: `readOnlyHint: true` (writes only the OTIO, not media).
@@ -461,7 +469,7 @@ clipwright (core)
   ├─ clipwright-stabilize      ← shipped (skip for screen-capture sources)
   ├─ clipwright-bgm            ← shipped
   ├─ clipwright-reframe        ← ✅ IMPLEMENTED (v0.1.0); aspect/crop/pad, vertical formats
-  ├─ clipwright-sequence       ← NEW (Medium); multi-source assembly over render's existing concat
+  ├─ clipwright-sequence       ← ✅ IMPLEMENTED (v0.1.0); multi-source assembly over render's existing concat
   ├─ clipwright-overlay        ← NEW (Medium); image/logo/watermark overlay
   ├─ clipwright-transition     ← NEW (Low); xfade/acrossfade
   └─ clipwright-render         ← shipped; extend for HW encode/decode, caption/overlay re-timing,

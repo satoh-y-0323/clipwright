@@ -236,6 +236,7 @@ For details, see [docs/clipwright-spec.md](docs/clipwright-spec.md).
 | `clipwright-stabilize` | `clipwright_detect_shake` | Analyse camera shake via FFmpeg `vidstabdetect` (requires libvidstab), write a `.trf` motion-analysis file and a stabilize directive to OTIO timeline metadata; applied as `vidstabtransform` in a single render pass by `clipwright-render` |
 | `clipwright-trim` | `clipwright_trim` | Build a kept-range OTIO timeline from explicit keep/drop time ranges (or pass through the whole clip); concatenated by `clipwright-render`. The basic "select which parts to keep" primitive |
 | `clipwright-reframe` | `clipwright_reframe` | Annotate a reframe directive (target resolution / fit mode / anchor) to OTIO timeline metadata; applied as an FFmpeg filter chain by `clipwright-render`. Three fit modes: `crop` (scale-to-cover + crop), `pad` (scale-to-fit + solid-color letterbox/pillarbox, configurable `pad_color`), `blur_pad` (foreground-over-blurred-background, popular for 16:9 → 9:16 vertical Shorts/Reels). `target_w` / `target_h` must be even (2–7680). `anchor` controls alignment (9-direction, default `center`) |
+| `clipwright-sequence` | `clipwright_build_sequence` | Assemble multiple source media files into a single multi-source OTIO timeline (V1 video track) for concatenation by `clipwright-render`. Each clip can specify an optional `start_sec` / `end_sec` sub-range; omitting them uses the full source duration. All sources must be co-located under the output directory (recursive subdirs allowed). Non-destructive: input media is never modified. |
 
 ---
 
@@ -304,10 +305,18 @@ Each clipwright tool is a standalone MCP server. Register them in your MCP clien
     },
     "clipwright-reframe": {
       "command": "clipwright-reframe"
+    },
+    "clipwright-sequence": {
+      "command": "clipwright-sequence",
+      "env": {
+        "CLIPWRIGHT_FFPROBE": "/path/to/ffprobe"
+      }
     }
   }
 }
 ```
+
+> Note: `clipwright-sequence` requires `CLIPWRIGHT_FFPROBE` because `inspect_media` uses ffprobe to probe each source's duration and video stream before building the OTIO timeline.
 
 > Note: `clipwright-frames` lists both `CLIPWRIGHT_FFMPEG` (frame extraction) and `CLIPWRIGHT_FFPROBE` (video-stream detection and duration probing via `inspect_media`), so both variables must be configured.
 

@@ -233,6 +233,7 @@ src/clipwright/
 | `clipwright-stabilize` | `clipwright_detect_shake` | FFmpeg `vidstabdetect`（libvidstab 必須）でカメラ手ブレを解析し、`.trf` モーション解析ファイルと stabilize ディレクティブを OTIO タイムラインのメタデータに書き込む。`clipwright-render` が一括レンダリングパスで `vidstabtransform` として適用する |
 | `clipwright-trim` | `clipwright_trim` | 明示した keep/drop 時間範囲から kept-range の OTIO タイムラインを生成する（オプション省略時はクリップ全体をパススルー）。`clipwright-render` がそのまま連結する。「どの区間を残すか」を指定する最も基本的なプリミティブ |
 | `clipwright-reframe` | `clipwright_reframe` | リフレーム指令（目標解像度 / フィットモード / アンカー）を OTIO タイムラインのメタデータに注記する。実体化は `clipwright-render` が FFmpeg フィルタチェーンとして一括適用する。3 つのフィットモード: `crop`（スケールしてクロップ）/ `pad`（スケールしてソリッドカラーでレターボックス/ピラーボックス、`pad_color` で色指定可）/ `blur_pad`（ぼかした背景の上にフォアグラウンドを重ね合わせ；16:9 → 9:16 縦型 Shorts/Reels で人気）。`target_w` / `target_h` は偶数 (2–7680)。`anchor` は配置アンカー（9 方向、デフォルト `center`） |
+| `clipwright-sequence` | `clipwright_build_sequence` | 複数のソースメディアファイルをひとつのマルチソース OTIO タイムライン（V1 ビデオトラック）に組み立て、`clipwright-render` で連結できる形にする。各クリップに `start_sec` / `end_sec` でサブ範囲を指定できる（省略時はソース全体）。ソースはすべて出力ディレクトリ以下に配置する必要がある（再帰サブディレクトリ可）。非破壊: 入力メディアは変更しない。 |
 
 ---
 
@@ -301,10 +302,18 @@ src/clipwright/
     },
     "clipwright-reframe": {
       "command": "clipwright-reframe"
+    },
+    "clipwright-sequence": {
+      "command": "clipwright-sequence",
+      "env": {
+        "CLIPWRIGHT_FFPROBE": "/path/to/ffprobe"
+      }
     }
   }
 }
 ```
+
+> 注: `clipwright-sequence` は `CLIPWRIGHT_FFPROBE` を必要とする。`inspect_media` が各ソースの尺とビデオストリームを probe してから OTIO タイムラインを構築するためである。
 
 > 注: `clipwright-frames` は `CLIPWRIGHT_FFMPEG`（フレーム抽出）と `CLIPWRIGHT_FFPROBE`（`inspect_media` 経由のビデオストリーム検出・尺取得）の両方を使うため、両変数を設定する必要がある。
 
