@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-06-22
+
+### Added
+
+- Image overlay materialisation: `clipwright_render` now reads `image_overlay` markers
+  written by `clipwright-overlay` and composites the referenced image onto the video
+  using an FFmpeg `overlay` filter chain during the single transcode pass.
+- The overlay image is added as an extra `-i` input after the BGM audio input, giving it
+  a stable stream index that does not shift when BGM, loudness, or other optional inputs
+  are absent.
+- Filter chain per overlay: `scale=iw*{scale}:-2` (even-rounded height for yuv420p
+  compatibility) → `format=rgba` → `colorchannelmixer=aa={opacity}` (constant opacity)
+  → optional `fade=t=in:...:alpha=1` → optional `fade=t=out:...:alpha=1` →
+  `overlay=x='{x}':y='{y}':enable='between(t,{start},{end})'`.
+- Static image inputs use `-loop 1 -t {total_duration}` before the `-i` flag so that
+  FFmpeg generates a video stream with the required duration; without this flag, `fade`
+  filters with `st > 0` have no frames to ramp and the overlay disappears silently.
+- `scale=iw*{scale}:-2` uses the `-2` even-rounding shorthand, consistent with the
+  subtitle scaling logic already present in the render pipeline.
+- Co-location boundary is re-validated at render time by reconstructing the absolute path
+  from the stored POSIX-relative image path and the timeline's parent directory, then
+  confirming it lies within that directory (CWE-22 path-traversal guard).
+- Corrupt or undecodable overlay images are detected via a magic-byte pre-check before
+  the FFmpeg subprocess is started; a detected bad file returns `SUBPROCESS_FAILED` with
+  the image **basename only** in the message to avoid leaking absolute paths (CWE-209).
+
 ## [0.2.0] - 2026-06-13
 
 ### Removed

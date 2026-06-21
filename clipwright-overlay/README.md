@@ -22,6 +22,17 @@ files. All image compositing is deferred to `clipwright-render`.
 - No FFmpeg is needed at annotation time. FFmpeg is only invoked by `clipwright-render`
   at realisation time.
 
+> **Note — clipwright-render >= 0.10.0 required for materialisation.**
+> `clipwright-overlay` only *annotates* the OTIO timeline; it never invokes FFmpeg.
+> The actual image compositing is performed by `clipwright-render`. Image overlay support
+> was added in `clipwright-render` **0.10.0** — earlier versions will ignore the
+> `image_overlay` markers and produce output without the overlay.
+> Install or upgrade before calling `clipwright_render` on an annotated timeline:
+>
+> ```bash
+> pip install "clipwright-render>=0.10.0"
+> ```
+
 ## MCP Tool: `clipwright_add_overlay`
 
 ### Parameters
