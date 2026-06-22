@@ -522,13 +522,13 @@ def _transcribe_inner(
                 message="Output path and input media path are identical.",
                 hint="Change the output file path to differ from the input media.",
             )
-    except OSError as exc:
+    except OSError:
         if str(output_path) == str(media_path):
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
                 message="Output path and input media path are identical.",
                 hint="Change the output file path to differ from the input media.",
-            ) from exc
+            ) from None
 
     # --- 2. inspect_media -> stream and duration check ---
 
@@ -542,7 +542,7 @@ def _transcribe_inner(
                 code=ErrorCode.FILE_NOT_FOUND,
                 message=f"File not found: {media_path.name}",
                 hint=exc.hint,
-            ) from exc
+            ) from None
         raise
 
     # Verify that output is in the same directory as media (TR-AD-08).
