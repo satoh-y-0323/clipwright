@@ -27,8 +27,9 @@ import json
 import math
 import os
 import tempfile
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple, TypedDict
 
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
@@ -57,6 +58,183 @@ _MODEL_MISSING_HINT = (
     "set the CLIPWRIGHT_WHISPER_MODEL environment variable. "
     "Download the model from the whisper.cpp distribution (e.g. ggml-base.bin)."
 )
+
+# ---------------------------------------------------------------------------
+# Backend detection constants (ADR-1' v2 AUTHORITY)
+# ---------------------------------------------------------------------------
+
+# Authoritative device signal = whisper.cpp backend-init RESULT lines in stderr.
+# Verified against whisper.cpp v1.8.6 (CPU build, Windows):
+#   CPU emits "whisper_backend_init_gpu: no GPU found" /
+#             "whisper_backend_init_gpu: device 0: CPU (type: 0)".
+# CUDA/Metal patterns are best-effort: not observable on a CPU build, sourced from
+# whisper.cpp known init messages (ggml_cuda_init / ggml_metal_init).
+# Adjust these constants (here only, detection logic unchanged) if a real GPU build
+# shows different strings. Device falls back to "unknown" if none match.
+#
+# WARNING: "use gpu = 1" / "gpu_device = 0" are REQUEST parameters printed even on
+# CPU builds ("whisper_init_with_params_no_state: use gpu = 1" etc.).
+# They are excluded before matching via _STDERR_EXCLUDE_TOKENS — naive "gpu"/"cuda"
+# substring match would misdetect a CPU-only run as GPU (F3, real whisper.cpp v1.8.6).
+_BACKEND_STDERR_PATTERNS: dict[str, list[str]] = {
+    "cuda": ["ggml_cuda_init", "using cuda"],
+    "metal": ["ggml_metal_init", "using metal"],
+    "cpu": ["no gpu found", "device 0: cpu", "init_cpu"],
+}
+# Lines containing any of these tokens are excluded before pattern matching (F3).
+_STDERR_EXCLUDE_TOKENS: list[str] = ["use gpu", "gpu_device"]
+# Fixed device-label strings used as the base for BackendInfo.detail (ADR-2'/DC-GP-003).
+# Using fixed labels prevents raw stderr content (e.g. model absolute paths) from
+# leaking into data/summary (CWE-209 / F4).
+_DEVICE_DETAIL_LABELS: dict[str, str] = {
+    "cuda": "CUDA",
+    "metal": "Metal",
+    "cpu": "cpu",
+    "unknown": "",
+}
+# Maximum length for the sanitised detail string (CWE-209 / ADR-2').
+_DETAIL_MAX_LEN = 80
+
+
+# ---------------------------------------------------------------------------
+# Backend TypedDict / WhisperRun NamedTuple (ADR-3' v2 AUTHORITY)
+# ---------------------------------------------------------------------------
+
+
+class BackendInfo(TypedDict):
+    """Detected or inferred whisper backend device and a sanitised label."""
+
+    device: str
+    detail: str
+
+
+class WhisperRun(NamedTuple):
+    """Result of a single whisper-cli invocation.
+
+    segments: Normalised caption segments from the transcription.
+    language: Detected language code, or None when absent in the JSON result.
+    backend: BackendInfo dict with 'device' and 'detail' fields.
+    wall_seconds: Monotonic-clock duration of the whisper subprocess only
+        (ffmpeg WAV extraction and JSON parse are excluded). Used to derive
+        realtime_factor in _transcribe_inner.
+    """
+
+    segments: list[Segment]
+    language: str | None
+    backend: BackendInfo
+    wall_seconds: float
+
+
+# ---------------------------------------------------------------------------
+# Backend detection helpers
+# ---------------------------------------------------------------------------
+
+
+def _sanitize_detail(raw: str) -> str:
+    """Sanitise a candidate detail string before storing in BackendInfo (CWE-209).
+
+    Applied in sequence:
+    1. Strip control characters (\\x00–\\x1f and \\x7f).
+    2. Remove whitespace-delimited tokens that contain '/' or '\\' (path tokens).
+    3. Truncate to _DETAIL_MAX_LEN characters.
+    4. Strip leading/trailing whitespace.
+
+    In production use, 'raw' is always a fixed label from _DEVICE_DETAIL_LABELS
+    (which never contains control chars, path separators, or long strings), so this
+    function is effectively a no-op on the normal path. It acts as a defense-in-depth
+    layer for any future change that feeds raw stderr into 'detail'.
+    """
+    # 1. Control character strip
+    cleaned = "".join(c for c in raw if ord(c) >= 0x20 and ord(c) != 0x7F)
+    # 2. Remove path-like tokens (tokens containing '/' or '\\')
+    tokens = [tok for tok in cleaned.split() if "/" not in tok and "\\" not in tok]
+    cleaned = " ".join(tokens)
+    # 3. Length cap
+    cleaned = cleaned[:_DETAIL_MAX_LEN]
+    # 4. Strip
+    return cleaned.strip()
+
+
+def _detect_backend(
+    whisper_json: dict[str, Any], whisper_stderr: str | None
+) -> BackendInfo:
+    """Detect the whisper backend device from stderr (stderr-only; ADR-1' v2 AUTHORITY).
+
+    Detection is stderr-only; systeminfo is not used for device determination (F1).
+    Priority: CUDA -> Metal -> CPU -> unknown.
+
+    CPU patterns are verified against real whisper.cpp v1.8.6 (CPU build, Windows).
+    CUDA/Metal patterns are best-effort (see _BACKEND_STDERR_PATTERNS comment).
+
+    Lines containing "use gpu" or "gpu_device" are excluded before matching to avoid
+    the F3 trap (these request-parameter lines appear on CPU builds too).
+
+    Any exception is caught and {"device": "unknown", "detail": ""} is returned
+    (NFR-3: backend detection must never propagate exceptions to the caller).
+
+    Args:
+        whisper_json: Parsed whisper JSON output (not used for device determination;
+            retained for future extension without a signature change).
+        whisper_stderr: Captured stderr text from the whisper subprocess, or None.
+
+    Returns:
+        BackendInfo with 'device' in {"cuda", "metal", "cpu", "unknown"} and a
+        sanitised 'detail' label.
+    """
+    try:
+        if not isinstance(whisper_json, dict):
+            return BackendInfo(device="unknown", detail="")
+        if not isinstance(whisper_stderr, str):
+            return BackendInfo(device="unknown", detail="")
+        if not whisper_stderr:
+            return BackendInfo(device="unknown", detail="")
+
+        # Filter lines that contain exclude tokens (F3: request-parameter lines)
+        lines = [
+            line
+            for line in whisper_stderr.splitlines()
+            if not any(token in line.lower() for token in _STDERR_EXCLUDE_TOKENS)
+        ]
+        combined = "\n".join(lines).lower()
+
+        # Determine device in priority order: CUDA -> Metal -> CPU -> unknown
+        device = "unknown"
+        for candidate in ("cuda", "metal", "cpu"):
+            patterns = _BACKEND_STDERR_PATTERNS[candidate]
+            if any(pat in combined for pat in patterns):
+                device = candidate
+                break
+
+        detail = _sanitize_detail(_DEVICE_DETAIL_LABELS[device])
+        return BackendInfo(device=device, detail=detail)
+    except Exception:  # noqa: BLE001
+        return BackendInfo(device="unknown", detail="")
+
+
+def _compute_realtime_factor(
+    total_duration_sec: float, wall_seconds: float
+) -> float | None:
+    """Compute the realtime factor: media container duration / whisper wall time.
+
+    A value > 1 means transcription was faster than real time (typical for GPU).
+    Returns None when wall_seconds is non-positive (clock resolution below measurement
+    threshold, or invalid measurement) — NOT 0.0, to avoid an AI reading "0x realtime"
+    as "effectively not running" (DC-AM-001).
+
+    The numerator is the container duration as reported by ffprobe, which can differ
+    slightly from the actual WAV length fed to whisper (DC-AS-005).
+    None means "not measurable" (not slow).
+
+    Args:
+        total_duration_sec: Media container duration in seconds (ffprobe-derived).
+        wall_seconds: Monotonic-clock duration of the whisper subprocess only.
+
+    Returns:
+        Realtime factor rounded to 2 decimal places, or None if wall_seconds <= 0.
+    """
+    if wall_seconds <= 0:
+        return None
+    return round(total_duration_sec / wall_seconds, 2)
 
 
 def _fmt_sec(sec: float) -> str:
@@ -180,13 +358,17 @@ def _run_whisper(
     options: TranscribeOptions,
     total_duration_sec: float,
     model_path: str,
-) -> tuple[list[Segment], str | None]:
+) -> WhisperRun:
     """Single adapter: ffmpeg WAV extraction -> whisper-cli -> JSON normalisation
     (TR-AD-01).
 
     Replace only this function to swap the backend (e.g. faster-whisper).
     WAV and JSON are written to a temporary directory so the source media directory
     is not polluted.
+
+    The whisper subprocess invocation is timed with time.monotonic(); ffmpeg WAV
+    extraction and JSON parse/normalise are excluded from the measured interval
+    (DC-AS-001/DC-AS-003).
 
     Args:
         media: Absolute path to the input media file.
@@ -196,7 +378,8 @@ def _run_whisper(
         model_path: Resolved model file path.
 
     Returns:
-        Tuple of (normalised Segment list, detected language code or None).
+        WhisperRun with normalised Segment list, detected language code or None,
+        BackendInfo (device/detail), and the whisper subprocess wall time in seconds.
 
     Raises:
         ClipwrightError: DEPENDENCY_MISSING (missing tool), sanitised
@@ -214,18 +397,23 @@ def _run_whisper(
         wav_path = os.path.join(tmpdir, "audio.wav")
         prefix = os.path.join(tmpdir, "transcript")
 
+        # ffmpeg WAV extraction is outside the timing interval (DC-AS-001/003).
         try:
             _extract_wav(ffmpeg, media, wav_path, ffmpeg_timeout)
         except ClipwrightError as exc:
             raise _sanitize_subprocess_error(exc) from None
 
         cmd = _build_whisper_cmd(whisper, model_path, wav_path, prefix, options)
+        # Time only the whisper subprocess (not ffmpeg or JSON parse; DC-AS-001/003).
+        start = time.monotonic()
         try:
-            run(cmd, timeout=whisper_timeout)
+            whisper_result = run(cmd, timeout=whisper_timeout)
         except ClipwrightError as exc:
             raise _sanitize_subprocess_error(exc) from None
+        wall_seconds = time.monotonic() - start
 
         # whisper `-oj -of <prefix>` produces <prefix>.json (DC-AM-003).
+        # JSON read and normalise are outside the timing interval (DC-AS-003).
         json_path = prefix + ".json"
         try:
             with open(json_path, encoding="utf-8") as f:
@@ -246,7 +434,10 @@ def _run_whisper(
         result = whisper_json.get("result")
         language = result.get("language") if isinstance(result, dict) else None
 
-    return segments, language
+        # Backend detection uses whisper stderr (stderr-only; ADR-1' v2 AUTHORITY).
+        backend = _detect_backend(whisper_json, whisper_result.stderr)
+
+    return WhisperRun(segments, language, backend, wall_seconds)
 
 
 def transcribe_media(
@@ -388,12 +579,12 @@ def _transcribe_inner(
 
     # --- 4. whisper execution (adapter) ---
 
-    segments, detected_language = _run_whisper(
-        abs_media, options, total_duration_sec, model_path
-    )
+    whisper_run = _run_whisper(abs_media, options, total_duration_sec, model_path)
 
     # Language priority: detected result > explicit option > unknown
-    language = detected_language or options.language or "unknown"
+    language = whisper_run.language or options.language or "unknown"
+
+    segments = whisper_run.segments
 
     # --- 5. SRT/VTT generation and write (TR-AD-08) ---
 
@@ -452,11 +643,22 @@ def _transcribe_inner(
     # --- 7. Return envelope ---
 
     segment_count = len(segments)
+    realtime_factor = _compute_realtime_factor(
+        total_duration_sec, whisper_run.wall_seconds
+    )
+    device = whisper_run.backend["device"]
+
     summary = (
         f"Language {language} · {segment_count} segment(s) · "
         f"total duration {_fmt_sec(total_duration_sec)} transcribed. "
         f"Generated {srt_path.name} / {vtt_path.name} / {output_path.name}."
     )
+    # Append backend info; realtime_factor=None means wall time was unmeasurable
+    # (DC-AM-001 / DC-AM-004: leading space + period-terminated).
+    if realtime_factor is not None:
+        summary += f" Backend: {device} ({realtime_factor}x realtime)."
+    else:
+        summary += f" Backend: {device}."
 
     warnings: list[str] = []
     if segment_count == 0:
@@ -473,6 +675,13 @@ def _transcribe_inner(
             "segment_count": segment_count,
             "language": language,
             "total_duration_seconds": total_duration_sec,
+            # Additive backend fields (NFR-2: existing fields unchanged)
+            "backend": {
+                "device": whisper_run.backend["device"],
+                "detail": whisper_run.backend["detail"],
+            },
+            "whisper_wall_seconds": round(whisper_run.wall_seconds, 3),
+            "realtime_factor": realtime_factor,
         },
         artifacts=[
             {"role": "timeline", "path": str(output_path), "format": "otio"},
