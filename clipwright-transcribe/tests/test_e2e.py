@@ -455,6 +455,135 @@ def test_transcribe_e2e(tmp_path: Path) -> None:
 
 
 @pytest.mark.integration
+@pytest.mark.skipif(_SKIP_E2E, reason=_SKIP_E2E_REASON)
+def test_transcribe_backend_e2e(tmp_path: Path) -> None:
+    """e2e: backend/realtime surface verification with a real whisper-cli (CPU build).
+
+    Verification points (AC-4 / ADR-7'(f)):
+      - ① Generate TTS media (same pattern as test_transcribe_e2e)
+      - ② Run clipwright_transcribe and obtain ok=True result
+      - ③ data["backend"]["device"] is in the known value set {"cuda","metal","cpu","unknown"}
+      - ④ On a CPU build, device must be "cpu" or "unknown" (both accepted).
+           "cpu" is the expected outcome because the real stderr emits
+           "whisper_backend_init_gpu: no GPU found" on a CPU build (F2).
+      - ⑤ data["whisper_wall_seconds"] > 0 (real whisper always takes non-zero wall time)
+      - ⑥ data["realtime_factor"] > 0 and is not None
+           (real transcription never hits the wall<=0 guard)
+      - ⑦ data["backend"]["detail"] contains no path-like token (CWE-209 live check).
+           A path-like token is defined as a whitespace-separated token that contains
+           "/" or "\\" (backslash). The real stderr line 1 exposes the model absolute
+           path (F4); if sanitisation is broken this assert catches it.
+      - ⑧ use-gpu trap regression guard (F3): even though real stderr emits
+           "use gpu = 1" / "gpu_device = 0" on a CPU build, device must be "cpu" or
+           "unknown" — NOT "cuda" or "metal". This is verified by the same
+           device-value check in ④ (e2e cannot observe raw stderr directly; the device
+           result is the observable proxy for the trap being avoided).
+           See ADR-1'(F3): "use gpu" / "gpu_device" lines are request params, not
+           backend-init result lines, and must be excluded before pattern matching.
+    """
+    assert _WHISPER_BIN is not None
+    assert _WHISPER_MODEL is not None
+    ffmpeg = _get_ffmpeg()
+
+    # ① Generate TTS test media (same pattern as test_transcribe_e2e)
+    source = tmp_path / "backend_tts_source.mp4"
+    speech_text = "hello backend"
+    _make_tts_video(ffmpeg, source, speech_text=speech_text)
+    assert source.exists(), "TTS test media was not generated for backend e2e"
+
+    otio_path = tmp_path / "backend_out.otio"
+
+    # ② Transcribe with real whisper-cli
+    _content, result = asyncio.run(
+        mcp.call_tool(
+            "clipwright_transcribe",
+            {
+                "media": str(source),
+                "output": str(otio_path),
+            },
+        )
+    )
+
+    assert result["ok"] is True, f"clipwright_transcribe failed: {result}"
+    assert "data" in result, "result has no 'data' key"
+    data = result["data"]
+
+    # ③ device is in the known value set
+    _KNOWN_DEVICES = {"cuda", "metal", "cpu", "unknown"}
+    assert "backend" in data, (
+        "data has no 'backend' key. "
+        "The backend/realtime surface is not yet implemented (expected Red failure)."
+    )
+    backend = data["backend"]
+    assert isinstance(backend, dict), f"data['backend'] is not a dict: {backend!r}"
+    assert "device" in backend, f"backend has no 'device' key: {backend!r}"
+    device = backend["device"]
+    assert device in _KNOWN_DEVICES, (
+        f"data['backend']['device']={device!r} is not in {_KNOWN_DEVICES}. "
+        "Unexpected device value returned."
+    )
+
+    # ④ On a CPU build, device must be "cpu" or "unknown" (NOT "cuda" / "metal").
+    # "cpu" is expected because the real stderr emits
+    # "whisper_backend_init_gpu: no GPU found" (F2 confirmed on this machine).
+    # ⑧ use-gpu trap regression guard: the same check ensures that "use gpu = 1" in
+    # real stderr does NOT cause device to be misdetected as "cuda" or "metal" (F3).
+    _CPU_BUILD_ALLOWED = {"cpu", "unknown"}
+    assert device in _CPU_BUILD_ALLOWED, (
+        f"CPU build produced device={device!r}. "
+        "Expected 'cpu' (or 'unknown' as fallback). "
+        "If 'cuda' or 'metal': the use-gpu trap (F3) may have caused misdetection. "
+        "Check that 'use gpu = 1' / 'gpu_device' lines are excluded before matching."
+    )
+
+    # ⑤ whisper_wall_seconds > 0 (real transcription always takes non-zero time)
+    assert "whisper_wall_seconds" in data, (
+        "data has no 'whisper_wall_seconds' key. "
+        "The backend/realtime surface is not yet implemented (expected Red failure)."
+    )
+    wall = data["whisper_wall_seconds"]
+    assert isinstance(wall, (int, float)), (
+        f"whisper_wall_seconds is not numeric: {wall!r}"
+    )
+    assert wall > 0, (
+        f"whisper_wall_seconds={wall} is not positive. "
+        "Real whisper-cli always takes non-zero wall time."
+    )
+
+    # ⑥ realtime_factor > 0 and not None
+    assert "realtime_factor" in data, (
+        "data has no 'realtime_factor' key. "
+        "The backend/realtime surface is not yet implemented (expected Red failure)."
+    )
+    rtf = data["realtime_factor"]
+    assert rtf is not None, (
+        "realtime_factor is None. "
+        "Real whisper-cli always takes positive wall time so realtime_factor "
+        "should never be None (wall<=0 guard should not be triggered)."
+    )
+    assert isinstance(rtf, (int, float)), f"realtime_factor is not numeric: {rtf!r}"
+    assert rtf > 0, (
+        f"realtime_factor={rtf} is not positive. "
+        "Real whisper-cli always takes non-zero wall time."
+    )
+
+    # ⑦ detail contains no path-like token (CWE-209 live check; F4)
+    # A path-like token is a whitespace-separated token containing "/" or "\\".
+    # The real stderr line 1 exposes the model absolute path (F4); sanitisation
+    # must prevent it from leaking into data["backend"]["detail"].
+    assert "detail" in backend, f"backend has no 'detail' key: {backend!r}"
+    detail = backend["detail"]
+    assert isinstance(detail, str), f"backend['detail'] is not a str: {detail!r}"
+    tokens_with_path_sep = [tok for tok in detail.split() if "/" in tok or "\\" in tok]
+    assert not tokens_with_path_sep, (
+        f"backend['detail'] contains path-like token(s): {tokens_with_path_sep!r}. "
+        f"Full detail value: {detail!r}. "
+        "CWE-209: model absolute path must not leak into data['backend']['detail']. "
+        "Check _sanitize_detail() and _DEVICE_DETAIL_LABELS in transcribe.py."
+    )
+
+
+@pytest.mark.integration
 @pytest.mark.skipif(not _SKIP_E2E, reason="env is set; skip behaviour test not needed")
 def test_e2e_skipped_when_env_not_set() -> None:
     """Placeholder confirming that e2e is skipped when env vars are absent.

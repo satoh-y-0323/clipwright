@@ -42,6 +42,7 @@ from clipwright_transcribe.transcribe import (
     _MARKER_NAME_MAX,
     LANG_AUTO_FLAG,
     WHISPER_BINARY_NAME,
+    WhisperRun,
     _resolve_model_path,
     _run_whisper,
     transcribe_media,
@@ -105,6 +106,17 @@ def _make_paths(tmp_path: Path) -> tuple[str, str, str]:
 
 def _opts(**kwargs: Any) -> TranscribeOptions:
     return TranscribeOptions(**kwargs)
+
+
+def _whisper_run(
+    segments: list[Segment],
+    language: str | None = "en",
+    device: str = "cpu",
+    detail: str = "cpu",
+    wall: float = 1.0,
+) -> WhisperRun:
+    """Build a WhisperRun for use as a mock return_value."""
+    return WhisperRun(segments, language, {"device": device, "detail": detail}, wall)
 
 
 # ===========================================================================
@@ -182,7 +194,7 @@ class TestInputValidation:
             ),
             patch(
                 "clipwright_transcribe.transcribe._run_whisper",
-                return_value=([_seg(0.0, 1.0, "hi")], "en"),
+                return_value=_whisper_run([_seg(0.0, 1.0, "hi")]),
             ),
         ):
             result = transcribe_media(media, output, _opts(model_path=model))
@@ -323,7 +335,7 @@ class TestOtioConstruction:
             ),
             patch(
                 "clipwright_transcribe.transcribe._run_whisper",
-                return_value=(segments, language),
+                return_value=_whisper_run(segments, language=language),
             ),
         ):
             result = transcribe_media(media, output, _opts(model_path=model))
@@ -387,7 +399,7 @@ class TestOtioConstruction:
             ),
             patch(
                 "clipwright_transcribe.transcribe._run_whisper",
-                return_value=([_seg(1.5, 2.8, "x")], "en"),
+                return_value=_whisper_run([_seg(1.5, 2.8, "x")]),
             ),
         ):
             transcribe_media(media, output, _opts(model_path=model))
@@ -429,7 +441,7 @@ class TestZeroSegments:
             ),
             patch(
                 "clipwright_transcribe.transcribe._run_whisper",
-                return_value=([], "en"),
+                return_value=_whisper_run([]),
             ),
         ):
             result = transcribe_media(media, output, _opts(model_path=model))
@@ -464,7 +476,7 @@ class TestEnvelopeAndOutputs:
             ),
             patch(
                 "clipwright_transcribe.transcribe._run_whisper",
-                return_value=(segs, "en"),
+                return_value=_whisper_run(segs),
             ),
         ):
             result = transcribe_media(media, output, _opts(model_path=model))
@@ -564,9 +576,9 @@ class TestRunWhisperAdapter:
                 ),
             ),
         ):
-            segments, language = _run_whisper("video.mp4", _opts(), 10.0, str(model))
-        assert len(segments) == 3
-        assert language == "en"
+            run = _run_whisper("video.mp4", _opts(), 10.0, str(model))
+        assert len(run.segments) == 3
+        assert run.language == "en"
 
     def test_language_auto_flag_when_none(self, tmp_path: Path) -> None:
         """language=None causes each LANG_AUTO_FLAG token to appear in cmd (DC-AM-002).
@@ -736,3 +748,305 @@ class TestRunWhisperAdapter:
             _run_whisper("video.mp4", _opts(), 10.0, "m.bin")
         assert WHISPER_BINARY_NAME in names
         assert "ffmpeg" in names
+
+    def test_returns_whisper_run_type(self, tmp_path: Path) -> None:
+        """_run_whisper returns a WhisperRun instance (not a plain tuple)."""
+        model = tmp_path / "m.bin"
+        model.write_bytes(b"x")
+        with (
+            patch(
+                "clipwright_transcribe.transcribe.resolve_tool",
+                side_effect=self._fake_resolve(),
+            ),
+            patch(
+                "clipwright_transcribe.transcribe.run",
+                side_effect=self._fake_run_writes_json('{"transcription": []}'),
+            ),
+        ):
+            result = _run_whisper("video.mp4", _opts(), 10.0, str(model))
+        assert isinstance(result, WhisperRun)
+
+    def test_wall_seconds_non_negative(self, tmp_path: Path) -> None:
+        """WhisperRun.wall_seconds is >= 0 (time.monotonic difference; DC-AM-001)."""
+        model = tmp_path / "m.bin"
+        model.write_bytes(b"x")
+        with (
+            patch(
+                "clipwright_transcribe.transcribe.resolve_tool",
+                side_effect=self._fake_resolve(),
+            ),
+            patch(
+                "clipwright_transcribe.transcribe.run",
+                side_effect=self._fake_run_writes_json('{"transcription": []}'),
+            ),
+        ):
+            result = _run_whisper("video.mp4", _opts(), 10.0, str(model))
+        assert result.wall_seconds >= 0
+
+    def test_backend_device_cuda_from_stderr(self, tmp_path: Path) -> None:
+        """_detect_backend is driven at mock boundary: CUDA stderr -> backend["device"]
+        == "cuda" (ADR-7', DC-GP-002)."""
+        model = tmp_path / "m.bin"
+        model.write_bytes(b"x")
+        cuda_stderr = "ggml_cuda_init: found 1 CUDA devices"
+
+        def _run_cuda_stderr(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            if "-of" in cmd:
+                prefix = cmd[cmd.index("-of") + 1]
+                Path(prefix + ".json").write_text(
+                    '{"transcription": []}', encoding="utf-8"
+                )
+            return CompletedProcess(
+                args=cmd, returncode=0, stdout="", stderr=cuda_stderr
+            )
+
+        with (
+            patch(
+                "clipwright_transcribe.transcribe.resolve_tool",
+                side_effect=self._fake_resolve(),
+            ),
+            patch(
+                "clipwright_transcribe.transcribe.run",
+                side_effect=_run_cuda_stderr,
+            ),
+        ):
+            result = _run_whisper("video.mp4", _opts(), 10.0, str(model))
+        assert result.backend["device"] == "cuda"
+
+
+# ===========================================================================
+# Backend detection unit tests (Red phase — implementations not yet present)
+# ===========================================================================
+
+
+class TestDetectBackend:
+    """Unit tests for _detect_backend(whisper_json, whisper_stderr).
+
+    Verifies stderr-only detection logic per ADR-1' (v2 AUTHORITY):
+    - CPU paths are authoritative (verified against real whisper.cpp v1.8.6 CPU build).
+    - CUDA/Metal are best-effort (sourced from whisper.cpp known init messages).
+    - Lines containing "use gpu" / "gpu_device" are excluded before matching
+      (F3 trap: these appear on CPU builds too and must NOT trigger "cuda").
+    - Any exception is caught and "unknown" is returned (NFR-3).
+    """
+
+    @pytest.mark.parametrize(
+        "whisper_json, stderr, expected_device",
+        [
+            # CPU authoritative — "no GPU found" result line (real whisper.cpp v1.8.6)
+            (
+                {},
+                "whisper_backend_init_gpu: no GPU found",
+                "cpu",
+            ),
+            # CPU authoritative — "device 0: CPU" result line (alternate CPU output)
+            (
+                {},
+                "whisper_backend_init_gpu: device 0: CPU (type: 0)",
+                "cpu",
+            ),
+            # use gpu TRAP (F3) — request params printed even on CPU; no result line
+            # => must NOT be detected as cuda (regression guard)
+            (
+                {},
+                (
+                    "whisper_init_with_params_no_state: use gpu    = 1\n"
+                    "whisper_init_with_params_no_state: gpu_device = 0"
+                ),
+                "unknown",
+            ),
+            # use gpu TRAP + CPU result line — exclude param lines, match result line
+            (
+                {},
+                (
+                    "whisper_init_with_params_no_state: use gpu    = 1\n"
+                    "whisper_backend_init_gpu: no GPU found"
+                ),
+                "cpu",
+            ),
+            # CUDA best-effort — ggml_cuda_init line
+            (
+                {},
+                "ggml_cuda_init: found 1 CUDA devices",
+                "cuda",
+            ),
+            # Metal best-effort — ggml_metal_init line
+            (
+                {},
+                "ggml_metal_init: allocating",
+                "metal",
+            ),
+            # Empty stderr => unknown
+            (
+                {},
+                "",
+                "unknown",
+            ),
+            # None stderr => unknown (exception non-propagation)
+            (
+                {},
+                None,
+                "unknown",
+            ),
+            # Non-dict whisper_json (list) => unknown (exception non-propagation)
+            (
+                [],
+                "whisper_backend_init_gpu: no GPU found",
+                "unknown",
+            ),
+        ],
+        ids=[
+            "cpu_no_gpu_found",
+            "cpu_device0_cpu",
+            "use_gpu_trap_no_result_line_must_be_unknown_not_cuda",
+            "use_gpu_trap_plus_cpu_result",
+            "cuda_best_effort",
+            "metal_best_effort",
+            "empty_stderr",
+            "none_stderr",
+            "non_dict_json",
+        ],
+    )
+    def test_detect_backend_device(
+        self,
+        whisper_json: Any,
+        stderr: str | None,
+        expected_device: str,
+    ) -> None:
+        from clipwright_transcribe.transcribe import _detect_backend
+
+        result = _detect_backend(whisper_json, stderr)
+        assert result["device"] == expected_device
+
+    def test_use_gpu_trap_must_not_be_cuda(self) -> None:
+        """Explicit regression guard: use gpu = 1 alone must NOT produce 'cuda'."""
+        from clipwright_transcribe.transcribe import _detect_backend
+
+        stderr = (
+            "whisper_init_with_params_no_state: use gpu    = 1\n"
+            "whisper_init_with_params_no_state: gpu_device = 0"
+        )
+        result = _detect_backend({}, stderr)
+        assert result["device"] != "cuda", (
+            "use gpu/gpu_device lines are CPU request params — "
+            "must not be misdetected as cuda"
+        )
+
+    def test_detect_backend_returns_device_and_detail_keys(self) -> None:
+        """Return value always contains 'device' and 'detail' keys."""
+        from clipwright_transcribe.transcribe import _detect_backend
+
+        result = _detect_backend({}, "")
+        assert "device" in result
+        assert "detail" in result
+
+    def test_detect_backend_no_exception_on_broken_input(self) -> None:
+        """Any broken input must not propagate an exception (NFR-3)."""
+        from clipwright_transcribe.transcribe import _detect_backend
+
+        # Passing an integer as whisper_json and a non-string as stderr
+        result = _detect_backend(42, object())  # type: ignore[arg-type]
+        assert result["device"] == "unknown"
+
+
+class TestSanitizeDetail:
+    """Unit tests for _sanitize_detail(raw) — CWE-209 path/control-char stripping.
+
+    Per ADR-2' (v2 AUTHORITY): _sanitize_detail is a defense-in-depth layer.
+    In production, detail contains only fixed device labels (no raw stderr).
+    These tests verify the sanitisation function itself with synthetic inputs
+    that mirror real whisper.cpp stderr (F4 real string confirmed).
+    """
+
+    def test_path_tokens_removed(self) -> None:
+        """Tokens containing '/' must be stripped (CWE-209 path exposure)."""
+        from clipwright_transcribe.transcribe import _sanitize_detail
+
+        # Mirrors real whisper.cpp stderr line (F4):
+        # "loading model from 'C:/Users/.../ggml-large-v3-turbo.bin'"
+        raw = "loading model from 'C:/Users/user/ggml-large-v3-turbo.bin'"
+        result = _sanitize_detail(raw)
+        assert "/" not in result
+        assert "\\" not in result
+
+    def test_backslash_path_tokens_removed(self) -> None:
+        """Tokens containing '\\' (Windows paths) must also be stripped."""
+        from clipwright_transcribe.transcribe import _sanitize_detail
+
+        raw = r"model path: C:\Users\user\ggml-large-v3-turbo.bin"
+        result = _sanitize_detail(raw)
+        assert "\\" not in result
+
+    def test_control_chars_stripped(self) -> None:
+        """Control characters \\x00–\\x1f and \\x7f must be removed."""
+        from clipwright_transcribe.transcribe import _sanitize_detail
+
+        raw = "CUDA\x00\x01\x1f\x7f"
+        result = _sanitize_detail(raw)
+        for ch in result:
+            assert ord(ch) >= 0x20 and ord(ch) != 0x7F, (
+                f"Control character U+{ord(ch):04X} found in sanitised output"
+            )
+
+    def test_length_capped_at_80(self) -> None:
+        """Output must not exceed 80 characters."""
+        from clipwright_transcribe.transcribe import _sanitize_detail
+
+        raw = "x" * 200
+        result = _sanitize_detail(raw)
+        assert len(result) <= 80
+
+    def test_normal_label_unchanged(self) -> None:
+        """Safe fixed labels (CUDA / Metal / cpu) pass through unchanged."""
+        from clipwright_transcribe.transcribe import _sanitize_detail
+
+        for label in ("CUDA", "Metal", "cpu", ""):
+            result = _sanitize_detail(label)
+            assert result == label.strip()
+
+
+class TestComputeRealtimeFactor:
+    """Unit tests for _compute_realtime_factor(total_duration_sec, wall_seconds).
+
+    Per ADR-4' (v2 AUTHORITY): returns float | None.
+    wall <= 0 must return None — NOT 0.0 (DC-AM-001).
+    """
+
+    def test_normal_calculation(self) -> None:
+        """Realtime factor = total / wall, rounded to 2 decimal places."""
+        from clipwright_transcribe.transcribe import _compute_realtime_factor
+
+        result = _compute_realtime_factor(10.0, 2.0)
+        assert result == pytest.approx(5.0)
+
+    def test_rounding_two_decimal_places(self) -> None:
+        """Result is rounded to 2 decimal places."""
+        from clipwright_transcribe.transcribe import _compute_realtime_factor
+
+        # 10.0 / 3.0 = 3.333... -> 3.33
+        result = _compute_realtime_factor(10.0, 3.0)
+        assert result == pytest.approx(3.33)
+
+    def test_wall_zero_returns_none(self) -> None:
+        """wall_seconds == 0.0 must return None, not 0.0 (DC-AM-001)."""
+        from clipwright_transcribe.transcribe import _compute_realtime_factor
+
+        result = _compute_realtime_factor(10.0, 0.0)
+        assert result is None, "wall=0 must return None, not 0.0"
+
+    def test_wall_negative_returns_none(self) -> None:
+        """wall_seconds < 0 must return None (DC-AM-001 guard)."""
+        from clipwright_transcribe.transcribe import _compute_realtime_factor
+
+        result = _compute_realtime_factor(10.0, -1.0)
+        assert result is None, "wall<0 must return None, not 0.0"
+
+    def test_wall_zero_is_not_zero_float(self) -> None:
+        """Explicit regression: wall=0 must not produce the value 0.0."""
+        from clipwright_transcribe.transcribe import _compute_realtime_factor
+
+        result = _compute_realtime_factor(5.0, 0.0)
+        assert result != 0.0, (
+            "Returning 0.0 for wall=0 causes AI to misread it as '0x realtime'; "
+            "None is required (DC-AM-001)"
+        )
