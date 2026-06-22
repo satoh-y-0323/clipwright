@@ -10,13 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`data.backend` and `data.realtime_factor`**: The transcribe envelope now surfaces
-  `data.backend` (fields: `device` in `cuda | metal | cpu | unknown`, `detail` with the
-  raw whisper.cpp device string) and `data.realtime_factor`
-  (`whisper_wall_seconds / audio_duration_sec`) so callers can confirm the GPU device
-  and transcription speed without parsing `summary`. `data.whisper_wall_seconds` (raw
-  wall-clock seconds in the whisper subprocess) is also included.
+  `data.backend` (fields: `device` in `cuda | metal | cpu | unknown`, `detail` with a
+  sanitized fixed device label (CWE-209: no raw stderr / model path); e.g. `"CUDA"`,
+  `"Metal"`, `"cpu"`, `""`) and `data.realtime_factor`
+  (`audio_duration_sec / whisper_wall_seconds`; values **above 1.0 mean faster than
+  realtime**) so callers can confirm the GPU device and transcription speed without
+  parsing `summary`. `data.whisper_wall_seconds` (raw wall-clock seconds in the whisper
+  subprocess) is also included.
 - **`summary` backend reporting**: The one-line `summary` now includes the backend
-  used (e.g. `"backend: cuda (CUDA0 …)"`) so the GPU device is visible without
+  used (e.g. `" Backend: cuda (12.5x realtime)."`) so the GPU device is visible without
   unpacking `data`.
 - **GPU / CUDA acceleration guidance in README**: New `## GPU / CUDA Acceleration`
   section documents how to point `CLIPWRIGHT_WHISPER` at a CUDA or Metal whisper.cpp

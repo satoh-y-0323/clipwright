@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class TranscribeOptions(BaseModel):
@@ -17,7 +17,12 @@ class TranscribeOptions(BaseModel):
     language: whisper language code (None = auto-detect). model_path: path to the ggml
     model file (None falls back to env CLIPWRIGHT_WHISPER_MODEL).
     initial_prompt: context hint to improve whisper recognition accuracy.
+
+    extra="forbid" rejects unknown fields so that AI-side typos raise an explicit
+    validation error instead of being silently ignored (SR L-1: explicit allowlist).
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     language: Annotated[
         str | None,

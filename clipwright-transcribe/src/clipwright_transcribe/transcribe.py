@@ -29,7 +29,7 @@ import os
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, NamedTuple, TypedDict
+from typing import Any, Literal, NamedTuple, TypedDict
 
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
@@ -94,17 +94,24 @@ _DEVICE_DETAIL_LABELS: dict[str, str] = {
 }
 # Maximum length for the sanitised detail string (CWE-209 / ADR-2').
 _DETAIL_MAX_LEN = 80
+# Maximum number of characters to scan from whisper stderr for backend detection.
+# Device-init lines appear near the top of stderr, so truncating the tail is safe.
+# Prevents full expansion of unexpectedly large stderr output into memory (SR L-2).
+_STDERR_SCAN_MAX_CHARS = 65536
 
 
 # ---------------------------------------------------------------------------
 # Backend TypedDict / WhisperRun NamedTuple (ADR-3' v2 AUTHORITY)
 # ---------------------------------------------------------------------------
 
+# Allowed device values for BackendInfo (CR L-5: Literal type strengthening).
+Device = Literal["cuda", "metal", "cpu", "unknown"]
+
 
 class BackendInfo(TypedDict):
     """Detected or inferred whisper backend device and a sanitised label."""
 
-    device: str
+    device: Device
     detail: str
 
 
@@ -173,8 +180,11 @@ def _detect_backend(
     (NFR-3: backend detection must never propagate exceptions to the caller).
 
     Args:
-        whisper_json: Parsed whisper JSON output (not used for device determination;
-            retained for future extension without a signature change).
+        whisper_json: Parsed whisper JSON output. Not used for device determination:
+            the JSON result section contains only CPU-flag columns (systeminfo) and
+            no GPU tokens, so it provides no signal for CUDA/Metal detection (F1).
+            Retained in the signature for potential future auxiliary use without a
+            breaking change.
         whisper_stderr: Captured stderr text from the whisper subprocess, or None.
 
     Returns:
@@ -189,24 +199,28 @@ def _detect_backend(
         if not whisper_stderr:
             return BackendInfo(device="unknown", detail="")
 
+        # Limit scan range to the head of stderr (SR L-2: large-stderr guard).
+        # Device-init signals appear early; truncating the tail is safe.
+        text = whisper_stderr[:_STDERR_SCAN_MAX_CHARS]
+
         # Filter lines that contain exclude tokens (F3: request-parameter lines)
         lines = [
             line
-            for line in whisper_stderr.splitlines()
+            for line in text.splitlines()
             if not any(token in line.lower() for token in _STDERR_EXCLUDE_TOKENS)
         ]
         combined = "\n".join(lines).lower()
 
-        # Determine device in priority order: CUDA -> Metal -> CPU -> unknown
-        device = "unknown"
-        for candidate in ("cuda", "metal", "cpu"):
-            patterns = _BACKEND_STDERR_PATTERNS[candidate]
+        # Determine device in priority order: CUDA -> Metal -> CPU -> unknown.
+        # Iterating over a Literal tuple lets mypy infer the return type as Device
+        # without a cast (CR L-5).
+        for device in ("cuda", "metal", "cpu"):
+            patterns = _BACKEND_STDERR_PATTERNS[device]
             if any(pat in combined for pat in patterns):
-                device = candidate
-                break
+                detail = _sanitize_detail(_DEVICE_DETAIL_LABELS[device])
+                return BackendInfo(device=device, detail=detail)
 
-        detail = _sanitize_detail(_DEVICE_DETAIL_LABELS[device])
-        return BackendInfo(device=device, detail=detail)
+        return BackendInfo(device="unknown", detail="")
     except Exception:  # noqa: BLE001
         return BackendInfo(device="unknown", detail="")
 
@@ -217,24 +231,30 @@ def _compute_realtime_factor(
     """Compute the realtime factor: media container duration / whisper wall time.
 
     A value > 1 means transcription was faster than real time (typical for GPU).
-    Returns None when wall_seconds is non-positive (clock resolution below measurement
-    threshold, or invalid measurement) — NOT 0.0, to avoid an AI reading "0x realtime"
-    as "effectively not running" (DC-AM-001).
+    Returns None when either argument is non-finite or non-positive (clock resolution
+    below measurement threshold, invalid measurement, or degenerate input) — NOT 0.0,
+    to avoid an AI reading "0x realtime" as "effectively not running" (DC-AM-001).
+    None means "not measurable" (not slow).
 
     The numerator is the container duration as reported by ffprobe, which can differ
-    slightly from the actual WAV length fed to whisper (DC-AS-005).
-    None means "not measurable" (not slow).
+    slightly from the actual WAV length fed to whisper due to container-header rounding
+    (DC-AS-005). This discrepancy is expected and typically sub-second.
 
     Args:
         total_duration_sec: Media container duration in seconds (ffprobe-derived).
+            Non-finite or non-positive values yield None.
         wall_seconds: Monotonic-clock duration of the whisper subprocess only.
+            Non-finite or non-positive values yield None.
 
     Returns:
-        Realtime factor rounded to 2 decimal places, or None if wall_seconds <= 0.
+        Realtime factor rounded to 2 decimal places, or None if not measurable.
     """
-    if wall_seconds <= 0:
+    if not math.isfinite(wall_seconds) or wall_seconds <= 0:
         return None
-    return round(total_duration_sec / wall_seconds, 2)
+    if not math.isfinite(total_duration_sec) or total_duration_sec <= 0:
+        return None
+    result = round(total_duration_sec / wall_seconds, 2)
+    return result if math.isfinite(result) else None
 
 
 def _fmt_sec(sec: float) -> str:

@@ -41,6 +41,8 @@ from clipwright_transcribe.server import (
 from clipwright_transcribe.server import main, mcp
 from clipwright_transcribe.transcribe import transcribe_media
 
+from ._whisper_run import _whisper_run
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -261,31 +263,7 @@ class TestCliMain:
 # ---------------------------------------------------------------------------
 # data / summary backend additive fields (AC-3 / ADR-5' / ADR-7'(e))
 # Drives transcribe_media with _run_whisper mocked as WhisperRun(...)
-# Red phase: WhisperRun is not yet implemented in transcribe.py
 # ---------------------------------------------------------------------------
-
-
-def _whisper_run(
-    segments: list[Segment],
-    language: str = "en",
-    device: str = "cpu",
-    detail: str = "cpu",
-    wall: float = 1.0,
-) -> Any:
-    """Factory that returns a WhisperRun namedtuple for use as _run_whisper mock.
-
-    Importing WhisperRun here intentionally triggers ImportError when the
-    class is not yet implemented (Red phase).
-    """
-    # This import will raise ImportError until WhisperRun is implemented.
-    from clipwright_transcribe.transcribe import WhisperRun  # noqa: PLC0415
-
-    return WhisperRun(
-        segments=segments,
-        language=language,
-        backend={"device": device, "detail": detail},
-        wall_seconds=wall,
-    )
 
 
 class TestDataSummaryBackend:
@@ -293,9 +271,6 @@ class TestDataSummaryBackend:
 
     _run_whisper is patched to return WhisperRun(...) so that transcribe_media
     is exercised end-to-end through the real orchestration path.
-
-    Red phase: these tests fail until WhisperRun is implemented and
-    _transcribe_inner is updated to consume it.
     """
 
     def _run_with_wall(
@@ -334,16 +309,23 @@ class TestDataSummaryBackend:
     # --- AC-3: additive backend fields exist ---
 
     def test_data_has_backend_device(self, tmp_path: Path) -> None:
-        """data["backend"]["device"] must be present (AC-3)."""
+        """data["backend"]["device"] must be present and equal the injected value (AC-3,
+        CR M-2)."""
         result, _ = self._run_with_wall(tmp_path)
         assert result.ok is True
         assert "backend" in result.data
         assert "device" in result.data["backend"]
+        # _run_with_wall injects device="cpu"; verify the surfaced value, not just
+        # key presence.
+        assert result.data["backend"]["device"] == "cpu"
 
     def test_data_has_backend_detail(self, tmp_path: Path) -> None:
-        """data["backend"]["detail"] must be present (AC-3)."""
+        """data["backend"]["detail"] must be present and equal the injected value (AC-3,
+        CR M-2)."""
         result, _ = self._run_with_wall(tmp_path)
         assert "detail" in result.data["backend"]
+        # _run_with_wall injects detail="cpu"; verify the surfaced value.
+        assert result.data["backend"]["detail"] == "cpu"
 
     def test_data_has_whisper_wall_seconds(self, tmp_path: Path) -> None:
         """data["whisper_wall_seconds"] must be present (AC-3)."""

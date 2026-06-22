@@ -395,9 +395,11 @@ new architecture.
 None — same `clipwright_transcribe`; honours a GPU-capable binary transparently.
 
 **Implementation summary (v0.3.0)**
-- `data.backend` (`device`: `cuda | metal | cpu | unknown`, `detail`: raw whisper
-  device string) and `data.realtime_factor` (`whisper_wall_seconds /
-  audio_duration_sec`) surfaced in the transcribe envelope.
+- `data.backend` (`device`: `cuda | metal | cpu | unknown`, `detail`: sanitized fixed
+  device label (CWE-209: no raw stderr / model path); e.g. `"CUDA"`, `"Metal"`,
+  `"cpu"`, `""`) and `data.realtime_factor` (`audio_duration_sec /
+  whisper_wall_seconds`; values above 1.0 mean faster than realtime) surfaced in the
+  transcribe envelope.
 - `data.whisper_wall_seconds` (raw wall-clock seconds in the whisper subprocess)
   also included.
 - `summary` now reports the backend used for quick MCP-level inspection.

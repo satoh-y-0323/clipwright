@@ -48,6 +48,8 @@ from clipwright_transcribe.transcribe import (
     transcribe_media,
 )
 
+from ._whisper_run import _whisper_run
+
 FPS = 30.0
 
 
@@ -106,17 +108,6 @@ def _make_paths(tmp_path: Path) -> tuple[str, str, str]:
 
 def _opts(**kwargs: Any) -> TranscribeOptions:
     return TranscribeOptions(**kwargs)
-
-
-def _whisper_run(
-    segments: list[Segment],
-    language: str | None = "en",
-    device: str = "cpu",
-    detail: str = "cpu",
-    wall: float = 1.0,
-) -> WhisperRun:
-    """Build a WhisperRun for use as a mock return_value."""
-    return WhisperRun(segments, language, {"device": device, "detail": detail}, wall)
 
 
 # ===========================================================================
@@ -781,6 +772,8 @@ class TestRunWhisperAdapter:
             ),
         ):
             result = _run_whisper("video.mp4", _opts(), 10.0, str(model))
+        # Allow zero: on very fast machines the monotonic delta may be 0.0.
+        # Do NOT change to > 0 — that would make the test flaky on fast hosts.
         assert result.wall_seconds >= 0
 
     def test_backend_device_cuda_from_stderr(self, tmp_path: Path) -> None:
@@ -815,7 +808,7 @@ class TestRunWhisperAdapter:
 
 
 # ===========================================================================
-# Backend detection unit tests (Red phase — implementations not yet present)
+# Backend detection unit tests
 # ===========================================================================
 
 

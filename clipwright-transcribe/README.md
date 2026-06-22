@@ -78,22 +78,24 @@ device actually used at runtime:
   "data": {
     "backend": {
       "device": "cuda",
-      "detail": "CUDA0 (NVIDIA GeForce RTX 4090)"
+      "detail": "CUDA"
     },
-    "realtime_factor": 0.08,
+    "realtime_factor": 12.5,
     "whisper_wall_seconds": 14.2
   }
 }
 ```
 
 - `data.backend.device` — one of `cuda`, `metal`, `cpu`, or `unknown`.
-- `data.realtime_factor` — `whisper_wall_seconds / audio_duration_sec`. A value well below
-  `1.0` confirms the GPU path is active (CPU builds typically produce values near or above
-  `1.0` for large models).
+- `data.backend.detail` — sanitized fixed device label (CWE-209: no raw stderr / model
+  path). Values: `"CUDA"` (cuda), `"Metal"` (metal), `"cpu"` (cpu), `""` (unknown).
+- `data.realtime_factor` — `audio_duration_sec / whisper_wall_seconds`. Values **above
+  `1.0`** mean faster than realtime (e.g. `12.5` means 12.5× faster than realtime); a GPU
+  build typically yields values well above `1.0` while a slow CPU build may fall below `1.0`.
 - `data.whisper_wall_seconds` — raw wall-clock seconds spent in the whisper subprocess.
 
-`summary` also reports the backend used (e.g. `"backend: cuda (CUDA0 …)"`), so the
-information is visible in the one-line MCP response without unpacking `data`.
+`summary` also reports the backend used (e.g. `" Backend: cuda (12.5x realtime)."`), so
+the information is visible in the one-line MCP response without unpacking `data`.
 
 ### Note on Python GPU Libraries
 
