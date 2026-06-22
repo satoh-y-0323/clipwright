@@ -123,6 +123,10 @@ class TestOutputValidation:
         assert result.ok is False
         assert result.error is not None
         assert result.error.code == ErrorCode.INVALID_INPUT
+        # Regression guard: message must use a fixed string (no user input interpolation).
+        # If someone re-adds suffix interpolation, the suffix value must NOT appear in the message.
+        assert ".srt" not in result.error.message
+        assert "Invalid output file extension" in result.error.message
 
     def test_missing_parent_dir_rejected(self, tmp_path: Path) -> None:
         media = tmp_path / "video.mp4"
