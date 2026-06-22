@@ -941,6 +941,41 @@ class TestDetectBackend:
         result = _detect_backend(42, object())  # type: ignore[arg-type]
         assert result["device"] == "unknown"
 
+    def test_device_init_beyond_64kb_boundary_not_detected(self) -> None:
+        """Device init line placed after the 64KB scan limit is not detected (SR2-R-002).
+
+        _STDERR_SCAN_MAX_CHARS = 65536. Padding the first 65536+ chars with
+        irrelevant content and placing the CUDA init line in the tail ensures
+        the scan window excludes it, so the result must be "unknown".
+        """
+        from clipwright_transcribe.transcribe import (
+            _STDERR_SCAN_MAX_CHARS,
+            _detect_backend,
+        )
+
+        # Fill the scan window with harmless content, then append the init line
+        padding = "x " * (_STDERR_SCAN_MAX_CHARS + 10)
+        stderr = padding + "ggml_cuda_init: found 1 CUDA devices"
+        result = _detect_backend({}, stderr)
+        assert result["device"] == "unknown", (
+            "Device init line beyond the 64KB scan limit must not be detected "
+            f"(_STDERR_SCAN_MAX_CHARS={_STDERR_SCAN_MAX_CHARS})"
+        )
+
+    def test_cpu_result_within_64kb_boundary_detected(self) -> None:
+        """CPU result line within the 64KB scan window is correctly detected (SR2-R-002).
+
+        Places a CPU init line at the very beginning of stderr (well within 64KB),
+        confirming the scan window picks it up.
+        """
+        from clipwright_transcribe.transcribe import _detect_backend
+
+        stderr = "whisper_backend_init_gpu: no GPU found"
+        result = _detect_backend({}, stderr)
+        assert result["device"] == "cpu", (
+            "CPU result line within the scan window must be detected as 'cpu'"
+        )
+
 
 class TestSanitizeDetail:
     """Unit tests for _sanitize_detail(raw) — CWE-209 path/control-char stripping.
@@ -1043,3 +1078,47 @@ class TestComputeRealtimeFactor:
             "Returning 0.0 for wall=0 causes AI to misread it as '0x realtime'; "
             "None is required (DC-AM-001)"
         )
+
+    def test_total_zero_returns_none(self) -> None:
+        """total_duration_sec == 0.0 must return None (degenerate input guard)."""
+        from clipwright_transcribe.transcribe import _compute_realtime_factor
+
+        result = _compute_realtime_factor(0.0, 2.0)
+        assert result is None, "total=0 must return None"
+
+    def test_total_negative_returns_none(self) -> None:
+        """total_duration_sec < 0 must return None (degenerate input guard)."""
+        from clipwright_transcribe.transcribe import _compute_realtime_factor
+
+        result = _compute_realtime_factor(-1.0, 2.0)
+        assert result is None, "total<0 must return None"
+
+    # --- nan/inf guards (SR2-R-001) ---
+
+    def test_wall_nan_returns_none(self) -> None:
+        """wall_seconds=nan must return None (isfinite guard; SR2-R-001)."""
+        from clipwright_transcribe.transcribe import _compute_realtime_factor
+
+        result = _compute_realtime_factor(10.0, float("nan"))
+        assert result is None, "wall=nan must return None"
+
+    def test_wall_inf_returns_none(self) -> None:
+        """wall_seconds=inf must return None (isfinite guard; SR2-R-001)."""
+        from clipwright_transcribe.transcribe import _compute_realtime_factor
+
+        result = _compute_realtime_factor(10.0, float("inf"))
+        assert result is None, "wall=inf must return None"
+
+    def test_total_nan_returns_none(self) -> None:
+        """total_duration_sec=nan must return None (isfinite guard; SR2-R-001)."""
+        from clipwright_transcribe.transcribe import _compute_realtime_factor
+
+        result = _compute_realtime_factor(float("nan"), 2.0)
+        assert result is None, "total=nan must return None"
+
+    def test_total_inf_returns_none(self) -> None:
+        """total_duration_sec=inf must return None (isfinite guard; SR2-R-001)."""
+        from clipwright_transcribe.transcribe import _compute_realtime_factor
+
+        result = _compute_realtime_factor(float("inf"), 2.0)
+        assert result is None, "total=inf must return None"

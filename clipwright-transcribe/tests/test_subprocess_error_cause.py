@@ -1,14 +1,11 @@
-"""test_subprocess_error_cause.py — Red tests for exception-chain hardening (SR-R-001 [NL-1]).
+"""test_subprocess_error_cause.py — Tests for exception-chain hardening (SR-R-001 [NL-1]).
 
-Pins that the two `raise _sanitize_subprocess_error(exc) from exc` sites in
-_run_whisper() emit `__cause__ is None` after the planned change to `from None`.
-
-RED TODAY: both sites use `from exc`, so __cause__ is the original ClipwrightError.
-GREEN AFTER IMPL: `from None` makes __cause__ None (PEP 3134).
+Pins that the two `raise _sanitize_subprocess_error(exc) from None` sites in
+_run_whisper() emit `__cause__ is None` (PEP 3134).
 
 Sites under test:
-  - L220 (ffmpeg WAV extraction path): _extract_wav raises ClipwrightError
-  - L226 (whisper run path): run() raises ClipwrightError after _extract_wav succeeds
+  - ffmpeg WAV extraction path: _extract_wav raises ClipwrightError
+  - whisper run path: run() raises ClipwrightError after _extract_wav succeeds
 
 Mock strategy follows existing TestRunWhisperAdapter in test_transcribe.py:
   - Patch module-level `resolve_tool` to return dummy paths.
@@ -53,12 +50,12 @@ class TestFfmpegSiteCause:
     """_extract_wav raises -> _sanitize_subprocess_error(exc) must be raised from None."""
 
     def test_ffmpeg_cause_is_none(self) -> None:
-        """__cause__ of the sanitised error must be None (Red: currently the original exc).
+        """__cause__ of the sanitised error must be None.
 
         AAA:
           Arrange: mock resolve_tool + _extract_wav to raise a path-leaking ClipwrightError.
           Act:     call _run_whisper inside pytest.raises.
-          Assert:  __cause__ is None (fails today because `from exc` keeps the original).
+          Assert:  __cause__ is None (`from None` suppresses the original exception chain).
         """
         ffmpeg_exc = ClipwrightError(
             code=ErrorCode.SUBPROCESS_FAILED,
@@ -79,7 +76,6 @@ class TestFfmpegSiteCause:
         ):
             _run_whisper("video.mp4", _opts(), 10.0, "m.bin")
 
-        # Red assertion: currently fails because __cause__ == ffmpeg_exc (not None)
         assert excinfo.value.__cause__ is None
 
     def test_ffmpeg_site_code_preserved(self) -> None:
@@ -156,13 +152,13 @@ class TestWhisperSiteCause:
     """run() raises for whisper -> _sanitize_subprocess_error(exc) must be raised from None."""
 
     def test_whisper_cause_is_none(self) -> None:
-        """__cause__ of the sanitised error must be None (Red: currently the original exc).
+        """__cause__ of the sanitised error must be None.
 
         AAA:
           Arrange: mock resolve_tool + _extract_wav (success) + run to raise
                    a path-leaking ClipwrightError on the whisper invocation.
           Act:     call _run_whisper inside pytest.raises.
-          Assert:  __cause__ is None (fails today because `from exc` keeps the original).
+          Assert:  __cause__ is None (`from None` suppresses the original exception chain).
         """
         whisper_exc = ClipwrightError(
             code=ErrorCode.SUBPROCESS_TIMEOUT,
@@ -193,7 +189,6 @@ class TestWhisperSiteCause:
         ):
             _run_whisper("video.mp4", _opts(), 10.0, "m.bin")
 
-        # Red assertion: currently fails because __cause__ == whisper_exc (not None)
         assert excinfo.value.__cause__ is None
 
     def test_whisper_site_code_preserved(self) -> None:

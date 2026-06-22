@@ -1,17 +1,11 @@
-"""test_subprocess_safe_message.py — Red test for SUBPROCESS_SAFE_MESSAGE DRY consolidation.
+"""test_subprocess_safe_message.py — Tests for SUBPROCESS_SAFE_MESSAGE DRY consolidation.
 
 Pins transcribe's _sanitize_subprocess_error output to the SHARED core helper
 safe_subprocess_message (SR I-1 / CR-M-001 round 4).
 
-RED TODAY: transcribe.py defines its own local _SUBPROCESS_SAFE_MESSAGE and does
-NOT import the core helper safe_subprocess_message. The test at the end of this
-file (test_no_local_subprocess_safe_message) asserts that the local copy does NOT
-exist as a module-level name in clipwright_transcribe.transcribe — that assertion
-is the concrete Red signal.
-
-Once impl-transcribe removes the local _SUBPROCESS_SAFE_MESSAGE and switches
-_sanitize_subprocess_error to use safe_subprocess_message(exc), all assertions
-will be Green.
+Verifies that:
+  - _sanitize_subprocess_error uses safe_subprocess_message from clipwright.process.
+  - No local _SUBPROCESS_SAFE_MESSAGE constant is defined in clipwright_transcribe.transcribe.
 """
 
 from __future__ import annotations
@@ -95,16 +89,16 @@ class TestSanitizeSubprocessError:
 class TestNoLocalSubprocessSafeMessage:
     """Assert that the local _SUBPROCESS_SAFE_MESSAGE copy does NOT exist.
 
-    This is the CONCRETE Red signal for the DRY consolidation. Once impl-transcribe
-    removes the local constant, this assertion will pass (Green).
+    Pins that the DRY consolidation (SR I-1 / CR-M-001) is complete:
+    clipwright_transcribe.transcribe must use safe_subprocess_message from
+    clipwright.process and must not define a redundant local constant.
     """
 
     def test_no_local_subprocess_safe_message(self) -> None:
         """clipwright_transcribe.transcribe must NOT define a module-level _SUBPROCESS_SAFE_MESSAGE.
 
-        The presence of this attribute means the module still uses a local copy
-        rather than the shared core constant, which is the gap SR I-1 / CR-M-001
-        requires closing.
+        The presence of this attribute indicates the module still uses a local copy
+        rather than the shared core constant, violating SR I-1 / CR-M-001.
         """
         assert not hasattr(transcribe_module, "_SUBPROCESS_SAFE_MESSAGE"), (
             "clipwright_transcribe.transcribe still defines a local _SUBPROCESS_SAFE_MESSAGE. "

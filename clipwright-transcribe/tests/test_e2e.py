@@ -516,7 +516,7 @@ def test_transcribe_backend_e2e(tmp_path: Path) -> None:
     _KNOWN_DEVICES = {"cuda", "metal", "cpu", "unknown"}
     assert "backend" in data, (
         "data has no 'backend' key. "
-        "The backend/realtime surface is not yet implemented (expected Red failure)."
+        "The backend/realtime surface must be present in the transcription result."
     )
     backend = data["backend"]
     assert isinstance(backend, dict), f"data['backend'] is not a dict: {backend!r}"
@@ -543,7 +543,7 @@ def test_transcribe_backend_e2e(tmp_path: Path) -> None:
     # ⑤ whisper_wall_seconds > 0 (real transcription always takes non-zero time)
     assert "whisper_wall_seconds" in data, (
         "data has no 'whisper_wall_seconds' key. "
-        "The backend/realtime surface is not yet implemented (expected Red failure)."
+        "The backend/realtime surface must be present in the transcription result."
     )
     wall = data["whisper_wall_seconds"]
     assert isinstance(wall, (int, float)), (
@@ -557,7 +557,7 @@ def test_transcribe_backend_e2e(tmp_path: Path) -> None:
     # ⑥ realtime_factor > 0 and not None
     assert "realtime_factor" in data, (
         "data has no 'realtime_factor' key. "
-        "The backend/realtime surface is not yet implemented (expected Red failure)."
+        "The backend/realtime surface must be present in the transcription result."
     )
     rtf = data["realtime_factor"]
     assert rtf is not None, (

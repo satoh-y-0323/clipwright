@@ -11,13 +11,13 @@ their own imports and remain self-contained.
 from __future__ import annotations
 
 from clipwright_transcribe.captions import Segment
-from clipwright_transcribe.transcribe import WhisperRun
+from clipwright_transcribe.transcribe import Device, WhisperRun
 
 
 def _whisper_run(
     segments: list[Segment],
     language: str | None = "en",
-    device: str = "cpu",
+    device: Device = "cpu",
     detail: str = "cpu",
     wall: float = 1.0,
 ) -> WhisperRun:

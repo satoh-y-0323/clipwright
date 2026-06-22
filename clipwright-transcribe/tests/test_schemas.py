@@ -1,8 +1,6 @@
-"""test_schemas.py — Red tests for TranscribeOptions.
+"""test_schemas.py — Tests for TranscribeOptions.
 
 Pins the TranscribeOptions specification from architecture TR-AD-06.
-This file is intended to fail at import when schemas.py does not exist, thereby
-signalling that the feature is not yet implemented (Red test suite).
 
 SR M-1 / SR L-1: Input validation hardening tests are appended at the end.
 language: only ISO 639-1 compatible 2+ ASCII letters or "auto" are accepted

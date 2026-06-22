@@ -499,8 +499,8 @@ def _transcribe_inner(
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
             message=(
-                f"Invalid output file extension: {output_path.suffix!r}. "
-                "Only .otio is allowed."
+                "Invalid output file extension. "
+                "The output timeline path must end with '.otio'."
             ),
             hint="Change the output file path extension to .otio.",
         )
