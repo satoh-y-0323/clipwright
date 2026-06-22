@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-06-22
+
+### Added
+
+- **`data.backend` and `data.realtime_factor`**: The transcribe envelope now surfaces
+  `data.backend` (fields: `device` in `cuda | metal | cpu | unknown`, `detail` with the
+  raw whisper.cpp device string) and `data.realtime_factor`
+  (`whisper_wall_seconds / audio_duration_sec`) so callers can confirm the GPU device
+  and transcription speed without parsing `summary`. `data.whisper_wall_seconds` (raw
+  wall-clock seconds in the whisper subprocess) is also included.
+- **`summary` backend reporting**: The one-line `summary` now includes the backend
+  used (e.g. `"backend: cuda (CUDA0 …)"`) so the GPU device is visible without
+  unpacking `data`.
+- **GPU / CUDA acceleration guidance in README**: New `## GPU / CUDA Acceleration`
+  section documents how to point `CLIPWRIGHT_WHISPER` at a CUDA or Metal whisper.cpp
+  build, confirms no code changes are required, and explains `data.backend.device` /
+  `data.realtime_factor` for runtime verification.
+
+### Changed
+
+- **Version reconciliation**: `__init__.py` and `pyproject.toml` versions unified to
+  `0.3.0` (previously `0.1.1` / `0.2.0` respectively).
+- Depends on `clipwright>=0.2.0` (unchanged; `run()` → `CompletedProcess.stderr`
+  contract already satisfied).
+
 ## [0.2.0] - 2026-06-14
 
 ### Added

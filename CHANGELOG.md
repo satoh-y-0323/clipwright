@@ -5,6 +5,28 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-06-22
+
+### Added (`clipwright-transcribe` v0.3.0)
+
+- **`data.backend` and `data.realtime_factor`**: The `clipwright_transcribe` MCP tool
+  envelope now includes `data.backend` (`device`: `cuda | metal | cpu | unknown`,
+  `detail`: raw whisper.cpp device string) and `data.realtime_factor`
+  (`whisper_wall_seconds / audio_duration_sec`). `data.whisper_wall_seconds` (raw
+  wall-clock seconds spent in the whisper subprocess) is also surfaced.
+- **`summary` backend reporting**: The one-line `summary` now reports the backend used
+  (e.g. `"backend: cuda (CUDA0 NVIDIA GeForce RTX 4090)"`) for quick inspection without
+  unpacking `data`.
+- **GPU / CUDA acceleration guidance**: New `## GPU / CUDA Acceleration` section in
+  `clipwright-transcribe/README.md` explains how to use a CUDA or Metal whisper.cpp
+  build via `CLIPWRIGHT_WHISPER` (no code or parameter changes required). `data.backend`
+  and `data.realtime_factor` fields enable runtime verification of the GPU path.
+
+### Changed (`clipwright-transcribe` v0.3.0)
+
+- **Version reconciliation**: `clipwright-transcribe` `__init__.py` and `pyproject.toml`
+  versions unified to `0.3.0` (previously `0.1.1` / `0.2.0` respectively).
+
 ## [0.14.0] - 2026-06-22
 
 ### Added

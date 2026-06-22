@@ -373,12 +373,16 @@ def test_transcribe_e2e(tmp_path: Path) -> None:
     # ⑤ spike validation (DC-GP-001/DC-AM-002/003)
     # Confirm that the WHISPER_BINARY_NAME constant matches the actual binary name
     # (DC-AS-003-R).
-    actual_binary_name = Path(_WHISPER_BIN).name
-    if actual_binary_name != WHISPER_BINARY_NAME:
+    # Compare stems only: on Windows the resolved binary has a .exe suffix while
+    # WHISPER_BINARY_NAME is the extension-less cross-platform name (PATHEXT handles
+    # the .exe lookup when using PATH; CLIPWRIGHT_WHISPER may be a full path with .exe).
+    actual_binary_stem = Path(_WHISPER_BIN).stem
+    expected_binary_stem = Path(WHISPER_BINARY_NAME).stem
+    if actual_binary_stem != expected_binary_stem:
         # Record the discrepancy but do not skip.
         pytest.fail(
-            f"WHISPER_BINARY_NAME constant ('{WHISPER_BINARY_NAME}') does not match "
-            f"the actual binary name ('{actual_binary_name}'). "
+            f"WHISPER_BINARY_NAME constant stem ('{expected_binary_stem}') does not "
+            f"match the actual binary stem ('{actual_binary_stem}'). "
             "A fix in impl-transcribe is required. "
             "Update the WHISPER_BINARY_NAME constant in transcribe.py to match the "
             "actual binary name."

@@ -377,11 +377,12 @@ graphic lower-thirds are standard in published video and have no path today.
 
 ---
 
-### GPU / CUDA transcription  *(transcribe wiring + docs)*
+### GPU / CUDA transcription  ✅ IMPLEMENTED (v0.3.0, 2026-06-22)  *(transcribe wiring + docs)*
 
 **What it does**
 Allows `clipwright-transcribe` to use a CUDA-enabled `whisper.cpp` build (or
-`faster-whisper`) for GPU-accelerated speech-to-text.
+Metal on macOS) for GPU-accelerated speech-to-text. Transparent to callers:
+point `CLIPWRIGHT_WHISPER` at a GPU build; no code or parameter changes needed.
 
 **Why it is needed**
 Verification used a CPU `whisper.cpp` build: 180s of audio took 136s. Transcription
@@ -391,16 +392,20 @@ several times faster. The binary is already env-configurable
 new architecture.
 
 **MCP tool name(s)**
-None — same `clipwright_transcribe`; honour a GPU-capable binary transparently.
+None — same `clipwright_transcribe`; honours a GPU-capable binary transparently.
 
-**Implementation hints**
-- No code change is required to *use* a CUDA whisper binary (point
-  `CLIPWRIGHT_WHISPER` at it). Add: (a) README guidance for installing a CUDA
-  build + model, (b) optional surfacing of the backend/device used in `summary`,
-  (c) consider a `faster-whisper` (CTranslate2) optional backend for users without
-  a whisper.cpp CUDA build.
-- Keep the external-process / license-independence rule: invoke the binary, do not
-  link a CUDA library into the package.
+**Implementation summary (v0.3.0)**
+- `data.backend` (`device`: `cuda | metal | cpu | unknown`, `detail`: raw whisper
+  device string) and `data.realtime_factor` (`whisper_wall_seconds /
+  audio_duration_sec`) surfaced in the transcribe envelope.
+- `data.whisper_wall_seconds` (raw wall-clock seconds in the whisper subprocess)
+  also included.
+- `summary` now reports the backend used for quick MCP-level inspection.
+- `## GPU / CUDA Acceleration` section added to `clipwright-transcribe/README.md`
+  with per-platform CUDA/Metal binary acquisition guidance and runtime verification
+  instructions.
+- External-process / license-independence rule maintained: `faster-whisper` and
+  CTranslate2 are **not** imported; any whisper-cli-compatible binary works.
 
 ---
 
@@ -473,7 +478,7 @@ clipwright (core)
   ├─ clipwright-trim           ← NEW (High); manual kept-ranges, same OTIO shape as silence
   ├─ clipwright-scene          ← shipped (content-aware backend = Low refinement)
   ├─ clipwright-frames         ← shipped
-  ├─ clipwright-transcribe     ← shipped (GPU/CUDA wiring = Medium)
+  ├─ clipwright-transcribe     ← ✅ IMPLEMENTED (v0.3.0, 2026-06-22); GPU/CUDA wiring + data.backend/realtime_factor
   ├─ clipwright-wrap           ← shipped (may host clipwright_remap_captions)
   ├─ clipwright-loudness       ← shipped
   ├─ clipwright-noise          ← shipped

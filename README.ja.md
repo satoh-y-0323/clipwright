@@ -221,7 +221,7 @@ src/clipwright/
 | `clipwright-silence` | `clipwright_detect_silence` | FFmpeg `silencedetect` で無音区間を検出し OTIO マーカーを注記する |
 | `clipwright-loudness` | `clipwright_measure_loudness` | FFmpeg で EBU R128 ラウドネス（積分 LUFS / トゥルーピーク）を測定する |
 | `clipwright-noise` | `clipwright_reduce_noise` | FFmpeg `afftdn` のノイズ低減設定を OTIO タイムラインに注記する |
-| `clipwright-transcribe` | `clipwright_transcribe` | whisper-cli で音声をテキスト化し、単語単位の OTIO マーカーを書き込む |
+| `clipwright-transcribe` | `clipwright_transcribe` | whisper-cli で音声をテキスト化し、単語単位の OTIO マーカーを書き込む。CUDA / Metal ビルドの whisper.cpp を透過利用可（`CLIPWRIGHT_WHISPER` を GPU ビルドに向けるだけで GPU 動作）。`data.backend.device` と `data.realtime_factor` で実機デバイスと速度をランタイム確認できる |
 | `clipwright-bgm` | `clipwright_place_bgm` | BGM の配置注記（音量 / フェード / ダッキング）を OTIO タイムラインに書く |
 | `clipwright-render` | `clipwright_render` | OTIO の編集オペレーション（トリム / 連結 / フィルタ / LinearTimeWarp 速度変換 / drawtext テキストオーバーレイ）を FFmpeg で出力メディアに実体化する。タイムラインに無音カットやスピード変換が含まれる場合、`.srt` 字幕キューと `text_overlay` マーカーをプログラム時間へ再タイミングする（デフォルト `retime_markers="auto"`）。再タイミング時は非破壊で `{output_stem}.retimed.srt` を出力する。`.vtt` / `.ass` およびマルチソースタイムラインは warning 付きでスキップする。ハードウェアエンコード（`hw_encoder`: none/auto/nvenc/amf/qsv/vaapi/videotoolbox）および GPU デコード（`hwaccel_decode`）をサポート。NVENC は開発機で動作確認済み。AMF / QSV / VAAPI / VideoToolbox は experimental（コミュニティ検証待ち）。 |
 | `clipwright-speed` | `clipwright_set_speed` | OTIO の `LinearTimeWarp` でクリップに速度倍率を注記する。実体化は `clipwright-render` が行う |
