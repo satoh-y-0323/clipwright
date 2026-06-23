@@ -23,7 +23,11 @@ import pytest
 # --- Imports under test (both modules are not yet implemented) ---
 # These imports will raise ImportError in the Red phase, making all tests fail.
 from clipwright.errors import ClipwrightError, ErrorCode
-from clipwright_transition.plan import ResolvedTransition, resolve_transitions  # type: ignore[import]  # noqa: E501
+
+from clipwright_transition.plan import (  # type: ignore[import]  # noqa: E501
+    ResolvedTransition,
+    resolve_transitions,
+)
 from clipwright_transition.schemas import (  # type: ignore[import]
     AddTransitionOptions,
     BoundaryTransition,
@@ -35,9 +39,13 @@ from clipwright_transition.schemas import (  # type: ignore[import]
 # ---------------------------------------------------------------------------
 
 
-def _uniform_opts(type_: str = "dissolve", duration_sec: float = 0.5) -> AddTransitionOptions:
+def _uniform_opts(
+    type_: str = "dissolve", duration_sec: float = 0.5
+) -> AddTransitionOptions:
     """Build AddTransitionOptions in uniform mode."""
-    return AddTransitionOptions(uniform=TransitionSpec(type=type_, duration_sec=duration_sec))
+    return AddTransitionOptions(
+        uniform=TransitionSpec(type=type_, duration_sec=duration_sec)
+    )
 
 
 def _per_opts(boundaries: list[BoundaryTransition]) -> AddTransitionOptions:
@@ -45,7 +53,9 @@ def _per_opts(boundaries: list[BoundaryTransition]) -> AddTransitionOptions:
     return AddTransitionOptions(per_boundary=boundaries)
 
 
-def _boundary(after_clip_index: int, type_: str = "fade", duration_sec: float = 0.3) -> BoundaryTransition:
+def _boundary(
+    after_clip_index: int, type_: str = "fade", duration_sec: float = 0.3
+) -> BoundaryTransition:
     """Shorthand for BoundaryTransition."""
     return BoundaryTransition(
         after_clip_index=after_clip_index,
@@ -141,7 +151,9 @@ class TestPerBoundaryMode:
         assert result[0].type == "fade"
         assert result[0].duration_sec == 0.3
 
-    def test_per_boundary_multiple_returned_ascending_regardless_of_input_order(self) -> None:
+    def test_per_boundary_multiple_returned_ascending_regardless_of_input_order(
+        self,
+    ) -> None:
         """per_boundary with out-of-order input is sorted ascending in the result."""
         # Input order: 2, 0, 1 — should be returned as [0, 1, 2].
         opts = _per_opts([_boundary(2), _boundary(0), _boundary(1)])
@@ -161,10 +173,16 @@ class TestPerBoundaryMode:
 
     def test_per_boundary_preserves_type_and_duration_per_entry(self) -> None:
         """Each ResolvedTransition preserves the type and duration from its BoundaryTransition."""
-        opts = _per_opts([
-            BoundaryTransition(after_clip_index=0, type="dissolve", duration_sec=0.5),
-            BoundaryTransition(after_clip_index=1, type="fadewhite", duration_sec=1.2),
-        ])
+        opts = _per_opts(
+            [
+                BoundaryTransition(
+                    after_clip_index=0, type="dissolve", duration_sec=0.5
+                ),
+                BoundaryTransition(
+                    after_clip_index=1, type="fadewhite", duration_sec=1.2
+                ),
+            ]
+        )
         result = resolve_transitions(n_clips=3, options=opts)
 
         # Result is sorted by index
@@ -249,10 +267,14 @@ class TestPerBoundaryDuplicate:
 
     def test_duplicate_index_different_types(self) -> None:
         """Same index with different type/duration is still a duplicate -> INVALID_INPUT."""
-        opts = _per_opts([
-            BoundaryTransition(after_clip_index=1, type="fade", duration_sec=0.5),
-            BoundaryTransition(after_clip_index=1, type="dissolve", duration_sec=1.0),
-        ])
+        opts = _per_opts(
+            [
+                BoundaryTransition(after_clip_index=1, type="fade", duration_sec=0.5),
+                BoundaryTransition(
+                    after_clip_index=1, type="dissolve", duration_sec=1.0
+                ),
+            ]
+        )
         with pytest.raises(ClipwrightError) as exc_info:
             resolve_transitions(n_clips=4, options=opts)
 

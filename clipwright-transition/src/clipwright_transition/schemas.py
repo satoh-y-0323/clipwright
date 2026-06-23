@@ -112,7 +112,7 @@ class AddTransitionOptions(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _exactly_one_mode(self) -> "AddTransitionOptions":
+    def _exactly_one_mode(self) -> AddTransitionOptions:
         """Ensure exactly one of uniform or per_boundary (non-empty) is provided."""
         has_uniform = self.uniform is not None
         has_per = self.per_boundary is not None and len(self.per_boundary) > 0

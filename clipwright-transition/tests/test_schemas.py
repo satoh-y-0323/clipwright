@@ -195,19 +195,13 @@ class TestBoundaryTransitionValidValues:
 
     def test_large_after_clip_index(self) -> None:
         """Large after_clip_index values (schema allows any ge=0 int) must be accepted."""
-        bt = BoundaryTransition(
-            after_clip_index=999, type="dissolve", duration_sec=1.0
-        )
+        bt = BoundaryTransition(after_clip_index=999, type="dissolve", duration_sec=1.0)
         assert bt.after_clip_index == 999
 
     def test_duration_sec_boundary_values(self) -> None:
         """duration_sec boundary values (just above 0 and exactly 5.0) must pass."""
-        bt_low = BoundaryTransition(
-            after_clip_index=0, type="fade", duration_sec=0.001
-        )
-        bt_high = BoundaryTransition(
-            after_clip_index=0, type="fade", duration_sec=5.0
-        )
+        bt_low = BoundaryTransition(after_clip_index=0, type="fade", duration_sec=0.001)
+        bt_high = BoundaryTransition(after_clip_index=0, type="fade", duration_sec=5.0)
         assert bt_low.duration_sec == pytest.approx(0.001)
         assert bt_high.duration_sec == pytest.approx(5.0)
 
@@ -240,9 +234,7 @@ class TestBoundaryTransitionDurationConstraints:
     def test_zero_duration_rejected(self) -> None:
         """duration_sec=0.0 violates gt=0."""
         with pytest.raises(ValidationError):
-            BoundaryTransition(
-                after_clip_index=0, type="fade", duration_sec=0.0
-            )
+            BoundaryTransition(after_clip_index=0, type="fade", duration_sec=0.0)
 
     @pytest.mark.parametrize("d", [-0.001, -1.0])
     def test_negative_duration_rejected(self, d: float) -> None:
@@ -253,9 +245,7 @@ class TestBoundaryTransitionDurationConstraints:
     def test_above_upper_bound_rejected(self) -> None:
         """duration_sec=5.0001 violates le=5.0."""
         with pytest.raises(ValidationError):
-            BoundaryTransition(
-                after_clip_index=0, type="fade", duration_sec=5.0001
-            )
+            BoundaryTransition(after_clip_index=0, type="fade", duration_sec=5.0001)
 
 
 # ===========================================================================
@@ -270,9 +260,7 @@ class TestBoundaryTransitionInfNan:
     def test_duration_sec_inf_nan_rejected(self, value: float) -> None:
         """inf/nan for duration_sec -> ValidationError."""
         with pytest.raises(ValidationError):
-            BoundaryTransition(
-                after_clip_index=0, type="fade", duration_sec=value
-            )
+            BoundaryTransition(after_clip_index=0, type="fade", duration_sec=value)
 
 
 # ===========================================================================
@@ -334,9 +322,7 @@ class TestAddTransitionOptionsValidValues:
 
     def test_per_boundary_only_multiple(self) -> None:
         """per_boundary with multiple entries, uniform=None -> valid."""
-        opts = AddTransitionOptions(
-            per_boundary=[_bt(0), _bt(1, type="dissolve")]
-        )
+        opts = AddTransitionOptions(per_boundary=[_bt(0), _bt(1, type="dissolve")])
         assert len(opts.per_boundary) == 2  # type: ignore[arg-type]
 
     def test_uniform_with_per_boundary_none(self) -> None:
