@@ -948,13 +948,13 @@ class TestZeroScenesDetected:
     """When no scene boundaries are detected, result is ok=True with warning."""
 
     def test_zero_boundaries_returns_ok_with_warning(self, tmp_path: Path) -> None:
-        """No scdet lines -> ok=True, warnings list is non-empty."""
+        """No scdet lines -> ok=True, guidance warning with new message substrings."""
         from clipwright_scene.detect import detect_scenes
 
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
         output = str(tmp_path / "out.otio")
-        # Empty stderr: no boundaries
+        # Empty stderr: no boundaries; default _opts() is threshold=0.3, backend=ffmpeg
         media_info = _make_media_info(path=media, duration_sec=10.0)
 
         with (
@@ -971,6 +971,13 @@ class TestZeroScenesDetected:
         assert result.data.get("scene_count") == 0
         assert result.warnings is not None
         assert len(result.warnings) > 0
+        # New guidance substrings (ffmpeg backend, threshold=0.3 -> suggested=0.15)
+        assert "No scene boundaries were detected." in result.warnings[0]
+        assert "backend='pyscenedetect'" in result.warnings[0]
+        assert "0.15" in result.warnings[0]
+        # summary also contains guidance
+        assert result.summary is not None
+        assert "pyscenedetect" in result.summary
 
     def test_zero_boundaries_produces_no_markers(self, tmp_path: Path) -> None:
         """No detection -> OTIO V1 track has no markers."""
@@ -1184,4 +1191,473 @@ class TestPyscenedetectThresholdArgumentFormat:
         assert pattern.fullmatch(captured_threshold[0]), (
             f"pyscenedetect --threshold value {captured_threshold[0]!r} "
             "does not match numeric pattern"
+        )
+
+
+# ===========================================================================
+# (A) _zero_boundary_guidance — pure helper contract tests
+# ===========================================================================
+
+
+class TestZeroBoundaryGuidancePureHelper:
+    """Unit tests for _zero_boundary_guidance() pure helper.
+
+    This function does not exist yet; tests will fail with ImportError until
+    the implementation is added (TDD Red phase).
+
+    Contract:
+    - Always: "No scene boundaries were detected."
+    - ffmpeg backend: "backend='pyscenedetect'" and "content-aware"
+    - pyscenedetect backend: "single continuous shot"
+    - threshold > 0.05: "Try lowering 'threshold' to" + suggested value string
+    - threshold <= 0.05: "practical floor (0.05)" and NOT "Try lowering 'threshold' to"
+    """
+
+    # ------------------------------------------------------------------
+    # Parametrize table
+    # threshold values: 0.0, 0.05, 0.1, 0.3, 1.0
+    # backend values: "ffmpeg", "pyscenedetect"
+    # ------------------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "threshold,backend",
+        [
+            (0.0, "ffmpeg"),
+            (0.0, "pyscenedetect"),
+            (0.05, "ffmpeg"),
+            (0.05, "pyscenedetect"),
+            (0.1, "ffmpeg"),
+            (0.1, "pyscenedetect"),
+            (0.3, "ffmpeg"),
+            (0.3, "pyscenedetect"),
+            (1.0, "ffmpeg"),
+            (1.0, "pyscenedetect"),
+        ],
+    )
+    def test_common_prefix_always_present(
+        self, threshold: float, backend: str
+    ) -> None:
+        """All combinations must start with the common prefix."""
+        from clipwright_scene.detect import _zero_boundary_guidance  # type: ignore[attr-defined]
+
+        opts = _opts(threshold=threshold, backend=backend)
+        guidance = _zero_boundary_guidance(opts)
+        assert "No scene boundaries were detected." in guidance
+
+    @pytest.mark.parametrize(
+        "threshold",
+        [0.0, 0.05, 0.1, 0.3, 1.0],
+    )
+    def test_ffmpeg_backend_contains_switch_fragment(self, threshold: float) -> None:
+        """ffmpeg backend must always mention backend='pyscenedetect' and content-aware."""
+        from clipwright_scene.detect import _zero_boundary_guidance  # type: ignore[attr-defined]
+
+        opts = _opts(threshold=threshold, backend="ffmpeg")
+        guidance = _zero_boundary_guidance(opts)
+        assert "backend='pyscenedetect'" in guidance
+        assert "content-aware" in guidance
+
+    @pytest.mark.parametrize(
+        "threshold",
+        [0.0, 0.05, 0.1, 0.3, 1.0],
+    )
+    def test_pyscenedetect_backend_contains_single_shot_fragment(
+        self, threshold: float
+    ) -> None:
+        """pyscenedetect backend must always mention single continuous shot."""
+        from clipwright_scene.detect import _zero_boundary_guidance  # type: ignore[attr-defined]
+
+        opts = _opts(threshold=threshold, backend="pyscenedetect")
+        guidance = _zero_boundary_guidance(opts)
+        assert "single continuous shot" in guidance
+
+    @pytest.mark.parametrize(
+        "threshold,expected_suggested",
+        [
+            # threshold > 0.05: suggested = round(max(0.05, threshold/2), 2)
+            (0.1, "0.05"),
+            (0.3, "0.15"),
+            (1.0, "0.5"),
+        ],
+    )
+    def test_threshold_above_floor_contains_lower_fragment(
+        self, threshold: float, expected_suggested: str
+    ) -> None:
+        """threshold > 0.05 must produce LOWER fragment with suggested value."""
+        from clipwright_scene.detect import _zero_boundary_guidance  # type: ignore[attr-defined]
+
+        # Use ffmpeg backend (does not affect threshold branch)
+        opts = _opts(threshold=threshold, backend="ffmpeg")
+        guidance = _zero_boundary_guidance(opts)
+        assert "Try lowering 'threshold' to" in guidance
+        assert expected_suggested in guidance
+
+    @pytest.mark.parametrize(
+        "threshold",
+        [0.0, 0.05],
+    )
+    def test_threshold_at_or_below_floor_contains_floor_note(
+        self, threshold: float
+    ) -> None:
+        """threshold <= 0.05 must show FLOOR_NOTE and must NOT show LOWER fragment."""
+        from clipwright_scene.detect import _zero_boundary_guidance  # type: ignore[attr-defined]
+
+        opts = _opts(threshold=threshold, backend="ffmpeg")
+        guidance = _zero_boundary_guidance(opts)
+        assert "practical floor (0.05)" in guidance
+        # Negative assert: LOWER fragment must not appear
+        assert "Try lowering 'threshold' to" not in guidance
+
+    @pytest.mark.parametrize(
+        "threshold",
+        [0.0, 0.05],
+    )
+    def test_threshold_at_or_below_floor_pyscenedetect(self, threshold: float) -> None:
+        """pyscenedetect + threshold<=0.05: floor note present, LOWER absent."""
+        from clipwright_scene.detect import _zero_boundary_guidance  # type: ignore[attr-defined]
+
+        opts = _opts(threshold=threshold, backend="pyscenedetect")
+        guidance = _zero_boundary_guidance(opts)
+        assert "practical floor (0.05)" in guidance
+        assert "Try lowering 'threshold' to" not in guidance
+
+    def test_ffmpeg_threshold_0_3_full_contract(self) -> None:
+        """Canonical case: ffmpeg + threshold=0.3 -> suggested=0.15."""
+        from clipwright_scene.detect import _zero_boundary_guidance  # type: ignore[attr-defined]
+
+        opts = _opts(threshold=0.3, backend="ffmpeg")
+        guidance = _zero_boundary_guidance(opts)
+        # All required substrings for this canonical case
+        assert "No scene boundaries were detected." in guidance
+        assert "Try lowering 'threshold' to" in guidance
+        assert "0.15" in guidance
+        assert "backend='pyscenedetect'" in guidance
+        assert "content-aware" in guidance
+        # SINGLE_SHOT must not appear in ffmpeg branch
+        assert "single continuous shot" not in guidance
+        # FLOOR_NOTE must not appear since threshold > 0.05
+        assert "practical floor (0.05)" not in guidance
+
+    def test_pyscenedetect_threshold_0_0_full_contract(self) -> None:
+        """Edge case: pyscenedetect + threshold=0.0 -> floor note, single shot."""
+        from clipwright_scene.detect import _zero_boundary_guidance  # type: ignore[attr-defined]
+
+        opts = _opts(threshold=0.0, backend="pyscenedetect")
+        guidance = _zero_boundary_guidance(opts)
+        assert "No scene boundaries were detected." in guidance
+        assert "practical floor (0.05)" in guidance
+        assert "single continuous shot" in guidance
+        # LOWER must not appear
+        assert "Try lowering 'threshold' to" not in guidance
+        # SWITCH_FROM_FFMPEG must not appear in pyscenedetect branch
+        assert "backend='pyscenedetect'" not in guidance
+
+
+# ===========================================================================
+# (A) Envelope integration: zero scenes -> warning + summary both carry guidance
+# ===========================================================================
+
+
+class TestZeroBoundaryGuidanceEnvelopeIntegration:
+    """Integration tests: detect_scenes with zero boundaries carries guidance
+    in both warnings[0] and summary (via _zero_boundary_guidance).
+
+    Currently fails because _zero_boundary_guidance is not yet implemented
+    (TDD Red phase).
+    """
+
+    def test_zero_scenes_ffmpeg_warning_substrings(self, tmp_path: Path) -> None:
+        """backend=ffmpeg, threshold=0.3: warnings[0] carries all required substrings."""
+        from clipwright_scene.detect import detect_scenes
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        with (
+            patch("clipwright_scene.detect.inspect_media", return_value=media_info),
+            patch(
+                "clipwright_scene.detect.run",
+                side_effect=_fake_run_ffmpeg_ok(""),
+            ),
+        ):
+            result = detect_scenes(media, output, _opts(threshold=0.3, backend="ffmpeg"))
+
+        assert result.ok is True
+        assert result.warnings is not None and len(result.warnings) > 0
+        w = result.warnings[0]
+        assert "No scene boundaries were detected." in w
+        assert "backend='pyscenedetect'" in w
+        assert "0.15" in w
+
+    def test_zero_scenes_ffmpeg_summary_contains_guidance(self, tmp_path: Path) -> None:
+        """backend=ffmpeg, threshold=0.3: summary also contains guidance substring."""
+        from clipwright_scene.detect import detect_scenes
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        with (
+            patch("clipwright_scene.detect.inspect_media", return_value=media_info),
+            patch(
+                "clipwright_scene.detect.run",
+                side_effect=_fake_run_ffmpeg_ok(""),
+            ),
+        ):
+            result = detect_scenes(media, output, _opts(threshold=0.3, backend="ffmpeg"))
+
+        assert result.ok is True
+        assert result.summary is not None
+        assert "pyscenedetect" in result.summary
+
+    def test_zero_scenes_pyscenedetect_warning_substrings(
+        self, tmp_path: Path
+    ) -> None:
+        """backend=pyscenedetect, threshold=0.3: warnings[0] carries single-shot hint."""
+        from clipwright_scene.detect import detect_scenes
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+        csv_stdout = _make_pyscenedetect_csv([])  # no boundaries
+
+        with (
+            patch("clipwright_scene.detect.inspect_media", return_value=media_info),
+            patch(
+                "clipwright_scene.detect.run",
+                side_effect=_fake_run_pyscenedetect_ok(csv_stdout),
+            ),
+        ):
+            result = detect_scenes(
+                media, output, _opts(threshold=0.3, backend="pyscenedetect")
+            )
+
+        assert result.ok is True
+        assert result.warnings is not None and len(result.warnings) > 0
+        w = result.warnings[0]
+        assert "No scene boundaries were detected." in w
+        assert "single continuous shot" in w
+        assert "0.15" in w
+
+    def test_zero_scenes_floor_threshold_no_lower_fragment(
+        self, tmp_path: Path
+    ) -> None:
+        """threshold=0.05: LOWER fragment absent in warnings[0]."""
+        from clipwright_scene.detect import detect_scenes
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        with (
+            patch("clipwright_scene.detect.inspect_media", return_value=media_info),
+            patch(
+                "clipwright_scene.detect.run",
+                side_effect=_fake_run_ffmpeg_ok(""),
+            ),
+        ):
+            result = detect_scenes(
+                media, output, _opts(threshold=0.05, backend="ffmpeg")
+            )
+
+        assert result.ok is True
+        assert result.warnings is not None and len(result.warnings) > 0
+        w = result.warnings[0]
+        assert "practical floor (0.05)" in w
+        assert "Try lowering 'threshold' to" not in w
+
+
+# ===========================================================================
+# (B) scenedetect DEPENDENCY_MISSING — UX unified error test
+# ===========================================================================
+
+
+class TestScenedetectDependencyMissing:
+    """When scenedetect is not installed, detect_scenes must return DEPENDENCY_MISSING
+    with the correct pip-install hint (not the ffmpeg winget hint).
+
+    Currently fails because _detect_with_pyscenedetect uses shutil.which instead of
+    resolve_tool (TDD Red phase).
+    """
+
+    def _make_dep_missing_error(self) -> ClipwrightError:
+        """Build a DEPENDENCY_MISSING error as resolve_tool would raise."""
+        return ClipwrightError(
+            code=ErrorCode.DEPENDENCY_MISSING,
+            message="scenedetect not found on PATH",
+            hint=(
+                "Install PySceneDetect with 'pip install scenedetect', "
+                "or set CLIPWRIGHT_SCENEDETECT to its executable path."
+            ),
+        )
+
+    def test_dependency_missing_returns_error_result(self, tmp_path: Path) -> None:
+        """resolve_tool raising DEPENDENCY_MISSING -> result ok=False."""
+        from clipwright_scene.detect import detect_scenes
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        dep_error = self._make_dep_missing_error()
+
+        def _selective_resolve_tool(name: str, **kwargs: Any) -> str:
+            # Only raise DEPENDENCY_MISSING for scenedetect; pass through ffmpeg
+            if name == "scenedetect":
+                raise dep_error
+            # For other tools (e.g. ffmpeg) return a plausible path
+            return f"/usr/bin/{name}"
+
+        with (
+            patch("clipwright_scene.detect.inspect_media", return_value=media_info),
+            patch(
+                "clipwright_scene.detect.resolve_tool",
+                side_effect=_selective_resolve_tool,
+            ),
+        ):
+            result = detect_scenes(
+                media,
+                output,
+                _opts(backend="pyscenedetect"),
+            )
+
+        assert result.ok is False
+
+    def test_dependency_missing_error_code(self, tmp_path: Path) -> None:
+        """result.error.code must be 'DEPENDENCY_MISSING'."""
+        from clipwright_scene.detect import detect_scenes
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        dep_error = self._make_dep_missing_error()
+
+        def _selective_resolve_tool(name: str, **kwargs: Any) -> str:
+            if name == "scenedetect":
+                raise dep_error
+            return f"/usr/bin/{name}"
+
+        with (
+            patch("clipwright_scene.detect.inspect_media", return_value=media_info),
+            patch(
+                "clipwright_scene.detect.resolve_tool",
+                side_effect=_selective_resolve_tool,
+            ),
+        ):
+            result = detect_scenes(
+                media,
+                output,
+                _opts(backend="pyscenedetect"),
+            )
+
+        assert result.error is not None
+        assert result.error.code == "DEPENDENCY_MISSING"
+
+    def test_dependency_missing_hint_contains_pip_install(self, tmp_path: Path) -> None:
+        """result.error.hint must contain 'pip install scenedetect'."""
+        from clipwright_scene.detect import detect_scenes
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        dep_error = self._make_dep_missing_error()
+
+        def _selective_resolve_tool(name: str, **kwargs: Any) -> str:
+            if name == "scenedetect":
+                raise dep_error
+            return f"/usr/bin/{name}"
+
+        with (
+            patch("clipwright_scene.detect.inspect_media", return_value=media_info),
+            patch(
+                "clipwright_scene.detect.resolve_tool",
+                side_effect=_selective_resolve_tool,
+            ),
+        ):
+            result = detect_scenes(
+                media,
+                output,
+                _opts(backend="pyscenedetect"),
+            )
+
+        assert result.error is not None
+        assert result.error.hint is not None
+        assert "pip install scenedetect" in result.error.hint
+
+    def test_dependency_missing_hint_contains_env_var(self, tmp_path: Path) -> None:
+        """result.error.hint must contain 'CLIPWRIGHT_SCENEDETECT'."""
+        from clipwright_scene.detect import detect_scenes
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        dep_error = self._make_dep_missing_error()
+
+        def _selective_resolve_tool(name: str, **kwargs: Any) -> str:
+            if name == "scenedetect":
+                raise dep_error
+            return f"/usr/bin/{name}"
+
+        with (
+            patch("clipwright_scene.detect.inspect_media", return_value=media_info),
+            patch(
+                "clipwright_scene.detect.resolve_tool",
+                side_effect=_selective_resolve_tool,
+            ),
+        ):
+            result = detect_scenes(
+                media,
+                output,
+                _opts(backend="pyscenedetect"),
+            )
+
+        assert result.error is not None
+        assert result.error.hint is not None
+        assert "CLIPWRIGHT_SCENEDETECT" in result.error.hint
+
+    def test_dependency_missing_hint_not_ffmpeg_winget(self, tmp_path: Path) -> None:
+        """result.error.hint must NOT contain ffmpeg winget hint (negative assert)."""
+        from clipwright_scene.detect import detect_scenes
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        dep_error = self._make_dep_missing_error()
+
+        def _selective_resolve_tool(name: str, **kwargs: Any) -> str:
+            if name == "scenedetect":
+                raise dep_error
+            return f"/usr/bin/{name}"
+
+        with (
+            patch("clipwright_scene.detect.inspect_media", return_value=media_info),
+            patch(
+                "clipwright_scene.detect.resolve_tool",
+                side_effect=_selective_resolve_tool,
+            ),
+        ):
+            result = detect_scenes(
+                media,
+                output,
+                _opts(backend="pyscenedetect"),
+            )
+
+        assert result.error is not None
+        # Negative assert: must not carry the ffmpeg-specific winget hint
+        assert result.error.hint is None or "winget install Gyan.FFmpeg" not in (
+            result.error.hint or ""
         )
