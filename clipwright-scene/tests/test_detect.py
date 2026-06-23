@@ -274,6 +274,7 @@ class TestPyscenedetectBackendNormal:
 
         with (
             patch("clipwright_scene.detect.inspect_media", return_value=media_info),
+            patch("clipwright_scene.detect.resolve_tool", return_value="scenedetect"),
             patch(
                 "clipwright_scene.detect.run",
                 side_effect=_fake_run_pyscenedetect_ok(csv_stdout),
@@ -299,6 +300,7 @@ class TestPyscenedetectBackendNormal:
 
         with (
             patch("clipwright_scene.detect.inspect_media", return_value=media_info),
+            patch("clipwright_scene.detect.resolve_tool", return_value="scenedetect"),
             patch(
                 "clipwright_scene.detect.run",
                 side_effect=_fake_run_pyscenedetect_ok(csv_stdout),
@@ -333,6 +335,7 @@ class TestPyscenedetectBackendNormal:
 
         with (
             patch("clipwright_scene.detect.inspect_media", return_value=media_info),
+            patch("clipwright_scene.detect.resolve_tool", return_value="scenedetect"),
             patch("clipwright_scene.detect.run", side_effect=_capture),
         ):
             detect_scenes(media, output, _opts(backend="pyscenedetect"))
@@ -1182,6 +1185,7 @@ class TestPyscenedetectThresholdArgumentFormat:
 
         with (
             patch("clipwright_scene.detect.inspect_media", return_value=media_info),
+            patch("clipwright_scene.detect.resolve_tool", return_value="scenedetect"),
             patch("clipwright_scene.detect.run", side_effect=_capture),
         ):
             detect_scenes(media, output, _opts(backend="pyscenedetect"))
@@ -1234,11 +1238,11 @@ class TestZeroBoundaryGuidancePureHelper:
             (1.0, "pyscenedetect"),
         ],
     )
-    def test_common_prefix_always_present(
-        self, threshold: float, backend: str
-    ) -> None:
+    def test_common_prefix_always_present(self, threshold: float, backend: str) -> None:
         """All combinations must start with the common prefix."""
-        from clipwright_scene.detect import _zero_boundary_guidance  # type: ignore[attr-defined]
+        from clipwright_scene.detect import (
+            _zero_boundary_guidance,  # type: ignore[attr-defined]
+        )
 
         opts = _opts(threshold=threshold, backend=backend)
         guidance = _zero_boundary_guidance(opts)
@@ -1250,7 +1254,9 @@ class TestZeroBoundaryGuidancePureHelper:
     )
     def test_ffmpeg_backend_contains_switch_fragment(self, threshold: float) -> None:
         """ffmpeg backend must always mention backend='pyscenedetect' and content-aware."""
-        from clipwright_scene.detect import _zero_boundary_guidance  # type: ignore[attr-defined]
+        from clipwright_scene.detect import (
+            _zero_boundary_guidance,  # type: ignore[attr-defined]
+        )
 
         opts = _opts(threshold=threshold, backend="ffmpeg")
         guidance = _zero_boundary_guidance(opts)
@@ -1265,7 +1271,9 @@ class TestZeroBoundaryGuidancePureHelper:
         self, threshold: float
     ) -> None:
         """pyscenedetect backend must always mention single continuous shot."""
-        from clipwright_scene.detect import _zero_boundary_guidance  # type: ignore[attr-defined]
+        from clipwright_scene.detect import (
+            _zero_boundary_guidance,  # type: ignore[attr-defined]
+        )
 
         opts = _opts(threshold=threshold, backend="pyscenedetect")
         guidance = _zero_boundary_guidance(opts)
@@ -1284,7 +1292,9 @@ class TestZeroBoundaryGuidancePureHelper:
         self, threshold: float, expected_suggested: str
     ) -> None:
         """threshold > 0.05 must produce LOWER fragment with suggested value."""
-        from clipwright_scene.detect import _zero_boundary_guidance  # type: ignore[attr-defined]
+        from clipwright_scene.detect import (
+            _zero_boundary_guidance,  # type: ignore[attr-defined]
+        )
 
         # Use ffmpeg backend (does not affect threshold branch)
         opts = _opts(threshold=threshold, backend="ffmpeg")
@@ -1300,7 +1310,9 @@ class TestZeroBoundaryGuidancePureHelper:
         self, threshold: float
     ) -> None:
         """threshold <= 0.05 must show FLOOR_NOTE and must NOT show LOWER fragment."""
-        from clipwright_scene.detect import _zero_boundary_guidance  # type: ignore[attr-defined]
+        from clipwright_scene.detect import (
+            _zero_boundary_guidance,  # type: ignore[attr-defined]
+        )
 
         opts = _opts(threshold=threshold, backend="ffmpeg")
         guidance = _zero_boundary_guidance(opts)
@@ -1314,7 +1326,9 @@ class TestZeroBoundaryGuidancePureHelper:
     )
     def test_threshold_at_or_below_floor_pyscenedetect(self, threshold: float) -> None:
         """pyscenedetect + threshold<=0.05: floor note present, LOWER absent."""
-        from clipwright_scene.detect import _zero_boundary_guidance  # type: ignore[attr-defined]
+        from clipwright_scene.detect import (
+            _zero_boundary_guidance,  # type: ignore[attr-defined]
+        )
 
         opts = _opts(threshold=threshold, backend="pyscenedetect")
         guidance = _zero_boundary_guidance(opts)
@@ -1323,7 +1337,9 @@ class TestZeroBoundaryGuidancePureHelper:
 
     def test_ffmpeg_threshold_0_3_full_contract(self) -> None:
         """Canonical case: ffmpeg + threshold=0.3 -> suggested=0.15."""
-        from clipwright_scene.detect import _zero_boundary_guidance  # type: ignore[attr-defined]
+        from clipwright_scene.detect import (
+            _zero_boundary_guidance,  # type: ignore[attr-defined]
+        )
 
         opts = _opts(threshold=0.3, backend="ffmpeg")
         guidance = _zero_boundary_guidance(opts)
@@ -1340,7 +1356,9 @@ class TestZeroBoundaryGuidancePureHelper:
 
     def test_pyscenedetect_threshold_0_0_full_contract(self) -> None:
         """Edge case: pyscenedetect + threshold=0.0 -> floor note, single shot."""
-        from clipwright_scene.detect import _zero_boundary_guidance  # type: ignore[attr-defined]
+        from clipwright_scene.detect import (
+            _zero_boundary_guidance,  # type: ignore[attr-defined]
+        )
 
         opts = _opts(threshold=0.0, backend="pyscenedetect")
         guidance = _zero_boundary_guidance(opts)
@@ -1382,7 +1400,9 @@ class TestZeroBoundaryGuidanceEnvelopeIntegration:
                 side_effect=_fake_run_ffmpeg_ok(""),
             ),
         ):
-            result = detect_scenes(media, output, _opts(threshold=0.3, backend="ffmpeg"))
+            result = detect_scenes(
+                media, output, _opts(threshold=0.3, backend="ffmpeg")
+            )
 
         assert result.ok is True
         assert result.warnings is not None and len(result.warnings) > 0
@@ -1407,15 +1427,15 @@ class TestZeroBoundaryGuidanceEnvelopeIntegration:
                 side_effect=_fake_run_ffmpeg_ok(""),
             ),
         ):
-            result = detect_scenes(media, output, _opts(threshold=0.3, backend="ffmpeg"))
+            result = detect_scenes(
+                media, output, _opts(threshold=0.3, backend="ffmpeg")
+            )
 
         assert result.ok is True
         assert result.summary is not None
         assert "pyscenedetect" in result.summary
 
-    def test_zero_scenes_pyscenedetect_warning_substrings(
-        self, tmp_path: Path
-    ) -> None:
+    def test_zero_scenes_pyscenedetect_warning_substrings(self, tmp_path: Path) -> None:
         """backend=pyscenedetect, threshold=0.3: warnings[0] carries single-shot hint."""
         from clipwright_scene.detect import detect_scenes
 
@@ -1427,6 +1447,7 @@ class TestZeroBoundaryGuidanceEnvelopeIntegration:
 
         with (
             patch("clipwright_scene.detect.inspect_media", return_value=media_info),
+            patch("clipwright_scene.detect.resolve_tool", return_value="scenedetect"),
             patch(
                 "clipwright_scene.detect.run",
                 side_effect=_fake_run_pyscenedetect_ok(csv_stdout),

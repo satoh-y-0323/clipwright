@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import math
 import os
-import shutil
 from pathlib import Path
 
 from clipwright.envelope import error_result, ok_result
@@ -37,6 +36,49 @@ from clipwright_scene.parse import (
     parse_scdet_stderr,
 )
 from clipwright_scene.schemas import DetectScenesOptions
+
+# Practical lower bound for threshold; below this, further lowering rarely helps.
+_THRESHOLD_FLOOR = 0.05
+
+
+def _zero_boundary_guidance(options: DetectScenesOptions) -> str:
+    """Return a guidance string for the zero-boundary case.
+
+    Pure helper: no I/O, no subprocess calls, no exceptions raised.
+    The caller is responsible for checking scene_count == 0 before calling this.
+
+    Args:
+        options: DetectScenesOptions (only threshold and backend are referenced).
+
+    Returns:
+        A single English guidance sentence with backend- and threshold-specific advice.
+    """
+    suggested = round(max(_THRESHOLD_FLOOR, options.threshold / 2), 2)
+    parts = ["No scene boundaries were detected."]
+
+    if options.threshold > _THRESHOLD_FLOOR:
+        current = f"{options.threshold:g}"
+        parts.append(
+            f"Try lowering 'threshold' to {suggested:g} (currently {current})."
+        )
+    else:
+        parts.append(
+            "'threshold' is already at the practical floor (0.05);"
+            " lowering it further is unlikely to help."
+        )
+
+    if options.backend == "ffmpeg":
+        parts.append(
+            "Or switch to backend='pyscenedetect', which is content-aware and detects"
+            " gradual or low-contrast cuts that the ffmpeg backend can miss."
+        )
+    else:
+        parts.append(
+            "If lowering the threshold still yields no boundaries,"
+            " the footage may be a single continuous shot."
+        )
+
+    return " ".join(parts)
 
 
 def _detect_with_ffmpeg(
@@ -110,7 +152,19 @@ def _detect_with_pyscenedetect(
         ClipwrightError: SUBPROCESS_FAILED / SUBPROCESS_TIMEOUT from run()
             when scenedetect is not installed or the command fails.
     """
-    scenedetect_path = shutil.which("scenedetect") or "scenedetect"
+    try:
+        scenedetect_path = resolve_tool("scenedetect", env_var="CLIPWRIGHT_SCENEDETECT")
+    except ClipwrightError as exc:
+        if exc.code == ErrorCode.DEPENDENCY_MISSING:
+            raise ClipwrightError(
+                code=ErrorCode.DEPENDENCY_MISSING,
+                message=exc.message,
+                hint=(
+                    "Install PySceneDetect with 'pip install scenedetect', "
+                    "or set CLIPWRIGHT_SCENEDETECT to its executable path."
+                ),
+            ) from None
+        raise
     cmd = [
         scenedetect_path,
         "-i",
@@ -353,20 +407,24 @@ def _detect_scenes_inner(
     # --- 6. Build return envelope ---
 
     scene_count = len(boundaries)
+    guidance: str | None = None
     warnings: list[str] = []
     if scene_count == 0:
-        warnings.append(
-            "No scene boundaries detected. Consider lowering the threshold."
-        )
+        guidance = _zero_boundary_guidance(options)
+        warnings = [guidance]
 
     # basename only (no absolute path); accepted disclosure surface consistent
     # with other clipwright tools (see SR-R-001).
-    summary = (
+    base_summary = (
         f"Detected {scene_count} scene boundary(ies) using {options.backend} "
         f"in {media_path.name} "
         f"(duration: {total_duration_sec:.1f}s). "
         f"Saved OTIO timeline to {output_path.name}."
     )
+    if scene_count == 0 and guidance is not None:
+        summary = f"{base_summary} {guidance}"
+    else:
+        summary = base_summary
 
     return ok_result(
         summary,
