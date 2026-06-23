@@ -54,6 +54,14 @@ def add_transition(
         return _add_transition_inner(timeline, output, options).model_dump()
     except ClipwrightError as exc:
         return error_result(str(exc.code), exc.message, exc.hint).model_dump()
+    except Exception:
+        # SR L-1: catch non-ClipwrightError exceptions (e.g. OTIOError from
+        # save_timeline) with fixed wording to prevent tmp path exposure (CWE-209).
+        return error_result(
+            str(ErrorCode.INTERNAL),
+            "Failed to write the output timeline.",
+            "Check that the output directory is writable and has free space.",
+        ).model_dump()
 
 
 def _add_transition_inner(
@@ -67,6 +75,7 @@ def _add_transition_inner(
       1. Output extension .otio check.
       2. Output parent directory existence check.
       3. output == timeline path comparison (_check_output_not_input).
+      3b. output within timeline directory boundary check.
       4. Load timeline (FILE_NOT_FOUND -> basename re-raise).
       5. count_video_clips (multiple tracks / existing Transition / Clip count).
       6. resolve_transitions (range / duplicate / mode validation in plan.py).
@@ -102,9 +111,18 @@ def _add_transition_inner(
     _check_output_not_input(output_path, timeline)
 
     # ------------------------------------------------------------------
+    # 3b. Output must reside within the same directory tree as the timeline
+    #     (SR L-3: mirrors sequence._resolve_and_check_colocation /
+    #     trim PATH_NOT_ALLOWED pattern; resolve OSError fallback included).
+    # ------------------------------------------------------------------
+    _check_output_within_timeline_dir(output_path, Path(timeline).parent)
+
+    # ------------------------------------------------------------------
     # 4. Load timeline (raises OTIO_ERROR on parse failure;
     #    FILE_NOT_FOUND is converted to basename-only for CWE-209)
     # ------------------------------------------------------------------
+    # Pre-check for CWE-209: load_timeline may surface the full path in its
+    # error message; intercept early and re-raise with basename only.
     if not Path(timeline).exists():
         raise ClipwrightError(
             code=ErrorCode.FILE_NOT_FOUND,
@@ -221,6 +239,67 @@ def _check_output_not_input(output_path: Path, input_timeline: str) -> None:
                 "(tool chaining requires a distinct OTIO file)."
             ),
         )
+
+
+def _check_output_within_timeline_dir(output_path: Path, timeline_dir: Path) -> None:
+    """Raise PATH_NOT_ALLOWED if output is outside the timeline directory tree.
+
+    Mirrors sequence._resolve_and_check_colocation (keep in sync).
+    Falls back to absolute()-based comparison when resolve() raises OSError.
+    Error message uses fixed wording without exposing the full path (CWE-209).
+
+    Args:
+        output_path: Proposed output OTIO file path.
+        timeline_dir: Parent directory of the input timeline file.
+
+    Raises:
+        ClipwrightError: PATH_NOT_ALLOWED when output is outside the boundary.
+    """
+    try:
+        base = timeline_dir.resolve()
+        target = output_path.resolve()
+        base_str = str(base)
+        target_str = str(target)
+        if not (
+            target_str == base_str
+            or target_str.startswith(base_str + "/")
+            or target_str.startswith(base_str + "\\")
+        ):
+            raise ClipwrightError(
+                code=ErrorCode.PATH_NOT_ALLOWED,
+                message="Output file points outside the project boundary.",
+                hint=(
+                    "Use an output path located under the same directory"
+                    " as the input OTIO timeline."
+                ),
+            )
+    except ClipwrightError:
+        raise
+    except OSError:
+        # resolve() failure (network paths, extremely long paths, symlink loops):
+        # fall back to absolute()-based best-effort comparison.
+        try:
+            base_abs = str(timeline_dir.absolute())
+            target_abs = str(output_path.absolute())
+            if not (
+                target_abs == base_abs
+                or target_abs.startswith(base_abs + "/")
+                or target_abs.startswith(base_abs + "\\")
+            ):
+                raise ClipwrightError(
+                    code=ErrorCode.PATH_NOT_ALLOWED,
+                    message="Output file points outside the project boundary.",
+                    hint=(
+                        "Use an output path located under the same directory"
+                        " as the input OTIO timeline."
+                    ),
+                )
+        except ClipwrightError:
+            raise
+        except OSError:
+            # Truly unresolvable: skip boundary check (best-effort, same as
+            # sequence._resolve_and_check_colocation SR L-1 / DC-GP-002).
+            pass
 
 
 def count_video_clips(tl: otio.schema.Timeline) -> int:

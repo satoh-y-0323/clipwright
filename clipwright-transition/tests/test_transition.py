@@ -5,7 +5,8 @@ Covers:
   zero track rejection.
 - add_transition: output == input (INVALID_INPUT), output extension, output parent
   directory, non-destructive (input file unchanged), directive canonical form
-  (existing directive preserved), FILE_NOT_FOUND.
+  (existing directive preserved), FILE_NOT_FOUND, output boundary (PATH_NOT_ALLOWED),
+  save_timeline failure (INTERNAL / fixed wording without tmp path exposure).
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from pathlib import Path
 
 import opentimelineio as otio
 import pytest
+from clipwright.errors import ClipwrightError, ErrorCode
 
 from clipwright_transition.schemas import AddTransitionOptions, TransitionSpec
 from clipwright_transition.transition import add_transition, count_video_clips
@@ -103,14 +105,10 @@ class TestCountVideoClips:
         track.append(_make_clip(str(tmp_path / "clip_b.mp4")))
         tl.tracks.append(track)
 
-        from clipwright.errors import ErrorCode
-
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(ClipwrightError) as exc_info:
             count_video_clips(tl)
-        exc = exc_info.value
-        assert hasattr(exc, "code")
-        assert str(exc.code) == str(ErrorCode.INVALID_INPUT)
-        assert "Transition" in exc.message
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+        assert "Transition" in exc_info.value.message
 
     def test_rejects_multiple_video_tracks(self, tmp_path: Path) -> None:
         """Two video tracks must raise INVALID_INPUT."""
@@ -120,13 +118,10 @@ class TestCountVideoClips:
             track.append(_make_clip(str(tmp_path / f"{name}_clip.mp4")))
             tl.tracks.append(track)
 
-        from clipwright.errors import ErrorCode
-
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(ClipwrightError) as exc_info:
             count_video_clips(tl)
-        exc = exc_info.value
-        assert str(exc.code) == str(ErrorCode.INVALID_INPUT)
-        assert "two or more video tracks" in exc.message.lower()
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+        assert "two or more video tracks" in exc_info.value.message.lower()
 
     def test_rejects_zero_video_tracks(self) -> None:
         """A timeline with no video track must raise INVALID_INPUT."""
@@ -134,12 +129,9 @@ class TestCountVideoClips:
         audio_track = otio.schema.Track(name="A1", kind=otio.schema.TrackKind.Audio)
         tl.tracks.append(audio_track)
 
-        from clipwright.errors import ErrorCode
-
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(ClipwrightError) as exc_info:
             count_video_clips(tl)
-        exc = exc_info.value
-        assert str(exc.code) == str(ErrorCode.INVALID_INPUT)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_three_clips(self, tmp_path: Path) -> None:
         tl = otio.schema.Timeline(name="three_clips")
@@ -427,3 +419,182 @@ class TestOkResultEnvelope:
         assert output_path.exists()
         artifact_path = result["artifacts"][0]["path"]
         assert artifact_path == str(output_path)
+
+
+# ---------------------------------------------------------------------------
+# add_transition — output boundary (SR L-3: PATH_NOT_ALLOWED)
+# ---------------------------------------------------------------------------
+
+
+class TestOutputBoundary:
+    """SR L-3: output outside the timeline directory must return PATH_NOT_ALLOWED."""
+
+    def test_output_outside_timeline_dir_returns_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """Output placed in a sibling directory must be rejected with PATH_NOT_ALLOWED."""
+        # Create two separate sibling directories under tmp_path.
+        timeline_dir = tmp_path / "project"
+        timeline_dir.mkdir()
+        other_dir = tmp_path / "other"
+        other_dir.mkdir()
+
+        tl = _two_clip_timeline(timeline_dir)
+        otio_path = timeline_dir / "timeline.otio"
+        _write_timeline(tl, otio_path)
+
+        # Output points into other_dir, which is outside the timeline directory.
+        result = add_transition(
+            timeline=str(otio_path),
+            output=str(other_dir / "output.otio"),
+            options=_uniform_opts(),
+        )
+        assert result["ok"] is False
+        assert result["error"]["code"] == "PATH_NOT_ALLOWED"
+
+    def test_output_in_same_dir_as_timeline_is_allowed(self, tmp_path: Path) -> None:
+        """Output placed in the same directory as the timeline must succeed."""
+        tl = _two_clip_timeline(tmp_path)
+        otio_path = tmp_path / "timeline.otio"
+        _write_timeline(tl, otio_path)
+
+        result = add_transition(
+            timeline=str(otio_path),
+            output=str(tmp_path / "output.otio"),
+            options=_uniform_opts(),
+        )
+        assert result["ok"] is True
+
+    def test_output_in_subdirectory_of_timeline_dir_is_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """Output placed in a subdirectory of the timeline directory must succeed."""
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        tl = _two_clip_timeline(tmp_path)
+        otio_path = tmp_path / "timeline.otio"
+        _write_timeline(tl, otio_path)
+
+        result = add_transition(
+            timeline=str(otio_path),
+            output=str(sub / "output.otio"),
+            options=_uniform_opts(),
+        )
+        assert result["ok"] is True
+
+    def test_path_not_allowed_message_does_not_expose_full_path(
+        self, tmp_path: Path
+    ) -> None:
+        """Error message must not expose the full filesystem path (CWE-209)."""
+        timeline_dir = tmp_path / "project"
+        timeline_dir.mkdir()
+        other_dir = tmp_path / "other"
+        other_dir.mkdir()
+
+        tl = _two_clip_timeline(timeline_dir)
+        otio_path = timeline_dir / "timeline.otio"
+        _write_timeline(tl, otio_path)
+
+        result = add_transition(
+            timeline=str(otio_path),
+            output=str(other_dir / "output.otio"),
+            options=_uniform_opts(),
+        )
+        assert result["ok"] is False
+        # Fixed wording must not include the full absolute path of other_dir.
+        assert str(other_dir) not in result["error"]["message"]
+        assert str(other_dir) not in result["error"].get("hint", "")
+
+
+# ---------------------------------------------------------------------------
+# add_transition — save_timeline failure (SR L-1: INTERNAL / no tmp path)
+# ---------------------------------------------------------------------------
+
+
+class TestSaveTimelineFailure:
+    """SR L-1: non-ClipwrightError from save_timeline must be caught with fixed wording."""
+
+    def test_save_timeline_exception_returns_internal_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """OTIOError from save_timeline must surface as INTERNAL, not propagate."""
+        import opentimelineio as otio_mod
+
+        tl = _two_clip_timeline(tmp_path)
+        otio_path = tmp_path / "timeline.otio"
+        _write_timeline(tl, otio_path)
+
+        # Monkeypatch save_timeline in the transition module to raise a non-ClipwrightError.
+        def _raise_otioc_error(timeline_obj: object, path: str) -> None:
+            raise otio_mod.exceptions.OTIOError("cannot write to /tmp/xxx.otio")
+
+        import clipwright_transition.transition as transition_mod
+
+        monkeypatch.setattr(transition_mod, "save_timeline", _raise_otioc_error)
+
+        result = add_transition(
+            timeline=str(otio_path),
+            output=str(tmp_path / "output.otio"),
+            options=_uniform_opts(),
+        )
+        assert result["ok"] is False
+        assert result["error"]["code"] == "INTERNAL"
+
+    def test_save_timeline_exception_uses_fixed_message(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Error message must be the fixed wording, not the raw exception text."""
+        import opentimelineio as otio_mod
+
+        tl = _two_clip_timeline(tmp_path)
+        otio_path = tmp_path / "timeline.otio"
+        _write_timeline(tl, otio_path)
+
+        fake_tmp = "/tmp/clipwright_abc123.otio"
+
+        def _raise_with_path(timeline_obj: object, path: str) -> None:
+            raise otio_mod.exceptions.OTIOError(
+                f"Failed to serialize timeline to {fake_tmp}"
+            )
+
+        import clipwright_transition.transition as transition_mod
+
+        monkeypatch.setattr(transition_mod, "save_timeline", _raise_with_path)
+
+        result = add_transition(
+            timeline=str(otio_path),
+            output=str(tmp_path / "output.otio"),
+            options=_uniform_opts(),
+        )
+        assert result["ok"] is False
+        # Fixed wording must match the implementation constant.
+        assert result["error"]["message"] == "Failed to write the output timeline."
+        # Tmp path must NOT appear in either message or hint (CWE-209).
+        assert fake_tmp not in result["error"]["message"]
+        assert fake_tmp not in result["error"].get("hint", "")
+
+    def test_save_timeline_generic_exception_also_caught(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Any non-ClipwrightError (e.g. PermissionError) is also caught."""
+        tl = _two_clip_timeline(tmp_path)
+        otio_path = tmp_path / "timeline.otio"
+        _write_timeline(tl, otio_path)
+
+        def _raise_permission(timeline_obj: object, path: str) -> None:
+            raise PermissionError("Access is denied: /tmp/secret.otio")
+
+        import clipwright_transition.transition as transition_mod
+
+        monkeypatch.setattr(transition_mod, "save_timeline", _raise_permission)
+
+        result = add_transition(
+            timeline=str(otio_path),
+            output=str(tmp_path / "output.otio"),
+            options=_uniform_opts(),
+        )
+        assert result["ok"] is False
+        assert result["error"]["code"] == "INTERNAL"
+        # Secret path must not be exposed.
+        assert "/tmp/secret.otio" not in result["error"]["message"]
+        assert "/tmp/secret.otio" not in result["error"].get("hint", "")

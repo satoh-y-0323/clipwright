@@ -1,8 +1,7 @@
 """test_plan.py — Unit tests for clipwright_transition.plan.resolve_transitions.
 
-These tests exercise the pure logic layer (no I/O, no OTIO, no subprocess).
-All tests are expected to FAIL at import time because plan.py and schemas.py
-are not yet implemented (Red phase of TDD).
+Tests for pure resolution logic in clipwright_transition.plan.
+No I/O, OTIO, or subprocess involved.
 
 Test cases:
   (1) uniform mode: expands to all boundaries [0, n_clips-2] in ascending order,
@@ -19,16 +18,13 @@ Test cases:
 from __future__ import annotations
 
 import pytest
-
-# --- Imports under test (both modules are not yet implemented) ---
-# These imports will raise ImportError in the Red phase, making all tests fail.
 from clipwright.errors import ClipwrightError, ErrorCode
 
-from clipwright_transition.plan import (  # type: ignore[import]  # noqa: E501
+from clipwright_transition.plan import (
     ResolvedTransition,
     resolve_transitions,
 )
-from clipwright_transition.schemas import (  # type: ignore[import]
+from clipwright_transition.schemas import (
     AddTransitionOptions,
     BoundaryTransition,
     TransitionSpec,

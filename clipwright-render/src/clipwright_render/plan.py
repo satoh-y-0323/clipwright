@@ -2259,10 +2259,7 @@ def _validate_transition(
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
                 message="A boundary index is out of range.",
-                hint=(
-                    f"Use after_clip_index in [0, {max_boundary}]"
-                    f" (n_clips = {n_clips})."
-                ),
+                hint=f"Use after_clip_index in [0, {max_boundary}].",
             )
 
     # Check for duplicate indices
@@ -2321,13 +2318,18 @@ def _build_transition_chain(
     has_audio: bool,
     program_durations: list[float],
     transitions: list[_RenderTransition] | None,
-) -> tuple[str, str, list[str]]:
+) -> tuple[str, str, list[str], float]:
     """Append either a concat filter or an xfade/acrossfade chain to filter_parts.
 
-    Returns (video_terminal_label, audio_terminal_label, warnings).
+    Returns (video_terminal_label, audio_terminal_label, warnings, sum_clamped_d).
+
+    sum_clamped_d is the total overlap removed from the program timeline by
+    transitions (Σ clamped_d). Callers use this to correct total_duration and
+    total_duration_for_bgm without re-deriving the clamping logic (CR M-3 / DRY).
 
     When transitions is None or empty, the traditional concat filter is generated
     (output byte-identical to the previous implementation; ADR-RT-1).
+    sum_clamped_d is 0.0 in that case.
 
     When transitions is non-empty (must cover all internal boundaries in ascending
     order), xfade filters are chained for video and, when has_audio=True,
@@ -2342,7 +2344,8 @@ def _build_transition_chain(
     Duration clamping (ADR-RT-8):
         clamped_d = min(requested_d, program_dur_i, program_dur_{i+1})
         When clamped_d <= 0 (degenerate), it is floored to _MIN_XFADE_DUR.
-        A warning is appended for each clamped boundary.
+        A warning is appended for each clamped boundary (fixed wording + boundary
+        identifier; SR M-1 — raw float values are not included in warnings).
 
     Offset formula (ADR-RT-3):
         offset = prog_cum − overlap_cum − clamped_d
@@ -2368,7 +2371,7 @@ def _build_transition_chain(
         filter_parts.append(
             f"{input_labels}concat=n={n}:v={v_count}:a={a_count}{concat_output}"
         )
-        return "[outv]", "[outa]" if has_audio else "", tr_warnings
+        return "[outv]", "[outa]" if has_audio else "", tr_warnings, 0.0
 
     # --- Transition path: xfade/acrossfade chain ---
     # Video chain
@@ -2386,19 +2389,21 @@ def _build_transition_chain(
         prog_cum += program_durations[i]
         prog_dur_next = program_durations[i + 1]
 
-        # Duration clamping (ADR-RT-8)
+        # Duration clamping (ADR-RT-8).
+        # SR M-1: warning text uses fixed wording and boundary identifier only;
+        # raw float values (requested_d / clamped_d) are intentionally excluded.
         requested_d = tr.duration_sec
         clamped_d = min(requested_d, program_durations[i], prog_dur_next)
         if clamped_d <= 0.0:
             clamped_d = _MIN_XFADE_DUR
             tr_warnings.append(
-                f"boundary after clip {i}: transition duration clamped to"
-                f" {clamped_d}s (adjacent clip has zero program duration)."
+                "A transition was clamped because an adjacent clip has zero"
+                " program duration. [boundary " + str(i) + "]"
             )
         elif clamped_d < requested_d:
             tr_warnings.append(
-                f"boundary after clip {i}: transition duration clamped from"
-                f" {requested_d}s to {clamped_d}s (adjacent clip shorter)."
+                "A transition was clamped because an adjacent clip is shorter"
+                " than the requested duration. [boundary " + str(i) + "]"
             )
 
         offset = prog_cum - overlap_cum - clamped_d
@@ -2421,7 +2426,7 @@ def _build_transition_chain(
             filter_parts.append(f"{prev_a}{next_a}acrossfade=d={clamped_d:g}{out_a}")
             prev_a = out_a
 
-    return "[outv]", "[outa]" if has_audio else "", tr_warnings
+    return "[outv]", "[outa]" if has_audio else "", tr_warnings, overlap_cum
 
 
 def _append_reframe_filter(
@@ -2866,7 +2871,7 @@ def _build_filter_complex(
     image_overlays: list[ImageOverlay] | None = None,
     transitions: list[_RenderTransition] | None = None,
     program_durations: list[float] | None = None,
-) -> tuple[str, str, str, bool, bool, list[str]]:
+) -> tuple[str, str, str, bool, bool, list[str], float]:
     """Build the filter_complex string, video_map_label, and audio_map_label
     (M-2).
 
@@ -2896,7 +2901,11 @@ def _build_filter_complex(
 
     Returns:
         (filter_complex, video_map_label, audio_map_label, use_afftdn,
-        use_loudness, transition_warnings)
+        use_loudness, transition_warnings, sum_clamped_d)
+
+        sum_clamped_d: total transition overlap in seconds (Σ clamped_d),
+        propagated from _build_transition_chain so that build_plan can use the
+        single authoritative value without re-deriving it (CR M-3 / DRY).
     """
     # Generate trim/atrim filter segments for each segment
     video_labels: list[str] = []
@@ -2952,7 +2961,7 @@ def _build_filter_complex(
             audio_labels.append(f"[{al}]")
 
     # concat or xfade/acrossfade chain (ADR-RT-1)
-    _v_term, _a_term, transition_warnings = _build_transition_chain(
+    _v_term, _a_term, transition_warnings, _sum_clamped_d = _build_transition_chain(
         filter_parts,
         video_labels,
         audio_labels,
@@ -3060,6 +3069,7 @@ def _build_filter_complex(
         use_afftdn,
         use_loudness,
         transition_warnings,
+        _sum_clamped_d,
     )
 
 
@@ -3245,7 +3255,7 @@ def _build_multi_source_filter_complex(
     image_overlays: list[ImageOverlay] | None = None,
     transitions: list[_RenderTransition] | None = None,
     program_durations: list[float] | None = None,
-) -> tuple[str, str, str, bool, bool, list[str]]:
+) -> tuple[str, str, str, bool, bool, list[str], float]:
     """Build the filter_complex for the multi-source path
     (ADR-C1/C5-r2/C7-r2/C11-r2).
 
@@ -3275,7 +3285,11 @@ def _build_multi_source_filter_complex(
 
     Returns:
         (filter_complex, video_map_label, audio_map_label, use_afftdn,
-        use_loudness, transition_warnings)
+        use_loudness, transition_warnings, sum_clamped_d)
+
+        sum_clamped_d: total transition overlap in seconds (Σ clamped_d),
+        propagated from _build_transition_chain so that build_plan can use the
+        single authoritative value without re-deriving it (CR M-3 / DRY).
     """
     # Delegate output spec determination to helper (ADR-C4-r2)
     target_w, target_h, target_fps = _resolve_target_spec(
@@ -3297,7 +3311,7 @@ def _build_multi_source_filter_complex(
     filter_parts: list[str] = clip_filter_parts
 
     # concat or xfade/acrossfade chain (ADR-RT-1)
-    _v_term, _a_term, transition_warnings = _build_transition_chain(
+    _v_term, _a_term, transition_warnings, _sum_clamped_d = _build_transition_chain(
         filter_parts,
         video_labels,
         audio_labels,
@@ -3362,6 +3376,7 @@ def _build_multi_source_filter_complex(
         use_afftdn,
         use_loudness,
         transition_warnings,
+        _sum_clamped_d,
     )
 
 
@@ -3794,6 +3809,7 @@ def build_plan(
             use_afftdn,
             use_loudness,
             _transition_warnings_multi,
+            _sum_clamped_d,
         ) = _build_multi_source_filter_complex(
             ranges,
             source_index,
@@ -3844,6 +3860,7 @@ def build_plan(
             use_afftdn,
             use_loudness,
             _transition_warnings_single,
+            _sum_clamped_d,
         ) = _build_filter_complex(
             ranges,
             has_audio,
@@ -3873,19 +3890,11 @@ def build_plan(
     has_main_audio = has_audio
     bgm_source_out: str | None = None
 
-    # Compute Σ clamped_d for transition total_duration correction (ADR-RT-3).
-    # This must happen after _build_transition_chain (which populates
-    # _transition_warnings with clamped values). We re-derive clamped_d here
-    # using the same formula as _build_transition_chain to correct total_duration.
-    _sum_clamped_d: float = 0.0
-    if transition_directive:
-        for _tr in transition_directive:
-            _i = _tr.after_clip_index
-            _d = _tr.duration_sec
-            _cd = min(_d, _program_durations[_i], _program_durations[_i + 1])
-            if _cd <= 0.0:
-                _cd = _MIN_XFADE_DUR
-            _sum_clamped_d += _cd
+    # _sum_clamped_d is now the authoritative Σ clamped_d returned from
+    # _build_transition_chain via _build_filter_complex /
+    # _build_multi_source_filter_complex (CR M-3 / DRY). The previous
+    # re-derivation loop has been removed; both total_duration and
+    # total_duration_for_bgm now use this single value.
 
     if bgm is not None:
         # BGM index = len(input_sources) (bgm_source not included in

@@ -13,26 +13,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that annotates an OTIO timeline with crossfade / dissolve transitions between adjacent
   clip boundaries. Key characteristics:
   - Parameters: `timeline` (source OTIO path), `output` (destination OTIO path),
-    `duration_sec` (transition duration, default `0.5`), `transition_type`
-    (default `dissolve`; maps to FFmpeg `xfade` for video and `acrossfade` for audio).
-  - Transition directives are written to `metadata["clipwright"]["transitions"]` in the
+    `options.uniform` (a TransitionSpec with `type` and `duration_sec` applied to all
+    boundaries) or `options.per_boundary` (a list of per-boundary TransitionSpec objects,
+    each with `after_clip_index`, `type`, and `duration_sec`).
+  - Transition directives are written to `metadata["clipwright"]["transition"]` in the
     OTIO timeline as a list of per-boundary descriptors (clip index, duration, type).
   - Non-destructive: input media and timeline are never modified; only a new `.otio` is
     written.
-  - Requires `CLIPWRIGHT_FFPROBE` to validate video stream presence and clip duration
-    before writing the directive.
+  - Does not require `CLIPWRIGHT_FFPROBE` or `CLIPWRIGHT_FFMPEG` (pure OTIO annotation
+    tool; no ffprobe calls at annotation time).
   - MCP annotations: `readOnlyHint=true`, `destructiveHint=false`,
     `idempotentHint=true`, `openWorldHint=false`.
-  - **v1 limitation**: uniform `duration_sec` applied to all boundaries; per-boundary
-    durations and mixed `transition_type` values are a v2 extension
-    (`UNSUPPORTED_OPERATION` is returned for per-boundary requests).
+  - **v1 limitation**: per-boundary with gaps (not covering all internal clip boundaries)
+    returns `UNSUPPORTED_OPERATION`; uniform mode and full per-boundary (all boundaries
+    specified) are fully supported.
 
 - **`clipwright-render` xfade / acrossfade support (v0.11.0)**: `clipwright_render` now
-  reads `transitions` metadata from the OTIO timeline and materialises crossfades via
-  FFmpeg `xfade` (video) and `acrossfade` (audio) filters. Transition segments overlap
+  reads the transition directive from `metadata["clipwright"]["transition"]` in the OTIO
+  timeline and materialises crossfades via FFmpeg `xfade` (video) and `acrossfade`
+  (audio) filters. Transition segments overlap
   at clip boundaries by `duration_sec`; the filter graph is restructured to feed the
   overlapping tails through the xfade/acrossfade chain before the final concat. Fully
-  backward compatible: timelines without a `transitions` directive render identically
+  backward compatible: timelines without a `transition` directive render identically
   to before.
 
 ## [0.15.0] - 2026-06-22

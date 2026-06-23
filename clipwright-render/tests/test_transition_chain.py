@@ -571,14 +571,14 @@ class TestDurationClamping:
         )
 
     def test_5b_clamp_warning_text(self) -> None:
-        """Clamping warning mentions 'boundary after clip {i}'."""
+        """Clamping warning uses fixed wording and includes '[boundary {i}]'."""
         plan = _build_single_source_plan(
             clip_durations=[1.0, 3.0],
             has_audio=False,
             transition=_uniform_transition(duration_sec=2.0, n_clips=2),
         )
         warning_text = " ".join(plan.warnings)
-        assert "boundary after clip 0" in warning_text
+        assert "[boundary 0]" in warning_text
 
     def test_5c_one_warning_per_boundary(self) -> None:
         """2 clamped boundaries → 2 clamping warnings."""

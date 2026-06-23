@@ -83,9 +83,11 @@ def resolve_transitions(
     # per_boundary mode (options.per_boundary is a non-empty list by schema validation).
     per_boundary = options.per_boundary
     if per_boundary is None:
+        # Unreachable in practice: schema validators enforce that per_boundary is set
+        # when uniform is None. Guard is retained for defensive programming only.
         raise ClipwrightError(
-            code=ErrorCode.INVALID_INPUT,
-            message="per_boundary is None in per_boundary mode.",
+            code=ErrorCode.INTERNAL,
+            message="Transition options validation failed (internal error).",
             hint="Provide a non-empty per_boundary list or use the uniform field.",
         )
 
@@ -99,9 +101,8 @@ def resolve_transitions(
                 code=ErrorCode.INVALID_INPUT,
                 message="A per-boundary transition index is out of range.",
                 hint=(
-                    f"Valid after_clip_index values for this timeline are "
-                    f"[0, {max_index}]. "
-                    f"Check your per_boundary list and remove out-of-range entries."
+                    "Valid after_clip_index values for this timeline are"
+                    f" [0, {max_index}]."
                 ),
             )
         if idx in seen:
