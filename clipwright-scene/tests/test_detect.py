@@ -1507,13 +1507,24 @@ class TestScenedetectDependencyMissing:
     """
 
     def _make_dep_missing_error(self) -> ClipwrightError:
-        """Build a DEPENDENCY_MISSING error as resolve_tool would raise."""
+        """Build a DEPENDENCY_MISSING error mirroring the ffmpeg-hint that resolve_tool
+        actually raises when a tool is not found on PATH.
+
+        resolve_tool (clipwright.process) always appends the ffmpeg-flavoured
+        ``_INSTALL_HINT`` ("On Windows, install via `winget install Gyan.FFmpeg`…")
+        regardless of the tool name.  By using this ffmpeg-oriented hint in the mock
+        we ensure that the negative assertion in
+        ``test_dependency_missing_hint_not_ffmpeg_winget`` truly verifies that
+        detect_scenes *replaces* the raw resolve_tool hint with a scenedetect-specific
+        one, rather than merely forwarding a hint that never contained the ffmpeg text.
+        """
         return ClipwrightError(
             code=ErrorCode.DEPENDENCY_MISSING,
             message="scenedetect not found on PATH",
             hint=(
-                "Install PySceneDetect with 'pip install scenedetect', "
-                "or set CLIPWRIGHT_SCENEDETECT to its executable path."
+                "Place scenedetect in a directory on PATH, or set an environment"
+                " variable to its full executable path."
+                " On Windows, install via `winget install Gyan.FFmpeg` or equivalent."
             ),
         )
 

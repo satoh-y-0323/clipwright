@@ -124,7 +124,7 @@ def _detect_with_ffmpeg(
                 code=exc.code,
                 message=safe_subprocess_message(exc),
                 hint=exc.hint,
-            ) from exc
+            ) from None
         raise
     return parse_scdet_stderr(result.stderr or "", total_duration_sec)
 
@@ -136,9 +136,11 @@ def _detect_with_pyscenedetect(
 ) -> list[SceneBoundary]:
     """Run PySceneDetect CLI and return parsed SceneBoundary list.
 
-    Attempts to resolve the scenedetect executable; falls back to the bare
-    name so that run() will raise SUBPROCESS_FAILED if it is truly absent,
-    giving a consistent error surface at the subprocess boundary.
+    Resolves the scenedetect executable via
+    ``resolve_tool("scenedetect", env_var="CLIPWRIGHT_SCENEDETECT")``
+    (PATH lookup first, then the env var). If the binary is not found,
+    DEPENDENCY_MISSING is caught and re-raised with a scenedetect-specific
+    install hint using ``from None`` to avoid leaking internal exception state.
 
     Args:
         media: Absolute path to the input media file.
@@ -149,8 +151,11 @@ def _detect_with_pyscenedetect(
         Sorted list of SceneBoundary objects (confidence=1.0 for all).
 
     Raises:
-        ClipwrightError: SUBPROCESS_FAILED / SUBPROCESS_TIMEOUT from run()
-            when scenedetect is not installed or the command fails.
+        ClipwrightError: DEPENDENCY_MISSING when the scenedetect executable
+            cannot be found; the error includes an install hint
+            ("pip install scenedetect" or CLIPWRIGHT_SCENEDETECT env var).
+        ClipwrightError: SUBPROCESS_FAILED / SUBPROCESS_TIMEOUT when the
+            scenedetect command fails or times out.
     """
     try:
         scenedetect_path = resolve_tool("scenedetect", env_var="CLIPWRIGHT_SCENEDETECT")
@@ -187,7 +192,7 @@ def _detect_with_pyscenedetect(
                 code=exc.code,
                 message=safe_subprocess_message(exc),
                 hint=exc.hint,
-            ) from exc
+            ) from None
         raise
     return parse_pyscenedetect_csv(result.stdout or "")
 
@@ -304,7 +309,7 @@ def _detect_scenes_inner(
                 code=ErrorCode.FILE_NOT_FOUND,
                 message=f"File not found: {media_path.name}",
                 hint=exc.hint,
-            ) from exc
+            ) from None
         raise
 
     # Verify video stream: scene detection requires a video stream.

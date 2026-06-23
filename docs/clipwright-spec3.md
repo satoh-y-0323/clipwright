@@ -454,7 +454,7 @@ assembly landing first.
 > - Zero-boundary guidance (`_zero_boundary_guidance`) was refined in v0.2.0:
 >   when 0 boundaries are found the `summary` and `warnings` fields now include
 >   a backend-specific hint — a concrete halved-threshold suggestion (e.g.
->   "Try lowering threshold to 0.15") for the ffmpeg backend, or a note that the
+>   "Try lowering 'threshold' to 0.15") for the ffmpeg backend, or a note that the
 >   footage may be a single continuous shot for the pyscenedetect backend.
 >   If the threshold is already at the practical floor (0.05), a further-lowering
 >   warning is replaced with a message explaining that lowering is unlikely to help.
