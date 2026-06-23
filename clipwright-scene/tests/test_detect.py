@@ -1694,3 +1694,128 @@ class TestScenedetectDependencyMissing:
         assert result.error.hint is None or "winget install Gyan.FFmpeg" not in (
             result.error.hint or ""
         )
+
+
+# ===========================================================================
+# (C) save_timeline failure — except Exception branch (SR-R-001)
+# ===========================================================================
+
+
+class TestOutputWriteFailure:
+    """CI lock for the except Exception branch in detect_scenes().
+
+    Verifies that when save_timeline() raises an unexpected exception
+    (e.g. OTIOError or OSError) the public boundary converts it to a
+    fixed-wording INTERNAL error without leaking the exception message
+    (CWE-209 defence, SR-R-001).
+    """
+
+    def test_save_timeline_failure_returns_ok_false(self, tmp_path: Path) -> None:
+        """save_timeline raising RuntimeError -> ok=False."""
+        from clipwright_scene.detect import detect_scenes
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        stderr = _make_scdet_stderr([(3.0, 60.0)])
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+        secret = "/tmp/private-path/secret_credential"
+
+        with (
+            patch("clipwright_scene.detect.inspect_media", return_value=media_info),
+            patch(
+                "clipwright_scene.detect.run",
+                side_effect=_fake_run_ffmpeg_ok(stderr),
+            ),
+            patch(
+                "clipwright_scene.detect.save_timeline",
+                side_effect=RuntimeError(secret),
+            ),
+        ):
+            result = detect_scenes(media, output, _opts())
+
+        assert result.ok is False
+
+    def test_save_timeline_failure_error_code_is_internal(self, tmp_path: Path) -> None:
+        """save_timeline raising RuntimeError -> error.code == INTERNAL."""
+        from clipwright_scene.detect import detect_scenes
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        stderr = _make_scdet_stderr([(3.0, 60.0)])
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+        secret = "/tmp/private-path/secret_credential"
+
+        with (
+            patch("clipwright_scene.detect.inspect_media", return_value=media_info),
+            patch(
+                "clipwright_scene.detect.run",
+                side_effect=_fake_run_ffmpeg_ok(stderr),
+            ),
+            patch(
+                "clipwright_scene.detect.save_timeline",
+                side_effect=RuntimeError(secret),
+            ),
+        ):
+            result = detect_scenes(media, output, _opts())
+
+        assert result.error is not None
+        assert result.error.code == ErrorCode.INTERNAL
+
+    def test_save_timeline_failure_message_is_fixed_wording(
+        self, tmp_path: Path
+    ) -> None:
+        """save_timeline raising RuntimeError -> error.message is the fixed string."""
+        from clipwright_scene.detect import detect_scenes
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        stderr = _make_scdet_stderr([(3.0, 60.0)])
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+        secret = "/tmp/private-path/secret_credential"
+
+        with (
+            patch("clipwright_scene.detect.inspect_media", return_value=media_info),
+            patch(
+                "clipwright_scene.detect.run",
+                side_effect=_fake_run_ffmpeg_ok(stderr),
+            ),
+            patch(
+                "clipwright_scene.detect.save_timeline",
+                side_effect=RuntimeError(secret),
+            ),
+        ):
+            result = detect_scenes(media, output, _opts())
+
+        assert result.error is not None
+        assert result.error.message == "Failed to write the output timeline."
+
+    def test_save_timeline_failure_does_not_leak_secret(self, tmp_path: Path) -> None:
+        """secret embedded in RuntimeError must not appear in message or hint (CWE-209)."""
+        from clipwright_scene.detect import detect_scenes
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        stderr = _make_scdet_stderr([(3.0, 60.0)])
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+        secret = "/tmp/private-path/secret_credential"
+
+        with (
+            patch("clipwright_scene.detect.inspect_media", return_value=media_info),
+            patch(
+                "clipwright_scene.detect.run",
+                side_effect=_fake_run_ffmpeg_ok(stderr),
+            ),
+            patch(
+                "clipwright_scene.detect.save_timeline",
+                side_effect=RuntimeError(secret),
+            ),
+        ):
+            result = detect_scenes(media, output, _opts())
+
+        assert result.error is not None
+        assert secret not in result.error.message
+        assert secret not in (result.error.hint or "")
