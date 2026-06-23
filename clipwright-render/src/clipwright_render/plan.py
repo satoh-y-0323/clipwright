@@ -2152,6 +2152,277 @@ def _validate_reframe(raw: dict[str, Any] | None) -> _RenderReframe | None:
         ) from None
 
 
+# ===========================================================================
+# Transition directive: reader-side validation model and helpers (ADR-RT-9)
+# ===========================================================================
+
+_TRANSITION_TYPE_ALLOWLIST: frozenset[str] = frozenset(
+    {"fade", "dissolve", "fadeblack", "fadewhite"}
+)
+
+# Minimum xfade duration: 1 frame at 30 fps as a safe floor.
+# Used when clamped_d would become <= 0 (degenerate case; ADR-RT-8).
+_MIN_XFADE_DUR: float = 1.0 / 30.0
+
+
+class _RenderTransition(BaseModel):
+    """Reader-side validation model for one boundary transition directive entry.
+
+    Validates after_clip_index / type / duration_sec with Pydantic; extra
+    fields are forbidden (defence-in-depth; ADR-RT-9).
+    Upper-bound check on after_clip_index (n_clips-2) is done in
+    _validate_transition, not here (n_clips unknown at model level).
+    """
+
+    model_config = {"extra": "forbid", "allow_inf_nan": False}
+
+    after_clip_index: Annotated[int, Field(ge=0)]
+    type: Literal["fade", "dissolve", "fadeblack", "fadewhite"]
+    duration_sec: Annotated[float, Field(gt=0, le=5.0)]
+
+
+def _validate_transition(
+    raw: dict[str, Any] | None,
+    n_clips: int,
+) -> list[_RenderTransition] | None:
+    """Validate a transition directive dict and return a list of _RenderTransition.
+
+    Returns None when raw is None (backward compatible).
+
+    Reader-side defence-in-depth (ADR-RT-9):
+    - Validates each boundary entry with _RenderTransition (extra=forbid,
+      type allowlist, duration_sec gt=0 le=5.0).
+    - Checks after_clip_index in [0, n_clips-2], ascending order, no
+      duplicates, and that the index set covers all internal boundaries
+      (gaps → UNSUPPORTED_OPERATION; ADR-RT-5).
+    - n_clips < 2 with a non-empty directive → INVALID_INPUT.
+    - ValidationError / TypeError / KeyError → INVALID_INPUT (CWE-209: raw
+      values are never echoed in error messages).
+    """
+    if raw is None:
+        return None
+
+    # Extract the transitions list (may raise KeyError / TypeError → caught below)
+    try:
+        raw_transitions = raw.get("transitions", [])
+        if not raw_transitions:
+            # Empty list → treat as no transition (backward compat)
+            return None
+    except (AttributeError, TypeError):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message="Transition directive validation failed. Malformed directive.",
+            hint=(
+                "Ensure the transition directive is a dict with a 'transitions'"
+                " list field."
+            ),
+        ) from None
+
+    # n_clips < 2 with a transition directive → INVALID_INPUT
+    if n_clips < 2:
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message="A transition directive is present but the timeline has fewer than two clips.",
+            hint=(
+                "Build a multi-clip timeline with clipwright-sequence or"
+                " clipwright-trim first, then apply transitions."
+            ),
+        )
+
+    # Validate each entry with _RenderTransition
+    validated: list[_RenderTransition] = []
+    try:
+        for entry in raw_transitions:
+            validated.append(_RenderTransition(**entry))
+    except (ValidationError, TypeError, KeyError):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "Transition directive validation failed."
+                " Check field names, types, and values."
+            ),
+            hint=(
+                "Each transition entry must have after_clip_index (int >= 0),"
+                " type in {fade, dissolve, fadeblack, fadewhite},"
+                " and 0 < duration_sec <= 5.0."
+            ),
+        ) from None
+
+    max_boundary = n_clips - 2  # inclusive upper bound
+
+    # Check for out-of-range indices
+    for t in validated:
+        if t.after_clip_index > max_boundary:
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message="A boundary index is out of range.",
+                hint=(
+                    f"Use after_clip_index in [0, {max_boundary}]"
+                    f" (n_clips = {n_clips})."
+                ),
+            )
+
+    # Check for duplicate indices
+    seen: set[int] = set()
+    for t in validated:
+        if t.after_clip_index in seen:
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message="Duplicate boundary index in the transition directive.",
+                hint="Specify each boundary at most once.",
+            )
+        seen.add(t.after_clip_index)
+
+    # Sort by after_clip_index (ascending normal form)
+    validated.sort(key=lambda t: t.after_clip_index)
+
+    # Check for gaps: index set must equal {0, 1, ..., n_clips-2}
+    expected = set(range(n_clips - 1))
+    if seen != expected:
+        raise ClipwrightError(
+            code=ErrorCode.UNSUPPORTED_OPERATION,
+            message=(
+                "Transition directive does not cover all internal clip boundaries."
+            ),
+            hint=(
+                "Apply transitions to all internal boundaries (uniform);"
+                " partial per-boundary is unsupported in v1."
+                " Use uniform mode or specify all boundaries."
+            ),
+        )
+
+    return validated
+
+
+def _segment_program_durations(ranges: list[KeptRange]) -> list[float]:
+    """Return the program duration (seconds) for each segment in ranges.
+
+    program_dur = source_dur / time_scalar  (identity → source_dur).
+    Mirrors the formula used in build_plan total_duration calculation
+    (lines ~3603-3608) and build_program_time_map (ADR-RT-4).
+    """
+    result: list[float] = []
+    for r in ranges:
+        src_dur = _to_seconds(r.source_range.duration)
+        if not _is_warp_identity(r.time_scalar):
+            result.append(src_dur / r.time_scalar)
+        else:
+            result.append(src_dur)
+    return result
+
+
+def _build_transition_chain(
+    filter_parts: list[str],
+    video_labels: list[str],
+    audio_labels: list[str],
+    has_audio: bool,
+    program_durations: list[float],
+    transitions: list[_RenderTransition] | None,
+) -> tuple[str, str, list[str]]:
+    """Append either a concat filter or an xfade/acrossfade chain to filter_parts.
+
+    Returns (video_terminal_label, audio_terminal_label, warnings).
+
+    When transitions is None or empty, the traditional concat filter is generated
+    (output byte-identical to the previous implementation; ADR-RT-1).
+
+    When transitions is non-empty (must cover all internal boundaries in ascending
+    order), xfade filters are chained for video and, when has_audio=True,
+    acrossfade filters are chained for audio.  Terminal labels are always
+    '[outv]' (video) and '[outa]' (audio, has_audio only) so that downstream
+    stages (audio pipe, scale, subtitle, drawtext, overlay, BGM) require no
+    changes (ADR-RT-1).
+
+    Intermediate video labels use the '[xf{i}]' prefix; intermediate audio labels
+    use '[acf{i}]' where i is the after_clip_index of the boundary.
+
+    Duration clamping (ADR-RT-8):
+        clamped_d = min(requested_d, program_dur_i, program_dur_{i+1})
+        When clamped_d <= 0 (degenerate), it is floored to _MIN_XFADE_DUR.
+        A warning is appended for each clamped boundary.
+
+    Offset formula (ADR-RT-3):
+        offset = prog_cum − overlap_cum − clamped_d
+        where prog_cum accumulates program_dur up to and including clip i,
+        and overlap_cum accumulates previously applied clamped_d values.
+    """
+    n = len(video_labels)
+    tr_warnings: list[str] = []
+
+    # --- Backward-compat path: no transitions ---
+    if not transitions:
+        v_count = 1
+        a_count = 1 if has_audio else 0
+        if has_audio:
+            interleaved: list[str] = []
+            for vl, al in zip(video_labels, audio_labels, strict=True):
+                interleaved.append(vl)
+                interleaved.append(al)
+            input_labels = "".join(interleaved)
+        else:
+            input_labels = "".join(video_labels)
+        concat_output = "[outv]" if not has_audio else "[outv][outa]"
+        filter_parts.append(
+            f"{input_labels}concat=n={n}:v={v_count}:a={a_count}{concat_output}"
+        )
+        return "[outv]", "[outa]" if has_audio else "", tr_warnings
+
+    # --- Transition path: xfade/acrossfade chain ---
+    # Video chain
+    prog_cum: float = 0.0
+    overlap_cum: float = 0.0
+    prev_v = video_labels[0]
+
+    # Audio chain
+    prev_a = audio_labels[0] if has_audio else ""
+
+    # transitions is already sorted ascending by after_clip_index (_validate_transition)
+    for idx, tr in enumerate(transitions):
+        i = tr.after_clip_index
+        # Accumulate program duration up to and including clip i
+        prog_cum += program_durations[i]
+        prog_dur_next = program_durations[i + 1]
+
+        # Duration clamping (ADR-RT-8)
+        requested_d = tr.duration_sec
+        clamped_d = min(requested_d, program_durations[i], prog_dur_next)
+        if clamped_d <= 0.0:
+            clamped_d = _MIN_XFADE_DUR
+            tr_warnings.append(
+                f"boundary after clip {i}: transition duration clamped to"
+                f" {clamped_d}s (adjacent clip has zero program duration)."
+            )
+        elif clamped_d < requested_d:
+            tr_warnings.append(
+                f"boundary after clip {i}: transition duration clamped from"
+                f" {requested_d}s to {clamped_d}s (adjacent clip shorter)."
+            )
+
+        offset = prog_cum - overlap_cum - clamped_d
+        overlap_cum += clamped_d
+
+        next_v = video_labels[i + 1]
+        # Last boundary: output label is [outv]; intermediate: [xf{i}]
+        is_last = idx == len(transitions) - 1
+        out_v = "[outv]" if is_last else f"[xf{i}]"
+        filter_parts.append(
+            f"{prev_v}{next_v}"
+            f"xfade=transition={tr.type}:duration={clamped_d:g}:offset={offset:.6f}"
+            f"{out_v}"
+        )
+        prev_v = out_v
+
+        if has_audio:
+            next_a = audio_labels[i + 1]
+            out_a = "[outa]" if is_last else f"[acf{i}]"
+            filter_parts.append(
+                f"{prev_a}{next_a}acrossfade=d={clamped_d:g}{out_a}"
+            )
+            prev_a = out_a
+
+    return "[outv]", "[outa]" if has_audio else "", tr_warnings
+
+
 def _append_reframe_filter(
     filter_parts: list[str],
     video_map_label: str,
@@ -2592,7 +2863,9 @@ def _build_filter_complex(
     stabilize_smoothing: int = _DEFAULT_STABILIZE_SMOOTHING,
     reframe: _RenderReframe | None = None,
     image_overlays: list[ImageOverlay] | None = None,
-) -> tuple[str, str, str, bool, bool]:
+    transitions: list[_RenderTransition] | None = None,
+    program_durations: list[float] | None = None,
+) -> tuple[str, str, str, bool, bool, list[str]]:
     """Build the filter_complex string, video_map_label, and audio_map_label
     (M-2).
 
@@ -2612,9 +2885,17 @@ def _build_filter_complex(
         after drawtext to compose image overlays (topmost layer; ADR-OV-5).
         None or empty list is a no-op (backward compatible).
 
+    transitions: list of validated transition directives (ascending by
+        after_clip_index). When None, the traditional concat filter is used
+        (backward compatible; ADR-RT-1). program_durations must be provided
+        when transitions is non-None.
+
+    program_durations: per-segment program duration in seconds (time_scalar
+        applied). Required when transitions is non-None.
+
     Returns:
         (filter_complex, video_map_label, audio_map_label, use_afftdn,
-        use_loudness)
+        use_loudness, transition_warnings)
     """
     n = len(ranges)
 
@@ -2671,22 +2952,17 @@ def _build_filter_complex(
                 )
             audio_labels.append(f"[{al}]")
 
-    # concat filter (interleave video/audio labels as inputs)
-    v_count = 1
-    a_count = 1 if has_audio else 0
-    if has_audio:
-        interleaved: list[str] = []
-        for vl, al in zip(video_labels, audio_labels, strict=True):
-            interleaved.append(vl)
-            interleaved.append(al)
-        input_labels = "".join(interleaved)
-    else:
-        input_labels = "".join(video_labels)
-
-    concat_output = "[outv]" if not has_audio else "[outv][outa]"
-    filter_parts.append(
-        f"{input_labels}concat=n={n}:v={v_count}:a={a_count}{concat_output}"
+    # concat or xfade/acrossfade chain (ADR-RT-1)
+    _v_term, _a_term, transition_warnings = _build_transition_chain(
+        filter_parts,
+        video_labels,
+        audio_labels,
+        has_audio,
+        program_durations if program_durations is not None else _segment_program_durations(ranges),
+        transitions,
     )
+    # _v_term is always "[outv]", _a_term is "[outa]" or "" — terminal labels
+    # are fixed so downstream stages require no changes (ADR-RT-1).
 
     # Cumulative audio pipe for denoise/loudness (shared single/multi-source helper)
     use_afftdn, use_loudness = _append_audio_pipe(
@@ -2776,7 +3052,14 @@ def _build_filter_complex(
     else:
         audio_map_label = "[outa]"
 
-    return filter_complex, video_map_label, audio_map_label, use_afftdn, use_loudness
+    return (
+        filter_complex,
+        video_map_label,
+        audio_map_label,
+        use_afftdn,
+        use_loudness,
+        transition_warnings,
+    )
 
 
 def _resolve_target_spec(
@@ -2959,7 +3242,9 @@ def _build_multi_source_filter_complex(
     text_overlays: list[TextOverlay] | None = None,
     color_eq: _RenderEqParams | None = None,
     image_overlays: list[ImageOverlay] | None = None,
-) -> tuple[str, str, str, bool, bool]:
+    transitions: list[_RenderTransition] | None = None,
+    program_durations: list[float] | None = None,
+) -> tuple[str, str, str, bool, bool, list[str]]:
     """Build the filter_complex for the multi-source path
     (ADR-C1/C5-r2/C7-r2/C11-r2).
 
@@ -2981,9 +3266,15 @@ def _build_multi_source_filter_complex(
         after drawtext to compose image overlays (topmost layer; ADR-OV-5).
         None or empty list is a no-op (backward compatible).
 
+    transitions: list of validated transition directives (ascending). When None,
+        the traditional concat filter is used (ADR-RT-1).
+
+    program_durations: per-segment program duration in seconds. Required when
+        transitions is non-None.
+
     Returns:
         (filter_complex, video_map_label, audio_map_label, use_afftdn,
-        use_loudness)
+        use_loudness, transition_warnings)
     """
     n = len(ranges)
 
@@ -3006,21 +3297,14 @@ def _build_multi_source_filter_complex(
     # Carry forward as local variable to append concat filter and audio pipe.
     filter_parts: list[str] = clip_filter_parts
 
-    # concat filter
-    v_count = 1
-    a_count = 1 if has_audio_overall else 0
-    if has_audio_overall:
-        interleaved: list[str] = []
-        for vl, al in zip(video_labels, audio_labels, strict=True):
-            interleaved.append(vl)
-            interleaved.append(al)
-        input_labels = "".join(interleaved)
-    else:
-        input_labels = "".join(video_labels)
-
-    concat_output = "[outv]" if not has_audio_overall else "[outv][outa]"
-    filter_parts.append(
-        f"{input_labels}concat=n={n}:v={v_count}:a={a_count}{concat_output}"
+    # concat or xfade/acrossfade chain (ADR-RT-1)
+    _v_term, _a_term, transition_warnings = _build_transition_chain(
+        filter_parts,
+        video_labels,
+        audio_labels,
+        has_audio_overall,
+        program_durations if program_durations is not None else _segment_program_durations(ranges),
+        transitions,
     )
 
     # Cumulative audio pipe for denoise/loudness (shared single/multi-source
@@ -3070,7 +3354,14 @@ def _build_multi_source_filter_complex(
     else:
         audio_map_label = "[outa]"
 
-    return filter_complex, video_map_label, audio_map_label, use_afftdn, use_loudness
+    return (
+        filter_complex,
+        video_map_label,
+        audio_map_label,
+        use_afftdn,
+        use_loudness,
+        transition_warnings,
+    )
 
 
 def _append_bgm_pipe(
@@ -3247,6 +3538,7 @@ def build_plan(
     text_overlays: list[TextOverlay] | None = None,
     resolved_encoder: ResolvedEncoder | None = None,
     reframe: dict[str, Any] | None = None,
+    transition: dict[str, Any] | None = None,
 ) -> RenderPlan:
     """Return filter_complex string and ffmpeg argument list as a RenderPlan
     (ADR-1/ADR-7).
@@ -3394,6 +3686,17 @@ def build_plan(
     input_sources = unique_sources_in_order(ranges)
     n = len(ranges)
 
+    # Validate the transition directive (raises INVALID_INPUT /
+    # UNSUPPORTED_OPERATION on failure; ADR-RT-9).
+    # n_clips = n (number of kept ranges / segments).
+    transition_directive: list[_RenderTransition] | None = _validate_transition(
+        transition, n
+    )
+
+    # Pre-compute per-segment program durations for transition chain (ADR-RT-4).
+    # Computed once here; passed to both filter-complex builders.
+    _program_durations: list[float] = _segment_program_durations(ranges)
+
     # Resolve image_overlays with correct input_index (ADR-OV-5/G4).
     # image_index_base = len(input_sources) + (1 if bgm else 0).
     # Re-collect from the timeline with the correct base so that input_index values
@@ -3483,21 +3786,29 @@ def build_plan(
         # Source → index mapping (ADR-C1)
         source_index: dict[str, int] = {src: i for i, src in enumerate(input_sources)}
 
-        filter_complex, video_map_label, audio_map_label, use_afftdn, use_loudness = (
-            _build_multi_source_filter_complex(
-                ranges,
-                source_index,
-                source_probes,
-                has_audio_overall,
-                denoise_directive,
-                loudness_directive,
-                options,
-                first_source,
-                text_overlays=text_overlays,
-                color_eq=color_eq,
-                image_overlays=_image_overlays,
-            )
+        (
+            filter_complex,
+            video_map_label,
+            audio_map_label,
+            use_afftdn,
+            use_loudness,
+            _transition_warnings_multi,
+        ) = _build_multi_source_filter_complex(
+            ranges,
+            source_index,
+            source_probes,
+            has_audio_overall,
+            denoise_directive,
+            loudness_directive,
+            options,
+            first_source,
+            text_overlays=text_overlays,
+            color_eq=color_eq,
+            image_overlays=_image_overlays,
+            transitions=transition_directive,
+            program_durations=_program_durations,
         )
+        _transition_warnings = _transition_warnings_multi
 
         has_audio = has_audio_overall
 
@@ -3525,26 +3836,34 @@ def build_plan(
             _validate_stabilize_basename(stabilize_basename)
             stabilize_cwd = str(Path(stabilize_directive.trf_path).resolve().parent)
 
-        filter_complex, video_map_label, audio_map_label, use_afftdn, use_loudness = (
-            _build_filter_complex(
-                ranges,
-                has_audio,
-                denoise_directive,
-                loudness_directive,
-                options,
-                probe_info,
-                text_overlays=text_overlays,
-                color_eq=color_eq,
-                stabilize_basename=stabilize_basename,
-                stabilize_smoothing=(
-                    stabilize_directive.smoothing
-                    if stabilize_directive is not None
-                    else _DEFAULT_STABILIZE_SMOOTHING
-                ),
-                reframe=reframe_directive,
-                image_overlays=_image_overlays,
-            )
+        (
+            filter_complex,
+            video_map_label,
+            audio_map_label,
+            use_afftdn,
+            use_loudness,
+            _transition_warnings_single,
+        ) = _build_filter_complex(
+            ranges,
+            has_audio,
+            denoise_directive,
+            loudness_directive,
+            options,
+            probe_info,
+            text_overlays=text_overlays,
+            color_eq=color_eq,
+            stabilize_basename=stabilize_basename,
+            stabilize_smoothing=(
+                stabilize_directive.smoothing
+                if stabilize_directive is not None
+                else _DEFAULT_STABILIZE_SMOOTHING
+            ),
+            reframe=reframe_directive,
+            image_overlays=_image_overlays,
+            transitions=transition_directive,
+            program_durations=_program_durations,
         )
+        _transition_warnings = _transition_warnings_single
 
     # ---------- Append BGM stage (ADR-B5-r2/B5-r3) ----------
     # has_main_audio: main audio presence after concat (equivalent to existing
@@ -3553,6 +3872,20 @@ def build_plan(
     has_main_audio = has_audio
     bgm_source_out: str | None = None
 
+    # Compute Σ clamped_d for transition total_duration correction (ADR-RT-3).
+    # This must happen after _build_transition_chain (which populates
+    # _transition_warnings with clamped values). We re-derive clamped_d here
+    # using the same formula as _build_transition_chain to correct total_duration.
+    _sum_clamped_d: float = 0.0
+    if transition_directive:
+        for _tr in transition_directive:
+            _i = _tr.after_clip_index
+            _d = _tr.duration_sec
+            _cd = min(_d, _program_durations[_i], _program_durations[_i + 1])
+            if _cd <= 0.0:
+                _cd = _MIN_XFADE_DUR
+            _sum_clamped_d += _cd
+
     if bgm is not None:
         # BGM index = len(input_sources) (bgm_source not included in
         # input_sources; DC-AS-005)
@@ -3560,12 +3893,7 @@ def build_plan(
         # BGM duration target must match the warped output duration (§6).
         # SR NL-2: use _is_warp_identity for identity detection (consistent with
         # filter_complex side; guards against OTIO round-trip float drift).
-        total_duration_for_bgm = sum(
-            _to_seconds(r.source_range.duration) / r.time_scalar
-            if not _is_warp_identity(r.time_scalar)
-            else _to_seconds(r.source_range.duration)
-            for r in ranges
-        )
+        total_duration_for_bgm = sum(_program_durations) - _sum_clamped_d
 
         # Expand filter_complex into filter_parts list and append the BGM stage
         filter_parts_bgm = filter_complex.split(";")
@@ -3595,20 +3923,16 @@ def build_plan(
     )
 
     # ---------- Dry-run estimate ----------
-    # Sum warped durations: source_dur / time_scalar when not identity,
-    # else source_dur (ADR-SP-2 / §6). render.py derives ffmpeg timeout from
-    # total_duration_seconds, so warped duration is functionally required.
-    # SR NL-2: use _is_warp_identity for identity detection (consistent with
-    # filter_complex side; guards against OTIO round-trip float drift).
-    total_duration = sum(
-        _to_seconds(r.source_range.duration) / r.time_scalar
-        if not _is_warp_identity(r.time_scalar)
-        else _to_seconds(r.source_range.duration)
-        for r in ranges
-    )
+    # Sum warped durations minus transition overlaps (ADR-RT-3).
+    # render.py derives ffmpeg timeout from total_duration_seconds, so the
+    # corrected (post-transition) duration is functionally required.
+    total_duration = sum(_program_durations) - _sum_clamped_d
 
     estimated_size: float | None = None
     warnings: list[str] = []
+
+    # Merge transition clamping warnings (ADR-RT-8).
+    warnings.extend(_transition_warnings)
 
     # Merge re-timing warnings from text_overlay adapter (ADR-4 / §5).
     warnings.extend(_retime_overlay_warnings)
@@ -3631,6 +3955,17 @@ def build_plan(
     if reframe_directive is not None and reframe_directive.mode == "crop":
         warnings.append(
             "content outside the target aspect ratio is cropped and discarded."
+        )
+
+    # retime interference warning (ADR-RT-6): transition + overlay markers present
+    # → overlay timings will drift because the program timeline shortens by Σd.
+    # Both single-source and multi-source paths emit this warning.
+    if transition_directive and (text_overlays or _image_overlays):
+        warnings.append(
+            f"Transition overlaps shorten the program timeline by"
+            f" {_sum_clamped_d:.3f}s;"
+            " text/image overlay timings are NOT adjusted for transitions"
+            " and may drift near transition boundaries (v1 limitation)."
         )
 
     # has_main_audio=False + denoise directive → denoise skipped (no main

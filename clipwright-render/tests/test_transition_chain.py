@@ -1,16 +1,11 @@
-"""test_transition_chain.py — Red tests for transition filter_complex in plan.py.
+"""test_transition_chain.py — Tests for transition filter_complex in plan.py.
 
-Target: _build_transition_chain (not yet implemented) and its integration with
-build_plan via the `transition` keyword argument (ADR-RT-1..9).
+Target: _build_transition_chain and its integration with build_plan via the
+`transition` keyword argument (ADR-RT-1..9).
 
 All tests use build_plan directly; ffmpeg is never invoked (pure logic layer).
 Follows the same filter_complex string-assert pattern as test_plan.py (concat=n=
 pattern).
-
-Failure mode: all tests are expected to fail because:
-- build_plan does not yet accept a `transition` keyword argument.
-- _build_transition_chain does not yet exist.
-- _validate_transition does not yet exist.
 """
 
 from __future__ import annotations
@@ -207,9 +202,6 @@ def _uniform_transition(
 # ===========================================================================
 
 
-@pytest.mark.xfail(
-    reason="build_plan does not yet accept transition= (NotImplementedError or TypeError expected)"
-)
 class TestXfadeChainString:
     """xfade string generation and offset accuracy (ADR-RT-3)."""
 
@@ -358,9 +350,6 @@ class TestXfadeChainString:
 # ===========================================================================
 
 
-@pytest.mark.xfail(
-    reason="build_plan does not yet accept transition= (NotImplementedError or TypeError expected)"
-)
 class TestAcrossfadeChain:
     """acrossfade string generation (ADR-RT-3)."""
 
@@ -426,9 +415,6 @@ class TestAcrossfadeChain:
 # ===========================================================================
 
 
-@pytest.mark.xfail(
-    reason="build_plan does not yet accept transition= (NotImplementedError or TypeError expected)"
-)
 class TestTerminalLabels:
     """Terminal labels [outv]/[outa] after xfade/acrossfade chain (ADR-RT-1)."""
 
@@ -515,9 +501,6 @@ class TestTerminalLabels:
 # ===========================================================================
 
 
-@pytest.mark.xfail(
-    reason="build_plan does not yet accept transition= (NotImplementedError or TypeError expected)"
-)
 class TestTotalDurationCorrection:
     """total_duration_seconds and BGM duration are corrected by Σclamped_d (ADR-RT-3)."""
 
@@ -573,9 +556,6 @@ class TestTotalDurationCorrection:
 # ===========================================================================
 
 
-@pytest.mark.xfail(
-    reason="build_plan does not yet accept transition= (NotImplementedError or TypeError expected)"
-)
 class TestDurationClamping:
     """Transition duration clamped when adjacent clip is shorter (ADR-RT-8)."""
 
@@ -661,9 +641,6 @@ class TestDurationClamping:
 # ===========================================================================
 
 
-@pytest.mark.xfail(
-    reason="build_plan does not yet accept transition= (NotImplementedError or TypeError expected)"
-)
 class TestTimeScalarIntegration:
     """program_dur = source_dur / time_scalar is used in offset calculation (ADR-RT-4)."""
 
@@ -721,9 +698,6 @@ class TestTimeScalarIntegration:
 # ===========================================================================
 
 
-@pytest.mark.xfail(
-    reason="build_plan does not yet accept transition= (NotImplementedError or TypeError expected)"
-)
 class TestRetimeInterferenceWarning:
     """transition + text/image overlay marker → warning (ADR-RT-6)."""
 
@@ -784,43 +758,34 @@ class TestRetimeInterferenceWarning:
         )
 
     def test_7b_multi_source_retime_warning(self) -> None:
-        """Multi-source: transition + overlay marker → retime warning also fires."""
-        from clipwright_render.plan import build_plan
+        """Multi-source: transition + overlay marker → retime warning also fires.
 
-        # Build ranges manually with overlays via text_overlays argument
-        from clipwright_render.plan import TextOverlay
+        Uses timeline-based text_overlay marker (same approach as test_7a) so that
+        font_path resolution is delegated to build_plan/_collect_text_overlays.
+        Multi-source path is forced by having two clips with different source URLs.
+        """
+        from clipwright_render.plan import KeptRangeList, build_plan, resolve_kept_ranges
 
-        ranges = [
-            _make_kept_range("/src/a.mp4", 0.0, 3.0),
-            _make_kept_range("/src/b.mp4", 0.0, 3.0),
-        ]
+        # Build a two-clip timeline where clip1 uses /src/a.mp4 and clip2 uses
+        # /src/b.mp4.  This forces the multi-source path in build_plan.
+        tl = self._make_timeline_with_text_marker(
+            source="/src/a.mp4",
+            clip_duration=3.0,
+        )
+        # Add a second clip with a different source → multi-source
+        clip2 = _make_clip("/src/b.mp4", 0.0, 3.0)
+        tl.tracks[0].append(clip2)
+
+        ranges = resolve_kept_ranges(tl)
         probe_a = _make_probe(has_video=True, audio_count=1, width=1920, height=1080)
         probe_b = _make_probe(has_video=True, audio_count=1, width=1920, height=1080)
         source_probes = {"/src/a.mp4": probe_a, "/src/b.mp4": probe_b}
 
-        # Inject a text overlay to simulate overlay marker presence
-        overlays = [
-            TextOverlay(
-                text="hello",
-                start_s=0.5,
-                end_s=1.5,
-                x="100",
-                y="100",
-                font_size=24,
-                font_color="white",
-                box=False,
-                box_color="black@0.5",
-                fade_in_s=0.0,
-                fade_out_s=0.0,
-                font_path=None,
-            )
-        ]
         plan = build_plan(
             ranges,
             probe_a,
             RenderOptions(),
             source_probes=source_probes,
-            text_overlays=overlays,
             transition=_uniform_transition(n_clips=2),  # type: ignore[call-arg]
         )
         retime_warnings = [
@@ -854,9 +819,6 @@ class TestRetimeInterferenceWarning:
 # ===========================================================================
 
 
-@pytest.mark.xfail(
-    reason="build_plan does not yet accept transition= (NotImplementedError or TypeError expected)"
-)
 class TestBackwardCompatibility:
     """Transition None/empty → filter_complex is byte-identical to no-transition (ADR-RT-1)."""
 
@@ -940,9 +902,6 @@ class TestBackwardCompatibility:
 # ===========================================================================
 
 
-@pytest.mark.xfail(
-    reason="build_plan does not yet accept transition= (NotImplementedError or TypeError expected)"
-)
 class TestTransitionValidationErrors:
     """_validate_transition rejects invalid directives (ADR-RT-5/RT-9)."""
 

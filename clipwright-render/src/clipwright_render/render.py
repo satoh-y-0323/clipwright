@@ -1011,6 +1011,7 @@ def _render_inner(
     raw_color = clipwright_meta.get("color")
     raw_stabilize = clipwright_meta.get("stabilize")  # §6-A
     raw_reframe = clipwright_meta.get("reframe")  # §7.2
+    raw_transition = clipwright_meta.get("transition")  # ADR-RT-2
 
     # --- 4d. Boundary and existence checks for trf_path (CR-E-001 / SR-V-002) ---
     # When stabilize directive is present and trf_path is non-None, apply the same
@@ -1081,6 +1082,7 @@ def _render_inner(
         bgm=bgm_clip,
         resolved_encoder=resolved,
         reframe=raw_reframe,  # §7.2
+        transition=raw_transition,  # ADR-RT-2
     )
 
     # --- 6a. dry_run ---
