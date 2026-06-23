@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-06-24
+
+### Added
+
+- Transition materialisation: `clipwright_render` now reads `transition` markers written
+  by `clipwright-transition` and realises them as FFmpeg `xfade` (video) and `acrossfade`
+  (audio) effects during the single transcode pass.
+- `xfade` is applied between adjacent video segments using `filter_complex`; duration and
+  effect name are read from the marker metadata (`clipwright.duration`,
+  `clipwright.effect`).
+- `acrossfade` is applied to the corresponding audio streams in sync with the video
+  transition so that audio and video fades remain aligned.
+- Unknown or missing effect names fall back to `"fade"` (the xfade default) and a warning
+  is appended to `ToolResult.warnings`.
+
 ## [0.10.0] - 2026-06-22
 
 ### Added

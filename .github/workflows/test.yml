@@ -85,6 +85,7 @@ jobs:
             "clipwright-trim"
             "clipwright-reframe"
             "clipwright-sequence"
+            "clipwright-transition"
             "clipwright-overlay"
           )
           # Note: clipwright-stabilize unit tests mock ffmpeg entirely and do not

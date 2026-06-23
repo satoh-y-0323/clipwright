@@ -39,6 +39,7 @@ jobs:
           - clipwright-scene
           - clipwright-overlay
           - clipwright-sequence
+          - clipwright-transition
           - clipwright-silence
           - clipwright-speed
           - clipwright-stabilize

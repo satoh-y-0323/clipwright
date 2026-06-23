@@ -235,6 +235,7 @@ src/clipwright/
 | `clipwright-reframe` | `clipwright_reframe` | リフレーム指令（目標解像度 / フィットモード / アンカー）を OTIO タイムラインのメタデータに注記する。実体化は `clipwright-render` が FFmpeg フィルタチェーンとして一括適用する。3 つのフィットモード: `crop`（スケールしてクロップ）/ `pad`（スケールしてソリッドカラーでレターボックス/ピラーボックス、`pad_color` で色指定可）/ `blur_pad`（ぼかした背景の上にフォアグラウンドを重ね合わせ；16:9 → 9:16 縦型 Shorts/Reels で人気）。`target_w` / `target_h` は偶数 (2–7680)。`anchor` は配置アンカー（9 方向、デフォルト `center`） |
 | `clipwright-sequence` | `clipwright_build_sequence` | 複数のソースメディアファイルをひとつのマルチソース OTIO タイムライン（V1 ビデオトラック）に組み立て、`clipwright-render` で連結できる形にする。各クリップに `start_sec` / `end_sec` でサブ範囲を指定できる（省略時はソース全体）。ソースはすべて出力ディレクトリ以下に配置する必要がある（再帰サブディレクトリ可）。非破壊: 入力メディアは変更しない。 |
 | `clipwright-overlay` | `clipwright_add_overlay` | OTIO タイムラインに画像オーバーレイ（PNG/JPEG ロゴ・ウォーターマーク・ロワーサード）を注記する。位置・スケール・不透明度・時間範囲を指定し、FFmpeg `fade:alpha=1` フィルタチェーンでフェードイン/フェードアウトをサポート。画像ファイルは出力タイムラインの親ディレクトリ以下に配置する必要がある（co-location 制約）。`clipwright-render` が実体化時に画像を追加 `-i` として入力し、`scale/format=rgba/colorchannelmixer/fade/overlay` フィルタチェーンを filtergraph に挿入する（drawtext の後段で最前面に合成）。非破壊: 入力メディアおよびタイムラインは変更しない。 |
+| `clipwright-transition` | `clipwright_add_transition` | 隣接するクリップ境界にクロスフェード/ディゾルブ（映像は FFmpeg `xfade`、音声は `acrossfade`）を注記する。`duration_sec` と任意の `transition_type`（デフォルト `dissolve`）を指定する。非破壊: 新しい OTIO ファイルのみ書き出す。実体化は `clipwright-render` が行う。v1 制約: 境界ごとの個別尺指定とトランジション種混在は v2 拡張予定。 |
 
 ---
 
@@ -312,10 +313,18 @@ src/clipwright/
     },
     "clipwright-overlay": {
       "command": "clipwright-overlay"
+    },
+    "clipwright-transition": {
+      "command": "clipwright-transition",
+      "env": {
+        "CLIPWRIGHT_FFPROBE": "/path/to/ffprobe"
+      }
     }
   }
 }
 ```
+
+> 注: `clipwright-transition` は `CLIPWRIGHT_FFPROBE` を必要とする。`inspect_media` がトランジション指令の書き込み前にビデオストリームの存在と尺を検証するためである。
 
 > 注: `clipwright-sequence` は `CLIPWRIGHT_FFPROBE` を必要とする。`inspect_media` が各ソースの尺とビデオストリームを probe してから OTIO タイムラインを構築するためである。
 

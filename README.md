@@ -238,6 +238,7 @@ For details, see [docs/clipwright-spec.md](docs/clipwright-spec.md).
 | `clipwright-reframe` | `clipwright_reframe` | Annotate a reframe directive (target resolution / fit mode / anchor) to OTIO timeline metadata; applied as an FFmpeg filter chain by `clipwright-render`. Three fit modes: `crop` (scale-to-cover + crop), `pad` (scale-to-fit + solid-color letterbox/pillarbox, configurable `pad_color`), `blur_pad` (foreground-over-blurred-background, popular for 16:9 → 9:16 vertical Shorts/Reels). `target_w` / `target_h` must be even (2–7680). `anchor` controls alignment (9-direction, default `center`) |
 | `clipwright-sequence` | `clipwright_build_sequence` | Assemble multiple source media files into a single multi-source OTIO timeline (V1 video track) for concatenation by `clipwright-render`. Each clip can specify an optional `start_sec` / `end_sec` sub-range; omitting them uses the full source duration. All sources must be co-located under the output directory (recursive subdirs allowed). Non-destructive: input media is never modified. |
 | `clipwright-overlay` | `clipwright_add_overlay` | Annotate an OTIO timeline with an image overlay (PNG/JPEG logo, watermark, lower-third graphic) at a specified position, scale, and opacity for a time range. Supports fade-in/fade-out via FFmpeg `fade:alpha=1` filter chain. The image file must be co-located under the output timeline's parent directory. Rendered to video by `clipwright-render`, which adds the image as an extra `-i` and inserts a `scale/format=rgba/colorchannelmixer/fade/overlay` filter chain into the filtergraph (after `drawtext`, so the image overlay appears on top). Non-destructive: input media and timeline are never modified. |
+| `clipwright-transition` | `clipwright_add_transition` | Annotate an OTIO timeline with crossfade / dissolve transitions (FFmpeg `xfade` for video, `acrossfade` for audio) at adjacent clip boundaries. Specify `duration_sec` and optional `transition_type` (default `dissolve`). Non-destructive: only a new OTIO file is written. Rendered by `clipwright-render`. v1 limitation: uniform duration per boundary only; per-boundary durations and mixed transition types are a v2 extension. |
 
 ---
 
@@ -315,10 +316,18 @@ Each clipwright tool is a standalone MCP server. Register them in your MCP clien
     },
     "clipwright-overlay": {
       "command": "clipwright-overlay"
+    },
+    "clipwright-transition": {
+      "command": "clipwright-transition",
+      "env": {
+        "CLIPWRIGHT_FFPROBE": "/path/to/ffprobe"
+      }
     }
   }
 }
 ```
+
+> Note: `clipwright-transition` requires `CLIPWRIGHT_FFPROBE` because `inspect_media` validates video stream presence and duration before writing transition directives.
 
 > Note: `clipwright-sequence` requires `CLIPWRIGHT_FFPROBE` because `inspect_media` uses ffprobe to probe each source's duration and video stream before building the OTIO timeline.
 

@@ -413,7 +413,13 @@ None — same `clipwright_transcribe`; honours a GPU-capable binary transparentl
 
 ## Low Priority
 
-### `clipwright-transition`
+### `clipwright-transition`  ✅ IMPLEMENTED (v0.1.0, 2026-06-24)  (crossfade / dissolve)
+
+> Shipped as the `clipwright-transition` package (MCP tool `clipwright_add_transition`).
+> Annotates OTIO timeline with transition directives (`metadata["clipwright"]["transitions"]`);
+> render materialises via FFmpeg `xfade` (video) + `acrossfade` (audio).
+> v1: uniform `duration_sec` per call; per-boundary durations and mixed types are v2
+> (`UNSUPPORTED_OPERATION` for per-boundary requests).
 
 **What it does**
 Inserts crossfades / dissolves (and audio crossfades) between adjacent clips or at
@@ -492,7 +498,7 @@ clipwright (core)
   ├─ clipwright-reframe        ← ✅ IMPLEMENTED (v0.1.0); aspect/crop/pad, vertical formats
   ├─ clipwright-sequence       ← ✅ IMPLEMENTED (v0.1.0); multi-source assembly over render's existing concat
   ├─ clipwright-overlay        ← ✅ IMPLEMENTED (v0.1.0, 2026-06-22); image/logo/watermark overlay
-  ├─ clipwright-transition     ← NEW (Low); xfade/acrossfade
+  ├─ clipwright-transition     ← ✅ IMPLEMENTED (v0.1.0, 2026-06-24); xfade/acrossfade; v1 uniform duration only
   └─ clipwright-render         ← shipped; extend for HW encode/decode, caption/overlay re-timing,
                                   reframe, image overlay, transitions
 ```
@@ -513,5 +519,5 @@ as render filter/option work:
 - [x] Re-time / remap subtitle cues to program time when cuts or warps are present
 - [x] `reframe` metadata → `scale`/`crop`/`pad`/`overlay` (blur-pad) filter chain
 - [x] `image_overlay` markers → extra `-i` + `overlay` filter with opacity/fade (render v0.10.0)
-- [ ] `xfade` / `acrossfade` for transitions (depends on sequence assembly)
+- [x] `xfade` / `acrossfade` for transitions (render v0.11.0; v1: uniform duration per call; per-boundary durations are v2)
 ```
