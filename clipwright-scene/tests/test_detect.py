@@ -1206,8 +1206,8 @@ class TestPyscenedetectThresholdArgumentFormat:
 class TestZeroBoundaryGuidancePureHelper:
     """Unit tests for _zero_boundary_guidance() pure helper.
 
-    This function does not exist yet; tests will fail with ImportError until
-    the implementation is added (TDD Red phase).
+    Verifies the string contract of _zero_boundary_guidance():
+    common prefix, four branches, and suggested-threshold formatting.
 
     Contract:
     - Always: "No scene boundaries were detected."
@@ -1380,8 +1380,9 @@ class TestZeroBoundaryGuidanceEnvelopeIntegration:
     """Integration tests: detect_scenes with zero boundaries carries guidance
     in both warnings[0] and summary (via _zero_boundary_guidance).
 
-    Currently fails because _zero_boundary_guidance is not yet implemented
-    (TDD Red phase).
+    Verifies that when no scene boundaries are detected, the warnings list
+    is replaced with the guidance message and the guidance is appended to
+    the summary string.
     """
 
     def test_zero_scenes_ffmpeg_warning_substrings(self, tmp_path: Path) -> None:
@@ -1502,8 +1503,8 @@ class TestScenedetectDependencyMissing:
     """When scenedetect is not installed, detect_scenes must return DEPENDENCY_MISSING
     with the correct pip-install hint (not the ffmpeg winget hint).
 
-    Currently fails because _detect_with_pyscenedetect uses shutil.which instead of
-    resolve_tool (TDD Red phase).
+    Verifies that a missing scenedetect dependency is reported as
+    DEPENDENCY_MISSING with a pip-install hint rather than a generic error.
     """
 
     def _make_dep_missing_error(self) -> ClipwrightError:

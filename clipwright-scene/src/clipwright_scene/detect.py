@@ -469,3 +469,11 @@ def detect_scenes(
         return _detect_scenes_inner(media, output, options, timeline)
     except ClipwrightError as exc:
         return error_result(exc.code, exc.message, exc.hint)
+    except Exception:
+        # SR-R-001: catch non-ClipwrightError exceptions (e.g. OTIOError from
+        # save_timeline) with fixed wording to prevent tmp path exposure (CWE-209).
+        return error_result(
+            ErrorCode.INTERNAL,
+            "Failed to write the output timeline.",
+            "Check that the output directory is writable and has free space.",
+        )
