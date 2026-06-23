@@ -145,10 +145,7 @@ def _build_multi_source_plan(
     """Helper: build a plan for multi-source clips via build_plan."""
     from clipwright_render.plan import build_plan
 
-    ranges = [
-        _make_kept_range(src, start, dur, 1.0, fps)
-        for src, start, dur in clips
-    ]
+    ranges = [_make_kept_range(src, start, dur, 1.0, fps) for src, start, dur in clips]
     source_probes = {}
     for src, _start, _dur in clips:
         if src not in source_probes:
@@ -256,9 +253,7 @@ class TestXfadeChainString:
         assert len(matches) > 0, "No offset= found in filter_complex"
         for m in matches:
             decimal_part = m.split(".")[1]
-            assert len(decimal_part) == 6, (
-                f"offset={m} does not have 6 decimal places"
-            )
+            assert len(decimal_part) == 6, f"offset={m} does not have 6 decimal places"
 
     def test_1f_single_boundary_offset_value(self) -> None:
         """n=2 clips (3s each), d=0.5s: offset = prog_dur[0] - 0 - d = 3.0 - 0.5 = 2.5."""
@@ -729,7 +724,11 @@ class TestRetimeInterferenceWarning:
 
     def test_7a_single_source_retime_warning(self) -> None:
         """Single-source: transition + text_overlay marker → retime warning."""
-        from clipwright_render.plan import KeptRangeList, build_plan, resolve_kept_ranges
+        from clipwright_render.plan import (
+            KeptRangeList,
+            build_plan,
+            resolve_kept_ranges,
+        )
 
         tl = self._make_timeline_with_text_marker(
             clip_duration=3.0,
@@ -748,8 +747,10 @@ class TestRetimeInterferenceWarning:
         )
         # At least one warning must mention transition + overlay timing
         retime_warnings = [
-            w for w in plan.warnings
-            if "transition" in w.lower() and (
+            w
+            for w in plan.warnings
+            if "transition" in w.lower()
+            and (
                 "overlay" in w.lower() or "timing" in w.lower() or "drift" in w.lower()
             )
         ]
@@ -764,7 +765,11 @@ class TestRetimeInterferenceWarning:
         font_path resolution is delegated to build_plan/_collect_text_overlays.
         Multi-source path is forced by having two clips with different source URLs.
         """
-        from clipwright_render.plan import KeptRangeList, build_plan, resolve_kept_ranges
+        from clipwright_render.plan import (
+            KeptRangeList,
+            build_plan,
+            resolve_kept_ranges,
+        )
 
         # Build a two-clip timeline where clip1 uses /src/a.mp4 and clip2 uses
         # /src/b.mp4.  This forces the multi-source path in build_plan.
@@ -789,8 +794,10 @@ class TestRetimeInterferenceWarning:
             transition=_uniform_transition(n_clips=2),  # type: ignore[call-arg]
         )
         retime_warnings = [
-            w for w in plan.warnings
-            if "transition" in w.lower() and (
+            w
+            for w in plan.warnings
+            if "transition" in w.lower()
+            and (
                 "overlay" in w.lower() or "timing" in w.lower() or "drift" in w.lower()
             )
         ]
@@ -806,8 +813,10 @@ class TestRetimeInterferenceWarning:
             transition=_uniform_transition(n_clips=2),
         )
         retime_warnings = [
-            w for w in plan.warnings
-            if "transition" in w.lower() and (
+            w
+            for w in plan.warnings
+            if "transition" in w.lower()
+            and (
                 "overlay" in w.lower() or "timing" in w.lower() or "drift" in w.lower()
             )
         ]
@@ -832,7 +841,9 @@ class TestBackwardCompatibility:
         ]
         probe = _make_probe(has_video=True, audio_count=0)
         plan = build_plan(
-            ranges, probe, RenderOptions(),
+            ranges,
+            probe,
+            RenderOptions(),
             transition=None,  # type: ignore[call-arg]
         )
         assert "concat=n=2" in plan.filter_complex
@@ -850,7 +861,9 @@ class TestBackwardCompatibility:
 
         plan_baseline = build_plan(ranges, probe, RenderOptions())
         plan_none = build_plan(
-            ranges, probe, RenderOptions(),
+            ranges,
+            probe,
+            RenderOptions(),
             transition=None,  # type: ignore[call-arg]
         )
         assert plan_baseline.filter_complex == plan_none.filter_complex
@@ -871,7 +884,9 @@ class TestBackwardCompatibility:
             "transitions": [],
         }
         plan = build_plan(
-            ranges, probe, RenderOptions(),
+            ranges,
+            probe,
+            RenderOptions(),
             transition=empty_directive,  # type: ignore[call-arg]
         )
         assert "concat=" in plan.filter_complex
@@ -891,7 +906,9 @@ class TestBackwardCompatibility:
         ranges = [_make_kept_range("/src/a.mp4", 0.0, 5.0)]
         probe = _make_probe(has_video=True, audio_count=0)
         plan = build_plan(
-            ranges, probe, RenderOptions(),
+            ranges,
+            probe,
+            RenderOptions(),
             transition=None,  # type: ignore[call-arg]
         )
         assert "concat=n=1" in plan.filter_complex
@@ -915,8 +932,7 @@ class TestTransitionValidationErrors:
         from clipwright_render.plan import build_plan
 
         ranges = [
-            _make_kept_range("/src/a.mp4", float(i) * 10.0, 3.0)
-            for i in range(n_clips)
+            _make_kept_range("/src/a.mp4", float(i) * 10.0, 3.0) for i in range(n_clips)
         ]
         probe = _make_probe(has_video=True, audio_count=0)
         directive = _uniform_transition(
@@ -924,7 +940,9 @@ class TestTransitionValidationErrors:
             duration_sec=duration_sec,
         )
         return build_plan(
-            ranges, probe, RenderOptions(),
+            ranges,
+            probe,
+            RenderOptions(),
             transition=directive,  # type: ignore[call-arg]
         )
 
@@ -966,11 +984,15 @@ class TestTransitionValidationErrors:
             "tool": "clipwright_add_transition",
             "version": "0.1.0",
             "kind": "transition",
-            "transitions": [{"after_clip_index": 0, "type": "dissolve", "duration_sec": 0.5}],
+            "transitions": [
+                {"after_clip_index": 0, "type": "dissolve", "duration_sec": 0.5}
+            ],
         }
         with pytest.raises(ClipwrightError) as exc_info:
             build_plan(
-                ranges, probe, RenderOptions(),
+                ranges,
+                probe,
+                RenderOptions(),
                 transition=directive,  # type: ignore[call-arg]
             )
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
@@ -994,7 +1016,9 @@ class TestTransitionValidationErrors:
         }
         with pytest.raises(ClipwrightError) as exc_info:
             build_plan(
-                ranges, probe, RenderOptions(),
+                ranges,
+                probe,
+                RenderOptions(),
                 transition=directive,  # type: ignore[call-arg]
             )
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
@@ -1018,7 +1042,9 @@ class TestTransitionValidationErrors:
         }
         with pytest.raises(ClipwrightError) as exc_info:
             build_plan(
-                ranges, probe, RenderOptions(),
+                ranges,
+                probe,
+                RenderOptions(),
                 transition=directive,  # type: ignore[call-arg]
             )
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
@@ -1042,7 +1068,9 @@ class TestTransitionValidationErrors:
         }
         with pytest.raises(ClipwrightError) as exc_info:
             build_plan(
-                ranges, probe, RenderOptions(),
+                ranges,
+                probe,
+                RenderOptions(),
                 transition=directive,  # type: ignore[call-arg]
             )
         assert exc_info.value.code == ErrorCode.INVALID_INPUT

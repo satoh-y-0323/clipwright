@@ -2222,7 +2222,10 @@ def _validate_transition(
     if n_clips < 2:
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message="A transition directive is present but the timeline has fewer than two clips.",
+            message=(
+                "A transition directive is present but the timeline has"
+                " fewer than two clips."
+            ),
             hint=(
                 "Build a multi-clip timeline with clipwright-sequence or"
                 " clipwright-trim first, then apply transitions."
@@ -2415,9 +2418,7 @@ def _build_transition_chain(
         if has_audio:
             next_a = audio_labels[i + 1]
             out_a = "[outa]" if is_last else f"[acf{i}]"
-            filter_parts.append(
-                f"{prev_a}{next_a}acrossfade=d={clamped_d:g}{out_a}"
-            )
+            filter_parts.append(f"{prev_a}{next_a}acrossfade=d={clamped_d:g}{out_a}")
             prev_a = out_a
 
     return "[outv]", "[outa]" if has_audio else "", tr_warnings
@@ -2897,8 +2898,6 @@ def _build_filter_complex(
         (filter_complex, video_map_label, audio_map_label, use_afftdn,
         use_loudness, transition_warnings)
     """
-    n = len(ranges)
-
     # Generate trim/atrim filter segments for each segment
     video_labels: list[str] = []
     audio_labels: list[str] = []
@@ -2958,7 +2957,9 @@ def _build_filter_complex(
         video_labels,
         audio_labels,
         has_audio,
-        program_durations if program_durations is not None else _segment_program_durations(ranges),
+        program_durations
+        if program_durations is not None
+        else _segment_program_durations(ranges),
         transitions,
     )
     # _v_term is always "[outv]", _a_term is "[outa]" or "" — terminal labels
@@ -3276,8 +3277,6 @@ def _build_multi_source_filter_complex(
         (filter_complex, video_map_label, audio_map_label, use_afftdn,
         use_loudness, transition_warnings)
     """
-    n = len(ranges)
-
     # Delegate output spec determination to helper (ADR-C4-r2)
     target_w, target_h, target_fps = _resolve_target_spec(
         source_probes, first_source, options
@@ -3303,7 +3302,9 @@ def _build_multi_source_filter_complex(
         video_labels,
         audio_labels,
         has_audio_overall,
-        program_durations if program_durations is not None else _segment_program_durations(ranges),
+        program_durations
+        if program_durations is not None
+        else _segment_program_durations(ranges),
         transitions,
     )
 
