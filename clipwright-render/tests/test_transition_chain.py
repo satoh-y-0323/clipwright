@@ -571,14 +571,29 @@ class TestDurationClamping:
         )
 
     def test_5b_clamp_warning_text(self) -> None:
-        """Clamping warning uses fixed wording and includes '[boundary {i}]'."""
+        """Clamping warning uses fixed wording and includes '[boundary {i}]'.
+
+        Also verifies that raw float values (requested=2.0, clamped=1.0) are NOT
+        embedded in the warning text, locking the fixed-wording contract (SR M-1).
+        """
         plan = _build_single_source_plan(
             clip_durations=[1.0, 3.0],
             has_audio=False,
             transition=_uniform_transition(duration_sec=2.0, n_clips=2),
         )
         warning_text = " ".join(plan.warnings)
+        # Positive: fixed label must be present
         assert "[boundary 0]" in warning_text
+        # Negative: raw float values must NOT appear in the warning text
+        # (requested duration=2.0, clamped duration=1.0 — these are scenario-specific
+        # values that would only appear if the implementation embeds raw floats rather
+        # than using the fixed-wording template mandated by SR M-1)
+        assert "2.0" not in warning_text, (
+            "Raw requested duration '2.0' must not appear in clamping warning text"
+        )
+        assert "1.0" not in warning_text, (
+            "Raw clamped duration '1.0' must not appear in clamping warning text"
+        )
 
     def test_5c_one_warning_per_boundary(self) -> None:
         """2 clamped boundaries → 2 clamping warnings."""
