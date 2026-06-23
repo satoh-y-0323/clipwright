@@ -5,6 +5,29 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] - 2026-06-24
+
+### Added (`clipwright-scene` v0.2.0)
+
+- **Zero-boundary guidance with concrete threshold suggestion**: When
+  `clipwright_detect_scenes` returns 0 boundaries, the `summary` and `warnings`
+  fields now include a backend-specific, actionable hint:
+  - **ffmpeg backend**: suggests a specific halved threshold value (e.g.
+    "Try lowering 'threshold' to 0.15 (currently 0.3)") and recommends switching
+    to `backend='pyscenedetect'` for gradual or low-contrast cuts.
+  - **pyscenedetect backend**: notes that further threshold lowering is unlikely
+    to help and suggests the footage may be a single continuous shot.
+  - When `threshold` is already at the practical floor (0.05), the hint replaces
+    the generic "consider lowering" warning with an explanation that no further
+    benefit is expected from lowering.
+
+- **`DEPENDENCY_MISSING` error with install hint for PySceneDetect**: When
+  `backend='pyscenedetect'` is requested but the `scenedetect` executable is not
+  found, `clipwright_detect_scenes` returns `DEPENDENCY_MISSING` with the hint:
+  `"Install PySceneDetect with 'pip install scenedetect', or set
+  CLIPWRIGHT_SCENEDETECT to its executable path."` (available as the optional
+  extra `clipwright-scene[pyscenedetect]`).
+
 ## [0.16.0] - 2026-06-24
 
 ### Added

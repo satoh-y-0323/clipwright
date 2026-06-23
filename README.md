@@ -230,7 +230,7 @@ For details, see [docs/clipwright-spec.md](docs/clipwright-spec.md).
 | `clipwright-speed` | `clipwright_set_speed` | Annotate a clip with a speed multiplier via OTIO `LinearTimeWarp`; materialized by `clipwright-render` |
 | `clipwright-text` | `clipwright_add_text` | Annotate an OTIO timeline with text overlay settings (drawtext); rendered to video by `clipwright-render` |
 | `clipwright-wrap` | `clipwright_wrap_text` | Wrap long text lines with line-break annotations in OTIO timeline |
-| `clipwright-scene` | `clipwright_detect_scenes` | Detect shot boundaries via FFmpeg `scdet` or PySceneDetect and write OTIO markers |
+| `clipwright-scene` | `clipwright_detect_scenes` | Detect shot boundaries via FFmpeg `scdet` or PySceneDetect (`backend='pyscenedetect'`) and write OTIO markers. When 0 boundaries are found the tool returns a concrete threshold-halving suggestion and, for the ffmpeg backend, recommends switching to pyscenedetect for gradual/low-contrast cuts. Install PySceneDetect with `pip install scenedetect` (or `clipwright-scene[pyscenedetect]`); set `CLIPWRIGHT_SCENEDETECT` to the executable path if not on PATH |
 | `clipwright-frames` | `clipwright_extract_frames` | Extract still frames from video at specified times, scene boundaries, or fixed intervals; writes images, OTIO markers, and a JSON manifest |
 | `clipwright-color` | `clipwright_detect_color` | Measure average luma via FFmpeg `signalstats` and write an `eq` color-correction directive to OTIO timeline metadata; applied in a single render pass by `clipwright-render` |
 | `clipwright-stabilize` | `clipwright_detect_shake` | Analyse camera shake via FFmpeg `vidstabdetect` (requires libvidstab), write a `.trf` motion-analysis file and a stabilize directive to OTIO timeline metadata; applied as `vidstabtransform` in a single render pass by `clipwright-render` |
@@ -325,6 +325,8 @@ Each clipwright tool is a standalone MCP server. Register them in your MCP clien
 ```
 
 > Note: `clipwright-transition` does not require `CLIPWRIGHT_FFPROBE` or `CLIPWRIGHT_FFMPEG` (pure OTIO annotation tool).
+
+> Note: `clipwright-scene` requires `CLIPWRIGHT_FFMPEG` for the ffmpeg backend (default). When using `backend='pyscenedetect'`, the `scenedetect` CLI must be installed (`pip install scenedetect`) or its path set via `CLIPWRIGHT_SCENEDETECT`. The optional extra `clipwright-scene[pyscenedetect]` installs PySceneDetect automatically.
 
 > Note: `clipwright-sequence` requires `CLIPWRIGHT_FFPROBE` because `inspect_media` uses ffprobe to probe each source's duration and video stream before building the OTIO timeline.
 

@@ -227,7 +227,7 @@ src/clipwright/
 | `clipwright-speed` | `clipwright_set_speed` | OTIO の `LinearTimeWarp` でクリップに速度倍率を注記する。実体化は `clipwright-render` が行う |
 | `clipwright-text` | `clipwright_add_text` | OTIO タイムラインにテキストオーバーレイ設定（drawtext）を注記する。映像への描画は `clipwright-render` が行う |
 | `clipwright-wrap` | `clipwright_wrap_text` | 長いテキスト行に改行注記を付けて OTIO タイムラインで折り返す |
-| `clipwright-scene` | `clipwright_detect_scenes` | FFmpeg `scdet` または PySceneDetect でショット境界を検出し OTIO マーカーを書く |
+| `clipwright-scene` | `clipwright_detect_scenes` | FFmpeg `scdet` または PySceneDetect（`backend='pyscenedetect'`）でショット境界を検出し OTIO マーカーを書く。0 境界の場合は具体的な閾値半減提案を返し、ffmpeg バックエンドでは pyscenedetect への切替を推奨する。PySceneDetect は `pip install scenedetect`（または `clipwright-scene[pyscenedetect]`）でインストール。PATH 上にない場合は `CLIPWRIGHT_SCENEDETECT` で実行ファイルパスを指定する |
 | `clipwright-frames` | `clipwright_extract_frames` | 指定時刻 / シーン境界 / 固定間隔で動画から静止画を抽出し、画像・OTIO マーカー・JSON マニフェストを出力する |
 | `clipwright-color` | `clipwright_detect_color` | FFmpeg `signalstats` で平均輝度を測定し、`eq` カラー補正ディレクティブを OTIO タイムラインのメタデータに書き込む。補正は `clipwright-render` が一括レンダリングパスで適用する |
 | `clipwright-stabilize` | `clipwright_detect_shake` | FFmpeg `vidstabdetect`（libvidstab 必須）でカメラ手ブレを解析し、`.trf` モーション解析ファイルと stabilize ディレクティブを OTIO タイムラインのメタデータに書き込む。`clipwright-render` が一括レンダリングパスで `vidstabtransform` として適用する |
@@ -322,6 +322,8 @@ src/clipwright/
 ```
 
 > 注: `clipwright-transition` は `CLIPWRIGHT_FFPROBE` / `CLIPWRIGHT_FFMPEG` を必要としない（pure OTIO 注記ツールのため、注記時に ffprobe / ffmpeg を呼び出さない）。
+
+> 注: `clipwright-scene` はデフォルトの ffmpeg バックエンドで `CLIPWRIGHT_FFMPEG` を必要とする。`backend='pyscenedetect'` を使う場合は `scenedetect` CLI のインストール（`pip install scenedetect`）または `CLIPWRIGHT_SCENEDETECT` でのパス指定が必要。オプション extra `clipwright-scene[pyscenedetect]` を指定すると PySceneDetect が自動インストールされる。
 
 > 注: `clipwright-sequence` は `CLIPWRIGHT_FFPROBE` を必要とする。`inspect_media` が各ソースの尺とビデオストリームを probe してから OTIO タイムラインを構築するためである。
 

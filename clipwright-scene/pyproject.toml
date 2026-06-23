@@ -1,6 +1,6 @@
 [project]
 name = "clipwright-scene"
-version = "0.1.0"
+version = "0.2.0"
 description = "MCP tool for shot boundary (scene) detection and OTIO marker generation."
 readme = "README.md"
 license = { text = "MIT" }

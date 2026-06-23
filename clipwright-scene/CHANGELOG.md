@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-24
+
+### Added
+
+- **Zero-boundary guidance**: The tool now returns a `hint` in results when no scenes are
+  detected, suggesting concrete threshold values to try (e.g. lower the `threshold` from the
+  default 0.3 toward 0.1–0.15 for high-motion content, or switch to the `pyscenedetect` backend
+  for content where FFmpeg's `scdet` filter misses cuts).
+- **`DEPENDENCY_MISSING` error for missing `scenedetect` CLI**: When `backend="pyscenedetect"`
+  is requested but the `scenedetect` CLI is not found on PATH or at the path given by the
+  `CLIPWRIGHT_SCENEDETECT` environment variable, the tool now returns a structured error
+  `{ ok: false, error: { code: "DEPENDENCY_MISSING", message: ..., hint: ... } }` with an
+  explicit install hint (`pip install scenedetect[opencv]` or `uv add clipwright-scene[pyscenedetect]`)
+  instead of a raw `FileNotFoundError`.
+
 ## [0.1.0] - 2026-06-16
 
 ### Added

@@ -444,26 +444,44 @@ assembly landing first.
 
 ### Content-aware scene detection / threshold tuning  *(scene refinement)*
 
+> **✅ IMPLEMENTED (scene v0.3.0; refinements v0.2.0)**
+>
+> - `backend: Literal["ffmpeg", "pyscenedetect"]` option is live. The `pyscenedetect`
+>   path spawns the `scenedetect` CLI (external process; license-independent) and
+>   parses CSV output via `parse.parse_pyscenedetect_csv()`.
+>   Executable resolved via `CLIPWRIGHT_SCENEDETECT` env var or PATH fallback;
+>   missing binary raises `DEPENDENCY_MISSING` with an install hint.
+> - Zero-boundary guidance (`_zero_boundary_guidance`) was refined in v0.2.0:
+>   when 0 boundaries are found the `summary` and `warnings` fields now include
+>   a backend-specific hint — a concrete halved-threshold suggestion (e.g.
+>   "Try lowering threshold to 0.15") for the ffmpeg backend, or a note that the
+>   footage may be a single continuous shot for the pyscenedetect backend.
+>   If the threshold is already at the practical floor (0.05), a further-lowering
+>   warning is replaced with a message explaining that lowering is unlikely to help.
+
 **What it does**
-Improves `clipwright-detect-scenes` recall on low-cut content via a content-aware
+Improves `clipwright_detect_scenes` recall on low-cut content via a content-aware
 backend and/or adaptive thresholds.
 
 **Why it is needed**
 On the continuous-gameplay verification clip, `detect_scenes` returned **0
-boundaries** at the default threshold (it emitted a "consider lowering the
-threshold" warning). For screen-capture / single-shot footage the FFmpeg
-`select=gt(scene,…)` heuristic is weak. `clipwright-spec2.md` already proposed an
-optional `pyscenedetect` backend; it appears not to have been wired.
+boundaries** at the default threshold. For screen-capture / single-shot footage the
+FFmpeg `select=gt(scene,…)` heuristic is weak. `clipwright-spec2.md` proposed an
+optional `pyscenedetect` backend; this was wired in v0.3.0, with threshold-guidance
+UX refined in v0.2.0.
 
 **MCP tool name(s)**
-None — extend `clipwright_detect_scenes`.
+None — extends `clipwright_detect_scenes`.
 
-**Implementation hints**
-- Add the `backend: Literal["ffmpeg", "pyscenedetect"]` option from spec2 (content
-  detector handles gradual/low-contrast cuts better), invoked as an external
-  process (`scenedetect` CLI) to keep license independence.
-- Optionally auto-suggest a lower threshold in `summary`/`hint` when 0 boundaries
-  are found, rather than only warning.
+**Implementation (shipped)**
+- `backend: Literal["ffmpeg", "pyscenedetect"]` option dispatches to
+  `_detect_with_ffmpeg()` or `_detect_with_pyscenedetect()` in `detect.py`.
+  The pyscenedetect path invokes the `scenedetect` CLI as an external process
+  to preserve license independence.
+- `CLIPWRIGHT_SCENEDETECT` env var overrides the executable path (consistent with
+  `CLIPWRIGHT_FFMPEG` / `CLIPWRIGHT_WHISPER` pattern).
+- `_zero_boundary_guidance()` returns a concrete threshold-halving suggestion plus
+  a backend-switch recommendation when the ffmpeg backend yields 0 boundaries.
 
 ---
 
@@ -484,7 +502,7 @@ None — extend `clipwright_detect_scenes`.
 clipwright (core)
   ├─ clipwright-silence        ← shipped
   ├─ clipwright-trim           ← NEW (High); manual kept-ranges, same OTIO shape as silence
-  ├─ clipwright-scene          ← shipped (content-aware backend = Low refinement)
+  ├─ clipwright-scene          ← ✅ IMPLEMENTED (v0.3.0; refinements v0.2.0); pyscenedetect backend + zero-boundary guidance
   ├─ clipwright-frames         ← shipped
   ├─ clipwright-transcribe     ← ✅ IMPLEMENTED (v0.3.0, 2026-06-22); GPU/CUDA wiring + data.backend/realtime_factor
   ├─ clipwright-wrap           ← shipped (may host clipwright_remap_captions)
