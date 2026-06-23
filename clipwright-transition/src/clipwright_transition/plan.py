@@ -81,12 +81,18 @@ def resolve_transitions(
         ]
 
     # per_boundary mode (options.per_boundary is a non-empty list by schema validation).
-    boundaries = options.per_boundary  # type: ignore[assignment]  # non-None guaranteed
+    per_boundary = options.per_boundary
+    if per_boundary is None:
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message="per_boundary is None in per_boundary mode.",
+            hint="Provide a non-empty per_boundary list or use the uniform field.",
+        )
 
     # Validate for duplicate indices before range check (collect all errors
     # in one pass: range check first so index information is sanitised).
     seen: set[int] = set()
-    for entry in boundaries:
+    for entry in per_boundary:
         idx = entry.after_clip_index
         if idx > max_index:
             raise ClipwrightError(
@@ -116,7 +122,7 @@ def resolve_transitions(
             type=entry.type,
             duration_sec=entry.duration_sec,
         )
-        for entry in boundaries
+        for entry in per_boundary
     ]
     resolved.sort(key=lambda rt: rt.after_clip_index)
     return resolved
