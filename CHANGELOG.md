@@ -5,6 +5,18 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] - 2026-06-25
+
+### Fixed (`clipwright-render` v0.11.1)
+
+- Output chroma is now always pinned to `yuv420p` (4:2:0) by passing `-pix_fmt yuv420p`
+  once at the encoder input. Previously, transition (xfade) outputs could negotiate to
+  `yuvj444p` / H.264 High 4:4:4 Predictive and fail to play in common players (e.g.
+  Windows "Movies & TV"). The fix covers all output paths — single-source, multi-source,
+  concat, transition, subtitle, overlay, reframe, scale, BGM — for both software
+  (libx264) and hardware (NVENC) encoders. Resolution, codec type, and output duration
+  are unchanged; color range is not converted.
+
 ## [0.17.0] - 2026-06-24
 
 ### Added (`clipwright-scene` v0.2.0)

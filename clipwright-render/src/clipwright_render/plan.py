@@ -3507,6 +3507,11 @@ def _build_ffmpeg_args(
     if has_audio:
         ffmpeg_args += ["-map", audio_map_label]
 
+    # Always pin output chroma to yuv420p for broad player compatibility; placed
+    # before the codec branch so it applies to both sw and hw encoders regardless
+    # of the filter-graph terminal pixel format (D1).
+    ffmpeg_args += ["-pix_fmt", "yuv420p"]
+
     # Map RenderOptions fields to ffmpeg arguments
     if resolved_encoder is None:
         # Existing (software) path — preserved byte-for-byte (AC-1/NFR-1).
