@@ -116,7 +116,17 @@ emitted ffmpeg args include the chroma pin, and an e2e check that probes
 
 ---
 
-### D2. `clipwright-scene` PySceneDetect backend is incompatible with PySceneDetect 0.7  ⚠️ **Medium**
+### D2. `clipwright-scene` PySceneDetect backend is incompatible with PySceneDetect 0.7  ✅ **FIXED (scene 0.2.1)**
+
+> Fixed by switching `_detect_with_pyscenedetect()` from stdout parsing
+> (`list-scenes -c`, removed in 0.7) to reading the CSV file written by
+> `list-scenes -o <tmpdir> --skip-cuts -q` (parsed by the unchanged
+> `parse_pyscenedetect_csv`). A missing/unreadable CSV falls back to zero
+> boundaries. Verified over real stdio MCP against PySceneDetect 0.7: the backend
+> now returns content-aware boundaries (9 on the gameplay clip vs 0 for ffmpeg);
+> the ffmpeg backend and DEPENDENCY_MISSING path are unchanged. README notes
+> "Verified with PySceneDetect 0.7+"; the optional dependency is now `>=0.7`.
+> (Originally reported below.)
 
 **Symptom**
 `clipwright_detect_scenes` with `backend="pyscenedetect"` returns
@@ -361,7 +371,7 @@ color        ✓
 
 1. ~~**D1 — render transition 4:4:4** (High): ships unplayable deliverables; contained `format=yuv420p` fix.~~ ✅ **FIXED (render 0.11.1)** — `-pix_fmt yuv420p` pinned in `_build_ffmpeg_args()`.
 2. **G — cut-aware caption alignment** (High): the silence+subtitle combination degrades caption quality today.
-3. **D2 — scene PySceneDetect 0.7 incompat** (Medium): the content-aware backend is dead against current PySceneDetect; contained CSV-file fix.
+3. ~~**D2 — scene PySceneDetect 0.7 incompat** (Medium): the content-aware backend is dead against current PySceneDetect; contained CSV-file fix.~~ ✅ **FIXED (scene 0.2.1)** — `list-scenes -o <tmpdir>` CSV-file read.
 4. **Content-aware reframe** (Medium–High): static vertical reframe caps shorts quality.
 5. **Scene-driven frames** / **trim ergonomics** / **path-policy consistency** (Medium): composition and DX gaps.
 6. **HW decode for filter graphs** (Low): known spec3 limit.
