@@ -497,7 +497,7 @@ dev = [
 
 [[package]]
 name = "clipwright-render"
-version = "0.11.0"
+version = "0.11.1"
 source = { editable = "clipwright-render" }
 dependencies = [
     { name = "clipwright" },
@@ -534,7 +534,7 @@ dev = [
 
 [[package]]
 name = "clipwright-scene"
-version = "0.2.0"
+version = "0.2.1"
 source = { editable = "clipwright-scene" }
 dependencies = [
     { name = "clipwright" },
@@ -563,7 +563,7 @@ requires-dist = [
     { name = "mcp", extras = ["cli"], specifier = ">=1.27.2" },
     { name = "opentimelineio", specifier = ">=0.18" },
     { name = "pydantic", specifier = ">=2" },
-    { name = "scenedetect", marker = "extra == 'pyscenedetect'", specifier = ">=0.6" },
+    { name = "scenedetect", marker = "extra == 'pyscenedetect'", specifier = ">=0.7" },
 ]
 provides-extras = ["pyscenedetect"]
 
