@@ -75,7 +75,14 @@ This round has two kinds of entry:
 
 ## Defects (found by the round-4 dogfood)
 
-### D1. `clipwright-render` transition path emits unplayable 4:4:4 video  ⛔ **High**
+### D1. `clipwright-render` transition path emits unplayable 4:4:4 video  ✅ **FIXED (render 0.11.1)**
+
+> Fixed by pinning output chroma to `yuv420p` once in `_build_ffmpeg_args()` (after
+> the `-map` group, before the codec branch), so every output path and both
+> software/hardware encoders produce broadly-playable 4:2:0. Verified over real
+> stdio MCP: transition output is now `yuvj420p` (Main/High, 4:2:0) on both NVENC
+> and libx264; non-transition paths and resolution/duration are unchanged. Color
+> range is intentionally not converted. (Originally reported below.)
 
 **Symptom**
 `program.mp4` (sequence → transition(dissolve) → render) would not open in common
@@ -352,7 +359,7 @@ color        ✓
 
 ## Priority summary
 
-1. **D1 — render transition 4:4:4** (High): ships unplayable deliverables; contained `format=yuv420p` fix.
+1. ~~**D1 — render transition 4:4:4** (High): ships unplayable deliverables; contained `format=yuv420p` fix.~~ ✅ **FIXED (render 0.11.1)** — `-pix_fmt yuv420p` pinned in `_build_ffmpeg_args()`.
 2. **G — cut-aware caption alignment** (High): the silence+subtitle combination degrades caption quality today.
 3. **D2 — scene PySceneDetect 0.7 incompat** (Medium): the content-aware backend is dead against current PySceneDetect; contained CSV-file fix.
 4. **Content-aware reframe** (Medium–High): static vertical reframe caps shorts quality.
