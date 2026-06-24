@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-25
+
+### Fixed
+
+- **`pyscenedetect` backend compatibility with PySceneDetect 0.7**: The backend previously
+  invoked `scenedetect ... list-scenes -c` and parsed scene boundaries from stdout. The `-c`
+  (CSV-to-console) flag was removed in PySceneDetect 0.7, which writes the scene list to a
+  CSV file instead. The backend now runs `list-scenes -o <tmpdir> --skip-cuts -q` and reads
+  the generated `<video>-Scenes.csv`, restoring content-aware scene detection against
+  PySceneDetect 0.7+. The ffmpeg backend, envelope, threshold scaling, and zero-boundary
+  guidance are unchanged.
+
 ## [0.2.0] - 2026-06-24
 
 ### Added

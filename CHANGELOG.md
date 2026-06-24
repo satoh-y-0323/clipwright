@@ -5,6 +5,19 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] - 2026-06-25
+
+### Fixed (`clipwright-scene` v0.2.1)
+
+- **`pyscenedetect` backend compatibility with PySceneDetect 0.7**: `clipwright_detect_scenes`
+  previously invoked `scenedetect ... list-scenes -c` and parsed the scene list from stdout.
+  The `-c` flag (CSV output to console) was removed in PySceneDetect 0.7, which now writes
+  the scene list to a CSV file (`<video>-Scenes.csv`) in an output directory. The backend
+  now runs `list-scenes -o <tmpdir> --skip-cuts -q` and reads the generated CSV, restoring
+  content-aware scene detection. Users on PySceneDetect 0.7+ who encountered
+  `SUBPROCESS_FAILED` from this backend are unblocked by this fix. The ffmpeg backend,
+  envelope contract, threshold scaling, and zero-boundary guidance are unchanged.
+
 ## [0.18.0] - 2026-06-25
 
 ### Fixed (`clipwright-render` v0.11.1)

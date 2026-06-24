@@ -1,6 +1,6 @@
 [project]
 name = "clipwright-scene"
-version = "0.2.0"
+version = "0.2.1"
 description = "MCP tool for shot boundary (scene) detection and OTIO marker generation."
 readme = "README.md"
 license = { text = "MIT" }
@@ -17,7 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 pyscenedetect = [
-    "scenedetect>=0.6",
+    "scenedetect>=0.7",
 ]
 
 [project.scripts]

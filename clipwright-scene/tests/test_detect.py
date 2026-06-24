@@ -123,11 +123,33 @@ def _fake_run_ffmpeg_ok(stderr: str) -> Any:
     return _impl
 
 
-def _fake_run_pyscenedetect_ok(csv_stdout: str) -> Any:
-    """Return a side_effect closure for a successful pyscenedetect subprocess."""
+def _fake_run_pyscenedetect_ok(csv_content: str) -> Any:
+    """Return a side_effect closure that mimics pyscenedetect 0.7 ``-o`` behaviour.
+
+    Parses ``-o <dir>`` and ``-i <media>`` from the command, then writes
+    ``<dir>/<media_stem>-Scenes.csv`` with *csv_content*.  Returns an empty
+    stdout (the real 0.7 binary writes to the file, not stdout).
+
+    This mirrors the new ``_detect_with_pyscenedetect()`` implementation that
+    reads the CSV from ``Path(tmpdir) / f"{Path(media).stem}-Scenes.csv"``.
+    The old implementation read ``result.stdout``; swapping this mock therefore
+    makes the three affected tests Red against the current (unmodified) code.
+    """
 
     def _impl(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
-        return CompletedProcess(args=cmd, returncode=0, stdout=csv_stdout, stderr="")
+        out_dir: str | None = None
+        media_arg: str | None = None
+        for i, arg in enumerate(cmd):
+            if arg == "-o" and i + 1 < len(cmd):
+                out_dir = cmd[i + 1]
+            if arg == "-i" and i + 1 < len(cmd):
+                media_arg = cmd[i + 1]
+        if out_dir is not None and media_arg is not None:
+            stem = Path(media_arg).stem
+            (Path(out_dir) / f"{stem}-Scenes.csv").write_text(
+                csv_content, encoding="utf-8"
+            )
+        return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
     return _impl
 
@@ -1819,3 +1841,118 @@ class TestOutputWriteFailure:
         assert result.error is not None
         assert secret not in result.error.message
         assert secret not in (result.error.hint or "")
+
+
+# ===========================================================================
+# (D) pyscenedetect 0.7 command-format lock tests  (AC-05 / TR-02)
+# ===========================================================================
+
+
+class TestPyscenedetectCommandFormatLock:
+    """Regression locks for the PySceneDetect 0.7-compatible command format.
+
+    AC-05: the command issued to scenedetect must NOT contain ``-c`` (the flag
+    that was removed in 0.7 and caused SUBPROCESS_FAILED in the old code).
+
+    TR-02: the new ``list-scenes -o <dir>`` path must actually deliver scene
+    boundaries (>0) through the CSV-file reading route.
+    """
+
+    def test_no_minus_c_in_pyscenedetect_command(self, tmp_path: Path) -> None:
+        """The command sent to scenedetect must not contain the token '-c' (AC-05).
+
+        In PySceneDetect 0.7 the ``list-scenes -c`` flag was removed.
+        Presence of '-c' causes SUBPROCESS_FAILED; this test is a CI regression
+        guard to prevent re-introduction of the flag.
+        """
+        from clipwright_scene.detect import detect_scenes
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        captured_cmds: list[list[str]] = []
+
+        def _capture(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            captured_cmds.append(list(cmd))
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with (
+            patch("clipwright_scene.detect.inspect_media", return_value=media_info),
+            patch("clipwright_scene.detect.resolve_tool", return_value="scenedetect"),
+            patch("clipwright_scene.detect.run", side_effect=_capture),
+        ):
+            detect_scenes(media, output, _opts(backend="pyscenedetect"))
+
+        assert len(captured_cmds) >= 1, "run() was not called"
+        cmd = captured_cmds[0]
+        assert "-c" not in cmd, (
+            f"Command must not contain '-c' (removed in PySceneDetect 0.7): {cmd!r}"
+        )
+
+    def test_list_scenes_dash_o_route_delivers_boundaries(self, tmp_path: Path) -> None:
+        """The ``list-scenes -o <dir>`` CSV-file route must return >=1 scene boundary.
+
+        Verifies that the new implementation reads scenes from the CSV file written
+        by the mock (mimicking pyscenedetect 0.7 ``-o`` behaviour) rather than from
+        stdout.  With the *old* stdout-reading implementation this test would see 0
+        scenes (because mock returns stdout="") — that is the intended Red signal.
+        """
+        from clipwright_scene.detect import detect_scenes
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        csv_content = _make_pyscenedetect_csv([0.0, 4.033, 8.1])
+        media_info = _make_media_info(path=media, duration_sec=12.0)
+
+        with (
+            patch("clipwright_scene.detect.inspect_media", return_value=media_info),
+            patch("clipwright_scene.detect.resolve_tool", return_value="scenedetect"),
+            patch(
+                "clipwright_scene.detect.run",
+                side_effect=_fake_run_pyscenedetect_ok(csv_content),
+            ),
+        ):
+            result = detect_scenes(media, output, _opts(backend="pyscenedetect"))
+
+        assert result.ok is True
+        assert result.data is not None
+        scene_count = result.data.get("scene_count", 0)
+        assert scene_count >= 1, (
+            f"Expected >=1 scene boundary via -o CSV route, got {scene_count}. "
+            "The implementation may still be reading stdout instead of the CSV file."
+        )
+
+    def test_list_scenes_command_contains_dash_o_flag(self, tmp_path: Path) -> None:
+        """The command must include ``-o <dir>`` so pyscenedetect 0.7 writes a CSV file."""
+        from clipwright_scene.detect import detect_scenes
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        output = str(tmp_path / "out.otio")
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        captured_cmds: list[list[str]] = []
+
+        def _capture(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            captured_cmds.append(list(cmd))
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with (
+            patch("clipwright_scene.detect.inspect_media", return_value=media_info),
+            patch("clipwright_scene.detect.resolve_tool", return_value="scenedetect"),
+            patch("clipwright_scene.detect.run", side_effect=_capture),
+        ):
+            detect_scenes(media, output, _opts(backend="pyscenedetect"))
+
+        assert len(captured_cmds) >= 1, "run() was not called"
+        cmd = captured_cmds[0]
+        assert "-o" in cmd, (
+            f"Command must contain '-o' for CSV output directory: {cmd!r}"
+        )
+        o_idx = cmd.index("-o")
+        assert o_idx + 1 < len(cmd), "'-o' flag has no following argument"
+        assert "--skip-cuts" in cmd, f"Command must contain '--skip-cuts': {cmd!r}"
+        assert "-q" in cmd, f"Command must contain '-q' (quiet): {cmd!r}"

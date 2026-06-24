@@ -8,7 +8,8 @@ Design decisions:
   public boundary that catches ClipwrightError and converts to error_result.
 - _detect_with_ffmpeg() uses the scdet filter (-vf scdet=threshold=T); stderr
   is parsed by parse.parse_scdet_stderr().
-- _detect_with_pyscenedetect() spawns the scenedetect CLI and parses CSV stdout
+- _detect_with_pyscenedetect() spawns the scenedetect CLI with 'list-scenes -o
+  <tmpdir>', then reads the generated '<video>-Scenes.csv' file and parses it
   via parse.parse_pyscenedetect_csv().
 - error messages do not expose full paths: FILE_NOT_FOUND uses basename only.
 - subprocess seam errors are sanitised with safe_subprocess_message() before
@@ -19,6 +20,7 @@ from __future__ import annotations
 
 import math
 import os
+import tempfile
 from pathlib import Path
 
 from clipwright.envelope import error_result, ok_result
@@ -170,31 +172,41 @@ def _detect_with_pyscenedetect(
                 ),
             ) from None
         raise
-    cmd = [
-        scenedetect_path,
-        "-i",
-        media,
-        "detect-content",
-        "--threshold",
-        # threshold is Pydantic-constrained (ge=0, le=1) and scaled to pyscenedetect
-        # range (0–27); formatted as a bare number; no shell metachars can appear.
-        # Locked by test below.
-        f"{options.threshold * 27:.1f}",
-        "list-scenes",
-        "-c",
-    ]
-    timeout = float(max(120, math.ceil(total_duration_sec * 5)))
-    try:
-        result = run(cmd, timeout=timeout)
-    except ClipwrightError as exc:
-        if exc.code in (ErrorCode.SUBPROCESS_FAILED, ErrorCode.SUBPROCESS_TIMEOUT):
-            raise ClipwrightError(
-                code=exc.code,
-                message=safe_subprocess_message(exc),
-                hint=exc.hint,
-            ) from None
-        raise
-    return parse_pyscenedetect_csv(result.stdout or "")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cmd = [
+            scenedetect_path,
+            "-i",
+            media,
+            "detect-content",
+            "--threshold",
+            # threshold is Pydantic-constrained (ge=0, le=1) and scaled to pyscenedetect
+            # range (0–27); formatted as a bare number; no shell metachars can appear.
+            # Locked by test below.
+            f"{options.threshold * 27:.1f}",
+            "list-scenes",
+            "-o",
+            tmpdir,
+            "--skip-cuts",
+            "-q",
+        ]
+        timeout = float(max(120, math.ceil(total_duration_sec * 5)))
+        try:
+            run(cmd, timeout=timeout)
+        except ClipwrightError as exc:
+            if exc.code in (ErrorCode.SUBPROCESS_FAILED, ErrorCode.SUBPROCESS_TIMEOUT):
+                raise ClipwrightError(
+                    code=exc.code,
+                    message=safe_subprocess_message(exc),
+                    hint=exc.hint,
+                ) from None
+            raise
+        csv_path = Path(tmpdir) / f"{Path(media).stem}-Scenes.csv"
+        # A missing or unreadable CSV is treated as zero boundaries (ADR-004).
+        try:
+            csv_text = csv_path.read_text(encoding="utf-8") if csv_path.exists() else ""
+        except OSError:
+            csv_text = ""
+        return parse_pyscenedetect_csv(csv_text)
 
 
 def _check_within_boundary(base_dir: Path, target: Path, kind: str) -> None:

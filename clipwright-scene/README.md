@@ -64,7 +64,8 @@ pip install "clipwright-scene[pyscenedetect]"
 ```
 
 Note: PySceneDetect performs a full video decode and is significantly slower than the FFmpeg
-backend. It may produce more accurate results for content-based detection.
+backend. It may produce more accurate results for content-based detection. Verified with
+PySceneDetect 0.7+.
 
 ## Output
 
