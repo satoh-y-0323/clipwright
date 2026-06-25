@@ -104,6 +104,12 @@ _WARP_IDENTITY_THRESHOLD: float = 1e-9
 # When changing this value, update all three locations to keep them in sync.
 _DEFAULT_STABILIZE_SMOOTHING: int = 30
 
+# Maximum keyframe count for mode='track' render path (DC-AM-003 / AC-09).
+# Value confirmed by spike: av_expr_parse hard limit ~96 tokens; N_max=80 gives
+# headroom (spike report: .claude/reports/test-report-spike_exprlen.md).
+# track_cli._DEFAULT_N_MAX must equal this value (SR-L-3 / _run_track_cli contract).
+_N_MAX_TRACK: int = 80
+
 # Allowlist for stabilize basename characters used in filtergraph input= option.
 # vid.stab input= does not support _escape_filtergraph (\:) escaping, so basenames
 # containing filtergraph special characters are rejected (INVALID_INPUT / CWE-78).
@@ -2165,9 +2171,6 @@ def _validate_reframe(raw: dict[str, Any] | None) -> _RenderReframe | None:
             ) from None
 
     # Track-mode length guard (DC-AM-003 / AC-09): render does not decimate.
-    # N_max=80 confirmed by spike (av_expr_parse hard limit 96; spike report
-    # .claude/reports/test-report-spike_exprlen.md).
-    _N_MAX_TRACK = 80
     raw_track = filtered.get("track")
     if raw_track is not None and isinstance(raw_track, list):
         if len(raw_track) > _N_MAX_TRACK:
@@ -2557,10 +2560,16 @@ def _build_track_crop_expr(
         dt = ts[i] - ts[i - 1]
         dt_s = _fmt_f(dt)
         # Guard: dt must not format to zero (track_cli guarantees >= 1/fps,
-        # _validate_reframe ensures monotonic t_s; this assert is defence-in-depth).
-        assert dt_s not in ("0", "0.0", "0.00", "0.000", "0.0000"), (
-            f"dt formatted to zero at index {i}: dt={dt}"
-        )
+        # _validate_reframe ensures monotonic t_s; this check is defence-in-depth).
+        if dt_s in ("0", "0.0", "0.00", "0.000", "0.0000"):
+            raise ClipwrightError(
+                code=ErrorCode.INTERNAL,
+                message=(
+                    "Reframe track timestamp difference formatted to zero"
+                    " (internal error)."
+                ),
+                hint="Re-detect the track to generate valid keyframes.",
+            )
         t_prev_s = _fmt_f(ts[i - 1])
         if dx != 0:
             x_parts.append(rf"{dx}*min(max((t-{t_prev_s})/{dt_s}\,0)\,1)")
@@ -2584,6 +2593,10 @@ def _compute_crop_window(
     rounding.  The crop window is the largest rectangle fitting inside
     src_w×src_h with aspect ratio tw:th, with both sides rounded down to
     even numbers.
+
+    Precondition: tw >= 2 and th >= 2 (guaranteed by caller's Pydantic model
+    _RenderReframe.target_w/h with ge=2 constraint; ZeroDivisionError cannot
+    occur through the normal call path).
     """
     # Height-limited vs width-limited.
     if src_w * th >= src_h * tw:

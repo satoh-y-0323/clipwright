@@ -38,6 +38,11 @@ from clipwright.process import resolve_tool, safe_subprocess_message
 # Constants
 # ---------------------------------------------------------------------------
 
+# Temp file size limit (SR-L-2 / DC-GP-002 / AC-14): guard against runaway
+# rawvideo allocation for very long media.  Estimate before spawning ffmpeg;
+# auto-reduce fps/w0 if the estimate exceeds the limit.
+_SIZE_LIMIT_BYTES = 512 * 1024 * 1024  # 512 MB
+
 _DEFAULT_TRACK_WIDTH = 160  # rawvideo decode width (architecture-report §2.6)
 _DEFAULT_FPS = 4.0
 _DEFAULT_EMA_ALPHA = 0.2
@@ -65,6 +70,46 @@ def _error_output(code: str, message: str, hint: str) -> None:
         }
     }
     print(json.dumps(result, ensure_ascii=False), file=sys.stdout)
+
+
+# ---------------------------------------------------------------------------
+# Argparse type converters (SR-M-3 / CWE-20 / CWE-400)
+# ---------------------------------------------------------------------------
+
+
+def _positive_float(s: str) -> float:
+    """Accept only finite positive floats (guards fps, ema_alpha entry points)."""
+    try:
+        v = float(s)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"must be a number, got {s!r}") from None
+    if not math.isfinite(v) or v <= 0:
+        raise argparse.ArgumentTypeError(f"must be a positive finite number, got {s!r}")
+    return v
+
+
+def _positive_int(s: str) -> int:
+    """Accept only positive integers (guards width, max-keyframes entry points)."""
+    try:
+        v = int(s)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"must be an integer, got {s!r}") from None
+    if v <= 0:
+        raise argparse.ArgumentTypeError(f"must be a positive integer, got {s!r}")
+    return v
+
+
+def _ema_alpha_float(s: str) -> float:
+    """Accept floats in (0, 1] for EMA alpha."""
+    try:
+        v = float(s)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"must be a number, got {s!r}") from None
+    if not math.isfinite(v) or v <= 0 or v > 1:
+        raise argparse.ArgumentTypeError(
+            f"must be a finite number in (0, 1], got {s!r}"
+        )
+    return v
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +307,9 @@ def _decimate(
         # Initial epsilon already reduces enough — unlikely for small eps0 but handle.
         pass
     else:
+        # Cache the last candidate that satisfies the n_max constraint so we avoid
+        # an extra _apply_rdp(hi) call after the loop (CR-M-2 / CR-Q-001).
+        final_candidate = kept  # initial fallback (eps=lo, may exceed n_max)
         for _ in range(24):
             mid = (lo + hi) / 2.0
             candidate = _apply_rdp(mid)
@@ -269,7 +317,8 @@ def _decimate(
                 lo = mid
             else:
                 hi = mid
-        kept = _apply_rdp(hi)
+                final_candidate = candidate  # cache when constraint satisfied
+        kept = final_candidate
 
     # Hard guard: truncate to n_max if binary search overshot.
     if len(kept) > n_max:
@@ -310,39 +359,44 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--media", required=True, help="Input video file path")
     parser.add_argument(
         "--fps",
-        type=float,
+        type=_positive_float,
         default=_DEFAULT_FPS,
-        help=f"Sampling frame rate (default {_DEFAULT_FPS})",
+        help=f"Sampling frame rate, positive finite (default {_DEFAULT_FPS})",
     )
     parser.add_argument(
         "--width",
-        type=int,
+        type=_positive_int,
         default=_DEFAULT_TRACK_WIDTH,
-        help=f"Decode width for rawvideo (default {_DEFAULT_TRACK_WIDTH})",
+        help=(
+            f"Decode width for rawvideo, positive int (default {_DEFAULT_TRACK_WIDTH})"
+        ),
     )
     parser.add_argument(
         "--ema-alpha",
-        type=float,
+        type=_ema_alpha_float,
         default=_DEFAULT_EMA_ALPHA,
-        help=f"EMA smoothing alpha (default {_DEFAULT_EMA_ALPHA})",
+        help=f"EMA smoothing alpha in (0,1] (default {_DEFAULT_EMA_ALPHA})",
     )
     parser.add_argument(
         "--motion-threshold",
-        type=int,
+        type=_positive_int,
         default=None,
-        help="Motion detection threshold (default: width*height*2)",
+        help="Motion detection threshold, positive int (default: width*height*2)",
     )
     parser.add_argument(
         "--max-keyframes",
-        type=int,
+        type=_positive_int,
         default=_DEFAULT_N_MAX,
-        help=f"Maximum output keyframes after decimation (default {_DEFAULT_N_MAX})",
+        help=(
+            f"Maximum output keyframes after decimation,"
+            f" positive int (default {_DEFAULT_N_MAX})"
+        ),
     )
     parser.add_argument(
         "--media-duration",
-        type=float,
+        type=_positive_float,
         default=None,
-        help="Total media duration (seconds) for timeout calculation",
+        help="Total media duration (seconds), positive finite, for timeout calculation",
     )
 
     try:
@@ -406,6 +460,33 @@ def main(argv: list[str] | None = None) -> int:
             args.motion_threshold if args.motion_threshold is not None else w0 * h0 * 2
         )
 
+        # --- Temp file size guard (SR-L-2 / DC-GP-002 / AC-14) ---
+        # Estimate rawvideo size before spawning ffmpeg; auto-reduce fps/w0 if
+        # the estimate exceeds _SIZE_LIMIT_BYTES to avoid disk/OOM exhaustion.
+        size_warnings: list[str] = []
+        if media_duration is not None and media_duration > 0:
+            estimated_bytes = w0 * h0 * int(math.ceil(fps * media_duration))
+            if estimated_bytes > _SIZE_LIMIT_BYTES:
+                scale = (_SIZE_LIMIT_BYTES / estimated_bytes) ** 0.5
+                fps = max(1.0, fps * scale)
+                w0 = max(64, (max(1, int(w0 * scale))) // 2 * 2)
+                # Recompute h0 and motion_threshold after dimension change.
+                if src_w and src_h and src_w > 0 and src_h > 0:
+                    h0 = max(2, (round(src_h * w0 / src_w) // 2) * 2)
+                else:
+                    h0 = max(2, (round(w0 * 9 / 16) // 2) * 2)
+                if args.motion_threshold is None:
+                    motion_threshold = w0 * h0 * 2
+                limit_mb = _SIZE_LIMIT_BYTES // (1024 * 1024)
+                size_warnings.append(
+                    f"Input size estimate exceeded {limit_mb} MB;"
+                    f" downsampled to fps={fps:.1f} width={w0}."
+                )
+                print(
+                    f"[track_cli] size guard: {size_warnings[-1]}",
+                    file=sys.stderr,
+                )
+
         # --- Compute ffmpeg timeout ---
         if media_duration is not None:
             ffmpeg_timeout = float(max(60, math.ceil(media_duration * 4)))
@@ -418,6 +499,11 @@ def main(argv: list[str] | None = None) -> int:
         tmp_file = tempfile.NamedTemporaryFile(suffix=".raw", delete=False)  # noqa: SIM115
         tmp_path = tmp_file.name
         tmp_file.close()
+
+        # frames is assigned inside the try block only when n_full >= 2;
+        # the early-return path (n_full < 2) exits before reaching the usage
+        # below.  Initialise to None here for scope clarity (CR-M-1).
+        frames: Any = None
 
         try:
             cmd = [
@@ -507,6 +593,8 @@ def main(argv: list[str] | None = None) -> int:
             "width": w0,
             "height": h0,
         }
+        if size_warnings:
+            diag["size_guard_warnings"] = size_warnings
 
         result = {"track": track_out, "diagnostics": diag}
         print(json.dumps(result, ensure_ascii=False), file=sys.stdout)
@@ -516,11 +604,14 @@ def main(argv: list[str] | None = None) -> int:
         if exc.code in (ErrorCode.SUBPROCESS_FAILED, ErrorCode.SUBPROCESS_TIMEOUT):
             safe_msg = safe_subprocess_message(exc)
         else:
-            safe_msg = exc.message
+            # Use a fixed message for non-subprocess errors to avoid leaking internal
+            # state (CWE-209 / SR-M-1).
+            safe_msg = "Track CLI encountered an error."
         _error_output(
             code=str(exc.code),
             message=safe_msg,
-            hint=exc.hint,
+            # hint is fixed to avoid leaking internal paths or state (CWE-209).
+            hint="See track CLI diagnostics for details.",
         )
         return 0
 

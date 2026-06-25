@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -13,6 +15,92 @@ def tmp_media(tmp_path: Path) -> Path:
     path = tmp_path / "video.mp4"
     path.write_bytes(b"dummy media")
     return path
+
+
+# ---------------------------------------------------------------------------
+# Shared fake NamedTemporaryFile classes (CR-L-2).
+#
+# track_cli tests need to intercept tempfile.NamedTemporaryFile to inject
+# synthetic raw bytes or track which paths were created.  Previously each test
+# defined its own local _FakeTmpFile / _TrackingTmpFile inner class; that
+# pattern duplicated the same code in four places.
+#
+# These module-level fixtures provide the same behaviour via pytest fixtures
+# that return factory callables, so test methods can use them without repeating
+# the class definitions.
+# ---------------------------------------------------------------------------
+
+
+class _FakeTmpFileBase:
+    """Wraps a real NamedTemporaryFile (delete=False) with a compatible API.
+
+    Subclasses may override _on_create() to customise behaviour.
+    """
+
+    _orig_ntf = staticmethod(tempfile.NamedTemporaryFile)
+
+    def __init__(self, raw_bytes: bytes = b"", **kwargs: Any) -> None:
+        self._real = self._orig_ntf(delete=False, suffix=".raw")
+        self.name: str = self._real.name
+        if raw_bytes:
+            self._real.write(raw_bytes)
+            self._real.flush()
+        self._real.close()
+
+    def close(self) -> None:
+        pass
+
+    def __enter__(self) -> _FakeTmpFileBase:
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        pass
+
+
+@pytest.fixture
+def fake_tmp_file_factory() -> Any:
+    """Return a factory that creates a FakeTmpFile pre-populated with raw_bytes.
+
+    Usage::
+        def test_foo(fake_tmp_file_factory):
+            factory = fake_tmp_file_factory(raw_bytes=b"...")
+            with patch("tempfile.NamedTemporaryFile", side_effect=factory):
+                ...
+    """
+
+    def _factory(raw_bytes: bytes = b"") -> Any:
+        class _FakeTmpFile(_FakeTmpFileBase):
+            def __init__(self, **kwargs: Any) -> None:
+                super().__init__(raw_bytes=raw_bytes, **kwargs)
+
+        return _FakeTmpFile
+
+    return _factory
+
+
+@pytest.fixture
+def tracking_tmp_file_factory() -> Any:
+    """Return a factory that records created temp file paths.
+
+    Usage::
+        def test_foo(tracking_tmp_file_factory):
+            created, factory = tracking_tmp_file_factory()
+            with patch("tempfile.NamedTemporaryFile", side_effect=factory):
+                ...
+            # created is a list of str paths that were opened.
+    """
+
+    def _factory() -> tuple[list[str], Any]:
+        created: list[str] = []
+
+        class _TrackingTmpFile(_FakeTmpFileBase):
+            def __init__(self, **kwargs: Any) -> None:
+                super().__init__(raw_bytes=b"", **kwargs)
+                created.append(self.name)
+
+        return created, _TrackingTmpFile
+
+    return _factory
 
 
 # ---------------------------------------------------------------------------

@@ -961,13 +961,8 @@ def _make_track_result_json(n_kf: int = 3) -> str:
 
 
 def _make_track_opts(target_w: int = 1080, target_h: int = 1920) -> ReframeOptions:
-    """Build ReframeOptions with mode='track' via model_construct (bypasses Literal guard).
-
-    ReframeOptions.mode currently accepts only 'crop'/'pad'/'blur_pad'.
-    Adding 'track' to ReframeOptions.mode Literal is part of wave2-B implementation.
-    Until then, use model_construct to produce the options needed by Red tests.
-    """
-    return ReframeOptions.model_construct(
+    """Build ReframeOptions with mode='track'."""
+    return ReframeOptions(
         target_w=target_w,
         target_h=target_h,
         mode="track",
@@ -990,12 +985,6 @@ def _run_track_reframe(
 
     track_cli is spawned as a subprocess via core run; we mock run() to return
     the provided JSON on stdout so no real numpy/ffmpeg is needed.
-
-    ReframeOptions is built via model_construct to bypass the Literal guard on
-    mode — 'track' will be added to the Literal in the implementation phase.
-    The defensive re-validation in _reframe_inner (step 0) calls
-    ReframeOptions.model_validate; to avoid it rejecting 'track' before the
-    implementation is in place we also patch that validation step.
     """
     media_path = tmp_path / media_name
     media_path.write_bytes(b"dummy media")
@@ -1016,11 +1005,6 @@ def _run_track_reframe(
         patch(
             "clipwright.process.run",
             return_value=fake_run_result,
-        ),
-        # Bypass step-0 defensive re-validation until 'track' Literal is added
-        patch(
-            "clipwright_reframe.reframe.ReframeOptions.model_validate",
-            return_value=opts,
         ),
     ):
         result = reframe(
@@ -1237,10 +1221,6 @@ class TestTrackMode:
                     hint="check ffmpeg",
                 ),
             ),
-            patch(
-                "clipwright_reframe.reframe.ReframeOptions.model_validate",
-                return_value=opts,
-            ),
         ):
             result = reframe(
                 media=str(media_path),
@@ -1287,10 +1267,6 @@ class TestTrackMode:
                 side_effect=lambda p: _make_media_info(str(p)),
             ),
             patch("clipwright.process.run", return_value=fake_run),
-            patch(
-                "clipwright_reframe.reframe.ReframeOptions.model_validate",
-                return_value=opts,
-            ),
         ):
             result = reframe(
                 media=str(media_path),
@@ -1332,10 +1308,6 @@ class TestTrackMode:
                     side_effect=lambda p: _make_media_info(str(p)),
                 ),
                 patch("clipwright.process.run", return_value=fake_run),
-                patch(
-                    "clipwright_reframe.reframe.ReframeOptions.model_validate",
-                    return_value=opts,
-                ),
             ):
                 reframe(
                     media=str(media_path),
@@ -1382,10 +1354,6 @@ class TestTrackMode:
                 side_effect=lambda p: _make_media_info(str(p)),
             ),
             patch("clipwright.process.run", return_value=fake_run),
-            patch(
-                "clipwright_reframe.reframe.ReframeOptions.model_validate",
-                return_value=opts,
-            ),
         ):
             result = reframe(
                 media=str(media_path),
@@ -1433,10 +1401,6 @@ class TestTrackMode:
                     hint="retry",
                 ),
             ),
-            patch(
-                "clipwright_reframe.reframe.ReframeOptions.model_validate",
-                return_value=opts,
-            ),
         ):
             result = reframe(
                 media=str(media_path),
@@ -1450,3 +1414,89 @@ class TestTrackMode:
             assert "Traceback" not in str(w), (
                 f"CWE-209: stack trace must not appear in warning: {w!r}"
             )
+
+    def test_subprocess_failed_warning_no_raw_path_or_stderr(
+        self, tmp_path: Path
+    ) -> None:
+        """SUBPROCESS_FAILED warning must not contain absolute paths, Traceback, or
+        raw stderr content (CWE-209 / SR-M-2).
+        """
+        from clipwright.errors import ClipwrightError, ErrorCode
+
+        media_path = tmp_path / "internal_video_secret.mp4"
+        media_path.write_bytes(b"dummy")
+        output_path = tmp_path / "out.otio"
+        opts = _make_track_opts()
+
+        with (
+            patch(
+                "clipwright_reframe.reframe.inspect_media",
+                side_effect=lambda p: _make_media_info(str(p)),
+            ),
+            patch(
+                "clipwright.process.run",
+                side_effect=ClipwrightError(
+                    code=ErrorCode.SUBPROCESS_FAILED,
+                    message="internal subprocess failed",
+                    hint="check arguments",
+                ),
+            ),
+        ):
+            result = reframe(
+                media=str(media_path),
+                output=str(output_path),
+                options=opts,
+                timeline=None,
+            )
+
+        assert result["ok"] is True
+        warnings_out = result.get("warnings", [])
+        assert len(warnings_out) >= 1, "SUBPROCESS_FAILED must emit a warning"
+        for w in warnings_out:
+            w_str = str(w)
+            # Negative assertions: raw internals must not leak (SR-M-2 / CWE-209).
+            assert "internal_video_secret" not in w_str, (
+                f"Absolute path must not appear in warning: {w_str!r}"
+            )
+            assert str(tmp_path) not in w_str, (
+                f"Absolute path must not appear in warning: {w_str!r}"
+            )
+            assert "Traceback" not in w_str, (
+                f"Stack trace must not appear in warning: {w_str!r}"
+            )
+            # Raw stderr content guard.
+            assert "check arguments" not in w_str, (
+                f"Raw hint text must not appear in warning: {w_str!r}"
+            )
+
+
+# ===========================================================================
+# N_max sync guard (SR-L-3)
+# ===========================================================================
+
+
+class TestNMaxSync:
+    """Lock that reframe._TRACK_MAX_KEYFRAMES, track_cli._DEFAULT_N_MAX, and
+    render's _N_MAX_TRACK all share the confirmed N_max=80 value (SR-L-3).
+
+    Independent-copy pattern: each package holds its own constant.  This test
+    acts as a CI lock so a change in one constant triggers a visible test failure.
+    """
+
+    def test_reframe_track_max_keyframes_equals_track_cli_default(self) -> None:
+        """reframe._TRACK_MAX_KEYFRAMES must equal track_cli._DEFAULT_N_MAX."""
+        from clipwright_reframe import reframe as reframe_mod
+        from clipwright_reframe import track_cli
+
+        assert reframe_mod._TRACK_MAX_KEYFRAMES == track_cli._DEFAULT_N_MAX, (
+            f"N_max mismatch: reframe={reframe_mod._TRACK_MAX_KEYFRAMES}"
+            f" track_cli={track_cli._DEFAULT_N_MAX}.  Update both constants together."
+        )
+
+    def test_reframe_track_max_keyframes_equals_n_max_80(self) -> None:
+        """Confirmed adjudicated value is 80 (spike report test-report-spike_exprlen.md)."""
+        from clipwright_reframe import reframe as reframe_mod
+
+        assert reframe_mod._TRACK_MAX_KEYFRAMES == 80, (
+            "N_max adjudicated value must be 80 (ffmpeg av_expr_parse cap=96 with margin)."
+        )

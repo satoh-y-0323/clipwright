@@ -26,8 +26,10 @@ import pytest
 
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright_render.plan import (  # type: ignore[attr-defined]
+    _RenderCentreKeyframe,
     _RenderReframe,
     _append_reframe_filter,
+    _build_track_crop_expr,
     _validate_reframe,
 )
 
@@ -777,4 +779,52 @@ class TestBackwardCompatNonTrackModes:
         # Legacy crop formula uses '(iw-W)' for origin calculation
         assert "(iw-" in seg or "iw-" in seg, (
             f"Legacy crop must use iw-based origin, got: {seg!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# SR-H-1 — zero-dt defence: ClipwrightError(INTERNAL) not AssertionError
+# ---------------------------------------------------------------------------
+
+
+class TestZeroDtDefence:
+    """SR-H-1: _build_track_crop_expr raises ClipwrightError(INTERNAL) for zero dt.
+
+    The check 'if dt_s in (...)' replaces a bare assert so that python -O
+    (which strips asserts) cannot bypass the zero-division guard.
+    """
+
+    def _make_kf(
+        self, t_s: float, cx: float = 0.5, cy: float = 0.5
+    ) -> _RenderCentreKeyframe:
+        return _RenderCentreKeyframe(t_s=t_s, cx=cx, cy=cy)
+
+    def test_zero_dt_raises_clipwright_error(self) -> None:
+        """Duplicate t_s values produce dt=0 → ClipwrightError(INTERNAL) is raised.
+
+        This verifies the if-raise path introduced by SR-H-1 (replacing the
+        assert that python -O would have silently removed).
+        """
+        kfs = [self._make_kf(1.0, 0.3, 0.4), self._make_kf(1.0, 0.7, 0.6)]
+        with pytest.raises(ClipwrightError) as exc_info:
+            _build_track_crop_expr(_SRC_W, _SRC_H, 608, 1080, kfs)
+        assert exc_info.value.code == ErrorCode.INTERNAL
+
+    def test_zero_dt_not_assertion_error(self) -> None:
+        """Ensure the zero-dt guard raises ClipwrightError, not AssertionError.
+
+        With the old assert-based guard, python -O would bypass the check and
+        let ffmpeg receive a zero-denominator expression.  The if-raise path
+        is never bypassed regardless of optimisation flags.
+        """
+        kfs = [self._make_kf(2.0, 0.2, 0.3), self._make_kf(2.0, 0.8, 0.7)]
+        raised_type: type | None = None
+        try:
+            _build_track_crop_expr(_SRC_W, _SRC_H, 608, 1080, kfs)
+        except ClipwrightError:
+            raised_type = ClipwrightError
+        except AssertionError:
+            raised_type = AssertionError
+        assert raised_type is ClipwrightError, (
+            f"Expected ClipwrightError; got {raised_type}"
         )

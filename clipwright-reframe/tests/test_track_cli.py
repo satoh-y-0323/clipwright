@@ -147,7 +147,6 @@ class TestCentroidTracking:
         calls the internal centroid computation, and checks that cx increases
         monotonically in the output track.
 
-        Red: ModuleNotFoundError because track_cli.py does not exist yet.
         """
         cli = _import_track_cli()
 
@@ -177,10 +176,7 @@ class TestCentroidTracking:
             assert 0.0 <= cx <= 1.0, f"cx out of range: {cx}"
 
     def test_centroid_values_normalised(self) -> None:
-        """All cx, cy in output track must be in [0.0, 1.0].
-
-        Red: ModuleNotFoundError because track_cli.py does not exist yet.
-        """
+        """All cx, cy in output track must be in [0.0, 1.0]."""
         cli = _import_track_cli()
 
         raw = _make_raw_bytes_moving_rect(8)
@@ -216,7 +212,6 @@ class TestOnsetSeed:
 
         Rect is placed at rect_col=120 → right side of 160px frame → cx_n > 0.5
 
-        Red: ModuleNotFoundError because track_cli.py does not exist yet.
         """
         cli = _import_track_cli()
 
@@ -244,10 +239,7 @@ class TestOnsetSeed:
         )
 
     def test_all_static_falls_back_to_center(self) -> None:
-        """All-static video (no motion) must produce cx=cy=0.5 (no first-motion seed).
-
-        Red: ModuleNotFoundError because track_cli.py does not exist yet.
-        """
+        """All-static video (no motion) must produce cx=cy=0.5 (no first-motion seed)."""
         cli = _import_track_cli()
 
         raw = _make_raw_bytes_static(8, fill=64)
@@ -281,7 +273,6 @@ class TestEmaSmoothing:
         Generates raw centroid sequence with alternating high/low cx, then
         verifies that EMA output variance is lower than raw variance.
 
-        Red: ModuleNotFoundError because track_cli.py does not exist yet.
         """
         cli = _import_track_cli()
 
@@ -303,10 +294,7 @@ class TestEmaSmoothing:
         )
 
     def test_ema_output_clipped_to_unit_interval(self) -> None:
-        """EMA output cx, cy must stay in [0.0, 1.0] even with extreme inputs.
-
-        Red: ModuleNotFoundError because track_cli.py does not exist yet.
-        """
+        """EMA output cx, cy must stay in [0.0, 1.0] even with extreme inputs."""
         cli = _import_track_cli()
 
         # Push cx near boundary to trigger clamp
@@ -339,7 +327,6 @@ class TestRdpDecimation:
         Diagnostics must report keyframes_before_decimation=81,
         keyframes_after_decimation<=80, and dropped>=1.
 
-        Red: ModuleNotFoundError because track_cli.py does not exist yet.
         """
         cli = _import_track_cli()
 
@@ -360,7 +347,6 @@ class TestRdpDecimation:
         N_max=80 means ≤80 is already acceptable; no decimation should occur.
         diagnostics must reflect dropped=0.
 
-        Red: ModuleNotFoundError because track_cli.py does not exist yet.
         """
         cli = _import_track_cli()
 
@@ -373,10 +359,7 @@ class TestRdpDecimation:
         assert diag["dropped"] == 0
 
     def test_decimation_preserves_monotonic_t_s(self) -> None:
-        """After decimation, t_s must remain strictly monotonically increasing.
-
-        Red: ModuleNotFoundError because track_cli.py does not exist yet.
-        """
+        """After decimation, t_s must remain strictly monotonically increasing."""
         cli = _import_track_cli()
 
         pts = self._make_pts(100)
@@ -390,10 +373,7 @@ class TestRdpDecimation:
             )
 
     def test_fewer_than_nmax_unchanged(self) -> None:
-        """Fewer than N_max points must pass through without decimation.
-
-        Red: ModuleNotFoundError because track_cli.py does not exist yet.
-        """
+        """Fewer than N_max points must pass through without decimation."""
         cli = _import_track_cli()
 
         pts = self._make_pts(10)
@@ -416,7 +396,6 @@ class TestMinIntervalGuard:
 
         1/fps = 0.25s for fps=4.0.
 
-        Red: ModuleNotFoundError because track_cli.py does not exist yet.
         """
         cli = _import_track_cli()
 
@@ -433,10 +412,7 @@ class TestMinIntervalGuard:
             )
 
     def test_min_interval_enforced_after_compression(self) -> None:
-        """Even after aggressive decimation, interval guard must hold.
-
-        Red: ModuleNotFoundError because track_cli.py does not exist yet.
-        """
+        """Even after aggressive decimation, interval guard must hold."""
         cli = _import_track_cli()
 
         # 100 points; decimation to 80 may produce close-spaced points
@@ -461,19 +437,16 @@ class TestMinIntervalGuard:
 class TestJsonContract:
     """Output JSON contract: success and error shapes."""
 
-    def test_json_contract_success_shape(self) -> None:
+    def test_json_contract_success_shape(self, fake_tmp_file_factory: Any) -> None:
         """main() must write {"track":[...], "diagnostics":{...}} on success.
 
         We monkeypatch the ffmpeg call and file read so no real ffmpeg is needed.
         The ffmpeg invocation must use a list (shell=False) and write to a temp file.
-
-        Red: ModuleNotFoundError because track_cli.py does not exist yet.
         """
         cli = _import_track_cli()
 
         # Synthesise rawvideo bytes (5 frames of moving rect)
         raw_bytes = _make_raw_bytes_moving_rect(5)
-        n_frames = 5
 
         # Patch: core run returns success, temp file contains our raw bytes
         fake_result = MagicMock()
@@ -487,38 +460,11 @@ class TestJsonContract:
             captured_cmd.append(list(cmd))
             return fake_result
 
-        import tempfile
-
-        # We need to intercept the temp file so np.fromfile reads our bytes.
-        # Strategy: patch tempfile.NamedTemporaryFile to return a file with our bytes.
-        original_ntf = tempfile.NamedTemporaryFile
-
-        class _FakeTmpFile:
-            """Mock NamedTemporaryFile that pre-populates with synthetic raw bytes."""
-
-            def __init__(self, **kwargs: Any) -> None:
-                self._real = original_ntf(delete=False, suffix=".raw")
-                self.name = self._real.name
-                # Write synthetic bytes so np.fromfile gets them
-                self._real.write(raw_bytes)
-                self._real.flush()
-                self._real.close()
-
-            def close(self) -> None:
-                pass
-
-            def __enter__(self) -> _FakeTmpFile:
-                return self
-
-            def __exit__(self, *args: Any) -> None:
-                pass
-
         import io
 
         captured_stdout = io.StringIO()
 
         # Build argv for main
-        # main expects --media --fps --width etc. via argv
         media_path = "/fake/video.mp4"
         argv = [
             "--media",
@@ -541,7 +487,10 @@ class TestJsonContract:
                 side_effect=fake_run,
                 create=True,
             ) as _mock_run,
-            patch("tempfile.NamedTemporaryFile", side_effect=_FakeTmpFile),
+            patch(
+                "tempfile.NamedTemporaryFile",
+                side_effect=fake_tmp_file_factory(raw_bytes=raw_bytes),
+            ),
             patch("sys.stdout", captured_stdout),
             patch("os.unlink"),  # prevent actual unlink of our fake temp
         ):
@@ -576,10 +525,7 @@ class TestJsonContract:
                 )
 
     def test_json_contract_error_shape(self) -> None:
-        """main() with nonexistent media must write {"error":{code,message,hint}}.
-
-        Red: ModuleNotFoundError because track_cli.py does not exist yet.
-        """
+        """main() with nonexistent media must write {"error":{code,message,hint}}."""
         cli = _import_track_cli()
 
         import io
@@ -614,10 +560,7 @@ class TestJsonContract:
         assert "hint" in err, "error must have 'hint'"
 
     def test_error_message_excludes_path_and_stack(self) -> None:
-        """CWE-209: error message/hint must not echo full path or stack trace.
-
-        Red: ModuleNotFoundError because track_cli.py does not exist yet.
-        """
+        """CWE-209: error message/hint must not echo full path or stack trace."""
         cli = _import_track_cli()
 
         import io
@@ -661,34 +604,19 @@ class TestJsonContract:
 class TestTempCleanup:
     """Temp rawvideo file must be deleted even when ffmpeg fails (try/finally)."""
 
-    def test_temp_cleanup_on_exception(self, tmp_path: Path) -> None:
+    def test_temp_cleanup_on_exception(
+        self, tmp_path: Path, tracking_tmp_file_factory: Any
+    ) -> None:
         """If ffmpeg raises an exception, the temp file must be removed.
 
         We inject a failing run() so the try/finally in track_cli must clean up.
-
-        Red: ModuleNotFoundError because track_cli.py does not exist yet.
         """
         cli = _import_track_cli()
 
         import io
 
         captured_stdout = io.StringIO()
-        import tempfile
-
-        created_temp: list[str] = []
-        original_ntf = tempfile.NamedTemporaryFile
-
-        class _TrackingTmpFile:
-            """Tracks created temp file path so we can check it is deleted."""
-
-            def __init__(self, **kwargs: Any) -> None:
-                self._real = original_ntf(delete=False, suffix=".raw")
-                self.name = self._real.name
-                created_temp.append(self.name)
-                self._real.close()
-
-            def close(self) -> None:
-                pass
+        created_temp, tracking_factory = tracking_tmp_file_factory()
 
         def _failing_run(cmd: Any, **kwargs: Any) -> None:
             raise RuntimeError("Simulated ffmpeg crash")
@@ -703,19 +631,13 @@ class TestTempCleanup:
         ]
 
         with (
-            patch("tempfile.NamedTemporaryFile", side_effect=_TrackingTmpFile),
+            patch("tempfile.NamedTemporaryFile", side_effect=tracking_factory),
             patch("sys.stdout", captured_stdout),
+            patch("clipwright.process.run", side_effect=_failing_run),
         ):
-            # Patch the run function used by track_cli
             try:
-                module_name = cli.__name__
-                # Try patching clipwright.process.run as used by track_cli
-                with patch("clipwright.process.run", side_effect=_failing_run):
-                    try:
-                        cli.main(argv)
-                    except (SystemExit, Exception):
-                        pass
-            except Exception:
+                cli.main(argv)
+            except (SystemExit, Exception):
                 pass
 
         # Any temp files that were created must no longer exist
@@ -724,31 +646,18 @@ class TestTempCleanup:
                 f"Temp file not cleaned up after exception: {temp_path}"
             )
 
-    def test_temp_cleanup_on_timeout(self, tmp_path: Path) -> None:
-        """If ffmpeg times out, the temp file must be removed.
-
-        Red: ModuleNotFoundError because track_cli.py does not exist yet.
-        """
+    def test_temp_cleanup_on_timeout(
+        self, tmp_path: Path, tracking_tmp_file_factory: Any
+    ) -> None:
+        """If ffmpeg times out, the temp file must be removed."""
         cli = _import_track_cli()
 
         import io
-        import tempfile
 
         from clipwright.errors import ClipwrightError, ErrorCode
 
         captured_stdout = io.StringIO()
-        original_ntf = tempfile.NamedTemporaryFile
-        created_temp: list[str] = []
-
-        class _TrackingTmpFile:
-            def __init__(self, **kwargs: Any) -> None:
-                self._real = original_ntf(delete=False, suffix=".raw")
-                self.name = self._real.name
-                created_temp.append(self.name)
-                self._real.close()
-
-            def close(self) -> None:
-                pass
+        created_temp, tracking_factory = tracking_tmp_file_factory()
 
         def _timeout_run(cmd: Any, **kwargs: Any) -> None:
             raise ClipwrightError(
@@ -767,7 +676,7 @@ class TestTempCleanup:
         ]
 
         with (
-            patch("tempfile.NamedTemporaryFile", side_effect=_TrackingTmpFile),
+            patch("tempfile.NamedTemporaryFile", side_effect=tracking_factory),
             patch("sys.stdout", captured_stdout),
             patch("clipwright.process.run", side_effect=_timeout_run),
         ):
@@ -790,29 +699,13 @@ class TestTempCleanup:
 class TestSubprocessDiscipline:
     """ffmpeg must be invoked as a list (shell=False) via core run (AC-10)."""
 
-    def test_ffmpeg_invoked_as_list_not_shell(self) -> None:
-        """The ffmpeg command passed to core run must be a list, not a string.
-
-        Red: ModuleNotFoundError because track_cli.py does not exist yet.
-        """
+    def test_ffmpeg_invoked_as_list_not_shell(self, fake_tmp_file_factory: Any) -> None:
+        """The ffmpeg command passed to core run must be a list, not a string."""
         cli = _import_track_cli()
 
         import io
-        import tempfile
 
         captured_stdout = io.StringIO()
-        original_ntf = tempfile.NamedTemporaryFile
-
-        class _FakeTmpFile:
-            def __init__(self, **kwargs: Any) -> None:
-                self._real = original_ntf(delete=False, suffix=".raw")
-                self.name = self._real.name
-                # Write minimal bytes (will error at np.fromfile but that's ok)
-                self._real.close()
-
-            def close(self) -> None:
-                pass
-
         captured_cmds: list[Any] = []
         fake_result = MagicMock(returncode=0, stdout="", stderr="")
 
@@ -830,7 +723,10 @@ class TestSubprocessDiscipline:
         ]
 
         with (
-            patch("tempfile.NamedTemporaryFile", side_effect=_FakeTmpFile),
+            patch(
+                "tempfile.NamedTemporaryFile",
+                side_effect=fake_tmp_file_factory(raw_bytes=b""),
+            ),
             patch("sys.stdout", captured_stdout),
             patch("clipwright.process.run", side_effect=_capturing_run),
             patch("os.unlink"),
@@ -849,10 +745,7 @@ class TestSubprocessDiscipline:
         )
 
     def test_media_not_found_returns_error_json(self) -> None:
-        """Nonexistent media path must return ok=false JSON with hint (AC-10).
-
-        Red: ModuleNotFoundError because track_cli.py does not exist yet.
-        """
+        """Nonexistent media path must return ok=false JSON with hint (AC-10)."""
         cli = _import_track_cli()
 
         import io
@@ -880,3 +773,218 @@ class TestSubprocessDiscipline:
         assert data["error"].get("hint"), (
             "error.hint must be non-empty for missing media"
         )
+
+
+# ===========================================================================
+# 9. Temp file size guard (SR-L-2 / DC-GP-002 / AC-14)
+# ===========================================================================
+
+
+class TestSizeGuard:
+    """Rawvideo size estimate must trigger fps/width downsampling when over 512 MB."""
+
+    def test_size_guard_reduces_fps_for_long_media(self) -> None:
+        """Estimated size > 512 MB must cause fps reduction before ffmpeg is called.
+
+        Uses a very long duration (100 000 s) with default fps=4.0 to trigger the guard,
+        then verifies that the ffmpeg -vf argument uses a reduced fps value.
+        """
+        cli = _import_track_cli()
+
+        import io
+
+        captured_stdout = io.StringIO()
+        captured_cmds: list[Any] = []
+        fake_result = MagicMock(returncode=0, stdout="", stderr="")
+
+        def _capturing_run(cmd: Any, **kwargs: Any) -> MagicMock:
+            captured_cmds.append(cmd)
+            return fake_result
+
+        # 160×90 × 4 fps × 100 000 s = 5 760 000 000 bytes ≫ 512 MB
+        argv = [
+            "--media",
+            "/fake/long_video.mp4",
+            "--fps",
+            "4.0",
+            "--width",
+            "160",
+            "--media-duration",
+            "100000",
+        ]
+
+        with (
+            patch(
+                "clipwright.process.run",
+                side_effect=_capturing_run,
+            ),
+            patch("sys.stdout", captured_stdout),
+            # Provide empty raw bytes so np.fromfile returns empty array → early-return.
+            patch(
+                "tempfile.NamedTemporaryFile",
+                side_effect=lambda **kw: type(
+                    "_F",
+                    (),
+                    {
+                        "name": __import__("tempfile").mktemp(suffix=".raw"),
+                        "close": lambda self: None,
+                    },
+                )(),
+            ),
+        ):
+            try:
+                cli.main(argv)
+            except Exception:
+                pass
+
+        # The guard must have fired: at least one ffmpeg invocation must use a
+        # reduced fps (< 4.0) in the -vf argument.
+        assert len(captured_cmds) > 0, "Expected ffmpeg to be invoked"
+        vf_arg = ""
+        for cmd in captured_cmds:
+            if isinstance(cmd, list) and "-vf" in cmd:
+                idx = cmd.index("-vf")
+                vf_arg = cmd[idx + 1]
+                break
+
+        assert vf_arg, "Expected a -vf argument in ffmpeg command"
+        # fps=N.N must be less than 4.0 after size-guard downsampling.
+        import re
+
+        m = re.search(r"fps=([0-9.]+)", vf_arg)
+        assert m is not None, f"No fps= found in -vf: {vf_arg!r}"
+        actual_fps = float(m.group(1))
+        assert actual_fps < 4.0, (
+            f"Size guard must reduce fps below 4.0 for 100 000 s media;"
+            f" got fps={actual_fps}"
+        )
+
+    def test_size_guard_below_limit_passes_unchanged(self) -> None:
+        """Estimated size ≤ 512 MB must not change fps or width.
+
+        10 s at default fps=4.0, width=160: 160×90×4×10 ≈ 5.76 MB — well under limit.
+        """
+        cli = _import_track_cli()
+
+        import io
+
+        captured_stdout = io.StringIO()
+        captured_cmds: list[Any] = []
+        fake_result = MagicMock(returncode=0, stdout="", stderr="")
+
+        def _capturing_run(cmd: Any, **kwargs: Any) -> MagicMock:
+            captured_cmds.append(cmd)
+            return fake_result
+
+        argv = [
+            "--media",
+            "/fake/video.mp4",
+            "--fps",
+            "4.0",
+            "--width",
+            "160",
+            "--media-duration",
+            "10",
+        ]
+
+        with (
+            patch("clipwright.process.run", side_effect=_capturing_run),
+            patch("sys.stdout", captured_stdout),
+            patch(
+                "tempfile.NamedTemporaryFile",
+                side_effect=lambda **kw: type(
+                    "_F",
+                    (),
+                    {
+                        "name": __import__("tempfile").mktemp(suffix=".raw"),
+                        "close": lambda self: None,
+                    },
+                )(),
+            ),
+        ):
+            try:
+                cli.main(argv)
+            except Exception:
+                pass
+
+        assert len(captured_cmds) > 0, "Expected ffmpeg to be invoked"
+        vf_arg = ""
+        for cmd in captured_cmds:
+            if isinstance(cmd, list) and "-vf" in cmd:
+                idx = cmd.index("-vf")
+                vf_arg = cmd[idx + 1]
+                break
+
+        import re
+
+        m = re.search(r"fps=([0-9.]+)", vf_arg)
+        assert m is not None, f"No fps= found in -vf: {vf_arg!r}"
+        actual_fps = float(m.group(1))
+        # fps must be unchanged (4.0) when under the size limit.
+        assert actual_fps == pytest.approx(4.0, abs=0.01), (
+            f"fps must stay 4.0 for short media; got {actual_fps}"
+        )
+
+
+# ===========================================================================
+# 10. N_max sync guard (SR-L-3)
+# ===========================================================================
+
+
+class TestNMaxSyncCli:
+    """N_max=80 must be the confirmed value in track_cli constants."""
+
+    def test_default_n_max_is_80(self) -> None:
+        """_DEFAULT_N_MAX in track_cli must be 80 (spike-confirmed value)."""
+        cli = _import_track_cli()
+
+        assert cli._DEFAULT_N_MAX == N_MAX, (
+            f"_DEFAULT_N_MAX must equal {N_MAX}, got {cli._DEFAULT_N_MAX}."
+            " Update N_MAX in the test and document the reason for the change."
+        )
+
+    def test_argparse_max_keyframes_default_is_n_max(self) -> None:
+        """argparse --max-keyframes default must equal _DEFAULT_N_MAX."""
+        cli = _import_track_cli()
+
+        import argparse
+        import io
+
+        # Parse an empty argv (except required --media) to get defaults.
+        captured_stdout = io.StringIO()
+        captured_args: list[Any] = []
+
+        original_parse = argparse.ArgumentParser.parse_args
+
+        def _capturing_parse(
+            self: argparse.ArgumentParser,
+            args: Any = None,
+            namespace: Any = None,
+        ) -> argparse.Namespace:
+            ns = original_parse(self, args, namespace)
+            captured_args.append(ns)
+            return ns
+
+        with (
+            patch.object(argparse.ArgumentParser, "parse_args", _capturing_parse),
+            patch("sys.stdout", captured_stdout),
+            patch(
+                "clipwright.process.run",
+                side_effect=RuntimeError("abort early"),
+            ),
+            patch(
+                "tempfile.NamedTemporaryFile",
+                side_effect=RuntimeError("abort early"),
+            ),
+        ):
+            try:
+                cli.main(["--media", "/fake/v.mp4"])
+            except Exception:
+                pass
+
+        if captured_args:
+            ns = captured_args[0]
+            assert ns.max_keyframes == cli._DEFAULT_N_MAX, (
+                f"argparse default max_keyframes={ns.max_keyframes} != "
+                f"_DEFAULT_N_MAX={cli._DEFAULT_N_MAX}"
+            )

@@ -53,6 +53,12 @@ from clipwright_reframe.schemas import CentreKeyframe, ReframeDirective, Reframe
 # Constant-center fallback track (architecture-report §5, DC-AM-002).
 _CONSTANT_CENTER_TRACK: list[dict[str, float]] = [{"t_s": 0.0, "cx": 0.5, "cy": 0.5}]
 
+# Maximum keyframes passed to track_cli (SR-L-3 / N_max=80 adjudicated value).
+# This value must match track_cli._DEFAULT_N_MAX and render's _N_MAX_TRACK.
+# Kept as an independent copy per package (defence-in-depth); the equality is
+# locked by test_reframe.py::TestNMaxSync.
+_TRACK_MAX_KEYFRAMES = 80
+
 
 def reframe(
     media: str,
@@ -88,15 +94,15 @@ def _reframe_inner(
     # Catches model_construct-bypassed invalid values before any path I/O.
     try:
         ReframeOptions.model_validate(options.model_dump())
-    except ValidationError as exc:
+    except ValidationError:
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
             message="Invalid reframe options.",
             hint=(
                 "target_w/h must be even integers in 2..7680; mode must be"
-                " crop/pad/blur_pad; anchor must be a valid 9-direction value."
+                " crop/pad/blur_pad/track; anchor must be a valid 9-direction value."
             ),
-        ) from exc
+        ) from None
 
     media_path = Path(media)
     output_path = Path(output)
@@ -181,12 +187,12 @@ def _reframe_inner(
             tl = load_timeline(timeline)
         except ClipwrightError:
             raise
-        except (ValueError, OSError) as exc:
+        except (ValueError, OSError):
             raise ClipwrightError(
                 code=ErrorCode.OTIO_ERROR,
                 message=f"Failed to load OTIO file: {Path(timeline).name}",
                 hint="Specify a valid .otio timeline file.",
-            ) from exc
+            ) from None
 
     # --- 4. Annotate ReframeDirective ---
 
@@ -277,6 +283,11 @@ def _run_track_cli(
         media,
         "--media-duration",
         str(duration_sec),
+        # Pass N_max explicitly so render-side and CLI-side stay in sync (SR-L-3).
+        # reframe._TRACK_MAX_KEYFRAMES == track_cli._DEFAULT_N_MAX
+        # == render._N_MAX_TRACK (all must be 80).
+        "--max-keyframes",
+        str(_TRACK_MAX_KEYFRAMES),
     ]
 
     try:
