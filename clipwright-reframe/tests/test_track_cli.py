@@ -783,7 +783,9 @@ class TestSubprocessDiscipline:
 class TestSizeGuard:
     """Rawvideo size estimate must trigger fps/width downsampling when over 512 MB."""
 
-    def test_size_guard_reduces_fps_for_long_media(self) -> None:
+    def test_size_guard_reduces_fps_for_long_media(
+        self, fake_tmp_file_factory: Any
+    ) -> None:
         """Estimated size > 512 MB must cause fps reduction before ffmpeg is called.
 
         Uses a very long duration (100 000 s) with default fps=4.0 to trigger the guard,
@@ -822,14 +824,7 @@ class TestSizeGuard:
             # Provide empty raw bytes so np.fromfile returns empty array → early-return.
             patch(
                 "tempfile.NamedTemporaryFile",
-                side_effect=lambda **kw: type(
-                    "_F",
-                    (),
-                    {
-                        "name": __import__("tempfile").mktemp(suffix=".raw"),
-                        "close": lambda self: None,
-                    },
-                )(),
+                side_effect=fake_tmp_file_factory(raw_bytes=b""),
             ),
         ):
             try:
@@ -859,7 +854,9 @@ class TestSizeGuard:
             f" got fps={actual_fps}"
         )
 
-    def test_size_guard_below_limit_passes_unchanged(self) -> None:
+    def test_size_guard_below_limit_passes_unchanged(
+        self, fake_tmp_file_factory: Any
+    ) -> None:
         """Estimated size ≤ 512 MB must not change fps or width.
 
         10 s at default fps=4.0, width=160: 160×90×4×10 ≈ 5.76 MB — well under limit.
@@ -892,14 +889,7 @@ class TestSizeGuard:
             patch("sys.stdout", captured_stdout),
             patch(
                 "tempfile.NamedTemporaryFile",
-                side_effect=lambda **kw: type(
-                    "_F",
-                    (),
-                    {
-                        "name": __import__("tempfile").mktemp(suffix=".raw"),
-                        "close": lambda self: None,
-                    },
-                )(),
+                side_effect=fake_tmp_file_factory(raw_bytes=b""),
             ),
         ):
             try:

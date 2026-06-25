@@ -338,8 +338,8 @@ def _run_track_cli(
         return (
             _make_constant_center_track(),
             [
-                f"Motion tracking failed during detection; wrote a static center track"
-                f" instead. Reason: {code}."
+                "Motion tracking failed during detection;"
+                " wrote a static center track instead."
             ],
         )
 

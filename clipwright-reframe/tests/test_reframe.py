@@ -1500,3 +1500,17 @@ class TestNMaxSync:
         assert reframe_mod._TRACK_MAX_KEYFRAMES == 80, (
             "N_max adjudicated value must be 80 (ffmpeg av_expr_parse cap=96 with margin)."
         )
+
+    def test_reframe_track_max_keyframes_equals_render_n_max_track(self) -> None:
+        """reframe._TRACK_MAX_KEYFRAMES must equal render plan._N_MAX_TRACK (N-2 / CR-M-001).
+
+        clipwright_render is an optional cross-package dependency; skip if not installed.
+        """
+        plan_mod = pytest.importorskip("clipwright_render.plan")
+        from clipwright_reframe import reframe as reframe_mod
+
+        assert reframe_mod._TRACK_MAX_KEYFRAMES == plan_mod._N_MAX_TRACK, (
+            f"N_max mismatch: reframe._TRACK_MAX_KEYFRAMES={reframe_mod._TRACK_MAX_KEYFRAMES}"
+            f" render._N_MAX_TRACK={plan_mod._N_MAX_TRACK}."
+            "  Update all three constants together (reframe / track_cli / render)."
+        )

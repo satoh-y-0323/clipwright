@@ -41,7 +41,7 @@ from clipwright.process import resolve_tool, safe_subprocess_message
 # Temp file size limit (SR-L-2 / DC-GP-002 / AC-14): guard against runaway
 # rawvideo allocation for very long media.  Estimate before spawning ffmpeg;
 # auto-reduce fps/w0 if the estimate exceeds the limit.
-_SIZE_LIMIT_BYTES = 512 * 1024 * 1024  # 512 MB
+_SIZE_LIMIT_BYTES: int = 512 * 1024 * 1024  # 512 MB
 
 _DEFAULT_TRACK_WIDTH = 160  # rawvideo decode width (architecture-report §2.6)
 _DEFAULT_FPS = 4.0
@@ -460,17 +460,19 @@ def main(argv: list[str] | None = None) -> int:
             args.motion_threshold if args.motion_threshold is not None else w0 * h0 * 2
         )
 
-        # --- Temp file size guard (SR-L-2 / DC-GP-002 / AC-14) ---
+        # --- Temp file size guard (SR-L-2 / SR-M-4 / DC-GP-002 / AC-14) ---
         # Estimate rawvideo size before spawning ffmpeg; auto-reduce fps/w0 if
         # the estimate exceeds _SIZE_LIMIT_BYTES to avoid disk/OOM exhaustion.
+        # SR-M-4: fps * media_duration may overflow to inf for extreme values
+        # (e.g. media_duration=1e308); treat non-finite product as beyond any
+        # realistic limit and force minimum parameters directly.
         size_warnings: list[str] = []
         if media_duration is not None and media_duration > 0:
-            estimated_bytes = w0 * h0 * int(math.ceil(fps * media_duration))
-            if estimated_bytes > _SIZE_LIMIT_BYTES:
-                scale = (_SIZE_LIMIT_BYTES / estimated_bytes) ** 0.5
-                fps = max(1.0, fps * scale)
-                w0 = max(64, (max(1, int(w0 * scale))) // 2 * 2)
-                # Recompute h0 and motion_threshold after dimension change.
+            product = fps * media_duration
+            if not math.isfinite(product):
+                # Non-finite product: clamp to minimum safe parameters (CWE-400).
+                fps = 1.0
+                w0 = 64
                 if src_w and src_h and src_w > 0 and src_h > 0:
                     h0 = max(2, (round(src_h * w0 / src_w) // 2) * 2)
                 else:
@@ -483,9 +485,31 @@ def main(argv: list[str] | None = None) -> int:
                     f" downsampled to fps={fps:.1f} width={w0}."
                 )
                 print(
-                    f"[track_cli] size guard: {size_warnings[-1]}",
+                    f"[track_cli] size guard (overflow clamp): {size_warnings[-1]}",
                     file=sys.stderr,
                 )
+            else:
+                estimated_bytes = w0 * h0 * int(math.ceil(product))
+                if estimated_bytes > _SIZE_LIMIT_BYTES:
+                    scale = (_SIZE_LIMIT_BYTES / estimated_bytes) ** 0.5
+                    fps = max(1.0, fps * scale)
+                    w0 = max(64, (max(1, int(w0 * scale))) // 2 * 2)
+                    # Recompute h0 and motion_threshold after dimension change.
+                    if src_w and src_h and src_w > 0 and src_h > 0:
+                        h0 = max(2, (round(src_h * w0 / src_w) // 2) * 2)
+                    else:
+                        h0 = max(2, (round(w0 * 9 / 16) // 2) * 2)
+                    if args.motion_threshold is None:
+                        motion_threshold = w0 * h0 * 2
+                    limit_mb = _SIZE_LIMIT_BYTES // (1024 * 1024)
+                    size_warnings.append(
+                        f"Input size estimate exceeded {limit_mb} MB;"
+                        f" downsampled to fps={fps:.1f} width={w0}."
+                    )
+                    print(
+                        f"[track_cli] size guard: {size_warnings[-1]}",
+                        file=sys.stderr,
+                    )
 
         # --- Compute ffmpeg timeout ---
         if media_duration is not None:
