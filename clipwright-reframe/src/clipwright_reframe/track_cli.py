@@ -88,6 +88,38 @@ def _positive_float(s: str) -> float:
     return v
 
 
+# Realistic upper bounds (SR-M-4-R / CWE-400): prevent float-overflow in
+# downstream calculations (e.g. media_duration*4 → inf → math.ceil → OverflowError).
+_MAX_DURATION_S: float = 315_360_000.0  # 10 years in seconds
+_MAX_FPS: float = 240.0
+_MAX_WIDTH: int = 7680  # 8 K horizontal
+
+
+def _positive_duration_float(s: str) -> float:
+    """Accept duration in seconds: finite, positive, within realistic range.
+
+    Upper bound 315 360 000 s (~10 years) ensures media_duration * 4 stays finite
+    and math.ceil() does not raise OverflowError (SR-M-4-R / CWE-400).
+    """
+    v = _positive_float(s)
+    if v > _MAX_DURATION_S:
+        raise argparse.ArgumentTypeError(
+            f"duration must be <= {_MAX_DURATION_S:.0f} s (~10 years), got {v!r}"
+        )
+    return v
+
+
+def _bounded_fps_float(s: str) -> float:
+    """Accept fps: finite, positive, at most _MAX_FPS.
+
+    Upper bound prevents w0 * h0 * fps * duration overflow in size guard.
+    """
+    v = _positive_float(s)
+    if v > _MAX_FPS:
+        raise argparse.ArgumentTypeError(f"fps must be <= {_MAX_FPS}, got {v!r}")
+    return v
+
+
 def _positive_int(s: str) -> int:
     """Accept only positive integers (guards width, max-keyframes entry points)."""
     try:
@@ -96,6 +128,17 @@ def _positive_int(s: str) -> int:
         raise argparse.ArgumentTypeError(f"must be an integer, got {s!r}") from None
     if v <= 0:
         raise argparse.ArgumentTypeError(f"must be a positive integer, got {s!r}")
+    return v
+
+
+def _bounded_width_int(s: str) -> int:
+    """Accept decode width: positive integer, at most _MAX_WIDTH (8K).
+
+    Upper bound prevents w0 * h0 * fps * duration overflow in size guard.
+    """
+    v = _positive_int(s)
+    if v > _MAX_WIDTH:
+        raise argparse.ArgumentTypeError(f"width must be <= {_MAX_WIDTH}, got {v!r}")
     return v
 
 
@@ -270,6 +313,36 @@ def _enforce_min_interval(
     return result
 
 
+def _recompute_h0_and_threshold(
+    w0: int,
+    src_w: int | None,
+    src_h: int | None,
+    motion_threshold_arg: int | None,
+) -> tuple[int, int]:
+    """Recompute h0 and motion_threshold after w0 changes (O-1 DRY helper).
+
+    Called by the size guard after fps/w0 are adjusted so that h0 and
+    motion_threshold stay consistent with the new w0.
+
+    Args:
+        w0: Updated decode width.
+        src_w: Source video width from media probe, or None.
+        src_h: Source video height from media probe, or None.
+        motion_threshold_arg: Explicit --motion-threshold value, or None for auto.
+
+    Returns:
+        (h0, motion_threshold) computed from the new w0.
+    """
+    if src_w and src_h and src_w > 0 and src_h > 0:
+        h0 = max(2, (round(src_h * w0 / src_w) // 2) * 2)
+    else:
+        h0 = max(2, (round(w0 * 9 / 16) // 2) * 2)
+    motion_threshold = (
+        motion_threshold_arg if motion_threshold_arg is not None else w0 * h0 * 2
+    )
+    return h0, motion_threshold
+
+
 def _decimate(
     pts: list[tuple[float, float, float]],
     n_max: int,
@@ -359,16 +432,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--media", required=True, help="Input video file path")
     parser.add_argument(
         "--fps",
-        type=_positive_float,
+        type=_bounded_fps_float,
         default=_DEFAULT_FPS,
-        help=f"Sampling frame rate, positive finite (default {_DEFAULT_FPS})",
+        help=(
+            f"Sampling frame rate, positive finite, <= {_MAX_FPS}"
+            f" (default {_DEFAULT_FPS})"
+        ),
     )
     parser.add_argument(
         "--width",
-        type=_positive_int,
+        type=_bounded_width_int,
         default=_DEFAULT_TRACK_WIDTH,
         help=(
-            f"Decode width for rawvideo, positive int (default {_DEFAULT_TRACK_WIDTH})"
+            f"Decode width for rawvideo, positive int, <= {_MAX_WIDTH}"
+            f" (default {_DEFAULT_TRACK_WIDTH})"
         ),
     )
     parser.add_argument(
@@ -394,9 +471,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--media-duration",
-        type=_positive_float,
+        type=_positive_duration_float,
         default=None,
-        help="Total media duration (seconds), positive finite, for timeout calculation",
+        help=(
+            f"Total media duration (seconds), positive finite,"
+            f" <= {_MAX_DURATION_S:.0f} s (~10 years),"
+            f" for timeout calculation"
+        ),
     )
 
     try:
@@ -471,14 +552,13 @@ def main(argv: list[str] | None = None) -> int:
             product = fps * media_duration
             if not math.isfinite(product):
                 # Non-finite product: clamp to minimum safe parameters (CWE-400).
+                # Triggered by extreme media_duration (e.g. 1e308) before
+                # _positive_duration_float was tightened; kept as belt-and-suspenders.
                 fps = 1.0
                 w0 = 64
-                if src_w and src_h and src_w > 0 and src_h > 0:
-                    h0 = max(2, (round(src_h * w0 / src_w) // 2) * 2)
-                else:
-                    h0 = max(2, (round(w0 * 9 / 16) // 2) * 2)
-                if args.motion_threshold is None:
-                    motion_threshold = w0 * h0 * 2
+                h0, motion_threshold = _recompute_h0_and_threshold(
+                    w0, src_w, src_h, args.motion_threshold
+                )
                 limit_mb = _SIZE_LIMIT_BYTES // (1024 * 1024)
                 size_warnings.append(
                     f"Input size estimate exceeded {limit_mb} MB;"
@@ -495,12 +575,9 @@ def main(argv: list[str] | None = None) -> int:
                     fps = max(1.0, fps * scale)
                     w0 = max(64, (max(1, int(w0 * scale))) // 2 * 2)
                     # Recompute h0 and motion_threshold after dimension change.
-                    if src_w and src_h and src_w > 0 and src_h > 0:
-                        h0 = max(2, (round(src_h * w0 / src_w) // 2) * 2)
-                    else:
-                        h0 = max(2, (round(w0 * 9 / 16) // 2) * 2)
-                    if args.motion_threshold is None:
-                        motion_threshold = w0 * h0 * 2
+                    h0, motion_threshold = _recompute_h0_and_threshold(
+                        w0, src_w, src_h, args.motion_threshold
+                    )
                     limit_mb = _SIZE_LIMIT_BYTES // (1024 * 1024)
                     size_warnings.append(
                         f"Input size estimate exceeded {limit_mb} MB;"
@@ -513,7 +590,14 @@ def main(argv: list[str] | None = None) -> int:
 
         # --- Compute ffmpeg timeout ---
         if media_duration is not None:
-            ffmpeg_timeout = float(max(60, math.ceil(media_duration * 4)))
+            timeout_product = media_duration * 4
+            # Belt-and-suspenders: _positive_duration_float caps media_duration at
+            # _MAX_DURATION_S so timeout_product is always finite; guard retained
+            # for defence-in-depth (SR-M-4-R / CWE-400).
+            if math.isfinite(timeout_product):
+                ffmpeg_timeout = float(max(60, math.ceil(timeout_product)))
+            else:
+                ffmpeg_timeout = float(max(60, _SIZE_LIMIT_BYTES))
         else:
             ffmpeg_timeout = 120.0
 

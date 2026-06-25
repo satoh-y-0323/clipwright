@@ -978,3 +978,115 @@ class TestNMaxSyncCli:
                 f"argparse default max_keyframes={ns.max_keyframes} != "
                 f"_DEFAULT_N_MAX={cli._DEFAULT_N_MAX}"
             )
+
+
+# ===========================================================================
+# 11. Argparse upper-bound validation (SR-M-4-R / CWE-400)
+# ===========================================================================
+
+
+class TestArgparseUpperBounds:
+    """Extreme inputs must be rejected at argparse level, never reach downstream math.
+
+    SR-M-4-R: media_duration=1e308 previously passed _positive_float (finite) but
+    caused math.ceil(inf) OverflowError in ffmpeg_timeout calculation.
+    The fix adds upper-bound validators so such inputs are rejected before any
+    arithmetic, and no OverflowError or traceback can reach the caller.
+    """
+
+    def _run_main_capture(self, argv: list[str]) -> tuple[str, str]:
+        """Run cli.main(argv) capturing stdout/stderr; return (stdout_str, stderr_str)."""
+        import io
+
+        cli = _import_track_cli()
+        out = io.StringIO()
+        err = io.StringIO()
+        with patch("sys.stdout", out), patch("sys.stderr", err):
+            try:
+                cli.main(argv)
+            except SystemExit:
+                pass
+        return out.getvalue(), err.getvalue()
+
+    def test_media_duration_1e308_rejected_no_overflow(self) -> None:
+        """--media-duration 1e308 must return INVALID_INPUT JSON without OverflowError.
+
+        1e308 is a finite float that passes the old _positive_float but triggers
+        math.ceil(inf) in ffmpeg_timeout.  The new _positive_duration_float must
+        reject it at argparse time so no OverflowError occurs.
+        """
+        stdout, stderr = self._run_main_capture(
+            ["--media", "/fake/v.mp4", "--media-duration", "1e308"]
+        )
+        assert stdout, "main() must always write JSON to stdout"
+        data = json.loads(stdout)
+        assert "error" in data, (
+            f"Expected error for media-duration=1e308, got: {list(data.keys())}"
+        )
+        # Must be INVALID_INPUT (argparse rejection), not INTERNAL (exception path).
+        assert "INVALID_INPUT" in str(data["error"].get("code", "")), (
+            f"Expected INVALID_INPUT code, got: {data['error']}"
+        )
+        # No OverflowError traceback in stderr or stdout.
+        combined = stdout + stderr
+        assert "OverflowError" not in combined, (
+            "OverflowError must not appear for media-duration=1e308"
+        )
+        assert "Traceback" not in combined, (
+            "Traceback must not appear for media-duration=1e308"
+        )
+
+    def test_fps_1e308_rejected_no_overflow(self) -> None:
+        """--fps 1e308 must return INVALID_INPUT JSON without OverflowError."""
+        stdout, stderr = self._run_main_capture(
+            ["--media", "/fake/v.mp4", "--fps", "1e308"]
+        )
+        assert stdout
+        data = json.loads(stdout)
+        assert "error" in data, (
+            f"Expected error for fps=1e308, got: {list(data.keys())}"
+        )
+        combined = stdout + stderr
+        assert "OverflowError" not in combined, (
+            "OverflowError must not appear for fps=1e308"
+        )
+        assert "Traceback" not in combined, "Traceback must not appear for fps=1e308"
+
+    def test_width_1e6_rejected(self) -> None:
+        """--width 1000000 (> 7680) must return INVALID_INPUT JSON."""
+        stdout, stderr = self._run_main_capture(
+            ["--media", "/fake/v.mp4", "--width", "1000000"]
+        )
+        assert stdout
+        data = json.loads(stdout)
+        assert "error" in data, (
+            f"Expected error for width=1000000, got: {list(data.keys())}"
+        )
+
+    def test_media_duration_valid_max_not_rejected(self) -> None:
+        """--media-duration at exactly _MAX_DURATION_S must not be rejected by argparse."""
+        import io
+
+        cli = _import_track_cli()
+        # Use a value right at the limit; should not be rejected at argparse level.
+        max_dur = str(int(cli._MAX_DURATION_S))
+        out = io.StringIO()
+        err = io.StringIO()
+        with (
+            patch("sys.stdout", out),
+            patch("sys.stderr", err),
+            patch("clipwright.process.run", side_effect=RuntimeError("abort")),
+            patch("tempfile.NamedTemporaryFile", side_effect=RuntimeError("abort")),
+        ):
+            try:
+                cli.main(["--media", "/fake/v.mp4", "--media-duration", max_dur])
+            except Exception:
+                pass
+        stdout = out.getvalue()
+        # Must produce JSON; if error it must NOT be INVALID_INPUT (argparse rejection).
+        if stdout.strip():
+            data = json.loads(stdout.strip())
+            if "error" in data:
+                assert "INVALID_INPUT" not in str(data["error"].get("code", "")), (
+                    f"Valid max duration {max_dur} must not be rejected by argparse"
+                )
