@@ -40,6 +40,7 @@ from clipwright_frames.plan import (
     build_fps_command,
     build_single_frame_command,
     compute_interval_timestamps,
+    compute_scene_segment_timestamps,
     compute_timestamps_mode,
     frame_filename,
     scene_marker_seconds,
@@ -317,20 +318,32 @@ def _extract_frames_inner(
 
         # Extract scene_boundary marker timestamps
         markers = get_markers(tl, kind="scene_boundary")
-        scene_ts_list = scene_marker_seconds(markers)
+        boundaries = scene_marker_seconds(markers)
 
-        if not scene_ts_list:
-            warnings.append(
-                "No scene_boundary markers found in the timeline. No frames extracted."
-            )
-        else:
-            for idx, ts in enumerate(scene_ts_list):
-                out_path = str(out_dir / frame_filename(idx, options.format))
-                cmd = build_single_frame_command(
-                    ffmpeg, abs_media, ts, out_path, options
+        # Determine timestamps to extract based on scene_sample.
+        # "boundary": preserve pre-0.2.0 behaviour (one frame per marker position).
+        # "midpoint"/"start": compute segment representatives via plan function
+        #   (no warning even when 0 boundaries — entire media treated as one segment).
+        if options.scene_sample == "boundary":
+            if not boundaries:
+                warnings.append(
+                    "No scene_boundary markers found in the timeline."
+                    " No frames extracted."
                 )
-                _run_with_safe_error(cmd, timeout)
-                extracted_frames.append((idx, ts))
+                ts_list: list[float] = []
+            else:
+                ts_list = boundaries
+        else:
+            # options.scene_sample is "midpoint" or "start" here.
+            ts_list = compute_scene_segment_timestamps(
+                boundaries, duration_sec, options.scene_sample
+            )
+
+        for idx, ts in enumerate(ts_list):
+            out_path = str(out_dir / frame_filename(idx, options.format))
+            cmd = build_single_frame_command(ffmpeg, abs_media, ts, out_path, options)
+            _run_with_safe_error(cmd, timeout)
+            extracted_frames.append((idx, ts))
 
     else:
         # mode == "timestamps"

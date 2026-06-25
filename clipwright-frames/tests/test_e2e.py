@@ -430,7 +430,7 @@ class TestSceneMode:
     """
 
     def test_one_frame_per_boundary(self, tmp_path: Path, require_ffmpeg: str) -> None:
-        """scene mode: one frame extracted per scene_boundary marker."""
+        """scene mode: one frame extracted per scene_boundary marker (scene_sample='boundary')."""
         video_path = str(tmp_path / "video.mp4")
         out_dir = tmp_path / "frames"
         out_dir.mkdir()
@@ -450,6 +450,7 @@ class TestSceneMode:
                         "mode": "scene",
                         "scene_timeline": scene_otio_path,
                         "format": "jpeg",
+                        "scene_sample": "boundary",
                     },
                 },
             )
@@ -466,7 +467,11 @@ class TestSceneMode:
     def test_frames_otio_contains_extracted_frame_markers(
         self, tmp_path: Path, require_ffmpeg: str
     ) -> None:
-        """frames.otio must contain extracted_frame markers with clipwright metadata."""
+        """frames.otio must contain extracted_frame markers with clipwright metadata.
+
+        Uses scene_sample='boundary' to verify the pre-0.2.0 one-marker-per-boundary
+        behavior: 2 boundaries -> exactly 2 extracted_frame markers.
+        """
         video_path = str(tmp_path / "video.mp4")
         out_dir = tmp_path / "frames"
         out_dir.mkdir()
@@ -485,6 +490,7 @@ class TestSceneMode:
                         "mode": "scene",
                         "scene_timeline": scene_otio_path,
                         "format": "jpeg",
+                        "scene_sample": "boundary",
                     },
                 },
             )

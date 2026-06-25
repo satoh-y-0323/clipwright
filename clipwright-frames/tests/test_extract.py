@@ -57,6 +57,7 @@ from typing import Any
 from unittest.mock import patch
 
 import opentimelineio as otio
+import pytest
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo
 
@@ -107,16 +108,25 @@ def _opts(
     fmt: str = "jpeg",
     quality: int = 2,
     max_width: int | None = None,
+    scene_sample: str | None = None,
 ) -> ExtractFramesOptions:
-    return ExtractFramesOptions(
-        mode=mode,  # type: ignore[arg-type]
-        interval_sec=interval_sec,
-        scene_timeline=scene_timeline,
-        timestamps=timestamps if timestamps is not None else [],
-        format=fmt,  # type: ignore[arg-type]
-        quality=quality,
-        max_width=max_width,
-    )
+    """Build ExtractFramesOptions for tests.
+
+    scene_sample is passed only when explicitly specified; omitting it lets
+    the schema default apply (or keeps pre-implementation tests stable at Red).
+    """
+    kwargs: dict[str, Any] = {
+        "mode": mode,
+        "interval_sec": interval_sec,
+        "scene_timeline": scene_timeline,
+        "timestamps": timestamps if timestamps is not None else [],
+        "format": fmt,
+        "quality": quality,
+        "max_width": max_width,
+    }
+    if scene_sample is not None:
+        kwargs["scene_sample"] = scene_sample
+    return ExtractFramesOptions(**kwargs)  # type: ignore[arg-type]
 
 
 def _make_scene_timeline_with_markers(
@@ -535,7 +545,11 @@ class TestSuccessPathScene:
         assert len(result.artifacts) == 2
 
     def test_scene_mode_frame_count_matches_marker_count(self, tmp_path: Path) -> None:
-        """frame_count must equal the number of scene_boundary markers."""
+        """scene_sample='boundary' extracts exactly N frames for N scene_boundary markers.
+
+        Updated to use scene_sample='boundary' explicitly to preserve the v0.1.0
+        boundary behavior. Without this, the default 'midpoint' would produce N+1 frames.
+        """
         from clipwright_frames.extract import extract_frames
 
         media = str(tmp_path / "video.mp4")
@@ -561,7 +575,7 @@ class TestSuccessPathScene:
             result = extract_frames(
                 media,
                 str(out_dir),
-                _opts(mode="scene", scene_timeline=scene_otio),
+                _opts(mode="scene", scene_timeline=scene_otio, scene_sample="boundary"),
             )
 
         assert result.ok is True
@@ -721,10 +735,15 @@ class TestIntervalExceedsDuration:
 
 
 class TestSceneModeZeroMarkers:
-    """Scene mode with no scene_boundary markers: ok=True + warning + empty output."""
+    """Scene mode with no scene_boundary markers: ok=True + warning + empty output.
+
+    Both tests use scene_sample='boundary' explicitly to preserve the v0.1.0 behavior
+    where 0 markers produces a warning and 0 frames. With the new default 'midpoint',
+    0 markers would yield 1 frame (single-shot representative) with no warning.
+    """
 
     def test_zero_scene_markers_returns_ok_with_warning(self, tmp_path: Path) -> None:
-        """0 scene_boundary markers -> ok=True, warnings contain 'No scene_boundary markers'."""
+        """scene_sample='boundary', 0 markers -> ok=True, fixed warning about no markers."""
         from clipwright_frames.extract import extract_frames
 
         media = str(tmp_path / "video.mp4")
@@ -742,7 +761,7 @@ class TestSceneModeZeroMarkers:
             result = extract_frames(
                 media,
                 str(out_dir),
-                _opts(mode="scene", scene_timeline=scene_otio),
+                _opts(mode="scene", scene_timeline=scene_otio, scene_sample="boundary"),
             )
 
         assert result.ok is True
@@ -753,7 +772,7 @@ class TestSceneModeZeroMarkers:
         )
 
     def test_zero_scene_markers_frame_count_is_zero(self, tmp_path: Path) -> None:
-        """0 scene_boundary markers -> frame_count == 0."""
+        """scene_sample='boundary', 0 markers -> frame_count == 0."""
         from clipwright_frames.extract import extract_frames
 
         media = str(tmp_path / "video.mp4")
@@ -768,7 +787,7 @@ class TestSceneModeZeroMarkers:
             result = extract_frames(
                 media,
                 str(out_dir),
-                _opts(mode="scene", scene_timeline=scene_otio),
+                _opts(mode="scene", scene_timeline=scene_otio, scene_sample="boundary"),
             )
 
         assert result.ok is True
@@ -1548,3 +1567,417 @@ class TestBoundaryChecks:
         assert result.ok is False
         assert result.error is not None
         assert result.error.code == ErrorCode.PATH_NOT_ALLOWED
+
+
+# ===========================================================================
+# scene_sample dispatch: midpoint / start / boundary
+# (Red: scene_sample not yet in ExtractFramesOptions or extract.py dispatch)
+# ===========================================================================
+
+
+def _extract_ss_from_cmds(captured_cmds: list[list[str]]) -> list[float]:
+    """Extract -ss values from captured single-frame ffmpeg commands in call order."""
+    ss_values: list[float] = []
+    for cmd in captured_cmds:
+        for i, arg in enumerate(cmd):
+            if arg == "-ss" and i + 1 < len(cmd):
+                ss_values.append(float(cmd[i + 1]))
+    return ss_values
+
+
+class TestSceneSampleDispatch:
+    """Tests for mode='scene' x scene_sample(midpoint/start/boundary) dispatch.
+
+    Red: ExtractFramesOptions.scene_sample and extract.py dispatch are not yet
+    implemented.  After impl-scene-dispatch (task) these must all turn Green.
+
+    Fixture: boundaries=[2.0, 5.0], duration=10.0
+    Expected representative timestamps per mode:
+      midpoint -> [1.0, 3.5, 7.5]  (N+1 = 3 frames)
+      start    -> [0.0, 2.0, 5.0]  (N+1 = 3 frames)
+      boundary -> [2.0, 5.0]        (N   = 2 frames)
+    """
+
+    _BOUNDARIES = [2.0, 5.0]
+    _DURATION = 10.0
+
+    # ------------------------------------------------------------------
+    # frame_count by scene_sample
+    # ------------------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "scene_sample, expected_count",
+        [
+            ("midpoint", 3),
+            ("start", 3),
+            ("boundary", 2),
+        ],
+    )
+    def test_frame_count_by_scene_sample(
+        self, tmp_path: Path, scene_sample: str, expected_count: int
+    ) -> None:
+        """frame_count must match expected value for each scene_sample.
+
+        midpoint/start yield N+1 (one per segment), boundary yields N (one per marker).
+        """
+        from clipwright_frames.extract import extract_frames
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        media_info = _make_media_info(path=media, duration_sec=self._DURATION)
+
+        out_dir = tmp_path / "frames_out"
+        out_dir.mkdir()
+        scene_otio = _make_scene_timeline_with_markers(tmp_path, self._BOUNDARIES)
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            if cmd:
+                out = Path(cmd[-1])
+                if out.suffix in {".jpg", ".png", ".jpeg"}:
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    out.write_bytes(b"FAKE_IMAGE")
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with (
+            patch("clipwright_frames.extract.inspect_media", return_value=media_info),
+            patch("clipwright_frames.extract.run", side_effect=_fake_run),
+        ):
+            result = extract_frames(
+                media,
+                str(out_dir),
+                _opts(
+                    mode="scene",
+                    scene_timeline=scene_otio,
+                    scene_sample=scene_sample,
+                ),
+            )
+
+        assert result.ok is True
+        assert result.data is not None
+        assert result.data.get("frame_count") == expected_count, (
+            f"scene_sample={scene_sample!r}: expected frame_count={expected_count}, "
+            f"got {result.data.get('frame_count')}"
+        )
+
+    # ------------------------------------------------------------------
+    # -ss values (build_single_frame_command timestamp verification)
+    # ------------------------------------------------------------------
+
+    def test_midpoint_ss_values(self, tmp_path: Path) -> None:
+        """midpoint: -ss values must be [1.0, 3.5, 7.5] for boundaries=[2.0,5.0], duration=10."""
+        from clipwright_frames.extract import extract_frames
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        media_info = _make_media_info(path=media, duration_sec=self._DURATION)
+
+        out_dir = tmp_path / "frames_out"
+        out_dir.mkdir()
+        scene_otio = _make_scene_timeline_with_markers(tmp_path, self._BOUNDARIES)
+
+        captured_cmds: list[list[str]] = []
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            captured_cmds.append(list(cmd))
+            if cmd:
+                out = Path(cmd[-1])
+                if out.suffix in {".jpg", ".png", ".jpeg"}:
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    out.write_bytes(b"FAKE_IMAGE")
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with (
+            patch("clipwright_frames.extract.inspect_media", return_value=media_info),
+            patch("clipwright_frames.extract.run", side_effect=_fake_run),
+        ):
+            result = extract_frames(
+                media,
+                str(out_dir),
+                _opts(mode="scene", scene_timeline=scene_otio, scene_sample="midpoint"),
+            )
+
+        assert result.ok is True
+        ss_values = _extract_ss_from_cmds(captured_cmds)
+        assert len(ss_values) == 3
+        assert ss_values == pytest.approx([1.0, 3.5, 7.5])
+
+    def test_start_ss_values(self, tmp_path: Path) -> None:
+        """start: -ss values must be [0.0, 2.0, 5.0] for boundaries=[2.0,5.0], duration=10."""
+        from clipwright_frames.extract import extract_frames
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        media_info = _make_media_info(path=media, duration_sec=self._DURATION)
+
+        out_dir = tmp_path / "frames_out"
+        out_dir.mkdir()
+        scene_otio = _make_scene_timeline_with_markers(tmp_path, self._BOUNDARIES)
+
+        captured_cmds: list[list[str]] = []
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            captured_cmds.append(list(cmd))
+            if cmd:
+                out = Path(cmd[-1])
+                if out.suffix in {".jpg", ".png", ".jpeg"}:
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    out.write_bytes(b"FAKE_IMAGE")
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with (
+            patch("clipwright_frames.extract.inspect_media", return_value=media_info),
+            patch("clipwright_frames.extract.run", side_effect=_fake_run),
+        ):
+            result = extract_frames(
+                media,
+                str(out_dir),
+                _opts(mode="scene", scene_timeline=scene_otio, scene_sample="start"),
+            )
+
+        assert result.ok is True
+        ss_values = _extract_ss_from_cmds(captured_cmds)
+        assert len(ss_values) == 3
+        assert ss_values == pytest.approx([0.0, 2.0, 5.0])
+
+    def test_boundary_ss_values(self, tmp_path: Path) -> None:
+        """boundary: -ss values must be [2.0, 5.0] for boundaries=[2.0,5.0], duration=10."""
+        from clipwright_frames.extract import extract_frames
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        media_info = _make_media_info(path=media, duration_sec=self._DURATION)
+
+        out_dir = tmp_path / "frames_out"
+        out_dir.mkdir()
+        scene_otio = _make_scene_timeline_with_markers(tmp_path, self._BOUNDARIES)
+
+        captured_cmds: list[list[str]] = []
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            captured_cmds.append(list(cmd))
+            if cmd:
+                out = Path(cmd[-1])
+                if out.suffix in {".jpg", ".png", ".jpeg"}:
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    out.write_bytes(b"FAKE_IMAGE")
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with (
+            patch("clipwright_frames.extract.inspect_media", return_value=media_info),
+            patch("clipwright_frames.extract.run", side_effect=_fake_run),
+        ):
+            result = extract_frames(
+                media,
+                str(out_dir),
+                _opts(mode="scene", scene_timeline=scene_otio, scene_sample="boundary"),
+            )
+
+        assert result.ok is True
+        ss_values = _extract_ss_from_cmds(captured_cmds)
+        assert len(ss_values) == 2
+        assert ss_values == pytest.approx([2.0, 5.0])
+
+    # ------------------------------------------------------------------
+    # Zero-boundary edge cases
+    # ------------------------------------------------------------------
+
+    def test_zero_boundaries_midpoint_one_frame_no_warning(
+        self, tmp_path: Path
+    ) -> None:
+        """midpoint with 0 markers: single-shot representative (1 frame), no warning.
+
+        The entire media [0, duration) forms one segment; midpoint = duration/2.
+        """
+        from clipwright_frames.extract import extract_frames
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        media_info = _make_media_info(path=media, duration_sec=self._DURATION)
+
+        out_dir = tmp_path / "frames_out"
+        out_dir.mkdir()
+        scene_otio = _make_scene_timeline_with_markers(tmp_path, [])  # no markers
+
+        captured_cmds: list[list[str]] = []
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            captured_cmds.append(list(cmd))
+            if cmd:
+                out = Path(cmd[-1])
+                if out.suffix in {".jpg", ".png", ".jpeg"}:
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    out.write_bytes(b"FAKE_IMAGE")
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with (
+            patch("clipwright_frames.extract.inspect_media", return_value=media_info),
+            patch("clipwright_frames.extract.run", side_effect=_fake_run),
+        ):
+            result = extract_frames(
+                media,
+                str(out_dir),
+                _opts(mode="scene", scene_timeline=scene_otio, scene_sample="midpoint"),
+            )
+
+        assert result.ok is True
+        assert result.data is not None
+        assert result.data.get("frame_count") == 1, (
+            "midpoint with 0 markers must yield 1 frame (single-shot representative)"
+        )
+        # No warning for midpoint/start when 0 markers (single-shot is valid)
+        assert not result.warnings, (
+            f"midpoint with 0 markers must not produce warnings; got: {result.warnings}"
+        )
+        # -ss value must be midpoint of [0, 10) = 5.0
+        ss_values = _extract_ss_from_cmds(captured_cmds)
+        assert ss_values == pytest.approx([5.0])
+
+    def test_zero_boundaries_start_one_frame_no_warning(self, tmp_path: Path) -> None:
+        """start with 0 markers: single-shot representative (1 frame), no warning.
+
+        The entire media [0, duration) forms one segment; start = 0.0.
+        """
+        from clipwright_frames.extract import extract_frames
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        media_info = _make_media_info(path=media, duration_sec=self._DURATION)
+
+        out_dir = tmp_path / "frames_out"
+        out_dir.mkdir()
+        scene_otio = _make_scene_timeline_with_markers(tmp_path, [])  # no markers
+
+        captured_cmds: list[list[str]] = []
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            captured_cmds.append(list(cmd))
+            if cmd:
+                out = Path(cmd[-1])
+                if out.suffix in {".jpg", ".png", ".jpeg"}:
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    out.write_bytes(b"FAKE_IMAGE")
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with (
+            patch("clipwright_frames.extract.inspect_media", return_value=media_info),
+            patch("clipwright_frames.extract.run", side_effect=_fake_run),
+        ):
+            result = extract_frames(
+                media,
+                str(out_dir),
+                _opts(mode="scene", scene_timeline=scene_otio, scene_sample="start"),
+            )
+
+        assert result.ok is True
+        assert result.data is not None
+        assert result.data.get("frame_count") == 1, (
+            "start with 0 markers must yield 1 frame (single-shot representative)"
+        )
+        assert not result.warnings, (
+            f"start with 0 markers must not produce warnings; got: {result.warnings}"
+        )
+        # -ss value must be start of [0, 10) = 0.0
+        ss_values = _extract_ss_from_cmds(captured_cmds)
+        assert ss_values == pytest.approx([0.0])
+
+    def test_zero_boundaries_boundary_zero_frames_with_warning(
+        self, tmp_path: Path
+    ) -> None:
+        """boundary with 0 markers: 0 frames extracted, fixed warning message.
+
+        Warning text must be exactly:
+        'No scene_boundary markers found in the timeline. No frames extracted.'
+        """
+        from clipwright_frames.extract import extract_frames
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        media_info = _make_media_info(path=media, duration_sec=self._DURATION)
+
+        out_dir = tmp_path / "frames_out"
+        out_dir.mkdir()
+        scene_otio = _make_scene_timeline_with_markers(tmp_path, [])  # no markers
+
+        with (
+            patch("clipwright_frames.extract.inspect_media", return_value=media_info),
+        ):
+            result = extract_frames(
+                media,
+                str(out_dir),
+                _opts(mode="scene", scene_timeline=scene_otio, scene_sample="boundary"),
+            )
+
+        assert result.ok is True
+        assert result.data is not None
+        assert result.data.get("frame_count") == 0, (
+            "boundary with 0 markers must yield 0 frames"
+        )
+        assert result.warnings is not None, (
+            "boundary with 0 markers must produce a warning"
+        )
+        expected_warning = (
+            "No scene_boundary markers found in the timeline. No frames extracted."
+        )
+        assert any(w == expected_warning for w in result.warnings), (
+            f"Expected fixed warning not found. Got: {result.warnings}"
+        )
+
+    # ------------------------------------------------------------------
+    # Artifact shape unchanged across scene_sample values
+    # ------------------------------------------------------------------
+
+    def test_artifacts_shape_unchanged_across_scene_sample(
+        self, tmp_path: Path
+    ) -> None:
+        """Artifacts must always be exactly 2 items with correct role/format.
+
+        The scene_sample value must not alter the artifact envelope shape:
+        - frames.otio: role='timeline', format='otio'
+        - frames.json: role='manifest', format='json'
+        """
+        from clipwright_frames.extract import extract_frames
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        media_info = _make_media_info(path=media, duration_sec=self._DURATION)
+
+        out_dir = tmp_path / "frames_out"
+        out_dir.mkdir()
+        scene_otio = _make_scene_timeline_with_markers(tmp_path, self._BOUNDARIES)
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            if cmd:
+                out = Path(cmd[-1])
+                if out.suffix in {".jpg", ".png", ".jpeg"}:
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    out.write_bytes(b"FAKE_IMAGE")
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with (
+            patch("clipwright_frames.extract.inspect_media", return_value=media_info),
+            patch("clipwright_frames.extract.run", side_effect=_fake_run),
+        ):
+            result = extract_frames(
+                media,
+                str(out_dir),
+                _opts(mode="scene", scene_timeline=scene_otio, scene_sample="midpoint"),
+            )
+
+        assert result.ok is True
+        assert result.artifacts is not None
+        assert len(result.artifacts) == 2, (
+            "Exactly 2 artifacts expected: frames.otio + frames.json"
+        )
+
+        roles = {
+            a.role if hasattr(a, "role") else a.get("role", "")
+            for a in result.artifacts
+        }
+        formats = {
+            a.format if hasattr(a, "format") else a.get("format", "")
+            for a in result.artifacts
+        }
+        assert "timeline" in roles, "Missing role='timeline' artifact"
+        assert "manifest" in roles, "Missing role='manifest' artifact"
+        assert "otio" in formats, "Missing format='otio' artifact"
+        assert "json" in formats, "Missing format='json' artifact"
