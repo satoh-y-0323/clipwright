@@ -1563,7 +1563,7 @@ class TestRunTrackCliTimeoutGuard:
         )
         assert len(warnings) >= 1, "Fallback must emit at least one warning"
 
-    def test_duration_inf_falls_back_ok_true(self, tmp_path: Path) -> None:
+    def test_duration_inf_falls_back_ok_true(self) -> None:
         """duration_sec=inf must not raise OverflowError; fallback returns constant-center.
 
         SR-V-001: _run_track_cli clamps duration_sec to _MAX_TIMEOUT_DURATION_S
@@ -1593,6 +1593,56 @@ class TestRunTrackCliTimeoutGuard:
             track, warnings = _run_track_cli(
                 media="/fake/video.mp4",
                 duration_sec=float("inf"),
+            )
+
+        self._assert_constant_center_fallback(track, warnings)
+
+    def test_duration_nan_falls_back_ok_true(self) -> None:
+        """duration_sec=nan must not raise; falls to else-branch (timeout=120.0).
+
+        nan > 0 is False in Python, so _run_track_cli takes the else-branch and
+        sets timeout=120.0 without entering the clamp path.  This test locks that
+        Python-spec-dependent behaviour so a future refactor cannot silently break it.
+        """
+        from clipwright.errors import ClipwrightError, ErrorCode
+        from clipwright_reframe.reframe import _run_track_cli
+
+        with patch(
+            "clipwright.process.run",
+            side_effect=ClipwrightError(
+                code=ErrorCode.SUBPROCESS_FAILED,
+                message="mocked failure",
+                hint="test",
+            ),
+        ):
+            track, warnings = _run_track_cli(
+                media="/fake/video.mp4",
+                duration_sec=float("nan"),
+            )
+
+        self._assert_constant_center_fallback(track, warnings)
+
+    def test_duration_negative_falls_back_ok_true(self) -> None:
+        """duration_sec<0 must not raise; falls to else-branch (timeout=120.0).
+
+        A negative value satisfies duration_sec > 0 == False, so _run_track_cli
+        takes the else-branch and sets timeout=120.0.  This test locks the guard
+        against crafted media where ffprobe returns a negative duration.
+        """
+        from clipwright.errors import ClipwrightError, ErrorCode
+        from clipwright_reframe.reframe import _run_track_cli
+
+        with patch(
+            "clipwright.process.run",
+            side_effect=ClipwrightError(
+                code=ErrorCode.SUBPROCESS_FAILED,
+                message="mocked failure",
+                hint="test",
+            ),
+        ):
+            track, warnings = _run_track_cli(
+                media="/fake/video.mp4",
+                duration_sec=-1.0,
             )
 
         self._assert_constant_center_fallback(track, warnings)
