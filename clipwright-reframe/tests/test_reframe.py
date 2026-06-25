@@ -51,24 +51,39 @@ Verification points:
      G-4: idempotentHint=True
      G-5: openWorldHint=False
 
+  H. track mode / fallback (wave2-B Red phase)
+     H-1: mode='track' -> track_cli spawned, directive has mode='track' and track (AC-01改)
+     H-2: track_cli DEPENDENCY_MISSING -> ok:true, constant-center track, warning has '[track]'
+     H-3: track_cli SUBPROCESS_FAILED -> ok:true, constant-center track, warning set (AC-03)
+     H-4: track_cli run() raises -> ok:true, constant-center fallback, warning (AC-03)
+     H-5: non-destructive: input bytes / mtime unchanged after track run (AC-07)
+     H-6: idempotent: two track runs produce identical track lists (AC-08)
+     H-7: CWE-209: warning text must not contain full media path or stack trace
+
 AC coverage:
-  AC-02 -> A-2, A-3
-  AC-03 -> F-1, F-2, F-1s, F-2s
-  AC-04 -> F-3, F-3s
-  AC-05 -> F-4, F-4s
-  AC-06 -> C-1 through C-8
-  AC-14 -> A-1
-  NFR-1 -> E-1, E-2
+  AC-01改 -> H-1
+  AC-02   -> A-2, A-3
+  AC-03   -> F-1, F-2, F-1s, F-2s, H-3, H-4
+  AC-04   -> F-3, F-3s
+  AC-05   -> F-4, F-4s
+  AC-06   -> C-1 through C-8
+  AC-07   -> H-5
+  AC-08   -> H-6
+  AC-14   -> A-1
+  NFR-1   -> E-1, E-2, H-5
   NFR-2.1 -> G-2 through G-5
   NFR-2.2 -> G-1
-  D1 -> B-1 through B-7
+  D1      -> B-1 through B-7
 """
 
 from __future__ import annotations
 
+import json
+import os
+import stat
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, call, patch
 
 import opentimelineio as otio
 import pytest
@@ -890,3 +905,531 @@ class TestMcpAnnotations:
         """openWorldHint must be False: no network access (NFR-2.1)."""
         _tool, annotations = self._get_tool_and_annotations()
         assert annotations.openWorldHint is False  # type: ignore[union-attr]
+
+
+# ===========================================================================
+# H. track mode and fallback (wave2-B Red phase)
+#
+# Design note (DC-AS-007 / architecture-report §5):
+#   The fallback constant-center track [{t_s:0, cx:0.5, cy:0.5}] is processed
+#   through the crop-from-source path (render side).  This is *distinct* from
+#   the existing scale-first static crop path (mode='crop').  Pixel values will
+#   differ by design; tests here only verify the reframe-side directive contract,
+#   not render-side pixel output.
+# ===========================================================================
+
+_CONSTANT_CENTER_TRACK = [{"t_s": 0.0, "cx": 0.5, "cy": 0.5}]
+
+_DEPENDENCY_MISSING_JSON = json.dumps(
+    {"error": {"code": "DEPENDENCY_MISSING",
+               "message": "numpy is not installed",
+               "hint": "pip install 'clipwright-reframe[track]'"}}
+)
+_SUBPROCESS_FAILED_JSON = json.dumps(
+    {"error": {"code": "SUBPROCESS_FAILED",
+               "message": "ffmpeg exited with code 1",
+               "hint": "Check the media file."}}
+)
+
+
+def _make_track_result_json(n_kf: int = 3) -> str:
+    """Return a valid track_cli JSON response with n_kf keyframes."""
+    track = [
+        {"t_s": float(i) * 0.25, "cx": 0.3 + 0.1 * i, "cy": 0.5}
+        for i in range(n_kf)
+    ]
+    return json.dumps({
+        "track": track,
+        "diagnostics": {
+            "frames_analyzed": 12,
+            "keyframes_before_decimation": n_kf,
+            "keyframes_after_decimation": n_kf,
+            "dropped": 0,
+            "hold_fraction": 0.0,
+            "sampling_fps": 4.0,
+            "width": 160,
+            "height": 90,
+        },
+    })
+
+
+def _make_track_opts(target_w: int = 1080, target_h: int = 1920) -> ReframeOptions:
+    """Build ReframeOptions with mode='track' via model_construct (bypasses Literal guard).
+
+    ReframeOptions.mode currently accepts only 'crop'/'pad'/'blur_pad'.
+    Adding 'track' to ReframeOptions.mode Literal is part of wave2-B implementation.
+    Until then, use model_construct to produce the options needed by Red tests.
+    """
+    return ReframeOptions.model_construct(
+        target_w=target_w,
+        target_h=target_h,
+        mode="track",
+        anchor="center",
+        pad_color="black",
+    )
+
+
+def _run_track_reframe(
+    tmp_path: Path,
+    *,
+    track_cli_stdout: str,
+    track_cli_returncode: int = 0,
+    media_name: str = "video.mp4",
+    output_name: str = "out.otio",
+    target_w: int = 1080,
+    target_h: int = 1920,
+) -> dict[str, Any]:
+    """Helper: call reframe(mode='track') with track_cli mocked via core run.
+
+    track_cli is spawned as a subprocess via core run; we mock run() to return
+    the provided JSON on stdout so no real numpy/ffmpeg is needed.
+
+    ReframeOptions is built via model_construct to bypass the Literal guard on
+    mode — 'track' will be added to the Literal in the implementation phase.
+    The defensive re-validation in _reframe_inner (step 0) calls
+    ReframeOptions.model_validate; to avoid it rejecting 'track' before the
+    implementation is in place we also patch that validation step.
+    """
+    media_path = tmp_path / media_name
+    media_path.write_bytes(b"dummy media")
+    output_path = tmp_path / output_name
+
+    opts = _make_track_opts(target_w=target_w, target_h=target_h)
+
+    fake_run_result = MagicMock()
+    fake_run_result.returncode = track_cli_returncode
+    fake_run_result.stdout = track_cli_stdout
+    fake_run_result.stderr = ""
+
+    with (
+        patch(
+            "clipwright_reframe.reframe.inspect_media",
+            side_effect=lambda p: _make_media_info(str(p)),
+        ),
+        patch(
+            "clipwright.process.run",
+            return_value=fake_run_result,
+        ),
+        # Bypass step-0 defensive re-validation until 'track' Literal is added
+        patch("clipwright_reframe.reframe.ReframeOptions.model_validate",
+              return_value=opts),
+    ):
+        result = reframe(
+            media=str(media_path),
+            output=str(output_path),
+            options=opts,
+            timeline=None,
+        )
+    return result  # type: ignore[return-value]
+
+
+class TestTrackMode:
+    """track mode and fallback behaviour (H-1 through H-7, AC-01改 / AC-02 / AC-03 / AC-07 / AC-08)."""
+
+    # -----------------------------------------------------------------------
+    # H-1: track_cli spawned, directive has mode='track' and valid track (AC-01改)
+    # -----------------------------------------------------------------------
+
+    def test_track_mode_directive_has_mode_track(self, tmp_path: Path) -> None:
+        """mode='track' run must write directive with mode=='track' (AC-01改, DC-AM-001).
+
+        Identification is by mode field, not version (DC-AM-001).
+
+        Red: reframe.py has no mode='track' branch yet — returns mode='track' from
+        options but without calling track_cli or storing the track list.
+        """
+        result = _run_track_reframe(tmp_path, track_cli_stdout=_make_track_result_json(3))
+
+        assert result["ok"] is True, f"Expected ok=True, got: {result}"
+
+        tl = otio.adapters.read_from_file(str(tmp_path / "out.otio"))
+        meta = dict(tl.metadata.get("clipwright", {}).get("reframe", {}))
+        assert meta.get("mode") == "track", (
+            f"Directive mode must be 'track', got: {meta.get('mode')!r}"
+        )
+
+    def test_track_mode_directive_stores_track_list(self, tmp_path: Path) -> None:
+        """mode='track' directive must contain non-empty track list from track_cli (AC-01改).
+
+        Red: reframe.py does not call track_cli; directive.track will be None.
+        """
+        result = _run_track_reframe(tmp_path, track_cli_stdout=_make_track_result_json(3))
+
+        assert result["ok"] is True
+        tl = otio.adapters.read_from_file(str(tmp_path / "out.otio"))
+        meta = dict(tl.metadata.get("clipwright", {}).get("reframe", {}))
+        track = meta.get("track")
+        assert track is not None, "track must be present in directive for mode='track'"
+        assert isinstance(track, list), f"track must be a list, got {type(track)}"
+        assert len(track) >= 1, "track must have at least one keyframe"
+
+    def test_track_mode_track_elements_in_range(self, tmp_path: Path) -> None:
+        """All track elements must have cx, cy in [0.0, 1.0] and t_s >= 0 (AC-01改).
+
+        Red: same as above — track_cli not called.
+        """
+        result = _run_track_reframe(tmp_path, track_cli_stdout=_make_track_result_json(3))
+
+        assert result["ok"] is True
+        tl = otio.adapters.read_from_file(str(tmp_path / "out.otio"))
+        meta = dict(tl.metadata.get("clipwright", {}).get("reframe", {}))
+        track = meta.get("track", [])
+        for kf in track:
+            assert 0.0 <= kf["cx"] <= 1.0, f"cx={kf['cx']} out of [0,1]"
+            assert 0.0 <= kf["cy"] <= 1.0, f"cy={kf['cy']} out of [0,1]"
+            assert kf["t_s"] >= 0.0, f"t_s={kf['t_s']} must be non-negative"
+
+    def test_track_mode_t_s_ascending(self, tmp_path: Path) -> None:
+        """track t_s must be strictly ascending (no duplicates).
+
+        Red: track_cli not called; directive.track is None.
+        """
+        result = _run_track_reframe(tmp_path, track_cli_stdout=_make_track_result_json(3))
+
+        assert result["ok"] is True
+        tl = otio.adapters.read_from_file(str(tmp_path / "out.otio"))
+        meta = dict(tl.metadata.get("clipwright", {}).get("reframe", {}))
+        track = meta.get("track", [])
+        if len(track) >= 2:
+            for i in range(1, len(track)):
+                assert track[i]["t_s"] > track[i - 1]["t_s"], (
+                    f"t_s not strictly ascending at index {i}: "
+                    f"{track[i-1]['t_s']} >= {track[i]['t_s']}"
+                )
+
+    def test_track_mode_new_otio_created(self, tmp_path: Path) -> None:
+        """mode='track' must create a new .otio file (AC-01改 / AC-02).
+
+        Red: reframe.py mode='track' branch absent; may or may not create file.
+        """
+        result = _run_track_reframe(tmp_path, track_cli_stdout=_make_track_result_json(3))
+
+        assert result["ok"] is True
+        assert (tmp_path / "out.otio").exists()
+
+    # -----------------------------------------------------------------------
+    # H-2: DEPENDENCY_MISSING fallback (AC-02 numpy)
+    # -----------------------------------------------------------------------
+
+    def test_dependency_missing_ok_true(self, tmp_path: Path) -> None:
+        """track_cli DEPENDENCY_MISSING must return ok:true (graceful fallback, AC-02).
+
+        Red: reframe.py has no track_cli spawn or fallback logic.
+        """
+        result = _run_track_reframe(
+            tmp_path, track_cli_stdout=_DEPENDENCY_MISSING_JSON
+        )
+        assert result["ok"] is True, (
+            "DEPENDENCY_MISSING must not propagate as ok=False; "
+            "expected graceful constant-center track fallback."
+        )
+
+    def test_dependency_missing_constant_center_track(self, tmp_path: Path) -> None:
+        """DEPENDENCY_MISSING fallback must write constant-center track [{0, 0.5, 0.5}].
+
+        Red: reframe.py does not call track_cli; directive.track is None.
+        """
+        result = _run_track_reframe(
+            tmp_path, track_cli_stdout=_DEPENDENCY_MISSING_JSON
+        )
+        assert result["ok"] is True
+        tl = otio.adapters.read_from_file(str(tmp_path / "out.otio"))
+        meta = dict(tl.metadata.get("clipwright", {}).get("reframe", {}))
+        track = meta.get("track")
+        assert track == _CONSTANT_CENTER_TRACK, (
+            f"Expected constant-center track {_CONSTANT_CENTER_TRACK}, got {track}"
+        )
+
+    def test_dependency_missing_warning_contains_track_extra(
+        self, tmp_path: Path
+    ) -> None:
+        """DEPENDENCY_MISSING warning must mention '[track]' install hint (AC-02).
+
+        Red: reframe.py does not produce fallback warnings.
+        """
+        result = _run_track_reframe(
+            tmp_path, track_cli_stdout=_DEPENDENCY_MISSING_JSON
+        )
+        assert result["ok"] is True
+        warnings = result.get("warnings", [])
+        assert any("[track]" in str(w) for w in warnings), (
+            f"Expected '[track]' install hint in warnings, got: {warnings}"
+        )
+
+    # -----------------------------------------------------------------------
+    # H-3: SUBPROCESS_FAILED fallback (AC-03)
+    # -----------------------------------------------------------------------
+
+    def test_subprocess_failed_ok_true(self, tmp_path: Path) -> None:
+        """track_cli SUBPROCESS_FAILED must return ok:true (fallback, AC-03).
+
+        Red: reframe.py no track_cli call; returns ok:true from existing logic
+        but without fallback track.
+        """
+        result = _run_track_reframe(
+            tmp_path, track_cli_stdout=_SUBPROCESS_FAILED_JSON
+        )
+        assert result["ok"] is True
+
+    def test_subprocess_failed_constant_center_track(self, tmp_path: Path) -> None:
+        """SUBPROCESS_FAILED must write constant-center track (AC-03).
+
+        Red: track_cli not called; directive.track is None.
+        """
+        result = _run_track_reframe(
+            tmp_path, track_cli_stdout=_SUBPROCESS_FAILED_JSON
+        )
+        assert result["ok"] is True
+        tl = otio.adapters.read_from_file(str(tmp_path / "out.otio"))
+        meta = dict(tl.metadata.get("clipwright", {}).get("reframe", {}))
+        assert meta.get("track") == _CONSTANT_CENTER_TRACK, (
+            f"SUBPROCESS_FAILED fallback must write constant-center track, "
+            f"got: {meta.get('track')}"
+        )
+
+    def test_subprocess_failed_warning_set(self, tmp_path: Path) -> None:
+        """SUBPROCESS_FAILED must produce at least one warning (AC-03).
+
+        Red: no fallback warning generated.
+        """
+        result = _run_track_reframe(
+            tmp_path, track_cli_stdout=_SUBPROCESS_FAILED_JSON
+        )
+        assert result["ok"] is True
+        warnings = result.get("warnings", [])
+        assert len(warnings) >= 1, (
+            "SUBPROCESS_FAILED fallback must emit at least one warning"
+        )
+
+    # -----------------------------------------------------------------------
+    # H-4: run() raises exception -> fallback (AC-03)
+    # -----------------------------------------------------------------------
+
+    def test_run_raises_constant_center_fallback(self, tmp_path: Path) -> None:
+        """If core run() raises ClipwrightError, fallback must be constant-center track.
+
+        Red: reframe.py does not call track_cli.
+        """
+        from clipwright.errors import ClipwrightError, ErrorCode
+
+        media_path = tmp_path / "video.mp4"
+        media_path.write_bytes(b"dummy")
+        output_path = tmp_path / "out.otio"
+        opts = _make_track_opts()
+
+        with (
+            patch(
+                "clipwright_reframe.reframe.inspect_media",
+                side_effect=lambda p: _make_media_info(str(p)),
+            ),
+            patch(
+                "clipwright.process.run",
+                side_effect=ClipwrightError(
+                    code=ErrorCode.SUBPROCESS_FAILED,
+                    message="run failed",
+                    hint="check ffmpeg",
+                ),
+            ),
+            patch("clipwright_reframe.reframe.ReframeOptions.model_validate",
+                  return_value=opts),
+        ):
+            result = reframe(
+                media=str(media_path),
+                output=str(output_path),
+                options=opts,
+                timeline=None,
+            )
+
+        assert result["ok"] is True, (
+            "run() raising must not propagate as ok=False; expected fallback."
+        )
+        tl = otio.adapters.read_from_file(str(output_path))
+        meta = dict(tl.metadata.get("clipwright", {}).get("reframe", {}))
+        assert meta.get("track") == _CONSTANT_CENTER_TRACK, (
+            f"run() raise fallback must write constant-center track, "
+            f"got: {meta.get('track')}"
+        )
+
+    # -----------------------------------------------------------------------
+    # H-5: non-destructive — input bytes / mtime unchanged (AC-07)
+    # -----------------------------------------------------------------------
+
+    def test_track_mode_input_media_bytes_unchanged(self, tmp_path: Path) -> None:
+        """Input media bytes must be identical before and after track run (AC-07 / NFR-1).
+
+        Red: reframe.py mode='track' branch absent; existing code already passes
+        this for mode='pad', but we need explicit coverage for mode='track'.
+        """
+        original_bytes = b"specific dummy content for track test"
+        media_path = tmp_path / "video.mp4"
+        media_path.write_bytes(original_bytes)
+        output_path = tmp_path / "out.otio"
+
+        opts = _make_track_opts()
+        fake_run = MagicMock(
+            returncode=0,
+            stdout=_make_track_result_json(2),
+            stderr="",
+        )
+
+        with (
+            patch(
+                "clipwright_reframe.reframe.inspect_media",
+                side_effect=lambda p: _make_media_info(str(p)),
+            ),
+            patch("clipwright.process.run", return_value=fake_run),
+            patch("clipwright_reframe.reframe.ReframeOptions.model_validate",
+                  return_value=opts),
+        ):
+            result = reframe(
+                media=str(media_path),
+                output=str(output_path),
+                options=opts,
+                timeline=None,
+            )
+
+        assert result["ok"] is True
+        assert media_path.read_bytes() == original_bytes, (
+            "Input media must not be modified by track run (AC-07)."
+        )
+
+    # -----------------------------------------------------------------------
+    # H-6: idempotent — two track runs produce identical track lists (AC-08)
+    # -----------------------------------------------------------------------
+
+    def test_track_mode_idempotent_track_list(self, tmp_path: Path) -> None:
+        """Two track runs on same media must produce identical track keyframe lists (AC-08).
+
+        Red: track_cli not called; track is always None, so comparison trivially
+        passes but the test intent (non-None track identity) will fail.
+        """
+        opts = _make_track_opts()
+        fake_run = MagicMock(
+            returncode=0,
+            stdout=_make_track_result_json(3),
+            stderr="",
+        )
+
+        media_path = tmp_path / "video.mp4"
+        media_path.write_bytes(b"dummy")
+
+        def _run_once(suffix: str) -> list[Any]:
+            out = tmp_path / f"out_{suffix}.otio"
+            with (
+                patch(
+                    "clipwright_reframe.reframe.inspect_media",
+                    side_effect=lambda p: _make_media_info(str(p)),
+                ),
+                patch("clipwright.process.run", return_value=fake_run),
+                patch("clipwright_reframe.reframe.ReframeOptions.model_validate",
+                      return_value=opts),
+            ):
+                reframe(
+                    media=str(media_path),
+                    output=str(out),
+                    options=opts,
+                    timeline=None,
+                )
+            tl = otio.adapters.read_from_file(str(out))
+            meta = dict(tl.metadata.get("clipwright", {}).get("reframe", {}))
+            return meta.get("track")  # type: ignore[return-value]
+
+        track1 = _run_once("run1")
+        track2 = _run_once("run2")
+
+        assert track1 is not None, "First track run must produce a non-None track"
+        assert track2 is not None, "Second track run must produce a non-None track"
+        assert track1 == track2, (
+            f"Idempotency violated: track lists differ.\n"
+            f"  run1: {track1}\n  run2: {track2}"
+        )
+
+    # -----------------------------------------------------------------------
+    # H-7: CWE-209 — warning must not expose path or stack
+    # -----------------------------------------------------------------------
+
+    def test_warning_no_path_leak_on_dependency_missing(self, tmp_path: Path) -> None:
+        """CWE-209: DEPENDENCY_MISSING warning must not echo the media file path.
+
+        Red: reframe.py does not generate fallback warnings.
+        """
+        media_path = tmp_path / "secret_video_name.mp4"
+        media_path.write_bytes(b"dummy")
+        output_path = tmp_path / "out.otio"
+        opts = _make_track_opts()
+        fake_run = MagicMock(
+            returncode=0,
+            stdout=_DEPENDENCY_MISSING_JSON,
+            stderr="",
+        )
+
+        with (
+            patch(
+                "clipwright_reframe.reframe.inspect_media",
+                side_effect=lambda p: _make_media_info(str(p)),
+            ),
+            patch("clipwright.process.run", return_value=fake_run),
+            patch("clipwright_reframe.reframe.ReframeOptions.model_validate",
+                  return_value=opts),
+        ):
+            result = reframe(
+                media=str(media_path),
+                output=str(output_path),
+                options=opts,
+                timeline=None,
+            )
+
+        assert result["ok"] is True
+        warnings = result.get("warnings", [])
+        for w in warnings:
+            w_str = str(w)
+            assert "secret_video_name" not in w_str, (
+                f"CWE-209: media filename must not appear in warning: {w_str!r}"
+            )
+            assert str(tmp_path) not in w_str, (
+                f"CWE-209: full path must not appear in warning: {w_str!r}"
+            )
+            assert "Traceback" not in w_str, (
+                f"CWE-209: stack trace must not appear in warning: {w_str!r}"
+            )
+
+    def test_warning_no_stack_leak_on_run_exception(self, tmp_path: Path) -> None:
+        """CWE-209: warning from run() exception must not contain stack trace.
+
+        Red: reframe.py does not call track_cli, so no warning is generated at all.
+        """
+        from clipwright.errors import ClipwrightError, ErrorCode
+
+        media_path = tmp_path / "video.mp4"
+        media_path.write_bytes(b"dummy")
+        output_path = tmp_path / "out.otio"
+        opts = _make_track_opts()
+
+        with (
+            patch(
+                "clipwright_reframe.reframe.inspect_media",
+                side_effect=lambda p: _make_media_info(str(p)),
+            ),
+            patch(
+                "clipwright.process.run",
+                side_effect=ClipwrightError(
+                    code=ErrorCode.SUBPROCESS_FAILED,
+                    message="internal error",
+                    hint="retry",
+                ),
+            ),
+            patch("clipwright_reframe.reframe.ReframeOptions.model_validate",
+                  return_value=opts),
+        ):
+            result = reframe(
+                media=str(media_path),
+                output=str(output_path),
+                options=opts,
+                timeline=None,
+            )
+
+        assert result["ok"] is True
+        for w in result.get("warnings", []):
+            assert "Traceback" not in str(w), (
+                f"CWE-209: stack trace must not appear in warning: {w!r}"
+            )
