@@ -241,15 +241,16 @@ order-sensitive. The **clean chain** below avoids fragmented captions:
 5. **Render again with subtitles** using the transcription OTIO as the timeline source:
    ```
    clipwright_render(timeline="cut.otio", output="final.mp4",
-                     options={subtitle: {path: "cut.srt"}})  # or wrapped.srt
+                     options={"subtitle": {"path": "cut.srt"}})  # or wrapped.srt
    ```
 
 **Why this order matters:**
 If you transcribe the original source first, every cue is anchored to original-media
 timestamps. When `clipwright_render` later applies the silence cuts, cues that straddle
 a cut boundary are split or clipped — even with `retime_markers="auto"` engaged.
-`clipwright_render` detects this condition and emits a `"fragmented by cuts"` advisory in
-`warnings`, but the fragmentation cannot be fully eliminated at render time because the
+`clipwright_render` detects this condition and emits a warning containing
+`fragmented by cuts` in `warnings`, but the fragmentation cannot be fully eliminated at
+render time because the
 cue text itself was aligned to the un-cut timeline. Transcribing the already-cut video
 eliminates this problem entirely.
 

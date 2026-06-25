@@ -71,9 +71,10 @@ def clipwright_render(
     Workflow note: when burning captions onto silence-cut footage, the recommended
     order is to render the cut first, then transcribe the rendered video, then render
     again with subtitles — rather than transcribing the original source and relying
-    on retime_markers="auto". retime_markers can re-time cues to program coordinates,
-    but cuts that fall mid-phrase still produce split or clipped captions and trigger
-    a "fragmented by cuts" advisory. See README "Recommended Workflows".
+    on retime_markers="auto". retime_markers can re-time cues to program coordinates
+    (only .srt subtitles are re-timed; .vtt and .ass are skipped), but cuts that fall
+    mid-phrase still produce split or clipped captions and trigger a warning containing
+    "fragmented by cuts". See README "Recommended Workflows".
     """
     resolved_options = options if options is not None else RenderOptions()
     return render_timeline(

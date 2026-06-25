@@ -236,11 +236,11 @@ src/clipwright/
 5. **字幕付きで再 render** する。timeline には step3 の transcription OTIO を使う:
    ```
    clipwright_render(timeline="cut.otio", output="final.mp4",
-                     options={subtitle: {path: "cut.srt"}})  # または wrapped.srt
+                     options={"subtitle": {"path": "cut.srt"}})  # または wrapped.srt
    ```
 
 **この順序が重要な理由:**
-元素材を先に transcribe すると、すべての cue が元尺のタイムスタンプに固定される。その後 `clipwright_render` で無音カットを適用したとき、カット境界をまたぐ cue は split または clip される。`retime_markers="auto"`（デフォルト）を使っても同様で、render はこの状態を検出して `"fragmented by cuts"` advisory を `warnings` に出力するが、cue テキスト自体が元尺に合わせて区切られているため render 段階での完全な解消はできない。カット済み動画を transcribe することでこの問題をそもそも回避できる。
+元素材を先に transcribe すると、すべての cue が元尺のタイムスタンプに固定される。その後 `clipwright_render` で無音カットを適用したとき、カット境界をまたぐ cue は split または clip される。`retime_markers="auto"`（デフォルト）を使っても同様で、render はこの状態を検出して `fragmented by cuts` を含む warning を `warnings` に出力するが、cue テキスト自体が元尺に合わせて区切られているため render 段階での完全な解消はできない。カット済み動画を transcribe することでこの問題をそもそも回避できる。
 
 ---
 
