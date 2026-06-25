@@ -69,6 +69,12 @@ _ALLOWED_IMAGE_EXTENSIONS: frozenset[str] = frozenset(
 # Maximum .srt file size accepted for re-timing (SR-L-2)
 _MAX_SRT_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB
 
+# G Layer 1: when this many SRT cues are fragmented by cuts (split or clipped),
+# emit a prescriptive advisory recommending the correct edit order
+# (cut -> render -> transcribe -> burn). One fragmented cue is a benign edge;
+# two or more signal a systematic cut-grid vs cue-grid mismatch.
+_CUE_FRAGMENTATION_ADVISORY_THRESHOLD = 2
+
 
 def _probe(source: str) -> ProbeInfo:
     """Call inspect_media and return ProbeInfo (AD-3 / ADR-C2-r2).
@@ -546,6 +552,7 @@ def _generate_retimed_srt(
 
     new_cues: list[_retiming.SrtCue] = []
     warnings: list[str] = []
+    fragmented_cues = 0  # G Layer 1: distinct cues that were split OR clipped
 
     for cue in cues:
         rr = _retiming.remap_window(tmap, cue.start, cue.end)
@@ -571,6 +578,12 @@ def _generate_retimed_srt(
             delta = first_start_s - orig_start_s
             warnings.append(f"caption cue {label} shifted by {delta:.3f}s")
 
+        # G Layer 1: count this cue once if it was fragmented (split or clipped).
+        # Counted per-cue (not split+clipped separately) because a single cue can
+        # be both split and clipped; summing the two flags would double-count it.
+        if rr.split or rr.clipped:
+            fragmented_cues += 1
+
         for win in rr.windows:
             new_cues.append(
                 _retiming.SrtCue(
@@ -579,6 +592,16 @@ def _generate_retimed_srt(
                     text=cue.text,
                 )
             )
+
+    # G Layer 1: if two or more distinct cues were fragmented, emit a prescriptive
+    # advisory recommending the correct cut -> render -> transcribe -> burn order.
+    if fragmented_cues >= _CUE_FRAGMENTATION_ADVISORY_THRESHOLD:
+        warnings.append(
+            f"{fragmented_cues} subtitle cue(s) were fragmented by cuts"
+            " (split/clipped). For clean captions, cut first and render the cut"
+            " program, then transcribe the rendered cut, then burn captions onto it"
+            " (order: cut -> render -> transcribe -> burn)."
+        )
 
     # Decision A: all cues dropped — do not write empty SRT, skip subtitle filter
     if not new_cues:
