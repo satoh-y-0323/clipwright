@@ -1514,3 +1514,109 @@ class TestNMaxSync:
             f" render._N_MAX_TRACK={plan_mod._N_MAX_TRACK}."
             "  Update all three constants together (reframe / track_cli / render)."
         )
+
+    def test_max_timeout_duration_mirrors_track_cli(self) -> None:
+        """reframe._MAX_TIMEOUT_DURATION_S must equal track_cli._MAX_DURATION_S.
+
+        Independent-copy pattern: each module holds its own constant.  This test
+        acts as a CI lock so a drift between the two constants triggers a visible
+        test failure (SR-V-001 / CWE-400).
+        """
+        from clipwright_reframe import reframe as reframe_mod
+        from clipwright_reframe import track_cli
+
+        assert reframe_mod._MAX_TIMEOUT_DURATION_S == track_cli._MAX_DURATION_S, (
+            f"Mismatch: reframe._MAX_TIMEOUT_DURATION_S={reframe_mod._MAX_TIMEOUT_DURATION_S}"
+            f" track_cli._MAX_DURATION_S={track_cli._MAX_DURATION_S}."
+            "  Update both constants together."
+        )
+
+
+# ===========================================================================
+# I. _run_track_cli timeout overflow guard (SR-V-001 / CWE-400)
+# ===========================================================================
+
+
+class TestRunTrackCliTimeoutGuard:
+    """Verify that extreme duration_sec values do not cause OverflowError in
+    _run_track_cli's timeout calculation (SR-V-001 / CWE-400).
+
+    Covers the reframe.py-side residual path that exists independently of the
+    track_cli argparse upper-bound validators.
+    """
+
+    def _assert_constant_center_fallback(
+        self, track: object, warnings: list[str]
+    ) -> None:
+        """Assert track is the constant-center fallback and at least one warning exists."""
+        from clipwright_reframe.schemas import CentreKeyframe
+
+        assert isinstance(track, list) and len(track) == 1, (
+            f"Expected list of 1 CentreKeyframe, got: {track!r}"
+        )
+        kf = track[0]
+        assert isinstance(kf, CentreKeyframe), (
+            f"Expected CentreKeyframe, got: {type(kf)}"
+        )
+        assert kf.t_s == 0.0 and kf.cx == 0.5 and kf.cy == 0.5, (
+            f"Expected constant-center keyframe (t_s=0, cx=0.5, cy=0.5), got: {kf}"
+        )
+        assert len(warnings) >= 1, "Fallback must emit at least one warning"
+
+    def test_duration_inf_falls_back_ok_true(self, tmp_path: Path) -> None:
+        """duration_sec=inf must not raise OverflowError; fallback returns constant-center.
+
+        SR-V-001: _run_track_cli clamps duration_sec to _MAX_TIMEOUT_DURATION_S
+        before multiplying by 4, so math.ceil() never sees inf.
+        The subprocess is patched to raise immediately; graceful fallback is expected.
+        """
+        import math
+
+        from clipwright.errors import ClipwrightError, ErrorCode
+        from clipwright_reframe.reframe import _run_track_cli
+
+        # Verify the precondition: inf * 4 would be OverflowError without the guard.
+        try:
+            math.ceil(float("inf"))
+            raise AssertionError("Expected OverflowError from math.ceil(inf)")
+        except OverflowError:
+            pass  # confirms the risk is real
+
+        with patch(
+            "clipwright.process.run",
+            side_effect=ClipwrightError(
+                code=ErrorCode.SUBPROCESS_FAILED,
+                message="mocked failure",
+                hint="test",
+            ),
+        ):
+            track, warnings = _run_track_cli(
+                media="/fake/video.mp4",
+                duration_sec=float("inf"),
+            )
+
+        self._assert_constant_center_fallback(track, warnings)
+
+    def test_duration_extreme_large_falls_back_ok_true(self, tmp_path: Path) -> None:
+        """duration_sec=1e308 must not raise OverflowError; fallback returns constant-center.
+
+        1e308 is a finite float.  Without the clamp, 1e308 * 4 = inf and
+        math.ceil(inf) raises OverflowError outside the except ClipwrightError block.
+        """
+        from clipwright.errors import ClipwrightError, ErrorCode
+        from clipwright_reframe.reframe import _run_track_cli
+
+        with patch(
+            "clipwright.process.run",
+            side_effect=ClipwrightError(
+                code=ErrorCode.SUBPROCESS_FAILED,
+                message="mocked failure",
+                hint="test",
+            ),
+        ):
+            track, warnings = _run_track_cli(
+                media="/fake/video.mp4",
+                duration_sec=1e308,
+            )
+
+        self._assert_constant_center_fallback(track, warnings)

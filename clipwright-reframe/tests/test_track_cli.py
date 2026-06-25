@@ -1046,6 +1046,10 @@ class TestArgparseUpperBounds:
         assert "error" in data, (
             f"Expected error for fps=1e308, got: {list(data.keys())}"
         )
+        # Must be INVALID_INPUT (argparse rejection), not INTERNAL (exception path).
+        assert "INVALID_INPUT" in str(data["error"].get("code", "")), (
+            f"Expected INVALID_INPUT code, got: {data['error']}"
+        )
         combined = stdout + stderr
         assert "OverflowError" not in combined, (
             "OverflowError must not appear for fps=1e308"
@@ -1053,7 +1057,7 @@ class TestArgparseUpperBounds:
         assert "Traceback" not in combined, "Traceback must not appear for fps=1e308"
 
     def test_width_1e6_rejected(self) -> None:
-        """--width 1000000 (> 7680) must return INVALID_INPUT JSON."""
+        """--width 1000000 (> 7680) must return INVALID_INPUT JSON without OverflowError."""
         stdout, stderr = self._run_main_capture(
             ["--media", "/fake/v.mp4", "--width", "1000000"]
         )
@@ -1061,6 +1065,17 @@ class TestArgparseUpperBounds:
         data = json.loads(stdout)
         assert "error" in data, (
             f"Expected error for width=1000000, got: {list(data.keys())}"
+        )
+        # Must be INVALID_INPUT (argparse rejection), not INTERNAL (exception path).
+        assert "INVALID_INPUT" in str(data["error"].get("code", "")), (
+            f"Expected INVALID_INPUT code, got: {data['error']}"
+        )
+        combined = stdout + stderr
+        assert "OverflowError" not in combined, (
+            "OverflowError must not appear for width=1000000"
+        )
+        assert "Traceback" not in combined, (
+            "Traceback must not appear for width=1000000"
         )
 
     def test_media_duration_valid_max_not_rejected(self) -> None:

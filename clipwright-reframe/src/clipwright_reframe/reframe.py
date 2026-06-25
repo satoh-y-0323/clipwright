@@ -59,6 +59,11 @@ _CONSTANT_CENTER_TRACK: list[dict[str, float]] = [{"t_s": 0.0, "cx": 0.5, "cy": 
 # locked by test_reframe.py::TestNMaxSync.
 _TRACK_MAX_KEYFRAMES = 80
 
+# Upper bound for duration_sec in timeout calculation (CWE-400 / SR-V-001).
+# Mirrors track_cli._MAX_DURATION_S (10 years).  track_cli is not imported by
+# the MCP server process (numpy isolation); duplicate constant is intentional.
+_MAX_TIMEOUT_DURATION_S: float = 315_360_000.0  # 10 years in seconds
+
 
 def reframe(
     media: str,
@@ -273,7 +278,16 @@ def _run_track_cli(
     Returns:
         (track_keyframes, warnings)
     """
-    timeout = float(max(60, math.ceil(duration_sec * 4))) if duration_sec > 0 else 120.0
+    # Clamp duration_sec before multiplication to prevent OverflowError on
+    # non-finite or extreme ffprobe-derived values (CWE-400 / SR-V-001).
+    if duration_sec > 0:
+        safe_dur = min(duration_sec, _MAX_TIMEOUT_DURATION_S)
+        _prod = safe_dur * 4
+        timeout = float(
+            max(60, math.ceil(_prod) if math.isfinite(_prod) else 1_261_440_000)
+        )
+    else:
+        timeout = 120.0
 
     cmd = [
         sys.executable,
