@@ -267,7 +267,20 @@ it for `wrap`/core) to re-segment cues to the cut grid.
 
 ---
 
-### Content-aware / subject-tracking reframe  *Medium–High*  *(reframe extension)*
+### Content-aware / subject-tracking reframe  *Medium–High*  *(reframe extension)*  ✅ **SHIPPED (reframe 0.2.0 / render 0.13.0)**
+
+> Shipped as a motion-centroid `mode="track"` fit mode on `clipwright-reframe`. At annotation
+> time the tool detects the motion centroid over time and writes a normalised keyframe track
+> (`[{t_s, cx, cy}]`, `cx`/`cy` in `0..1`, capped at **80 keyframes** for the FFmpeg
+> filter-expression length limit) into the reframe directive; `clipwright-render` materialises it
+> as a time-varying, subject-following crop with piecewise-linear `x(t)`/`y(t)` interpolation that
+> preserves the target aspect ratio. Detection runs in a separate process using numpy, shipped as
+> an optional extra (`pip install clipwright-reframe[track]`); when numpy is missing or detection
+> fails the tool **falls back to a static centre crop** (`ok: true`, warning only) so a vertical
+> video is always produced. Existing `crop` / `pad` / `blur_pad` modes are unchanged. A
+> multi-source timeline combined with a `track` directive ignores the track and falls back to the
+> per-clip cover crop, with a warning. Motion-centroid only (no ML / face / HUD), per the
+> "scope to motion-only first" hint below. (Originally catalogued below.)
 
 **What it does**
 Drives the crop window for aspect-ratio conversion by content (motion /
@@ -438,6 +451,6 @@ color        ✓
 1. ~~**D1 — render transition 4:4:4** (High): ships unplayable deliverables; contained `format=yuv420p` fix.~~ ✅ **FIXED (render 0.11.1)** — `-pix_fmt yuv420p` pinned in `_build_ffmpeg_args()`.
 2. **G — cut-aware caption alignment** (High): the silence+subtitle combination degrades caption quality. Split by home: the *ordering* fix is orchestration, not a tool. ✅ **Layers 1 & 2 SHIPPED (render 0.12.0 / transcribe 0.3.1 / silence 0.2.1)** — Layer 1 makes render's fragmentation advisory prescribe the clean "cut → render → transcribe → burn" order (helps every AI user, zero setup); Layer 2 carries that guidance in the always-visible channels (tool docstrings + README "Recommended Workflows"), not a user-authored skill. **Layer 3** (cue-boundary snapping input to `silence`) remains deferred until a true single pass is required.
 3. ~~**D2 — scene PySceneDetect 0.7 incompat** (Medium): the content-aware backend is dead against current PySceneDetect; contained CSV-file fix.~~ ✅ **FIXED (scene 0.2.1)** — `list-scenes -o <tmpdir>` CSV-file read.
-4. **Content-aware reframe** (Medium–High): static vertical reframe caps shorts quality.
+4. ~~**Content-aware reframe** (Medium–High): static vertical reframe caps shorts quality.~~ ✅ **SHIPPED (reframe 0.2.0 / render 0.13.0)** — motion-centroid `mode="track"` writes a keyframed crop-centre track that render materialises as a subject-following crop; falls back to a static centre crop when the optional `[track]` (numpy) extra is absent.
 5. **Scene-driven frames** / **trim ergonomics** / **path-policy consistency** (Medium): composition and DX gaps.
 6. **HW decode for filter graphs** (Low): known spec3 limit.
