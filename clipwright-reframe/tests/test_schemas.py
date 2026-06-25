@@ -6,6 +6,7 @@ Tests cover:
 - AC-05: pad_color allowlist (filtergraph injection prevention)
 - Literal validation for mode / anchor
 - D3: directive dict shape freeze (both-sides contract)
+- track mode: CentreKeyframe + ReframeDirective.track (DC-GP-001)
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from clipwright_reframe.schemas import ReframeDirective, ReframeOptions
+from clipwright_reframe.schemas import CentreKeyframe, ReframeDirective, ReframeOptions
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -291,9 +292,22 @@ def test_reframe_options_extra_field_raises() -> None:
 # coordinated with the render side (_RenderReframe in plan.py).
 # ---------------------------------------------------------------------------
 
-# D3 contract: canonical key set for the directive dict
+# D3 contract: canonical key set for the directive dict.
+# "track" is included because mode="track" directives carry a track list.
+# Static-mode directives serialise track=None which model_dump() renders as
+# {"track": None}, so track is always present in the dumped dict.
 _D3_REQUIRED_KEYS = frozenset(
-    {"tool", "version", "kind", "target_w", "target_h", "mode", "anchor", "pad_color"}
+    {
+        "tool",
+        "version",
+        "kind",
+        "target_w",
+        "target_h",
+        "mode",
+        "anchor",
+        "pad_color",
+        "track",
+    }
 )
 
 
@@ -359,6 +373,7 @@ def test_reframe_directive_generates_correct_dict() -> None:
         "mode": "crop",
         "anchor": "top_left",
         "pad_color": "white",
+        "track": None,
     }
 
 
@@ -402,3 +417,119 @@ def test_reframe_directive_extra_field_raises() -> None:
             target_h=1080,
             unknown="should_fail",  # type: ignore[call-arg]
         )
+
+
+# ---------------------------------------------------------------------------
+# track mode: CentreKeyframe + ReframeDirective.track (DC-GP-001 / DC-AM-001)
+# ---------------------------------------------------------------------------
+
+
+def test_centre_keyframe_valid() -> None:
+    """CentreKeyframe must accept values within valid ranges."""
+    kf = CentreKeyframe(t_s=0.0, cx=0.5, cy=0.5)
+    assert kf.t_s == 0.0
+    assert kf.cx == 0.5
+    assert kf.cy == 0.5
+
+
+def test_centre_keyframe_negative_t_s_raises() -> None:
+    """t_s < 0.0 must raise ValidationError."""
+    with pytest.raises(ValidationError):
+        CentreKeyframe(t_s=-0.1, cx=0.5, cy=0.5)
+
+
+@pytest.mark.parametrize("bad_val", [-0.01, 1.01, 2.0])
+def test_centre_keyframe_cx_out_of_range_raises(bad_val: float) -> None:
+    """cx outside [0.0, 1.0] must raise ValidationError."""
+    with pytest.raises(ValidationError):
+        CentreKeyframe(t_s=0.0, cx=bad_val, cy=0.5)
+
+
+@pytest.mark.parametrize("bad_val", [-0.01, 1.01, 2.0])
+def test_centre_keyframe_cy_out_of_range_raises(bad_val: float) -> None:
+    """cy outside [0.0, 1.0] must raise ValidationError."""
+    with pytest.raises(ValidationError):
+        CentreKeyframe(t_s=0.0, cx=0.5, cy=bad_val)
+
+
+def test_centre_keyframe_extra_field_raises() -> None:
+    """CentreKeyframe must reject unknown fields (extra='forbid')."""
+    with pytest.raises(ValidationError):
+        CentreKeyframe(t_s=0.0, cx=0.5, cy=0.5, unknown="x")  # type: ignore[call-arg]
+
+
+def test_centre_keyframe_boundary_values() -> None:
+    """cx=0.0, cy=1.0 must be accepted (boundary values)."""
+    kf = CentreKeyframe(t_s=0.0, cx=0.0, cy=1.0)
+    assert kf.cx == 0.0
+    assert kf.cy == 1.0
+
+
+def test_reframe_directive_mode_track_accepted() -> None:
+    """mode='track' must be a valid literal in ReframeDirective (DC-AM-001)."""
+    directive = ReframeDirective(
+        version="0.3.0",
+        kind="reframe",
+        target_w=1080,
+        target_h=1920,
+        mode="track",
+        track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}],
+    )
+    assert directive.mode == "track"
+
+
+def test_reframe_directive_track_mode_model_dump_shape() -> None:
+    """mode='track' directive model_dump() must have track elements with {t_s, cx, cy}
+    only, values in range, and mode=='track' (DC-AM-001 — not version-based).
+    """
+    kfs = [
+        {"t_s": 0.0, "cx": 0.3, "cy": 0.4},
+        {"t_s": 1.0, "cx": 0.6, "cy": 0.7},
+    ]
+    directive = ReframeDirective(
+        version="0.3.0",
+        kind="reframe",
+        target_w=1080,
+        target_h=1920,
+        mode="track",
+        track=kfs,
+    )
+    dumped = directive.model_dump()
+
+    # Identification is by mode, not version (DC-AM-001).
+    assert dumped["mode"] == "track"
+
+    # Each keyframe must contain exactly {t_s, cx, cy}.
+    assert dumped["track"] is not None
+    for item in dumped["track"]:
+        assert set(item.keys()) == {"t_s", "cx", "cy"}
+        assert 0.0 <= item["cx"] <= 1.0
+        assert 0.0 <= item["cy"] <= 1.0
+        assert item["t_s"] >= 0.0
+
+
+def test_reframe_directive_track_none_for_static_modes() -> None:
+    """Static modes (crop / pad / blur_pad) must have track=None by default."""
+    for mode in ("crop", "pad", "blur_pad"):
+        directive = ReframeDirective(
+            version="0.3.0",
+            kind="reframe",
+            target_w=1920,
+            target_h=1080,
+            mode=mode,  # type: ignore[arg-type]
+        )
+        assert directive.track is None, f"Expected track=None for mode={mode}"
+
+
+def test_reframe_directive_key_set_includes_track() -> None:
+    """model_dump() of a static-mode directive must include 'track' key (frozen D3 contract)."""
+    directive = ReframeDirective(
+        version="0.3.0",
+        kind="reframe",
+        target_w=1920,
+        target_h=1080,
+    )
+    actual_keys = frozenset(directive.model_dump().keys())
+    assert "track" in actual_keys, (
+        "D3 contract violation: 'track' key missing from model_dump()"
+    )

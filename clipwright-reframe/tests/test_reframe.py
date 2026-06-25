@@ -400,6 +400,7 @@ class TestDirectiveAnnotation:
                 "mode",
                 "anchor",
                 "pad_color",
+                "track",
             }
         )
         actual_keys = frozenset(meta.keys())

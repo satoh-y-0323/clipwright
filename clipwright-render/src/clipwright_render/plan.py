@@ -2048,6 +2048,21 @@ _AnchorLiteral = Literal[
 ]
 
 
+class _RenderCentreKeyframe(BaseModel):
+    """Reader-side motion-centroid keyframe (both-sides contract — DC-AM-007).
+
+    The writer-side equivalent is CentreKeyframe in clipwright-reframe.schemas.
+    Defined independently here to ensure the reader validates incoming data
+    without a hard dependency on clipwright-reframe (defence-in-depth).
+    """
+
+    model_config = {"extra": "forbid", "allow_inf_nan": False}
+
+    t_s: Annotated[float, Field(ge=0.0)]
+    cx: Annotated[float, Field(ge=0.0, le=1.0)]
+    cy: Annotated[float, Field(ge=0.0, le=1.0)]
+
+
 class _RenderReframe(BaseModel):
     """Reader-side validation model for the reframe directive (architecture §7.4).
 
@@ -2055,15 +2070,20 @@ class _RenderReframe(BaseModel):
     (writer).  Reader must not be stricter than writer on range; even-number
     constraint is defence-in-depth (AC-03).  Unknown keys forbidden; inf/nan
     rejected (CWE-20).
+
+    Track / static identification is done via mode=='track' (DC-AM-001).
+    The 'track' field carries the motion-centroid keyframe list for mode='track';
+    it is None for all other modes.
     """
 
     model_config = {"extra": "forbid", "allow_inf_nan": False}
 
     target_w: Annotated[int, Field(ge=2, le=7680)]
     target_h: Annotated[int, Field(ge=2, le=7680)]
-    mode: Literal["crop", "pad", "blur_pad"] = "pad"
+    mode: Literal["crop", "pad", "blur_pad", "track"] = "pad"
     anchor: _AnchorLiteral = "center"
     pad_color: Annotated[str, Field(max_length=64)] = "black"
+    track: list[_RenderCentreKeyframe] | None = None
 
     @field_validator("target_w")
     @classmethod
@@ -2105,9 +2125,12 @@ def _validate_reframe(raw: dict[str, Any] | None) -> _RenderReframe | None:
         return None
 
     # Extract only the keys _RenderReframe accepts.
+    # "track" must be included here; omitting it would silently drop all keyframe
+    # data and cause every track-mode render to fall back to a static centre crop
+    # without any error or warning (DC-GP-001).
     filtered: dict[str, Any] = {
         k: raw[k]
-        for k in ("target_w", "target_h", "mode", "anchor", "pad_color")
+        for k in ("target_w", "target_h", "mode", "anchor", "pad_color", "track")
         if k in raw
     }
 
