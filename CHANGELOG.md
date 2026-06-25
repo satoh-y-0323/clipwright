@@ -5,6 +5,38 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] - 2026-06-25
+
+Cut-aware caption guidance (spec4 "G"). When silence-cutting and burning transcribed
+captions are combined, transcribing the un-cut source first leaves cues anchored to the
+original timeline, so cuts that fall mid-phrase fragment the captions. This release adds a
+render-side advisory that detects the condition and prescribes the correct order, plus
+proactive workflow guidance in the tool descriptions and the README.
+
+### Added (`clipwright-render` v0.12.0)
+
+- **Cut-aware caption fragmentation advisory**: when subtitle re-timing finds that two or
+  more caption cues were fragmented by cuts (split or clipped), `clipwright_render` now
+  appends a single advisory to `warnings` prescribing the clean order — render the cut
+  program first, then transcribe the rendered cut, then burn captions onto it
+  (`cut -> render -> transcribe -> burn`). The advisory is additive: existing per-cue
+  re-timing warnings, the envelope contract, and all render output are unchanged.
+
+### Changed (`clipwright-render` v0.12.0 / `clipwright-transcribe` v0.3.1 / `clipwright-silence` v0.2.1)
+
+- **Workflow guidance in tool descriptions**: the `clipwright_render`,
+  `clipwright_transcribe`, and `clipwright_detect_silence` docstrings now point to the
+  recommended "transcribe the cut program, not the original" order for burning captions
+  onto silence-cut footage. A new "Recommended Workflows" section in `README.md` /
+  `README.ja.md` documents the full chain.
+
+### Fixed (`clipwright-silence` v0.2.1)
+
+- **Reported version drift**: `clipwright_silence.__version__` lagged the packaged version
+  (`0.1.1` while the distribution was `0.2.0`), so the `metadata["clipwright"]["version"]`
+  written into output timelines under-reported the real version. The in-package version is
+  now aligned, so emitted OTIO metadata reports the correct version.
+
 ## [0.19.0] - 2026-06-25
 
 ### Fixed (`clipwright-scene` v0.2.1)

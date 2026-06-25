@@ -163,7 +163,21 @@ PySceneDetect version in the README's optional-dependency note.
 
 ## Missing Features / Friction
 
-### `clipwright-silence` cut-aware caption alignment (or caption-aware cutting)  *High*  *(silence/transcribe/render interplay)*
+### `clipwright-silence` cut-aware caption alignment (or caption-aware cutting)  *High*  *(silence/transcribe/render interplay)*  ✅ **Layers 1 & 2 SHIPPED (render 0.12.0 / transcribe 0.3.1 / silence 0.2.1)**
+
+> **Layer 1 (shipped, render 0.12.0)** — `clipwright_render` now detects cue fragmentation
+> (two or more cues split/clipped by cuts) and appends a single advisory to `warnings`
+> prescribing the clean `cut -> render -> transcribe -> burn` order. Computed from the
+> existing `RemapResult` split/clipped flags; additive to the per-cue warnings; no
+> envelope/schema change.
+> **Layer 2 (shipped, render 0.12.0 / transcribe 0.3.1 / silence 0.2.1)** — proactive
+> workflow guidance now lives in the always-visible channels: the `clipwright_render` /
+> `clipwright_transcribe` / `clipwright_detect_silence` docstrings point to the clean
+> order, and a "Recommended Workflows" section in `README.md` / `README.ja.md` documents
+> the full chain. MCP-prompt and bundled-skill channels were considered and declined
+> (one-server-per-tool has no natural host for a cross-tool prompt; a Claude-Code-only
+> skill file serves too narrow an audience). **Layer 3 (snapping primitive) remains
+> deferred** until a true single-pass requirement arises. (Originally catalogued below.)
 
 **What it does**
 Reconciles silence-cutting with transcription so that burning captions onto a
@@ -402,7 +416,7 @@ color        ✓
 ## Priority summary
 
 1. ~~**D1 — render transition 4:4:4** (High): ships unplayable deliverables; contained `format=yuv420p` fix.~~ ✅ **FIXED (render 0.11.1)** — `-pix_fmt yuv420p` pinned in `_build_ffmpeg_args()`.
-2. **G — cut-aware caption alignment** (High): the silence+subtitle combination degrades caption quality today. Split by home: the *ordering* fix is orchestration, not a tool — so Layer 1 makes render's fragmentation hint prescribe the clean "cut → render → transcribe → burn" order (helps every AI user, zero setup), Layer 2 ships that workflow as an official reference skill rather than making each user author one, and Layer 3 adds a cue-boundary snapping input to `silence` only if a true single pass is ever required.
+2. **G — cut-aware caption alignment** (High): the silence+subtitle combination degrades caption quality. Split by home: the *ordering* fix is orchestration, not a tool. ✅ **Layers 1 & 2 SHIPPED (render 0.12.0 / transcribe 0.3.1 / silence 0.2.1)** — Layer 1 makes render's fragmentation advisory prescribe the clean "cut → render → transcribe → burn" order (helps every AI user, zero setup); Layer 2 carries that guidance in the always-visible channels (tool docstrings + README "Recommended Workflows"), not a user-authored skill. **Layer 3** (cue-boundary snapping input to `silence`) remains deferred until a true single pass is required.
 3. ~~**D2 — scene PySceneDetect 0.7 incompat** (Medium): the content-aware backend is dead against current PySceneDetect; contained CSV-file fix.~~ ✅ **FIXED (scene 0.2.1)** — `list-scenes -o <tmpdir>` CSV-file read.
 4. **Content-aware reframe** (Medium–High): static vertical reframe caps shorts quality.
 5. **Scene-driven frames** / **trim ergonomics** / **path-policy consistency** (Medium): composition and DX gaps.
