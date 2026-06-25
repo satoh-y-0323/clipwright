@@ -62,6 +62,10 @@ def clipwright_detect_silence(
 
     Delegates business logic to detect.detect_silence.
     Uses default DetectSilenceOptions() when options is None.
+
+    Workflow note: if you plan to burn captions onto the cut footage, render the
+    silence-cut video first, then transcribe that rendered file so that caption
+    cues align with the cut program timeline. See README "Recommended Workflows".
     """
     resolved_options = options if options is not None else DetectSilenceOptions()
     return detect_silence(

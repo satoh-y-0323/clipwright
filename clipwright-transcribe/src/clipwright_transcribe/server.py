@@ -64,6 +64,13 @@ def clipwright_transcribe(
 
     Business logic is delegated to transcribe.transcribe_media.
     When options is None, default TranscribeOptions() is used.
+
+    Workflow note: when burning captions onto silence-cut footage, transcribe the
+    rendered cut video (not the original source) so that cue timecodes align with
+    the cut program rather than the original media timeline. Transcribing the source
+    first causes cues to be anchored at original-media timestamps; cuts that fall
+    mid-phrase then split or clip captions during render. See README "Recommended
+    Workflows" for the full step-by-step chain.
     """
     resolved_options = options if options is not None else TranscribeOptions()
     return transcribe_media(

@@ -213,6 +213,48 @@ For details, see [docs/clipwright-spec.md](docs/clipwright-spec.md).
 
 ---
 
+## Recommended Workflows
+
+### Burning captions onto silence-cut footage
+
+Two of the most common editing operations — silence removal and caption burn-in — are
+order-sensitive. The **clean chain** below avoids fragmented captions:
+
+1. **Detect silence** in the original media and produce a KEEP-range OTIO timeline:
+   ```
+   clipwright_detect_silence(media="source.mp4", output="silence.otio")
+   ```
+2. **Render the cut video** to materialise the silence OTIO into an actual file:
+   ```
+   clipwright_render(timeline="silence.otio", output="cut.mp4")
+   ```
+3. **Transcribe the cut video** (not the original source) to generate cues whose
+   timestamps are anchored to the cut program:
+   ```
+   clipwright_transcribe(media="cut.mp4", output="cut.otio")
+   → artifacts: [{role:"timeline", path:"cut.otio"}, {role:"captions", path:"cut.srt"}, ...]
+   ```
+4. *(Optional)* **Wrap captions** for line-length if needed:
+   ```
+   clipwright_wrap_text(timeline="cut.otio", ...)  → wrapped.srt
+   ```
+5. **Render again with subtitles** using the transcription OTIO as the timeline source:
+   ```
+   clipwright_render(timeline="cut.otio", output="final.mp4",
+                     options={subtitle: {path: "cut.srt"}})  # or wrapped.srt
+   ```
+
+**Why this order matters:**
+If you transcribe the original source first, every cue is anchored to original-media
+timestamps. When `clipwright_render` later applies the silence cuts, cues that straddle
+a cut boundary are split or clipped — even with `retime_markers="auto"` engaged.
+`clipwright_render` detects this condition and emits a `"fragmented by cuts"` advisory in
+`warnings`, but the fragmentation cannot be fully eliminated at render time because the
+cue text itself was aligned to the un-cut timeline. Transcribing the already-cut video
+eliminates this problem entirely.
+
+---
+
 ## Available Tools
 
 | Package | MCP Tool | Description |

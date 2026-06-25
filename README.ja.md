@@ -210,6 +210,40 @@ src/clipwright/
 
 ---
 
+## 推奨ワークフロー
+
+### 無音カット動画への字幕焼き込み
+
+無音除去と字幕焼き込みは、どちらも頻出の編集操作だが**順序が重要**。以下の**クリーン連鎖**で断片化のない字幕を得られる。
+
+1. **無音検出**で元素材から KEEP 範囲 OTIO を生成する:
+   ```
+   clipwright_detect_silence(media="source.mp4", output="silence.otio")
+   ```
+2. **カット動画を render** して OTIO を実ファイルに実体化する:
+   ```
+   clipwright_render(timeline="silence.otio", output="cut.mp4")
+   ```
+3. **カット済み動画を transcribe** する（元素材ではなく）。これにより cue のタイムスタンプがカット後のプログラム基準になる:
+   ```
+   clipwright_transcribe(media="cut.mp4", output="cut.otio")
+   → artifacts: [{role:"timeline", path:"cut.otio"}, {role:"captions", path:"cut.srt"}, ...]
+   ```
+4. *(任意)* 行長が長い場合は **キャプション折り返し**を行う:
+   ```
+   clipwright_wrap_text(timeline="cut.otio", ...)  → wrapped.srt
+   ```
+5. **字幕付きで再 render** する。timeline には step3 の transcription OTIO を使う:
+   ```
+   clipwright_render(timeline="cut.otio", output="final.mp4",
+                     options={subtitle: {path: "cut.srt"}})  # または wrapped.srt
+   ```
+
+**この順序が重要な理由:**
+元素材を先に transcribe すると、すべての cue が元尺のタイムスタンプに固定される。その後 `clipwright_render` で無音カットを適用したとき、カット境界をまたぐ cue は split または clip される。`retime_markers="auto"`（デフォルト）を使っても同様で、render はこの状態を検出して `"fragmented by cuts"` advisory を `warnings` に出力するが、cue テキスト自体が元尺に合わせて区切られているため render 段階での完全な解消はできない。カット済み動画を transcribe することでこの問題をそもそも回避できる。
+
+---
+
 ## 利用可能なツール
 
 | パッケージ | MCP ツール | 説明 |
