@@ -5,6 +5,34 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Motion-tracking reframe. `clipwright-reframe` gains a content-aware `track` fit mode that keeps
+a moving subject in frame when converting 16:9 footage to 9:16 vertical, and `clipwright-render`
+materialises it as a time-varying, subject-following crop.
+
+### Added (`clipwright-reframe` v0.2.0)
+
+- **Motion-tracking reframe (`mode="track"`)**: at annotation time the tool detects the motion
+  centroid over time and writes a normalised keyframe track (`[{t_s, cx, cy}]`, `cx`/`cy` in
+  `0..1`) into the reframe directive for `clipwright-render` to materialise as a subject-following
+  crop. Detection runs in a separate process using numpy, shipped as an **optional extra**
+  (`pip install clipwright-reframe[track]`). When numpy is missing or detection fails, the tool
+  **falls back to a static centre crop** (`ok: true`, no error) and emits a warning describing
+  how to enable tracking — a vertical video is always produced. The keyframe track is capped at
+  **80 keyframes** (an FFmpeg filter-expression length limit); the detector decimates to fit and
+  render uses the received track as-is. The existing `crop` / `pad` / `blur_pad` modes and the
+  default mode (`pad`) are unchanged. `anchor` / `pad_color` are not used in `track` mode.
+
+### Added (`clipwright-render` v0.13.0)
+
+- **Time-varying crop realisation for the `track` directive**: render materialises the
+  motion-centroid keyframe track as a crop-from-source with piecewise-linear `x(t)` / `y(t)`
+  centre interpolation, preserving the target aspect ratio, then scales to the target resolution.
+  Existing `crop` / `pad` / `blur_pad` realisation is unchanged. A multi-source timeline combined
+  with a `track` directive ignores the track and falls back to the existing per-clip cover crop,
+  with a warning.
+
 ## [0.20.0] - 2026-06-25
 
 Cut-aware caption guidance (spec4 "G"). When silence-cutting and burning transcribed
