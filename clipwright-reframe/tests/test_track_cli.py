@@ -27,8 +27,6 @@ AC coverage:
 from __future__ import annotations
 
 import json
-import struct
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -126,9 +124,11 @@ def _make_raw_bytes_onset(
 # which is exactly the expected Red state.
 # ---------------------------------------------------------------------------
 
+
 def _import_track_cli() -> Any:
     """Import clipwright_reframe.track_cli; raises ModuleNotFoundError when absent."""
     import importlib
+
     return importlib.import_module("clipwright_reframe.track_cli")
 
 
@@ -152,15 +152,17 @@ class TestCentroidTracking:
         cli = _import_track_cli()
 
         n_frames = 10
-        raw = _make_raw_bytes_moving_rect(n_frames, rect_w=20, rect_h=20,
-                                          start_col=0, end_col=_W0 - 20)
+        raw = _make_raw_bytes_moving_rect(
+            n_frames, rect_w=20, rect_h=20, start_col=0, end_col=_W0 - 20
+        )
         frames = np.frombuffer(raw, dtype=np.uint8).reshape(n_frames, _H0, _W0)
 
         # Call the internal function that processes frames into (t_s, cx, cy) tuples.
         # Expected interface: _compute_centroids(frames, fps, motion_floor, motion_threshold)
         #   returns list of (t_s, cx, cy).
-        pts = cli._compute_centroids(frames, fps=_FPS, motion_floor=8,
-                                     motion_threshold=_W0 * _H0 * 2)
+        pts = cli._compute_centroids(
+            frames, fps=_FPS, motion_floor=8, motion_threshold=_W0 * _H0 * 2
+        )
 
         assert len(pts) > 0, "Expected at least one centroid point"
         cxs = [p[1] for p in pts if p[1] is not None]
@@ -183,8 +185,9 @@ class TestCentroidTracking:
 
         raw = _make_raw_bytes_moving_rect(8)
         frames = np.frombuffer(raw, dtype=np.uint8).reshape(8, _H0, _W0)
-        pts = cli._compute_centroids(frames, fps=_FPS, motion_floor=8,
-                                     motion_threshold=_W0 * _H0 * 2)
+        pts = cli._compute_centroids(
+            frames, fps=_FPS, motion_floor=8, motion_threshold=_W0 * _H0 * 2
+        )
 
         for t_s, cx, cy in pts:
             assert t_s >= 0.0, f"t_s must be non-negative: {t_s}"
@@ -222,8 +225,9 @@ class TestOnsetSeed:
         n_total = 10
         frames = np.frombuffer(raw, dtype=np.uint8).reshape(n_total, _H0, _W0)
 
-        pts = cli._compute_centroids(frames, fps=_FPS, motion_floor=8,
-                                     motion_threshold=_W0 * _H0 * 2)
+        pts = cli._compute_centroids(
+            frames, fps=_FPS, motion_floor=8, motion_threshold=_W0 * _H0 * 2
+        )
 
         # Apply hold-fill (seed-based) and EMA to get smoothed track
         # Expected interface: _apply_seed_and_ema(raw_pts, ema_alpha)
@@ -248,8 +252,9 @@ class TestOnsetSeed:
 
         raw = _make_raw_bytes_static(8, fill=64)
         frames = np.frombuffer(raw, dtype=np.uint8).reshape(8, _H0, _W0)
-        pts = cli._compute_centroids(frames, fps=_FPS, motion_floor=8,
-                                     motion_threshold=_W0 * _H0 * 2)
+        pts = cli._compute_centroids(
+            frames, fps=_FPS, motion_floor=8, motion_threshold=_W0 * _H0 * 2
+        )
         smoothed = cli._apply_seed_and_ema(pts, ema_alpha=0.2)
 
         if smoothed:
@@ -281,8 +286,9 @@ class TestEmaSmoothing:
         cli = _import_track_cli()
 
         # Alternating raw pts: high/low cx
-        raw_pts = [(float(i) / _FPS, 0.8 if i % 2 == 0 else 0.2, 0.5)
-                   for i in range(1, 9)]
+        raw_pts = [
+            (float(i) / _FPS, 0.8 if i % 2 == 0 else 0.2, 0.5) for i in range(1, 9)
+        ]
 
         smoothed = cli._apply_seed_and_ema(raw_pts, ema_alpha=0.2)
 
@@ -307,7 +313,9 @@ class TestEmaSmoothing:
         raw_pts = [(float(i) / _FPS, 0.99, 0.99) for i in range(1, 5)]
         raw_pts += [(float(i) / _FPS, 0.01, 0.01) for i in range(5, 9)]
 
-        smoothed = cli._apply_seed_and_ema(raw_pts, ema_alpha=1.0)  # alpha=1 = no smoothing
+        smoothed = cli._apply_seed_and_ema(
+            raw_pts, ema_alpha=1.0
+        )  # alpha=1 = no smoothing
         for _, cx, cy in smoothed:
             assert 0.0 <= cx <= 1.0
             assert 0.0 <= cy <= 1.0
@@ -323,8 +331,7 @@ class TestRdpDecimation:
 
     def _make_pts(self, n: int) -> list[tuple[float, float, float]]:
         """Generate n uniformly-spaced (t_s, cx, cy) points."""
-        return [(i / _FPS, 0.3 + 0.4 * (i / max(n - 1, 1)), 0.5)
-                for i in range(n)]
+        return [(i / _FPS, 0.3 + 0.4 * (i / max(n - 1, 1)), 0.5) for i in range(n)]
 
     def test_81_points_decimated_to_at_most_80(self) -> None:
         """81 input points must be decimated to ≤80 (N_max=80 boundary, AC-09).
@@ -379,7 +386,7 @@ class TestRdpDecimation:
         for i in range(1, len(ts_vals)):
             assert ts_vals[i] > ts_vals[i - 1], (
                 f"t_s not monotonically increasing after decimation at index {i}: "
-                f"{ts_vals[i-1]:.4f} >= {ts_vals[i]:.4f}"
+                f"{ts_vals[i - 1]:.4f} >= {ts_vals[i]:.4f}"
             )
 
     def test_fewer_than_nmax_unchanged(self) -> None:
@@ -481,7 +488,6 @@ class TestJsonContract:
             return fake_result
 
         import tempfile
-        import os
 
         # We need to intercept the temp file so np.fromfile reads our bytes.
         # Strategy: patch tempfile.NamedTemporaryFile to return a file with our bytes.
@@ -501,14 +507,13 @@ class TestJsonContract:
             def close(self) -> None:
                 pass
 
-            def __enter__(self) -> "_FakeTmpFile":
+            def __enter__(self) -> _FakeTmpFile:
                 return self
 
             def __exit__(self, *args: Any) -> None:
                 pass
 
         import io
-        import sys as _sys
 
         captured_stdout = io.StringIO()
 
@@ -516,16 +521,26 @@ class TestJsonContract:
         # main expects --media --fps --width etc. via argv
         media_path = "/fake/video.mp4"
         argv = [
-            "--media", media_path,
-            "--fps", str(_FPS),
-            "--width", str(_W0),
-            "--media-duration", "5.0",
+            "--media",
+            media_path,
+            "--fps",
+            str(_FPS),
+            "--width",
+            str(_W0),
+            "--media-duration",
+            "5.0",
         ]
 
         with (
-            patch.object(sys.modules.get("clipwright.process", sys.modules.get(
-                "clipwright_reframe.track_cli", cli).__module__,
-            ), "run", side_effect=fake_run, create=True) as _mock_run,
+            patch.object(
+                sys.modules.get(
+                    "clipwright.process",
+                    sys.modules.get("clipwright_reframe.track_cli", cli).__module__,
+                ),
+                "run",
+                side_effect=fake_run,
+                create=True,
+            ) as _mock_run,
             patch("tempfile.NamedTemporaryFile", side_effect=_FakeTmpFile),
             patch("sys.stdout", captured_stdout),
             patch("os.unlink"),  # prevent actual unlink of our fake temp
@@ -568,12 +583,16 @@ class TestJsonContract:
         cli = _import_track_cli()
 
         import io
+
         captured_stdout = io.StringIO()
 
         argv = [
-            "--media", "/nonexistent/path/does_not_exist.mp4",
-            "--fps", str(_FPS),
-            "--width", str(_W0),
+            "--media",
+            "/nonexistent/path/does_not_exist.mp4",
+            "--fps",
+            str(_FPS),
+            "--width",
+            str(_W0),
         ]
 
         with patch("sys.stdout", captured_stdout):
@@ -602,13 +621,17 @@ class TestJsonContract:
         cli = _import_track_cli()
 
         import io
+
         captured_stdout = io.StringIO()
         secret_path = "/very/secret/internal/video.mp4"
 
         argv = [
-            "--media", secret_path,
-            "--fps", str(_FPS),
-            "--width", str(_W0),
+            "--media",
+            secret_path,
+            "--fps",
+            str(_FPS),
+            "--width",
+            str(_W0),
         ]
 
         with patch("sys.stdout", captured_stdout):
@@ -648,9 +671,9 @@ class TestTempCleanup:
         cli = _import_track_cli()
 
         import io
+
         captured_stdout = io.StringIO()
         import tempfile
-        import os
 
         created_temp: list[str] = []
         original_ntf = tempfile.NamedTemporaryFile
@@ -671,9 +694,12 @@ class TestTempCleanup:
             raise RuntimeError("Simulated ffmpeg crash")
 
         argv = [
-            "--media", "/fake/video.mp4",
-            "--fps", str(_FPS),
-            "--width", str(_W0),
+            "--media",
+            "/fake/video.mp4",
+            "--fps",
+            str(_FPS),
+            "--width",
+            str(_W0),
         ]
 
         with (
@@ -707,6 +733,7 @@ class TestTempCleanup:
 
         import io
         import tempfile
+
         from clipwright.errors import ClipwrightError, ErrorCode
 
         captured_stdout = io.StringIO()
@@ -731,9 +758,12 @@ class TestTempCleanup:
             )
 
         argv = [
-            "--media", "/fake/video.mp4",
-            "--fps", str(_FPS),
-            "--width", str(_W0),
+            "--media",
+            "/fake/video.mp4",
+            "--fps",
+            str(_FPS),
+            "--width",
+            str(_W0),
         ]
 
         with (
@@ -769,6 +799,7 @@ class TestSubprocessDiscipline:
 
         import io
         import tempfile
+
         captured_stdout = io.StringIO()
         original_ntf = tempfile.NamedTemporaryFile
 
@@ -790,9 +821,12 @@ class TestSubprocessDiscipline:
             return fake_result
 
         argv = [
-            "--media", "/fake/video.mp4",
-            "--fps", str(_FPS),
-            "--width", str(_W0),
+            "--media",
+            "/fake/video.mp4",
+            "--fps",
+            str(_FPS),
+            "--width",
+            str(_W0),
         ]
 
         with (
@@ -822,12 +856,16 @@ class TestSubprocessDiscipline:
         cli = _import_track_cli()
 
         import io
+
         captured_stdout = io.StringIO()
 
         argv = [
-            "--media", "/nonexistent/video.mp4",
-            "--fps", str(_FPS),
-            "--width", str(_W0),
+            "--media",
+            "/nonexistent/video.mp4",
+            "--fps",
+            str(_FPS),
+            "--width",
+            str(_W0),
         ]
 
         with patch("sys.stdout", captured_stdout):
@@ -839,4 +877,6 @@ class TestSubprocessDiscipline:
         output = captured_stdout.getvalue().strip()
         data = json.loads(output)
         assert "error" in data
-        assert data["error"].get("hint"), "error.hint must be non-empty for missing media"
+        assert data["error"].get("hint"), (
+            "error.hint must be non-empty for missing media"
+        )

@@ -93,12 +93,14 @@ class ReframeOptions(BaseModel):
         ),
     ]
     mode: Annotated[
-        Literal["crop", "pad", "blur_pad"],
+        Literal["crop", "pad", "blur_pad", "track"],
         Field(
             default="pad",
             description=(
                 "Fit mode: 'crop' (cover+crop), 'pad' (fit+letterbox/pillarbox),"
-                " 'blur_pad' (fit foreground over blurred background). Default 'pad'."
+                " 'blur_pad' (fit foreground over blurred background),"
+                " 'track' (motion-centroid crop; requires [track] extra)."
+                " Default 'pad'."
             ),
         ),
     ] = "pad"

@@ -75,9 +75,21 @@ def clipwright_reframe(
 
     The input media file is never modified (non-destructive, readOnly).
     Writes a reframe directive to timeline-level metadata["clipwright"]["reframe"]
-    specifying target resolution, fit mode, anchor, and pad color.
+    specifying target resolution, fit mode, anchor, pad color, and — for
+    mode='track' — a motion-centroid keyframe list.
+
+    Modes:
+      'crop'     — cover-then-crop (static, anchor-aligned).
+      'pad'      — fit-then-letterbox/pillarbox (static, anchor-aligned).
+      'blur_pad' — fit foreground over blurred background (static).
+      'track'    — motion-centroid crop-from-source (requires [track] extra).
+                   Spawns track_cli as a subprocess to detect motion centroids
+                   using numpy.  When numpy is absent or detection fails, a
+                   constant-center track is written as a graceful fallback;
+                   ok remains True and a warning is included in the response.
+
     clipwright-render reads this directive and applies the corresponding ffmpeg
-    filter (crop / pad / blur_pad) during render.
+    filter during render.
 
     Returns the path of the resulting timeline.otio in artifacts.
 

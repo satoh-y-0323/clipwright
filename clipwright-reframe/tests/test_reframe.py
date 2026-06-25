@@ -79,11 +79,9 @@ AC coverage:
 from __future__ import annotations
 
 import json
-import os
-import stat
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import opentimelineio as otio
 import pytest
@@ -921,36 +919,45 @@ class TestMcpAnnotations:
 _CONSTANT_CENTER_TRACK = [{"t_s": 0.0, "cx": 0.5, "cy": 0.5}]
 
 _DEPENDENCY_MISSING_JSON = json.dumps(
-    {"error": {"code": "DEPENDENCY_MISSING",
-               "message": "numpy is not installed",
-               "hint": "pip install 'clipwright-reframe[track]'"}}
+    {
+        "error": {
+            "code": "DEPENDENCY_MISSING",
+            "message": "numpy is not installed",
+            "hint": "pip install 'clipwright-reframe[track]'",
+        }
+    }
 )
 _SUBPROCESS_FAILED_JSON = json.dumps(
-    {"error": {"code": "SUBPROCESS_FAILED",
-               "message": "ffmpeg exited with code 1",
-               "hint": "Check the media file."}}
+    {
+        "error": {
+            "code": "SUBPROCESS_FAILED",
+            "message": "ffmpeg exited with code 1",
+            "hint": "Check the media file.",
+        }
+    }
 )
 
 
 def _make_track_result_json(n_kf: int = 3) -> str:
     """Return a valid track_cli JSON response with n_kf keyframes."""
     track = [
-        {"t_s": float(i) * 0.25, "cx": 0.3 + 0.1 * i, "cy": 0.5}
-        for i in range(n_kf)
+        {"t_s": float(i) * 0.25, "cx": 0.3 + 0.1 * i, "cy": 0.5} for i in range(n_kf)
     ]
-    return json.dumps({
-        "track": track,
-        "diagnostics": {
-            "frames_analyzed": 12,
-            "keyframes_before_decimation": n_kf,
-            "keyframes_after_decimation": n_kf,
-            "dropped": 0,
-            "hold_fraction": 0.0,
-            "sampling_fps": 4.0,
-            "width": 160,
-            "height": 90,
-        },
-    })
+    return json.dumps(
+        {
+            "track": track,
+            "diagnostics": {
+                "frames_analyzed": 12,
+                "keyframes_before_decimation": n_kf,
+                "keyframes_after_decimation": n_kf,
+                "dropped": 0,
+                "hold_fraction": 0.0,
+                "sampling_fps": 4.0,
+                "width": 160,
+                "height": 90,
+            },
+        }
+    )
 
 
 def _make_track_opts(target_w: int = 1080, target_h: int = 1920) -> ReframeOptions:
@@ -1011,8 +1018,10 @@ def _run_track_reframe(
             return_value=fake_run_result,
         ),
         # Bypass step-0 defensive re-validation until 'track' Literal is added
-        patch("clipwright_reframe.reframe.ReframeOptions.model_validate",
-              return_value=opts),
+        patch(
+            "clipwright_reframe.reframe.ReframeOptions.model_validate",
+            return_value=opts,
+        ),
     ):
         result = reframe(
             media=str(media_path),
@@ -1038,7 +1047,9 @@ class TestTrackMode:
         Red: reframe.py has no mode='track' branch yet — returns mode='track' from
         options but without calling track_cli or storing the track list.
         """
-        result = _run_track_reframe(tmp_path, track_cli_stdout=_make_track_result_json(3))
+        result = _run_track_reframe(
+            tmp_path, track_cli_stdout=_make_track_result_json(3)
+        )
 
         assert result["ok"] is True, f"Expected ok=True, got: {result}"
 
@@ -1053,7 +1064,9 @@ class TestTrackMode:
 
         Red: reframe.py does not call track_cli; directive.track will be None.
         """
-        result = _run_track_reframe(tmp_path, track_cli_stdout=_make_track_result_json(3))
+        result = _run_track_reframe(
+            tmp_path, track_cli_stdout=_make_track_result_json(3)
+        )
 
         assert result["ok"] is True
         tl = otio.adapters.read_from_file(str(tmp_path / "out.otio"))
@@ -1068,7 +1081,9 @@ class TestTrackMode:
 
         Red: same as above — track_cli not called.
         """
-        result = _run_track_reframe(tmp_path, track_cli_stdout=_make_track_result_json(3))
+        result = _run_track_reframe(
+            tmp_path, track_cli_stdout=_make_track_result_json(3)
+        )
 
         assert result["ok"] is True
         tl = otio.adapters.read_from_file(str(tmp_path / "out.otio"))
@@ -1084,7 +1099,9 @@ class TestTrackMode:
 
         Red: track_cli not called; directive.track is None.
         """
-        result = _run_track_reframe(tmp_path, track_cli_stdout=_make_track_result_json(3))
+        result = _run_track_reframe(
+            tmp_path, track_cli_stdout=_make_track_result_json(3)
+        )
 
         assert result["ok"] is True
         tl = otio.adapters.read_from_file(str(tmp_path / "out.otio"))
@@ -1094,7 +1111,7 @@ class TestTrackMode:
             for i in range(1, len(track)):
                 assert track[i]["t_s"] > track[i - 1]["t_s"], (
                     f"t_s not strictly ascending at index {i}: "
-                    f"{track[i-1]['t_s']} >= {track[i]['t_s']}"
+                    f"{track[i - 1]['t_s']} >= {track[i]['t_s']}"
                 )
 
     def test_track_mode_new_otio_created(self, tmp_path: Path) -> None:
@@ -1102,7 +1119,9 @@ class TestTrackMode:
 
         Red: reframe.py mode='track' branch absent; may or may not create file.
         """
-        result = _run_track_reframe(tmp_path, track_cli_stdout=_make_track_result_json(3))
+        result = _run_track_reframe(
+            tmp_path, track_cli_stdout=_make_track_result_json(3)
+        )
 
         assert result["ok"] is True
         assert (tmp_path / "out.otio").exists()
@@ -1116,9 +1135,7 @@ class TestTrackMode:
 
         Red: reframe.py has no track_cli spawn or fallback logic.
         """
-        result = _run_track_reframe(
-            tmp_path, track_cli_stdout=_DEPENDENCY_MISSING_JSON
-        )
+        result = _run_track_reframe(tmp_path, track_cli_stdout=_DEPENDENCY_MISSING_JSON)
         assert result["ok"] is True, (
             "DEPENDENCY_MISSING must not propagate as ok=False; "
             "expected graceful constant-center track fallback."
@@ -1129,9 +1146,7 @@ class TestTrackMode:
 
         Red: reframe.py does not call track_cli; directive.track is None.
         """
-        result = _run_track_reframe(
-            tmp_path, track_cli_stdout=_DEPENDENCY_MISSING_JSON
-        )
+        result = _run_track_reframe(tmp_path, track_cli_stdout=_DEPENDENCY_MISSING_JSON)
         assert result["ok"] is True
         tl = otio.adapters.read_from_file(str(tmp_path / "out.otio"))
         meta = dict(tl.metadata.get("clipwright", {}).get("reframe", {}))
@@ -1147,9 +1162,7 @@ class TestTrackMode:
 
         Red: reframe.py does not produce fallback warnings.
         """
-        result = _run_track_reframe(
-            tmp_path, track_cli_stdout=_DEPENDENCY_MISSING_JSON
-        )
+        result = _run_track_reframe(tmp_path, track_cli_stdout=_DEPENDENCY_MISSING_JSON)
         assert result["ok"] is True
         warnings = result.get("warnings", [])
         assert any("[track]" in str(w) for w in warnings), (
@@ -1166,9 +1179,7 @@ class TestTrackMode:
         Red: reframe.py no track_cli call; returns ok:true from existing logic
         but without fallback track.
         """
-        result = _run_track_reframe(
-            tmp_path, track_cli_stdout=_SUBPROCESS_FAILED_JSON
-        )
+        result = _run_track_reframe(tmp_path, track_cli_stdout=_SUBPROCESS_FAILED_JSON)
         assert result["ok"] is True
 
     def test_subprocess_failed_constant_center_track(self, tmp_path: Path) -> None:
@@ -1176,9 +1187,7 @@ class TestTrackMode:
 
         Red: track_cli not called; directive.track is None.
         """
-        result = _run_track_reframe(
-            tmp_path, track_cli_stdout=_SUBPROCESS_FAILED_JSON
-        )
+        result = _run_track_reframe(tmp_path, track_cli_stdout=_SUBPROCESS_FAILED_JSON)
         assert result["ok"] is True
         tl = otio.adapters.read_from_file(str(tmp_path / "out.otio"))
         meta = dict(tl.metadata.get("clipwright", {}).get("reframe", {}))
@@ -1192,9 +1201,7 @@ class TestTrackMode:
 
         Red: no fallback warning generated.
         """
-        result = _run_track_reframe(
-            tmp_path, track_cli_stdout=_SUBPROCESS_FAILED_JSON
-        )
+        result = _run_track_reframe(tmp_path, track_cli_stdout=_SUBPROCESS_FAILED_JSON)
         assert result["ok"] is True
         warnings = result.get("warnings", [])
         assert len(warnings) >= 1, (
@@ -1230,8 +1237,10 @@ class TestTrackMode:
                     hint="check ffmpeg",
                 ),
             ),
-            patch("clipwright_reframe.reframe.ReframeOptions.model_validate",
-                  return_value=opts),
+            patch(
+                "clipwright_reframe.reframe.ReframeOptions.model_validate",
+                return_value=opts,
+            ),
         ):
             result = reframe(
                 media=str(media_path),
@@ -1278,8 +1287,10 @@ class TestTrackMode:
                 side_effect=lambda p: _make_media_info(str(p)),
             ),
             patch("clipwright.process.run", return_value=fake_run),
-            patch("clipwright_reframe.reframe.ReframeOptions.model_validate",
-                  return_value=opts),
+            patch(
+                "clipwright_reframe.reframe.ReframeOptions.model_validate",
+                return_value=opts,
+            ),
         ):
             result = reframe(
                 media=str(media_path),
@@ -1321,8 +1332,10 @@ class TestTrackMode:
                     side_effect=lambda p: _make_media_info(str(p)),
                 ),
                 patch("clipwright.process.run", return_value=fake_run),
-                patch("clipwright_reframe.reframe.ReframeOptions.model_validate",
-                      return_value=opts),
+                patch(
+                    "clipwright_reframe.reframe.ReframeOptions.model_validate",
+                    return_value=opts,
+                ),
             ):
                 reframe(
                     media=str(media_path),
@@ -1369,8 +1382,10 @@ class TestTrackMode:
                 side_effect=lambda p: _make_media_info(str(p)),
             ),
             patch("clipwright.process.run", return_value=fake_run),
-            patch("clipwright_reframe.reframe.ReframeOptions.model_validate",
-                  return_value=opts),
+            patch(
+                "clipwright_reframe.reframe.ReframeOptions.model_validate",
+                return_value=opts,
+            ),
         ):
             result = reframe(
                 media=str(media_path),
@@ -1418,8 +1433,10 @@ class TestTrackMode:
                     hint="retry",
                 ),
             ),
-            patch("clipwright_reframe.reframe.ReframeOptions.model_validate",
-                  return_value=opts),
+            patch(
+                "clipwright_reframe.reframe.ReframeOptions.model_validate",
+                return_value=opts,
+            ),
         ):
             result = reframe(
                 media=str(media_path),

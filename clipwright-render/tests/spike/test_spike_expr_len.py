@@ -48,13 +48,13 @@ import pytest
 
 SRC_W = 640
 SRC_H = 360
-CW = 202   # 9:16 crop window: floor(360 * 9/16) = 202 (even)
+CW = 202  # 9:16 crop window: floor(360 * 9/16) = 202 (even)
 CH = 360
 TW = 202
 TH = 360
 
 # av_expr_parse hard limit discovered by this spike
-_FFMPEG_EXPR_TERM_LIMIT = 96   # additive terms per x or y expression
+_FFMPEG_EXPR_TERM_LIMIT = 96  # additive terms per x or y expression
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +103,8 @@ def _make_sine_expr(n_ctrl: int, duration: float = 2.0) -> tuple[str, int]:
     t_secs = [i * duration / max(n_ctrl - 1, 1) for i in range(n_ctrl)]
     x_pixels = [
         round(
-            x_min + x_span * (0.5 + 0.5 * math.sin(2 * math.pi * i / max(n_ctrl - 1, 1)))
+            x_min
+            + x_span * (0.5 + 0.5 * math.sin(2 * math.pi * i / max(n_ctrl - 1, 1)))
         )
         for i in range(n_ctrl)
     ]
@@ -121,7 +122,9 @@ def _make_sine_expr(n_ctrl: int, duration: float = 2.0) -> tuple[str, int]:
     return "+".join(parts), len(parts)
 
 
-def _run_ffmpeg_crop(ffmpeg: str, xe: str, ye: str, out: Path) -> subprocess.CompletedProcess[str]:
+def _run_ffmpeg_crop(
+    ffmpeg: str, xe: str, ye: str, out: Path
+) -> subprocess.CompletedProcess[str]:
     """Run ffmpeg testsrc → crop(xe, ye) → 1-frame output.
 
     Prepends ``format=yuv420p`` because testsrc emits rgb24 which the crop
@@ -131,13 +134,20 @@ def _run_ffmpeg_crop(ffmpeg: str, xe: str, ye: str, out: Path) -> subprocess.Com
     vf = f"format=yuv420p,crop={CW}:{CH}:'{xe}':'{ye}',scale={TW}:{TH},setsar=1"
     cmd = [
         ffmpeg,
-        "-hide_banner", "-nostats",
-        "-f", "lavfi",
-        "-i", f"testsrc=size={SRC_W}x{SRC_H}:rate=10:duration=2",
-        "-vf", vf,
-        "-frames:v", "1",
-        "-c:v", "libx264",
-        "-y", str(out),
+        "-hide_banner",
+        "-nostats",
+        "-f",
+        "lavfi",
+        "-i",
+        f"testsrc=size={SRC_W}x{SRC_H}:rate=10:duration=2",
+        "-vf",
+        vf,
+        "-frames:v",
+        "1",
+        "-c:v",
+        "libx264",
+        "-y",
+        str(out),
     ]
     return subprocess.run(
         cmd,
@@ -169,7 +179,11 @@ def ffmpeg_bin() -> str:
 def ffmpeg_version(ffmpeg_bin: str) -> str:
     r = subprocess.run(
         [ffmpeg_bin, "-version"],
-        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=10,
     )
     return r.stdout.splitlines()[0] if r.stdout else "unknown"
 
@@ -201,9 +215,7 @@ def test_spike_expr_len_term_limit_96_ok(
 
 
 @pytest.mark.integration
-def test_spike_expr_len_term_limit_97_fails(
-    ffmpeg_bin: str, tmp_path: Path
-) -> None:
+def test_spike_expr_len_term_limit_97_fails(ffmpeg_bin: str, tmp_path: Path) -> None:
     """97 uniform additive terms must fail with av_expr_parse error.
 
     This documents the hard limit: 97 terms exceed av_expr_parse recursion depth.
@@ -226,9 +238,7 @@ def test_spike_expr_len_term_limit_97_fails(
 
 
 @pytest.mark.integration
-def test_spike_expr_len_n120_fails(
-    ffmpeg_bin: str, tmp_path: Path
-) -> None:
+def test_spike_expr_len_n120_fails(ffmpeg_bin: str, tmp_path: Path) -> None:
     """N_max=120 sine-wave control points produce expressions that exceed the limit.
 
     This test documents why N_max must be reduced from 120 to at most 80.
@@ -236,14 +246,19 @@ def test_spike_expr_len_n120_fails(
     which exceeds the 96-term limit.
     """
     xe, term_count = _make_sine_expr(120)
-    print(f"\n[spike] N=120 sine: {term_count} effective terms, {len(xe)} bytes", file=sys.stderr)
+    print(
+        f"\n[spike] N=120 sine: {term_count} effective terms, {len(xe)} bytes",
+        file=sys.stderr,
+    )
 
     r = _run_ffmpeg_crop(ffmpeg_bin, xe, "0", tmp_path / "n120_sine.mp4")
     assert r.returncode != 0, (
         f"ffmpeg UNEXPECTEDLY succeeded with N=120 ({term_count} terms). "
         "Re-check the effective term count — dx==0 pruning may have reduced it enough."
     )
-    print(f"[spike] N=120 FAILED as expected (term_count={term_count})", file=sys.stderr)
+    print(
+        f"[spike] N=120 FAILED as expected (term_count={term_count})", file=sys.stderr
+    )
 
 
 @pytest.mark.integration

@@ -6,6 +6,9 @@ Flow (3-layer: public API → _inner → error boundary):
   2. inspect_media: require video stream
   3. Timeline resolution (None -> create new / path -> load + validate)
   4. Annotate ReframeDirective to timeline metadata["clipwright"]["reframe"]
+     For mode='track': spawn track_cli subprocess to obtain motion-centroid keyframes.
+     On failure (numpy missing / subprocess error / run exception): constant-center
+     fallback [{t_s:0, cx:0.5, cy:0.5}] is written; ok remains True.
   5. save_timeline (atomic)
   6. ok_result with summary / data / artifacts
 
@@ -15,13 +18,20 @@ Design decisions:
   render's reader-side _RenderReframe validates independently (defence-in-depth).
 - 3-layer skeleton (public API / _inner / error boundary) keeps the MCP server
   startup clean; all ClipwrightError raised inside _inner are caught at the boundary.
+- track_cli is spawned as a separate subprocess to keep numpy out of the server
+  process (architecture-report §2.1 numpy isolation).
 """
 
 from __future__ import annotations
 
+import json
+import math
 import os
+import sys
 from pathlib import Path
+from typing import Any
 
+import clipwright.process as _process
 import opentimelineio as otio
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
@@ -33,11 +43,15 @@ from clipwright.otio_utils import (
     save_timeline,
     set_clipwright_metadata,
 )
+from clipwright.process import safe_subprocess_message
 from clipwright.schemas import ToolResult
 from pydantic import ValidationError
 
 import clipwright_reframe
-from clipwright_reframe.schemas import ReframeDirective, ReframeOptions
+from clipwright_reframe.schemas import CentreKeyframe, ReframeDirective, ReframeOptions
+
+# Constant-center fallback track (architecture-report §5, DC-AM-002).
+_CONSTANT_CENTER_TRACK: list[dict[str, float]] = [{"t_s": 0.0, "cx": 0.5, "cy": 0.5}]
 
 
 def reframe(
@@ -176,6 +190,13 @@ def _reframe_inner(
 
     # --- 4. Annotate ReframeDirective ---
 
+    warnings: list[str] = []
+    track: list[CentreKeyframe] | None = None
+
+    if options.mode == "track":
+        track, track_warnings = _run_track_cli(media, duration_sec)
+        warnings.extend(track_warnings)
+
     directive = ReframeDirective(
         tool="clipwright-reframe",
         version=clipwright_reframe.__version__,
@@ -185,10 +206,18 @@ def _reframe_inner(
         mode=options.mode,
         anchor=options.anchor,
         pad_color=options.pad_color,
+        track=track,
     )
 
+    # Serialize directive to plain Python dict (via JSON round-trip) so that
+    # OTIO stores primitive types (not Pydantic models or numpy scalars).
+    # OTIO wraps nested lists/dicts in AnyVector/AnyDictionary; reading back
+    # via dict(meta) only unwraps the top level.  JSON round-trip guarantees
+    # that every nested value is a plain Python primitive that tests can compare
+    # with == and isinstance(x, list/dict) checks.
+    directive_dict: dict[str, Any] = json.loads(directive.model_dump_json())
     existing_meta = get_clipwright_metadata(tl)
-    existing_meta["reframe"] = directive.model_dump()
+    existing_meta["reframe"] = directive_dict
     set_clipwright_metadata(tl, existing_meta)
 
     # --- 5. save_timeline (atomic) ---
@@ -214,8 +243,123 @@ def _reframe_inner(
             "pad_color": options.pad_color,
         },
         artifacts=[{"role": "timeline", "path": str(output_path), "format": "otio"}],
-        warnings=[],
+        warnings=warnings,
     )
+
+
+def _run_track_cli(
+    media: str,
+    duration_sec: float,
+) -> tuple[list[CentreKeyframe], list[str]]:
+    """Spawn track_cli subprocess and return (track, warnings).
+
+    On success: returns parsed CentreKeyframe list and empty warnings.
+    On any failure (DEPENDENCY_MISSING / SUBPROCESS_FAILED / run exception / empty):
+      returns constant-center fallback track and a descriptive warning.
+      ok remains True — graceful degradation (architecture-report §5).
+
+    CWE-209: warnings must not contain the full media path or stack traces.
+
+    Args:
+        media: Input video file path (passed to track_cli --media).
+        duration_sec: Media duration in seconds (for track_cli timeout).
+
+    Returns:
+        (track_keyframes, warnings)
+    """
+    timeout = float(max(60, math.ceil(duration_sec * 4))) if duration_sec > 0 else 120.0
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "clipwright_reframe.track_cli",
+        "--media",
+        media,
+        "--media-duration",
+        str(duration_sec),
+    ]
+
+    try:
+        result = _process.run(cmd, timeout=timeout)
+        stdout = result.stdout.strip()
+    except ClipwrightError as exc:
+        safe_msg = safe_subprocess_message(exc)
+        return (
+            _make_constant_center_track(),
+            [
+                "Motion tracking failed during detection; wrote a static center track"
+                f" instead. Reason: {safe_msg}."
+            ],
+        )
+    except Exception:
+        return (
+            _make_constant_center_track(),
+            [
+                "Motion tracking failed due to an unexpected error;"
+                " wrote a static center track instead."
+            ],
+        )
+
+    # Parse stdout JSON.
+    try:
+        data: dict[str, Any] = json.loads(stdout)
+    except (json.JSONDecodeError, ValueError):
+        return (
+            _make_constant_center_track(),
+            [
+                "Motion tracking produced invalid output;"
+                " wrote a static center track instead."
+            ],
+        )
+
+    if "error" in data:
+        err = data["error"]
+        code = str(err.get("code", "UNKNOWN"))
+        if code == "DEPENDENCY_MISSING":
+            return (
+                _make_constant_center_track(),
+                [
+                    "Motion tracking disabled: numpy is not installed."
+                    " Wrote a static center track instead."
+                    " Install with: pip install 'clipwright-reframe[track]'."
+                ],
+            )
+        return (
+            _make_constant_center_track(),
+            [
+                f"Motion tracking failed during detection; wrote a static center track"
+                f" instead. Reason: {code}."
+            ],
+        )
+
+    raw_track = data.get("track", [])
+    if not raw_track:
+        return (
+            _make_constant_center_track(),
+            [
+                "Motion tracking returned no keyframes;"
+                " wrote a static center track instead."
+            ],
+        )
+
+    # Validate and convert to CentreKeyframe objects.
+    try:
+        track = [CentreKeyframe(**kf) for kf in raw_track]
+    except Exception:
+        return (
+            _make_constant_center_track(),
+            [
+                "Motion tracking returned invalid keyframe data;"
+                " wrote a static center track instead."
+            ],
+        )
+
+    return track, []
+
+
+def _make_constant_center_track() -> list[CentreKeyframe]:
+    """Return the constant-center fallback track [{t_s:0, cx:0.5, cy:0.5}]."""
+    return [CentreKeyframe(t_s=0.0, cx=0.5, cy=0.5)]
 
 
 def _same_path(a: Path, b: Path) -> bool:
