@@ -12,16 +12,24 @@ Purpose:
     Commas escaped as ``\\,`` per ffmpeg filtergraph quoting rules (ADR-T6).
     Single-quoted in the crop filter: ``crop={cw}:{ch}:'{x_expr}':'{y_expr}'``
 
-Findings (2026-06-25, ffmpeg 8.1.1-full_build):
-    - ffmpeg av_expr_parse has a HARD LIMIT of 96 additive terms per expression.
+Findings (2026-06-25, ffmpeg 8.1.1-full_build on Windows / Gyan):
+    - ffmpeg av_expr_parse rejected expressions above 96 additive terms on THIS build.
     - 96 terms (uniform dt): OK (x_expr ~3233 bytes)
     - 97 terms (uniform dt): FAIL ("Failed to configure input pad on Parsed_crop")
-    - N_max=120 yields up to 116 non-zero terms (sine-wave control points) → EXCEEDS LIMIT.
-    - RECOMMENDED N_max: 80 (worst-case 80 terms = 80 control points all changing,
-      comfortably below 96; with typical dx==0 pruning the effective term count is lower).
-    - x_expr and y_expr are parsed independently, so the 96-term limit applies per axis.
+    - N_max=120 yields up to 116 non-zero terms (sine-wave control points) → EXCEEDED here.
+    - x_expr and y_expr are parsed independently, so the limit applies per axis.
     - The ``format=yuv420p`` pre-filter is NOT the root cause; the limit is
       av_expr_parse recursion depth for left-associative addition parsing.
+
+IMPORTANT — the upper limit is ffmpeg-BUILD-SPECIFIC (not a portable constant):
+    Other builds accept more. CI's Ubuntu ffmpeg parses 97 and 116 terms fine, so the
+    "must fail above 96" assertions are NOT portable and would red the CI. What IS
+    portable — and all that production correctness depends on — is the FLOOR:
+    N_max=80 (worst-case ~78–80 terms) parses successfully on every build observed
+    (Windows / macOS / Ubuntu), comfortably below even the strictest limit (96). The
+    "above the limit it fails" tests below therefore only assert the failure MODE when a
+    build does reject the expression, and skip when a build accepts it (limit > 96).
+    RECOMMENDED / shipped N_max: 80 (conservative, build-independent).
 
 Spike report: .claude/reports/test-report-spike_exprlen.md
 
@@ -53,8 +61,10 @@ CH = 360
 TW = 202
 TH = 360
 
-# av_expr_parse hard limit discovered by this spike
-_FFMPEG_EXPR_TERM_LIMIT = 96  # additive terms per x or y expression
+# Lowest av_expr_parse additive-term limit observed (Windows / Gyan ffmpeg 8.1.1).
+# Build-specific: other builds (e.g. Ubuntu CI) accept more. Production N_max=80 stays
+# below this floor on every build, so it is the portable, conservative choice.
+_FFMPEG_EXPR_TERM_LIMIT_FLOOR = 96  # additive terms per x or y expression
 
 
 # ---------------------------------------------------------------------------
@@ -215,35 +225,41 @@ def test_spike_expr_len_term_limit_96_ok(
 
 
 @pytest.mark.integration
-def test_spike_expr_len_term_limit_97_fails(ffmpeg_bin: str, tmp_path: Path) -> None:
-    """97 uniform additive terms must fail with av_expr_parse error.
+def test_spike_expr_len_term_limit_97_failure_mode(
+    ffmpeg_bin: str, tmp_path: Path
+) -> None:
+    """Document the failure MODE for 97 terms on builds that reject it.
 
-    This documents the hard limit: 97 terms exceed av_expr_parse recursion depth.
-    If this test starts passing, the ffmpeg version has lifted the limit and
-    N_max may be revisited upward.
+    The exact term limit is ffmpeg-build-specific. On builds at the 96-term floor
+    (e.g. Windows / Gyan) 97 terms are rejected; this asserts the rejection is a crop
+    filter parse error (not a crash or unrelated failure). On builds that accept >96
+    terms (e.g. Ubuntu CI) the call succeeds and the test skips — N_max=80 stays safe
+    regardless, so a higher build limit is not a regression.
     """
     xe = _make_uniform_expr(97)
     ye = _make_uniform_expr(97)
 
     r = _run_ffmpeg_crop(ffmpeg_bin, xe, ye, tmp_path / "limit_97.mp4")
-    assert r.returncode != 0, (
-        "ffmpeg UNEXPECTEDLY succeeded with 97-term expression. "
-        "The av_expr_parse limit may have been raised in this ffmpeg version. "
-        "Consider revising N_max upward and re-running the spike."
-    )
-    # Confirm the failure is a crop filter parse error, not something else
+    if r.returncode == 0:
+        pytest.skip(
+            "This ffmpeg build accepts 97 additive terms (av_expr limit > 96). "
+            "N_max=80 remains conservatively safe; nothing to assert."
+        )
+    # Build rejected it — confirm the failure is a crop filter parse error.
     assert "crop" in r.stderr.lower() or "pad" in r.stderr.lower(), (
         f"Unexpected failure mode (no 'crop' in stderr):\n{r.stderr[:500]}"
     )
 
 
 @pytest.mark.integration
-def test_spike_expr_len_n120_fails(ffmpeg_bin: str, tmp_path: Path) -> None:
-    """N_max=120 sine-wave control points produce expressions that exceed the limit.
+def test_spike_expr_len_n120_over_floor(ffmpeg_bin: str, tmp_path: Path) -> None:
+    """N_max=120 sine-wave control points exceed the 96-term floor — why 120 was rejected.
 
-    This test documents why N_max must be reduced from 120 to at most 80.
     The 120-point sine wave produces ~116 non-zero terms (dx!=0 pruning leaves few zeros),
-    which exceeds the 96-term limit.
+    above the 96-term floor. On builds at that floor (Windows / Gyan) this is rejected,
+    which is the reason N_max was reduced from the original 120 to 80. On builds that
+    accept >116 terms (e.g. Ubuntu CI) the call succeeds and the test skips — the higher
+    limit is not a regression, and shipped N_max=80 stays safe on every build.
     """
     xe, term_count = _make_sine_expr(120)
     print(
@@ -252,12 +268,14 @@ def test_spike_expr_len_n120_fails(ffmpeg_bin: str, tmp_path: Path) -> None:
     )
 
     r = _run_ffmpeg_crop(ffmpeg_bin, xe, "0", tmp_path / "n120_sine.mp4")
-    assert r.returncode != 0, (
-        f"ffmpeg UNEXPECTEDLY succeeded with N=120 ({term_count} terms). "
-        "Re-check the effective term count — dx==0 pruning may have reduced it enough."
-    )
+    if r.returncode == 0:
+        pytest.skip(
+            f"This ffmpeg build accepts N=120 ({term_count} terms; av_expr limit > 116). "
+            "N_max=80 remains conservatively safe; nothing to assert."
+        )
     print(
-        f"[spike] N=120 FAILED as expected (term_count={term_count})", file=sys.stderr
+        f"[spike] N=120 rejected as on the 96-term floor (term_count={term_count})",
+        file=sys.stderr,
     )
 
 
