@@ -1323,36 +1323,36 @@ class TestCueFragmentationAdvisory:
         )
 
     # -------------------------------------------------------------------
-    # AC-4: Clipped >= 2 cues -> advisory emitted (direct unit test style)
+    # AC-4a: Clipped >= 2 cues + at least one dropped -> advisory co-exists with
+    #         per-cue "dropped" warning (normal return path)
+    # AC-4b: True all-dropped (no clipped/split cues) -> no advisory emitted
     # -------------------------------------------------------------------
 
-    def test_all_dropped_with_fragmentation_emits_advisory(
-        self, tmp_path: Path
-    ) -> None:
-        """AC-4: 2 clipped cues -> advisory emitted regardless of new_cues state.
+    def test_mixed_dropped_and_fragmented_emits_advisory(self, tmp_path: Path) -> None:
+        """AC-4a: 2 clipped cues + 1 fully-dropped cue -> advisory on normal return path.
 
-        Direct unit test (architecture §4.2 AC-4 note: fall back to direct
-        _generate_retimed_srt call when integration-style is hard to reproduce).
+        A clipped cue always produces at least one non-empty program window
+        (remap_window returns windows, _is_clipped returns False when the cue is
+        fully outside all kept ranges).  Therefore, 2 clipped cues guarantee
+        new_cues is non-empty and _generate_retimed_srt takes the normal return
+        path, not the all-dropped early return.
+
+        This test verifies that the advisory and per-cue "dropped" warning can
+        co-exist in the normal return path.  The fragmented cue is necessarily
+        retained in new_cues, so ok=True and the subtitle filter is applied.
 
         Setup:
           ProgramTimeMap: single kept range source 10-20s -> program 0-10s.
-          Cue 1: source 9-11s -> clipped at left (9s < 10s; window=[10s,11s] non-empty)
-          Cue 2: source 19-21s -> clipped at right (21s > 20s; window=[19s,20s] non-empty)
-          Both produce clipped=True -> fragmented_cues=2 -> advisory appended.
-
-        The advisory is inserted BEFORE the all-dropped early-return check, so it
-        appears in warnings for both the early-return path (None, warnings) and the
-        normal return path. This test verifies the advisory is present in the
-        _generate_retimed_srt return value warnings, covering the invariant that
-        the advisory is set before `if not new_cues:`.
-
-        Also verifies that an all-dropped integration path co-emits both the
-        "All subtitle cues were dropped" warning AND the advisory when clipped_cues >= 2.
+          Cue 1: source 9-11s -> clipped at left (window=[10s,11s] non-empty)
+          Cue 2: source 19-21s -> clipped at right (window=[19s,20s] non-empty)
+          Cue 3: source 0-5s -> fully outside kept range [10-20s] -> dropped
+          fragmented_cues=2 (both clipped) -> advisory appended.
+          new_cues is non-empty (2 clipped windows) -> normal return path.
         """
         from clipwright_render import retiming as _retiming_mod
         from clipwright_render.render import _generate_retimed_srt
 
-        # Build ProgramTimeMap: single kept range source 10-20s -> program 0-10s
+        # Single kept range: source 10-20s -> program 0-10s
         kept_single = [
             _make_kept(10.0, 20.0, source=str(tmp_path / "clip.mp4")),
         ]
@@ -1360,18 +1360,22 @@ class TestCueFragmentationAdvisory:
 
         # Cue 1: source 9-11s -> clipped (left edge 9s < kept start 10s)
         # Cue 2: source 19-21s -> clipped (right edge 21s > kept end 20s)
-        # Both clipped -> fragmented_cues=2 >= threshold=2 -> advisory appended
-        ac4_srt = textwrap.dedent("""\
+        # Cue 3: source 0-5s -> fully outside kept [10-20s] -> dropped only
+        mixed_srt = textwrap.dedent("""\
             1
+            00:00:00,000 --> 00:00:05,000
+            Cue fully outside kept range (dropped)
+
+            2
             00:00:09,000 --> 00:00:11,000
             Cue clipped at left boundary
 
-            2
+            3
             00:00:19,000 --> 00:00:21,000
             Cue clipped at right boundary
             """)
         srt_path_ac4 = tmp_path / "ac4_subs.srt"
-        srt_path_ac4.write_text(ac4_srt, encoding="utf-8")
+        srt_path_ac4.write_text(mixed_srt, encoding="utf-8")
         output_path_ac4 = tmp_path / "ac4_out.mp4"
 
         _retimed_path, ac4_warnings = _generate_retimed_srt(
@@ -1381,22 +1385,100 @@ class TestCueFragmentationAdvisory:
             overwrite=True,
         )
 
-        # AC-4: advisory must be present in warnings (fragmented_cues=2 >= threshold=2).
-        # The advisory is appended BEFORE the all-dropped check, so it appears in
-        # both the early-return (None, warnings) and the normal-return paths.
-        advisory_in_warnings = [w for w in ac4_warnings if ADVISORY_SUBSTR in w]
-        assert len(advisory_in_warnings) >= 1, (
-            f"Expected advisory containing {ADVISORY_SUBSTR!r} in _generate_retimed_srt "
-            f"warnings when 2 cues are clipped, got: {ac4_warnings}"
+        # AC-4a: retimed path is not None (normal return path — new_cues non-empty)
+        assert _retimed_path is not None, (
+            "2 clipped cues always produce non-empty windows; "
+            "new_cues must be non-empty -> normal return path expected."
         )
 
-        # Verify co-existence with "All subtitle cues were dropped" warning when applicable.
-        # If clipped cues produce non-empty windows, new_cues is non-empty and the
-        # "all dropped" warning is absent — that is also acceptable per AC-4 spec.
-        all_drop_warns = [w for w in ac4_warnings if "all subtitle cues" in w.lower()]
-        # Either both advisory + all-drop appear (early-return path)
-        # or advisory alone appears (normal-return path). Both are valid.
-        assert len(advisory_in_warnings) >= 1, (
-            "Advisory must appear in either path. "
-            f"advisory={advisory_in_warnings}, all_drop={all_drop_warns}"
+        # AC-4a: advisory must appear exactly once (fragmented_cues=2 >= threshold=2)
+        advisory_in_warnings = [w for w in ac4_warnings if ADVISORY_SUBSTR in w]
+        assert len(advisory_in_warnings) == 1, (
+            f"Expected exactly 1 advisory containing {ADVISORY_SUBSTR!r}, "
+            f"got {len(advisory_in_warnings)}. All warnings: {ac4_warnings}"
+        )
+
+        # AC-4a: advisory must mention the count of fragmented cues
+        assert "2 subtitle cue(s)" in advisory_in_warnings[0], (
+            f"Advisory must mention '2 subtitle cue(s)', got: {advisory_in_warnings[0]!r}"
+        )
+
+        # AC-4a: per-cue dropped warning must also be present (co-existence)
+        dropped_warnings = [w for w in ac4_warnings if "dropped" in w.lower()]
+        assert len(dropped_warnings) >= 1, (
+            f"Expected at least 1 per-cue 'dropped' warning alongside advisory, "
+            f"got warnings: {ac4_warnings}"
+        )
+
+    def test_all_dropped_no_advisory(self, tmp_path: Path) -> None:
+        """AC-4b: True all-dropped (no clipped/split cues) -> no advisory emitted.
+
+        When every cue falls entirely outside all kept ranges, remap_window returns
+        empty windows (dropped=True, clipped=False, split=False) for each cue.
+        fragmented_cues remains 0, so the advisory threshold is never reached.
+        The early-return path (`if not new_cues`) is taken and the
+        "All subtitle cues were dropped" warning is emitted without advisory.
+
+        Advisory and all-dropped early-return are mutually exclusive:
+          - advisory requires fragmented_cues >= 2 (clipped or split cues)
+          - clipped/split cues always produce at least one non-empty window
+          - non-empty windows populate new_cues -> the early-return is not taken
+        Therefore, when the early-return IS taken, fragmented_cues must be 0
+        and no advisory is emitted.
+
+        Setup:
+          ProgramTimeMap: single kept range source 10-20s -> program 0-10s.
+          Cue 1: source 0-2s -> entirely before kept range -> dropped (not clipped)
+          Cue 2: source 3-5s -> entirely before kept range -> dropped (not clipped)
+          Both dropped -> new_cues=[] -> early-return path.
+          fragmented_cues=0 -> advisory NOT emitted.
+        """
+        from clipwright_render import retiming as _retiming_mod
+        from clipwright_render.render import _generate_retimed_srt
+
+        # Single kept range: source 10-20s -> program 0-10s
+        kept_single = [
+            _make_kept(10.0, 20.0, source=str(tmp_path / "clip.mp4")),
+        ]
+        tmap_single = _retiming_mod.build_program_time_map(kept_single)
+
+        # Both cues are entirely before the kept range -> dropped only (not clipped)
+        all_dropped_srt = textwrap.dedent("""\
+            1
+            00:00:00,000 --> 00:00:02,000
+            Cue fully before kept range
+
+            2
+            00:00:03,000 --> 00:00:05,000
+            Also fully before kept range
+            """)
+        srt_path_drop = tmp_path / "all_dropped_subs.srt"
+        srt_path_drop.write_text(all_dropped_srt, encoding="utf-8")
+        output_path_drop = tmp_path / "all_dropped_out.mp4"
+
+        retimed_path, drop_warnings = _generate_retimed_srt(
+            src_srt=str(srt_path_drop),
+            output_path=output_path_drop,
+            tmap=tmap_single,
+            overwrite=True,
+        )
+
+        # AC-4b: retimed path is None (early-return path taken — new_cues is empty)
+        assert retimed_path is None, (
+            "All cues fully outside kept range must trigger early-return path "
+            "(retimed_path=None)."
+        )
+
+        # AC-4b: "All subtitle cues were dropped" warning must be present
+        all_drop_warns = [w for w in drop_warnings if "all subtitle cues" in w.lower()]
+        assert len(all_drop_warns) >= 1, (
+            f"Expected 'All subtitle cues were dropped' warning on early-return path, "
+            f"got warnings: {drop_warnings}"
+        )
+
+        # AC-4b: advisory must NOT be emitted (fragmented_cues=0, threshold not met)
+        advisory_warns = [w for w in drop_warnings if ADVISORY_SUBSTR in w]
+        assert len(advisory_warns) == 0, (
+            f"Expected 0 advisory warnings on all-dropped early-return path "
+            f"(fragmented_cues=0), got: {advisory_warns}"
         )
