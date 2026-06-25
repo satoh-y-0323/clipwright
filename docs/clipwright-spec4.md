@@ -240,8 +240,28 @@ it for `wrap`/core) to re-segment cues to the cut grid.
 - **Layer 3 — snapping primitive, only when single-pass is a hard requirement.**
   Accept an optional `.srt`/cue list in `clipwright-silence`; when a proposed cut
   falls inside a cue, nudge it to the nearest inter-cue gap within a tolerance, or
-  drop the cut if no gap is near. Deprioritised: once Layer 1 lands, demand for a
-  true single-pass should drop sharply.
+  drop the cut if no gap is near.
+
+  **Status: deferred (not yet warranted as of render 0.12.0 / v0.20.0).** Layers 1
+  and 2 exist precisely to make single-pass snapping unnecessary by steering agents
+  onto the clean multi-pass order, so building Layer 3 now would be speculative.
+  Do not implement it as a guess; build it only when one of these **triggers** fires:
+
+  1. **The guidance demonstrably fails** — agents keep emitting fragmented captions
+     in real use *despite* the Layer 1 advisory and Layer 2 docs, i.e. the redirect
+     onto the clean order is not working.
+  2. **The clean order is genuinely too costly or impossible** — the multi-pass order
+     requires an extra full render pass to materialise the cut before transcribing.
+     If avoiding that double-encode becomes a real efficiency requirement on large
+     sources (e.g. a 52-min capture), single-pass snapping earns its place. This is
+     the most plausible trigger.
+  3. **An explicit single-pass context** — live / low-latency / non-re-renderable
+     source where render-then-transcribe simply cannot be run.
+
+  Until a trigger fires, Layer 3 stays a backlog item ranked below the *Medium–High*
+  content-aware reframe gap below. When it does fire, the failing scenario should
+  drive the API (cue input shape, snap tolerance, nudge-vs-drop policy) — design it
+  against that concrete case, not in the abstract.
 - Keep all timing in `RationalTime`; reuse the kept-range map render already
   computes for re-timing.
 
