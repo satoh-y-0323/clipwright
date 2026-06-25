@@ -2111,7 +2111,7 @@ class _RenderReframe(BaseModel):
 def _validate_reframe(raw: dict[str, Any] | None) -> _RenderReframe | None:
     """Validate a reframe directive dict and return a _RenderReframe, or None.
 
-    Only target_w / target_h / mode / anchor / pad_color are consumed.
+    Only target_w / target_h / mode / anchor / pad_color / track are consumed.
     tool / version / kind are intentionally stripped (extra=forbid on
     _RenderReframe).  Returns None when raw is None (backward compatible).
 
@@ -2120,6 +2120,11 @@ def _validate_reframe(raw: dict[str, Any] | None) -> _RenderReframe | None:
     - pad_color allowlist re-checked inside _RenderReframe field_validator.
     - All ValidationError / TypeError → INVALID_INPUT (CWE-209: no raw value
       echoed in error messages).
+
+    Track-mode validation (DC-AM-003 / DC-AM-005 / AC-09):
+    - len(track) > 80 → INVALID_INPUT (render does not decimate; DC-AM-003).
+    - len(track) == 80 → accepted (boundary inclusive).
+    - t_s strictly monotonic → INVALID_INPUT (prevents zero-division in expr gen).
     """
     if raw is None:
         return None
@@ -2158,6 +2163,43 @@ def _validate_reframe(raw: dict[str, Any] | None) -> _RenderReframe | None:
                     " or #RRGGBB / 0xRRGGBB hex."
                 ),
             ) from None
+
+    # Track-mode length guard (DC-AM-003 / AC-09): render does not decimate.
+    # N_max=80 confirmed by spike (av_expr_parse hard limit 96; spike report
+    # .claude/reports/test-report-spike_exprlen.md).
+    _N_MAX_TRACK = 80
+    raw_track = filtered.get("track")
+    if raw_track is not None and isinstance(raw_track, list):
+        if len(raw_track) > _N_MAX_TRACK:
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message=(
+                    f"Reframe track has {len(raw_track)} keyframes;"
+                    f" maximum is {_N_MAX_TRACK} (DC-AM-003)."
+                ),
+                hint=(
+                    f"Reduce the track to at most {_N_MAX_TRACK} keyframes."
+                    " Use clipwright-reframe to re-detect with decimation."
+                ),
+            )
+        # Strict monotonic t_s guard (prevents zero-division in expr generation;
+        # DC-AM-005).  Validation runs on raw dicts before Pydantic parsing.
+        t_s_values: list[float] = []
+        for kf in raw_track:
+            if isinstance(kf, dict):
+                ts = kf.get("t_s")
+                if ts is not None:
+                    t_s_values.append(float(ts))
+        for idx in range(1, len(t_s_values)):
+            if t_s_values[idx] <= t_s_values[idx - 1]:
+                raise ClipwrightError(
+                    code=ErrorCode.INVALID_INPUT,
+                    message="Reframe track t_s values must be strictly increasing.",
+                    hint=(
+                        "Ensure each keyframe t_s is greater than the previous one."
+                        " Duplicate or out-of-order timestamps cause zero-division."
+                    ),
+                )
 
     try:
         return _RenderReframe(**filtered)
@@ -2452,10 +2494,123 @@ def _build_transition_chain(
     return "[outv]", "[outa]" if has_audio else "", tr_warnings, overlap_cum
 
 
+def _even_floor(v: float) -> int:
+    """Return largest even integer <= v (yuv420p constraint)."""
+    return (int(v) // 2) * 2
+
+
+def _clamp(v: float, lo: float, hi: float) -> float:
+    """Clamp v to [lo, hi]."""
+    return max(lo, min(hi, v))
+
+
+def _fmt_f(v: float) -> str:
+    """Format float to fixed 4-decimal, stripping trailing zeros.
+
+    Used for dt and t_prev in piecewise-linear ramp expressions (§3.3).
+    """
+    s = f"{v:.4f}"
+    s = s.rstrip("0").rstrip(".")
+    return s or "0"
+
+
+def _build_track_crop_expr(
+    src_w: int,
+    src_h: int,
+    cw: int,
+    ch: int,
+    keyframes: list[_RenderCentreKeyframe],
+) -> tuple[str, str]:
+    """Build x(t) and y(t) piecewise-linear crop-origin expressions (§3.3).
+
+    Converts normalised centroid keyframes to pixel-space left-upper crop origins
+    and generates ffmpeg filter-graph additive ramp expressions.
+
+    Architecture §3.2: pixel coordinates are pre-computed numerically;
+    'iw'/'ih' are never emitted in the x/y expressions (DC-AS-001).
+
+    Architecture §3.3: zero-dx/dy terms are omitted (ADR-T7).
+    Denominator dt is format-asserted non-zero before inclusion (DC-AM-005 /
+    AC-04c).
+    """
+    # Convert normalised centroids to clamped pixel left-upper origins.
+    xs: list[int] = []
+    ys: list[int] = []
+    ts: list[float] = []
+    for kf in keyframes:
+        xi = kf.cx * src_w - cw / 2
+        yi = kf.cy * src_h - ch / 2
+        xs.append(round(_clamp(xi, 0.0, float(src_w - cw))))
+        ys.append(round(_clamp(yi, 0.0, float(src_h - ch))))
+        ts.append(kf.t_s)
+
+    n = len(xs)
+    if n == 1:
+        return str(xs[0]), str(ys[0])
+
+    # Build piecewise-linear additive ramp sums.
+    x_parts = [str(xs[0])]
+    y_parts = [str(ys[0])]
+    for i in range(1, n):
+        dx = xs[i] - xs[i - 1]
+        dy = ys[i] - ys[i - 1]
+        dt = ts[i] - ts[i - 1]
+        dt_s = _fmt_f(dt)
+        # Guard: dt must not format to zero (track_cli guarantees >= 1/fps,
+        # _validate_reframe ensures monotonic t_s; this assert is defence-in-depth).
+        assert dt_s not in ("0", "0.0", "0.00", "0.000", "0.0000"), (
+            f"dt formatted to zero at index {i}: dt={dt}"
+        )
+        t_prev_s = _fmt_f(ts[i - 1])
+        if dx != 0:
+            x_parts.append(rf"{dx}*min(max((t-{t_prev_s})/{dt_s}\,0)\,1)")
+        if dy != 0:
+            y_parts.append(rf"{dy}*min(max((t-{t_prev_s})/{dt_s}\,0)\,1)")
+
+    x_expr = "+".join(x_parts)
+    y_expr = "+".join(y_parts)
+    return x_expr, y_expr
+
+
+def _compute_crop_window(
+    src_w: int,
+    src_h: int,
+    tw: int,
+    th: int,
+) -> tuple[int, int]:
+    """Compute (cw, ch): largest even rectangle inscribed in src with tw:th aspect.
+
+    Architecture §3.1 (DC-AS-002): tw:th aspect is preserved under even
+    rounding.  The crop window is the largest rectangle fitting inside
+    src_w×src_h with aspect ratio tw:th, with both sides rounded down to
+    even numbers.
+    """
+    # Height-limited vs width-limited.
+    if src_w * th >= src_h * tw:
+        # Source is wider relative to target → height is the limiting dimension.
+        ch_f = float(src_h)
+        cw_f = src_h * tw / th
+    else:
+        # Source is narrower → width is limiting.
+        cw_f = float(src_w)
+        ch_f = src_w * th / tw
+
+    cw = min(_even_floor(cw_f), (src_w // 2) * 2)
+    ch = min(_even_floor(ch_f), (src_h // 2) * 2)
+
+    # Ensure positive dimensions (degenerate source guard).
+    cw = max(cw, 2)
+    ch = max(ch, 2)
+
+    return cw, ch
+
+
 def _append_reframe_filter(
     filter_parts: list[str],
     video_map_label: str,
     reframe: _RenderReframe,
+    src_w: int | None = None,
+    src_h: int | None = None,
 ) -> str:
     """Append reframe filter segment(s) to filter_parts and return the terminal label.
 
@@ -2471,6 +2626,11 @@ def _append_reframe_filter(
     - blur_pad (§3.3 / FR-3.3): 4 segments — split, background (scale+crop+blur),
       foreground (scale), overlay+setsar.  Anchor is ignored for the background
       crop (center-fixed; AC-15).
+    - track (§3.4 / DC-AS-001): 1 segment — crop-from-source (cw×ch) with
+      piecewise-linear time-varying x(t)/y(t), scale to tw×th, setsar=1.
+      src_w/src_h must be provided for pixel coordinate computation.
+      When src_w/src_h is None (probe failure) or track is empty/None, falls
+      back to static centre crop on the same crop-from-source path (§5 / AC-05).
 
     Caller contract:
         - ``video_map_label`` must be the terminal label of the video chain
@@ -2480,11 +2640,15 @@ def _append_reframe_filter(
         - Insertion order (D4): reframe → eq → subtitle → drawtext.
           Callers must pass the output of this function as the input label
           to the subsequent eq/subtitle/drawtext stages.
+        - src_w/src_h: source frame dimensions (pixels). Required for
+          mode='track'. Legacy modes (crop/pad/blur_pad) do not use them.
 
     Args:
         filter_parts: list of filter_complex segments (mutated in place).
         video_map_label: terminal label of the preceding video chain.
         reframe: validated _RenderReframe instance.
+        src_w: source frame width in pixels (None = probe failure / not provided).
+        src_h: source frame height in pixels (None = probe failure / not provided).
 
     Returns:
         '[outvrf]'
@@ -2492,6 +2656,42 @@ def _append_reframe_filter(
     w = reframe.target_w
     h = reframe.target_h
     anchor = reframe.anchor
+
+    if reframe.mode == "track":
+        # Crop-from-source path (DC-AS-001 / ADR-T10).
+        # Fallback to static centre track when src dimensions unavailable or
+        # track is empty/None (architecture §5 / AC-05).
+        _effective_src_w = src_w
+        _effective_src_h = src_h
+        if _effective_src_w is None or _effective_src_h is None:
+            # Probe failure fallback: use target dimensions as a stand-in so
+            # the crop window degenerates to the full frame (§5 §3.5).
+            # cw=tw, ch=th → x0=0, y0=0 (centred at 0 with zero margin).
+            # A real output requires valid source dims; this path emits a valid
+            # filter string, with the caller having already logged a warning.
+            _effective_src_w = w
+            _effective_src_h = h
+
+        cw, ch = _compute_crop_window(_effective_src_w, _effective_src_h, w, h)
+
+        # Resolve effective keyframes: empty/None → static centre fallback.
+        effective_track = reframe.track
+        if not effective_track:
+            effective_track = [_RenderCentreKeyframe(t_s=0.0, cx=0.5, cy=0.5)]
+
+        x_expr, y_expr = _build_track_crop_expr(
+            _effective_src_w, _effective_src_h, cw, ch, effective_track
+        )
+
+        seg = (
+            f"{video_map_label}"
+            f"crop={cw}:{ch}:'{x_expr}':'{y_expr}',"
+            f"scale={w}:{h},"
+            f"setsar=1"
+            f"[outvrf]"
+        )
+        filter_parts.append(seg)
+        return "[outvrf]"
 
     if reframe.mode == "crop":
         # Resolve anchor offset expressions (§2.2); substitute literal integers.
@@ -3018,7 +3218,18 @@ def _build_filter_complex(
         # Reframe path: insert reframe segments after concat (§4.2).
         # frame_h = target_h for subtitle counter-scaling (AC-16).
         frame_h = reframe.target_h
-        video_map_label = _append_reframe_filter(filter_parts, "[outv]", reframe)
+        # Pass source dimensions for mode='track' (crop-from-source §3.2).
+        # probe_info may be None (legacy callers); width/height may be None
+        # (probe failure); _append_reframe_filter handles both gracefully (§5).
+        _probe_src_w = probe_info.width if probe_info is not None else None
+        _probe_src_h = probe_info.height if probe_info is not None else None
+        video_map_label = _append_reframe_filter(
+            filter_parts,
+            "[outv]",
+            reframe,
+            src_w=_probe_src_w,
+            src_h=_probe_src_h,
+        )
     elif use_scale:
         raw_w: int = options.width  # type: ignore[assignment]
         raw_h: int = options.height  # type: ignore[assignment]
@@ -3769,16 +3980,31 @@ def build_plan(
             ),
         )
 
-    # multi-source + reframe → UNSUPPORTED_OPERATION (§5.2/D6/AC-12)
+    # multi-source + reframe handling (§5.2/D6/AC-12/DC-AS-008).
+    # - mode='track' + multi-source: delegate to existing per-clip cover crop
+    #   (scale-first) path with a warning.  Do NOT raise INVALID_INPUT or
+    #   UNSUPPORTED_OPERATION (DC-AS-008 parent ruling).
+    # - Other modes (crop/pad/blur_pad) + multi-source: not supported (v1).
+    _multi_source_track_warnings: list[str] = []
     if use_multi_source and reframe_directive is not None:
-        raise ClipwrightError(
-            code=ErrorCode.UNSUPPORTED_OPERATION,
-            message="Reframing is not supported for multi-source timelines.",
-            hint=(
-                "v1 supports single-source only."
-                " Trim/render to a single source first, then apply reframe."
-            ),
-        )
+        if reframe_directive.mode == "track":
+            # Discard the track directive; multi-source per-clip cover crop
+            # normalises each clip independently — a single-source crop-from-source
+            # window would be wrong for 2nd+ clips (DC-AS-008).
+            _multi_source_track_warnings.append(
+                "Track reframe directive ignored for multi-source timeline;"
+                " per-clip cover crop applied instead."
+            )
+            reframe_directive = None
+        else:
+            raise ClipwrightError(
+                code=ErrorCode.UNSUPPORTED_OPERATION,
+                message="Reframing is not supported for multi-source timelines.",
+                hint=(
+                    "v1 supports single-source only."
+                    " Trim/render to a single source first, then apply reframe."
+                ),
+            )
 
     # stabilize_cwd: initialized for both branches. Set in single-source branch;
     # remains None for multi-source (blocked above; ADR-ST-2).
@@ -3971,6 +4197,9 @@ def build_plan(
 
     # Merge transition clamping warnings (ADR-RT-8).
     warnings.extend(_transition_warnings)
+
+    # Merge multi-source track fallback warnings (DC-AS-008).
+    warnings.extend(_multi_source_track_warnings)
 
     # Merge re-timing warnings from text_overlay adapter (ADR-4 / §5).
     warnings.extend(_retime_overlay_warnings)

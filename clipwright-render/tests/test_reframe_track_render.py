@@ -96,7 +96,9 @@ def _run_track_filter(
     For the Red phase the call may raise TypeError (signature not yet extended).
     """
     parts: list[str] = []
-    result_label = _append_reframe_filter(parts, label, reframe, src_w=src_w, src_h=src_h)
+    result_label = _append_reframe_filter(
+        parts, label, reframe, src_w=src_w, src_h=src_h
+    )
     return parts, result_label
 
 
@@ -122,7 +124,9 @@ def _make_track_directive(
         "mode": "track",
         "anchor": "center",
         "pad_color": "black",
-        "track": keyframes if keyframes is not None else [{"t_s": 0.0, "cx": 0.5, "cy": 0.5}],
+        "track": keyframes
+        if keyframes is not None
+        else [{"t_s": 0.0, "cx": 0.5, "cy": 0.5}],
     }
 
 
@@ -142,80 +146,63 @@ class TestTrackFilterBasicStructure:
 
     def test_track_mode_returns_outvrf_label(self) -> None:
         """mode='track' → terminal label is '[outvrf]'."""
-        reframe = _make_track_reframe(
-            track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}]
-        )
+        reframe = _make_track_reframe(track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}])
         _parts, label = _run_track_filter(reframe)
         assert label == "[outvrf]"
 
     def test_track_mode_single_segment(self) -> None:
         """mode='track' → exactly one segment appended (single-segment rule §3.1)."""
-        reframe = _make_track_reframe(
-            track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}]
-        )
+        reframe = _make_track_reframe(track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}])
         parts, _ = _run_track_filter(reframe)
         assert len(parts) == 1
 
     def test_track_segment_no_semicolon(self) -> None:
         """track segment must not contain ';' (individual-segment rule §3.1)."""
         reframe = _make_track_reframe(
-            track=[{"t_s": 0.0, "cx": 0.3, "cy": 0.4},
-                   {"t_s": 1.0, "cx": 0.7, "cy": 0.6}]
+            track=[
+                {"t_s": 0.0, "cx": 0.3, "cy": 0.4},
+                {"t_s": 1.0, "cx": 0.7, "cy": 0.6},
+            ]
         )
         parts, _ = _run_track_filter(reframe)
         assert ";" not in parts[0]
 
     def test_track_segment_starts_with_input_label(self) -> None:
         """track segment starts with the input video_map_label."""
-        reframe = _make_track_reframe(
-            track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}]
-        )
+        reframe = _make_track_reframe(track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}])
         parts, _ = _run_track_filter(reframe)
         assert parts[0].startswith(_IN_LABEL)
 
     def test_track_segment_ends_with_outvrf(self) -> None:
         """track segment ends with '[outvrf]'."""
-        reframe = _make_track_reframe(
-            track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}]
-        )
+        reframe = _make_track_reframe(track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}])
         parts, _ = _run_track_filter(reframe)
         assert parts[0].endswith("[outvrf]")
 
     def test_track_segment_contains_crop_filter(self) -> None:
         """track segment contains crop=cw:ch:'x_expr':'y_expr' (§3.4)."""
-        reframe = _make_track_reframe(
-            track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}]
-        )
+        reframe = _make_track_reframe(track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}])
         parts, _ = _run_track_filter(reframe)
         # crop= must be present with single-quoted x/y expressions
         assert "crop=" in parts[0]
 
     def test_track_segment_contains_scale(self) -> None:
         """track segment contains scale={tw}:{th} after crop (crop-from-source)."""
-        reframe = _make_track_reframe(
-            track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}]
-        )
+        reframe = _make_track_reframe(track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}])
         parts, _ = _run_track_filter(reframe)
         assert f"scale={_TW}:{_TH}" in parts[0]
 
     def test_track_segment_contains_setsar_1(self) -> None:
         """track segment ends chain with setsar=1 (§3.4)."""
-        reframe = _make_track_reframe(
-            track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}]
-        )
+        reframe = _make_track_reframe(track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}])
         parts, _ = _run_track_filter(reframe)
         assert "setsar=1" in parts[0]
 
     def test_track_segment_no_iw_in_crop_args(self) -> None:
         """x/y in crop must be numeric (no 'iw' / 'ih' tokens) — DC-AS-001/§3.2."""
-        reframe = _make_track_reframe(
-            track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}]
-        )
+        reframe = _make_track_reframe(track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}])
         parts, _ = _run_track_filter(reframe)
         seg = parts[0]
-        # Find the crop= section
-        crop_start = seg.index("crop=")
-        # The crop args are the part before the next unquoted comma at top level.
         # A simpler check: 'iw' and 'ih' must not appear in the segment at all.
         assert "iw" not in seg, f"'iw' found in track filter segment: {seg!r}"
         assert "ih" not in seg, f"'ih' found in track filter segment: {seg!r}"
@@ -223,8 +210,10 @@ class TestTrackFilterBasicStructure:
     def test_track_n2_segment_contains_min_max(self) -> None:
         """N>=2 track → x_expr/y_expr contains 'min(max(' piecewise ramp (§3.3)."""
         reframe = _make_track_reframe(
-            track=[{"t_s": 0.0, "cx": 0.3, "cy": 0.4},
-                   {"t_s": 2.0, "cx": 0.7, "cy": 0.6}]
+            track=[
+                {"t_s": 0.0, "cx": 0.3, "cy": 0.4},
+                {"t_s": 2.0, "cx": 0.7, "cy": 0.6},
+            ]
         )
         parts, _ = _run_track_filter(reframe)
         seg = parts[0]
@@ -236,9 +225,7 @@ class TestTrackFilterBasicStructure:
         For a single-keyframe (N=1) track, x_expr is a constant integer.
         We extract cw,ch from the segment and verify the constant is in range.
         """
-        reframe = _make_track_reframe(
-            track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}]
-        )
+        reframe = _make_track_reframe(track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}])
         parts, _ = _run_track_filter(reframe, src_w=_SRC_W, src_h=_SRC_H)
         seg = parts[0]
         cw, ch = _cw_ch_from_filter(seg)
@@ -266,8 +253,7 @@ class TestTrackFilterAspect:
     def test_portrait_source_landscape_target_aspect(self) -> None:
         """Landscape target (1920:1080) from landscape source: |cw/ch - tw/th| <= ε."""
         reframe = _make_track_reframe(
-            tw=_TW_LS, th=_TH_LS,
-            track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}]
+            tw=_TW_LS, th=_TH_LS, track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}]
         )
         parts, _ = _run_track_filter(reframe, src_w=_SRC_W, src_h=_SRC_H)
         cw, ch = _cw_ch_from_filter(parts[0])
@@ -282,8 +268,7 @@ class TestTrackFilterAspect:
     def test_landscape_source_portrait_target_aspect(self) -> None:
         """Portrait target (1080:1920) from landscape source: |cw/ch - tw/th| <= ε."""
         reframe = _make_track_reframe(
-            tw=_TW, th=_TH,
-            track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}]
+            tw=_TW, th=_TH, track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}]
         )
         parts, _ = _run_track_filter(reframe, src_w=_SRC_W, src_h=_SRC_H)
         cw, ch = _cw_ch_from_filter(parts[0])
@@ -298,8 +283,7 @@ class TestTrackFilterAspect:
     def test_portrait_source_portrait_target_aspect(self) -> None:
         """Portrait target (1080:1920) from portrait source (1080:1920): ε-check."""
         reframe = _make_track_reframe(
-            tw=_TW, th=_TH,
-            track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}]
+            tw=_TW, th=_TH, track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}]
         )
         parts, _ = _run_track_filter(reframe, src_w=_SRC_W_PORT, src_h=_SRC_H_PORT)
         cw, ch = _cw_ch_from_filter(parts[0])
@@ -314,8 +298,7 @@ class TestTrackFilterAspect:
     def test_cw_ch_are_even(self) -> None:
         """cw and ch must both be even numbers (yuv420p constraint, DC-AS-002)."""
         reframe = _make_track_reframe(
-            tw=_TW, th=_TH,
-            track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}]
+            tw=_TW, th=_TH, track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}]
         )
         parts, _ = _run_track_filter(reframe, src_w=_SRC_W, src_h=_SRC_H)
         cw, ch = _cw_ch_from_filter(parts[0])
@@ -336,15 +319,15 @@ class TestTrackFilterNoDivisionByZero:
     """
 
     # Patterns that represent zero (:.4f format → "0.0000" for dt=0)
-    _ZERO_DT_PATTERN = re.compile(
-        r"/(?:0\.0+|0+)(?:[^0-9.]|$)"
-    )
+    _ZERO_DT_PATTERN = re.compile(r"/(?:0\.0+|0+)(?:[^0-9.]|$)")
 
     def test_n2_no_zero_denominator(self) -> None:
         """Two keyframes at t=0 and t=2 → dt=2.0 → denominator is not zero."""
         reframe = _make_track_reframe(
-            track=[{"t_s": 0.0, "cx": 0.3, "cy": 0.4},
-                   {"t_s": 2.0, "cx": 0.7, "cy": 0.6}]
+            track=[
+                {"t_s": 0.0, "cx": 0.3, "cy": 0.4},
+                {"t_s": 2.0, "cx": 0.7, "cy": 0.6},
+            ]
         )
         parts, _ = _run_track_filter(reframe)
         seg = parts[0]
@@ -382,9 +365,7 @@ class TestTrackFilterDegenerate:
 
         Architecture §3.3: 'N == 1: x_expr = str(x[0])'
         """
-        reframe = _make_track_reframe(
-            track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}]
-        )
+        reframe = _make_track_reframe(track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}])
         parts, _ = _run_track_filter(reframe, src_w=_SRC_W, src_h=_SRC_H)
         seg = parts[0]
         # N=1: no 'min(max(' in crop x/y (it's a constant expression)
@@ -395,8 +376,10 @@ class TestTrackFilterDegenerate:
     def test_n2_has_ramp_terms(self) -> None:
         """N=2 track → exactly one ramp term (one dx entry) in x_expr."""
         reframe = _make_track_reframe(
-            track=[{"t_s": 0.0, "cx": 0.2, "cy": 0.3},
-                   {"t_s": 2.0, "cx": 0.8, "cy": 0.7}]
+            track=[
+                {"t_s": 0.0, "cx": 0.2, "cy": 0.3},
+                {"t_s": 2.0, "cx": 0.8, "cy": 0.7},
+            ]
         )
         parts, _ = _run_track_filter(reframe)
         seg = parts[0]
@@ -408,9 +391,11 @@ class TestTrackFilterDegenerate:
         Architecture §3.3: 'if dx == 0: continue' — all-zero dx ⇒ no ramp terms.
         """
         reframe = _make_track_reframe(
-            track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5},
-                   {"t_s": 1.0, "cx": 0.5, "cy": 0.5},
-                   {"t_s": 2.0, "cx": 0.5, "cy": 0.5}]
+            track=[
+                {"t_s": 0.0, "cx": 0.5, "cy": 0.5},
+                {"t_s": 1.0, "cx": 0.5, "cy": 0.5},
+                {"t_s": 2.0, "cx": 0.5, "cy": 0.5},
+            ]
         )
         parts, _ = _run_track_filter(reframe)
         seg = parts[0]
@@ -532,6 +517,7 @@ class TestMultiSourceTrackGuard:
 
     def _make_probe(self, width: int = 1920, height: int = 1080) -> Any:
         from clipwright_render.plan import ProbeInfo
+
         return ProbeInfo(
             has_video=True,
             audio_count=1,
@@ -637,9 +623,7 @@ class TestProbeFailureFallback:
 
     def test_src_w_none_produces_filter(self) -> None:
         """src_w=None → fallback centre crop (not error)."""
-        reframe = _make_track_reframe(
-            track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}]
-        )
+        reframe = _make_track_reframe(track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}])
         # Probe failure: src_w is None
         parts: list[str] = []
         label = _append_reframe_filter(
@@ -651,9 +635,7 @@ class TestProbeFailureFallback:
 
     def test_src_h_none_produces_filter(self) -> None:
         """src_h=None → fallback centre crop (not error)."""
-        reframe = _make_track_reframe(
-            track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}]
-        )
+        reframe = _make_track_reframe(track=[{"t_s": 0.0, "cx": 0.5, "cy": 0.5}])
         parts: list[str] = []
         label = _append_reframe_filter(
             parts, _IN_LABEL, reframe, src_w=_SRC_W, src_h=None
