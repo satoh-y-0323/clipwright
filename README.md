@@ -236,7 +236,7 @@ order-sensitive. The **clean chain** below avoids fragmented captions:
    ```
 4. *(Optional)* **Wrap captions** for line-length if needed:
    ```
-   clipwright_wrap_text(timeline="cut.otio", ...)  → wrapped.srt
+   clipwright_wrap_captions(input="cut.srt", output="wrapped.srt")
    ```
 5. **Render again with subtitles** using the transcription OTIO as the timeline source:
    ```

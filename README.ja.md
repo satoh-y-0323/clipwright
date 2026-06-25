@@ -231,7 +231,7 @@ src/clipwright/
    ```
 4. *(任意)* 行長が長い場合は **キャプション折り返し**を行う:
    ```
-   clipwright_wrap_text(timeline="cut.otio", ...)  → wrapped.srt
+   clipwright_wrap_captions(input="cut.srt", output="wrapped.srt")
    ```
 5. **字幕付きで再 render** する。timeline には step3 の transcription OTIO を使う:
    ```
