@@ -183,19 +183,51 @@ uncut audio while the cuts slice through phrases. An AI agent currently has to
 hand-orchestrate a "cut first, then transcribe the cut program" order to avoid
 this — there is no primitive that makes the common single-pass combination clean.
 
-**MCP tool name(s)**
-None new for the snapping approach — extend `clipwright_detect_silence` with an
-optional cue-boundary input; or a render-side option that prefers cutting on cue
-gaps. A `clipwright_remap_captions`-style helper (spec3 noted it for `wrap`/core)
-could also re-segment cues to the cut grid.
+**Design stance: tools vs. a user-authored skill**
+This gap decomposes into two problems that have *different* right homes, and that
+split is the whole design decision:
 
-**Implementation hints**
-- Snapping: accept an optional `.srt`/cue list in `clipwright-silence`; when a
-  proposed cut falls inside a cue, nudge it to the nearest inter-cue gap within a
-  tolerance, or drop the cut if no gap is near.
-- Alternatively document and/or tool the "cut → render cut program → transcribe
-  the rendered cut → burn" order as the recommended clean path, and surface it in
-  the render warning hints when cue fragmentation is detected.
+1. **Ordering** — "cut → render the cut program → transcribe the rendered cut →
+   burn" avoids the fragmentation entirely. This is pure composition knowledge:
+   the AI can already achieve a clean result by calling existing tools in the
+   right order. Per this suite's standing boundary (cf. the *Out of scope* note
+   that composing `silence + scene + transcribe` "remains the agent's job"),
+   baking the ordering into a new tool would violate single-responsibility. It
+   belongs in orchestration, **not** in a primitive.
+2. **Snapping** — when a genuine *single pass* is required, nudge silence cut
+   points onto caption-cue boundaries so cuts never fall mid-cue. The AI cannot do
+   this by orchestration alone (silence has no cue input), so this is the one part
+   that legitimately needs a tool capability.
+
+The UX trap to avoid: making each user *author* the orchestration skill themselves
+offloads the hardest part (the implicit composition knowledge) onto every user and
+only helps sophisticated ones — a regression for an AI-first product whose value is
+"an AI can just use it correctly." So the orchestration knowledge should be carried
+by clipwright (hints + a shipped reference skill), not invented per user.
+
+**MCP tool name(s)**
+None required for the recommended layers below. Only the (later, optional) snapping
+primitive touches a tool: extend `clipwright_detect_silence` with an optional
+cue-boundary input, or add a `clipwright_remap_captions`-style helper (spec3 noted
+it for `wrap`/core) to re-segment cues to the cut grid.
+
+**Implementation hints (layered — top layers help every AI user with zero setup)**
+- **Layer 1 — the tool teaches the right usage (highest priority, low cost).**
+  When `clipwright-render` detects cue fragmentation (the same condition that emits
+  the 20+ re-timing warnings), make the warning `hint` *prescribe the clean order*
+  ("this source cuts through captions; render the cut program first, then
+  transcribe the rendered cut, then burn"). This is a quality improvement to an
+  existing hint, not a new responsibility, and lets even an AI with no skill
+  self-correct. This is the primary win.
+- **Layer 2 — ship a reference editing skill / doc, don't make users invent one.**
+  The full "cut → render → transcribe → burn" workflow belongs in a skill, but
+  clipwright should *distribute* it as an official reference that users can adopt
+  or fork to control MCP usage — rather than requiring each user to write it.
+- **Layer 3 — snapping primitive, only when single-pass is a hard requirement.**
+  Accept an optional `.srt`/cue list in `clipwright-silence`; when a proposed cut
+  falls inside a cue, nudge it to the nearest inter-cue gap within a tolerance, or
+  drop the cut if no gap is near. Deprioritised: once Layer 1 lands, demand for a
+  true single-pass should drop sharply.
 - Keep all timing in `RationalTime`; reuse the kept-range map render already
   computes for re-timing.
 
@@ -370,7 +402,7 @@ color        ✓
 ## Priority summary
 
 1. ~~**D1 — render transition 4:4:4** (High): ships unplayable deliverables; contained `format=yuv420p` fix.~~ ✅ **FIXED (render 0.11.1)** — `-pix_fmt yuv420p` pinned in `_build_ffmpeg_args()`.
-2. **G — cut-aware caption alignment** (High): the silence+subtitle combination degrades caption quality today.
+2. **G — cut-aware caption alignment** (High): the silence+subtitle combination degrades caption quality today. Split by home: the *ordering* fix is orchestration, not a tool — so Layer 1 makes render's fragmentation hint prescribe the clean "cut → render → transcribe → burn" order (helps every AI user, zero setup), Layer 2 ships that workflow as an official reference skill rather than making each user author one, and Layer 3 adds a cue-boundary snapping input to `silence` only if a true single pass is ever required.
 3. ~~**D2 — scene PySceneDetect 0.7 incompat** (Medium): the content-aware backend is dead against current PySceneDetect; contained CSV-file fix.~~ ✅ **FIXED (scene 0.2.1)** — `list-scenes -o <tmpdir>` CSV-file read.
 4. **Content-aware reframe** (Medium–High): static vertical reframe caps shorts quality.
 5. **Scene-driven frames** / **trim ergonomics** / **path-policy consistency** (Medium): composition and DX gaps.
