@@ -5,7 +5,7 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.21.0] - 2026-06-25
 
 Motion-tracking reframe. `clipwright-reframe` gains a content-aware `track` fit mode that keeps
 a moving subject in frame when converting 16:9 footage to 9:16 vertical, and `clipwright-render`

@@ -462,7 +462,7 @@ dev = [
 
 [[package]]
 name = "clipwright-reframe"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "clipwright-reframe" }
 dependencies = [
     { name = "clipwright" },
@@ -504,7 +504,7 @@ dev = [
 
 [[package]]
 name = "clipwright-render"
-version = "0.12.0"
+version = "0.13.0"
 source = { editable = "clipwright-render" }
 dependencies = [
     { name = "clipwright" },
