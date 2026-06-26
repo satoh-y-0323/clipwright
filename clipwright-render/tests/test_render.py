@@ -558,10 +558,10 @@ class TestInputValidation:
         # Red until render.py delegates to pathpolicy.check_media_ref.
         assert result["ok"] is True
 
-    def test_symlink_source_raises_file_not_found(self, tmp_path: Path) -> None:
-        """Symlink source passed to render_timeline returns FILE_NOT_FOUND (DC-AS-001).
+    def test_symlink_source_raises_path_not_allowed(self, tmp_path: Path) -> None:
+        """Symlink source passed to render_timeline returns PATH_NOT_ALLOWED (DC-AS-001).
 
-        Regression test verifying that _probe -> inspect_media rejects symlinks with FILE_NOT_FOUND
+        Regression test verifying that _probe -> inspect_media rejects symlinks with PATH_NOT_ALLOWED
         when reached via render_timeline.
         Path.exists() returns True if the symlink target exists, so it passes the existence check;
         the rejection fires inside inspect_media within _probe.
@@ -595,7 +595,7 @@ class TestInputValidation:
         )
 
         assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
+        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
         # error.message must not expose absolute path (parent dir of real_file etc.)
         # — only basename (Sec M-1)
         error_message: str = result["error"]["message"]

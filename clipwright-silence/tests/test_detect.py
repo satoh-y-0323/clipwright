@@ -752,8 +752,8 @@ class TestInputValidation:
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
 
-    def test_symlink_media_propagates_file_not_found(self, tmp_path: Path) -> None:
-        """Symlink media -> FILE_NOT_FOUND from inspect_media propagates."""
+    def test_symlink_media_propagates_path_not_allowed(self, tmp_path: Path) -> None:
+        """Symlink media -> PATH_NOT_ALLOWED from inspect_media propagates."""
         from clipwright_silence.detect import detect_silence
 
         media = str(tmp_path / "link.mp4")
@@ -762,7 +762,7 @@ class TestInputValidation:
         with patch(
             "clipwright_silence.detect.inspect_media",
             side_effect=ClipwrightError(
-                code=ErrorCode.FILE_NOT_FOUND,
+                code=ErrorCode.PATH_NOT_ALLOWED,
                 message=f"Symbolic links are not accepted: {Path(media).name}",
                 hint="Specify a real file.",
             ),
@@ -770,7 +770,7 @@ class TestInputValidation:
             result = detect_silence(media, output, _opts())
 
         assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
+        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
 
     def test_output_in_different_dir_allowed(self, tmp_path: Path) -> None:
         """output in a different directory than media is now allowed (new policy: DC-AS-001 removed).
@@ -1366,10 +1366,15 @@ class TestFileNotFoundMessageSafety:
         exp_hint = "Specify a valid media file path."
         assert result["error"]["hint"] == exp_hint
 
-    def test_symlink_file_not_found_message_contains_only_basename(
+    def test_symlink_path_not_allowed_message_contains_only_basename(
         self, tmp_path: Path
     ) -> None:
-        """Symlink rejection message must also not contain a directory path (SR L-2)."""
+        """Symlink rejection message must not contain a directory path (SR L-2).
+
+        pathpolicy.validate_source_file emits basename-only messages for PATH_NOT_ALLOWED.
+        detect_silence propagates the message without further sanitization for this code,
+        so the mock reflects the real source (basename only, not full path).
+        """
         from clipwright_silence.detect import detect_silence
 
         media = str(tmp_path / "link.mp4")
@@ -1379,15 +1384,15 @@ class TestFileNotFoundMessageSafety:
         with patch(
             "clipwright_silence.detect.inspect_media",
             side_effect=ClipwrightError(
-                code=ErrorCode.FILE_NOT_FOUND,
-                message=f"Symbolic links are not accepted: {media}",  # full path
+                code=ErrorCode.PATH_NOT_ALLOWED,
+                message="Symbolic links are not accepted: link.mp4",  # basename only (real impl)
                 hint="Specify a real file.",
             ),
         ):
             result = detect_silence(media, output, _opts())
 
         assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
+        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
         error_msg = result["error"]["message"]
         # Directory part must not be present
         assert full_dir not in error_msg
