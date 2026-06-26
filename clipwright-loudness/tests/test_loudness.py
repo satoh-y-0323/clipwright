@@ -494,12 +494,20 @@ class TestMediaNotFound:
 
 
 # ===========================================================================
-# (e) output == media / output == timeline -> INVALID_INPUT
+# (e) output == media -> INVALID_INPUT (ext check fires first)
+#     output == timeline -> PATH_NOT_ALLOWED (check_output_not_source)
 # ===========================================================================
 
 
 class TestOutputConflict:
-    """INVALID_INPUT must be returned when output is the same path as media or timeline."""
+    """Error must be returned when output is the same path as media or timeline.
+
+    - output == media: INVALID_INPUT — the output extension check (".otio" required)
+      fires before the conflict check, so the extension error is returned first.
+    - output == timeline: PATH_NOT_ALLOWED — the timeline file has the ".otio"
+      extension, so it passes the extension check; check_output_not_source then
+      fires and returns PATH_NOT_ALLOWED.
+    """
 
     def test_output_equals_media_returns_invalid_input(self, tmp_path: Path) -> None:
         from clipwright_loudness.loudness import detect_loudness
@@ -515,7 +523,7 @@ class TestOutputConflict:
         assert result.error is not None
         assert result.error.code == ErrorCode.INVALID_INPUT
 
-    def test_output_equals_timeline_returns_invalid_input(self, tmp_path: Path) -> None:
+    def test_output_equals_timeline_returns_path_not_allowed(self, tmp_path: Path) -> None:
         from clipwright_loudness.loudness import detect_loudness
 
         media = tmp_path / "video.mp4"
