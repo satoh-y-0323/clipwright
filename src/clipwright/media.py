@@ -7,10 +7,10 @@ Delegates ffprobe invocation to process.run, following subprocess discipline (§
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import clipwright.process as _process_module
 from clipwright.errors import ClipwrightError, ErrorCode
+from clipwright.pathpolicy import validate_source_file as _validate_source_file
 from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo
 
 
@@ -85,22 +85,13 @@ def _to_optional_int(val: object) -> int | None:
 def _validate_existing_file(path: str) -> None:
     """Verify that a file exists at the given path.
 
-    Symbolic links are rejected (F-04: SR-V-002).
-    Raises FILE_NOT_FOUND if the file does not exist.
+    Thin wrapper over pathpolicy.validate_source_file for backward
+    compatibility with existing callers.  Symlinks are rejected across all
+    path components (ADR-PP-2).  Raises FILE_NOT_FOUND when the path does
+    not point to an existing regular file, PATH_NOT_ALLOWED when any path
+    component is a symlink (F-04: SR-V-002).
     """
-    p = Path(path)
-    if p.is_symlink():
-        raise ClipwrightError(
-            code=ErrorCode.FILE_NOT_FOUND,
-            message=f"Symbolic links are not accepted: {path}",
-            hint="Specify the path to a real file, not a symbolic link.",
-        )
-    if not p.is_file():
-        raise ClipwrightError(
-            code=ErrorCode.FILE_NOT_FOUND,
-            message=f"File not found: {path}",
-            hint="Check that the path is correct and the file exists.",
-        )
+    _validate_source_file(path)
 
 
 def _parse_avg_frame_rate(avg_frame_rate: str) -> float:
