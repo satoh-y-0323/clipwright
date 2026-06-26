@@ -458,7 +458,6 @@ class TestColocation:
         Updated from PATH_NOT_ALLOWED to ok=True (ADR-SEQ-6 relaxed: co-location
         restriction removed; external absolute sources are allowed when they exist
         as regular non-symlink files).
-        Red until impl-sequence replaces _resolve_and_check_colocation.
         """
         outside = tmp_path / "outside"
         outside.mkdir()
@@ -474,7 +473,6 @@ class TestColocation:
         ):
             result = build_sequence(clips=clips, output=output)
 
-        # Red: current code raises PATH_NOT_ALLOWED from _resolve_and_check_colocation
         assert result["ok"] is True
 
     def test_target_url_equals_resolved_path(self, tmp_path: Path) -> None:

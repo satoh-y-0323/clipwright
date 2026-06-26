@@ -1,4 +1,4 @@
-"""test_server.py — Contract tests for server.py (MCP + CLI) (Red phase).
+"""test_server.py — Contract tests for server.py (MCP + CLI).
 
 Test scope:
   13. MCP annotations values for clipwright_add_bgm:

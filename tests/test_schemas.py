@@ -1,4 +1,4 @@
-"""test_schemas.py — Contract tests for schemas.py (Red phase).
+"""test_schemas.py — Contract tests for schemas.py.
 
 Covers:
 - RationalTimeModel / TimeRangeModel

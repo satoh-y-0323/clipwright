@@ -1,4 +1,4 @@
-"""test_wrap_cli.py — Red tests for wrap_cli.py (small BudouX phrase-segmentation CLI).
+"""test_wrap_cli.py — Contract tests for wrap_cli.py (small BudouX phrase-segmentation CLI).
 
 Target: clipwright_wrap.wrap_cli.main(argv)
 I/O contract (WR-AD-02):
@@ -44,7 +44,7 @@ def _run_main(
     stdout is redirected to StringIO and the JSON is parsed before returning.
     When loader_map is provided, _PARSER_LOADERS is replaced with that map.
     """
-    import clipwright_wrap.wrap_cli as wrap_cli_mod  # ImportError → Red if not implemented
+    import clipwright_wrap.wrap_cli as wrap_cli_mod
 
     stdin_payload = json.dumps(stdin_data, ensure_ascii=False)
     fake_stdin = io.StringIO(stdin_payload)
@@ -484,8 +484,8 @@ class TestWrapCliErrors:
     ) -> None:
         """SR M-2: error message for invalid language must not contain the input language value.
 
-        The current implementation exposes the input value via f"unsupported language: {language!r}".
-        This requires changing to the fixed string "Unsupported language specified".
+        Verifies the fixed-string "Unsupported language specified" is used instead of
+        exposing the raw input value via f"unsupported language: {language!r}".
         """
         malicious_lang = "xx'; DROP TABLE users; --"
         result, rc = _run_main(
@@ -507,9 +507,8 @@ class TestWrapCliErrors:
     ) -> None:
         """SR M-2: hint for invalid language must not expose _PARSER_LOADERS.keys() expansion.
 
-        The current implementation exposes the internal dict dynamically via
-        f"language is one of {list(_PARSER_LOADERS.keys())} ...".
-        This requires changing to the fixed string "ja / zh-hans / zh-hant / th".
+        Verifies the fixed enumeration "ja / zh-hans / zh-hant / th" is used instead of
+        dynamically expanding _PARSER_LOADERS.keys() into the hint string.
         """
         result, rc = _run_main(
             argv=None,
@@ -536,8 +535,8 @@ class TestWrapCliErrors:
     ) -> None:
         """SR L-3: when texts contains non-str elements, INVALID_INPUT is returned.
 
-        The current implementation has no type check, causing AttributeError from
-        parser.parse(None) → INTERNAL error. Adding a type check for texts elements is required.
+        Verifies that a type check on texts elements is in place, preventing an
+        AttributeError from parser.parse(None) from escalating to an INTERNAL error.
         """
         result, rc = _run_main(
             argv=None,
@@ -573,8 +572,8 @@ class TestWrapCliErrors:
     ) -> None:
         """CR L-2: when budoux is not installed and _PARSER_LOADERS={}, DEPENDENCY_MISSING is returned.
 
-        The current implementation returns INVALID_INPUT via "language not in _PARSER_LOADERS".
-        When _PARSER_LOADERS is empty at the start of main(), DEPENDENCY_MISSING should be returned.
+        When _PARSER_LOADERS is empty at the start of main(), DEPENDENCY_MISSING is returned
+        (not INVALID_INPUT which would mask the missing-package root cause).
         """
         result, rc = _run_main(
             argv=None,

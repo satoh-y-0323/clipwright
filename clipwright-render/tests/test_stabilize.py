@@ -112,10 +112,7 @@ def _single_source_plan(
     options: RenderOptions | None = None,
     source: str = "/src/a.mp4",
 ) -> Any:
-    """Build a single-source RenderPlan with an optional stabilize directive.
-
-    build_plan does not yet accept stabilize= so this will raise TypeError (Red).
-    """
+    """Build a single-source RenderPlan with an optional stabilize directive."""
     tl = _make_timeline([_make_clip(source, 0.0, 5.0)])
     ranges = resolve_kept_ranges(tl)
     probe = _make_probe()

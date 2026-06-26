@@ -1,4 +1,4 @@
-"""test_denoise.py — Red tests for the denoise extension of clipwright-render (DC-AS-005/AS-006/GP-001 B-2).
+"""test_denoise.py — Tests for the denoise extension of clipwright-render (DC-AS-005/AS-006/GP-001 B-2).
 
 Targets:
   - build_plan(ranges, probe_info, options, denoise=...) — afftdn injection, has_audio branching, scale coexistence

@@ -1,4 +1,4 @@
-"""test_detect.py — Red tests for detect.py orchestration.
+"""test_detect.py — Tests for detect.py orchestration.
 
 Target API:
   clipwright_silence.detect.detect_silence(

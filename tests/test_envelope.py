@@ -1,4 +1,4 @@
-"""test_envelope.py — Contract tests for envelope.py (Red phase).
+"""test_envelope.py — Contract tests for envelope.py.
 
 Covers:
 - ok_result: returns a ToolResult-form dict (§4 return value envelope)

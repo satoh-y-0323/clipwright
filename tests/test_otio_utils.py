@@ -1,4 +1,4 @@
-"""test_otio_utils.py — Red phase tests for otio_utils.py.
+"""test_otio_utils.py — Tests for otio_utils.py.
 
 Target (§6 / §13.5):
 - new_timeline: create tracks in [V1(kind=Video), A1(kind=Audio)] order

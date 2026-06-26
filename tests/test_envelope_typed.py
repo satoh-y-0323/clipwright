@@ -3,7 +3,7 @@
 Covers:
 - ok_result returns a ToolResult instance (not a plain dict)
 - error_result returns a ToolResult instance with ok=False and error populated
-- to_tool_result(dict) -> ToolResult conversion (new function, not yet implemented)
+- to_tool_result(dict) -> ToolResult conversion
 - Artifact extra="ignore" model_config (M-002)
 - Wire-compatibility: model_dump(mode="json") key set
 """
@@ -161,7 +161,7 @@ class TestErrorResultTyped:
 
 
 # ===========================================================================
-# to_tool_result — new function (not yet implemented → Red)
+# to_tool_result
 # ===========================================================================
 
 _SKIP_TO_TOOL_RESULT = pytest.mark.skipif(

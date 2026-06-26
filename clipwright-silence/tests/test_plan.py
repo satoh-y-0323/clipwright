@@ -1,4 +1,4 @@
-"""test_plan.py — Red tests for plan.py (pure logic).
+"""test_plan.py — Tests for plan.py (pure logic).
 
 Target function:
   derive_keep_ranges(

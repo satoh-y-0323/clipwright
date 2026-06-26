@@ -1,8 +1,6 @@
-"""test_schemas.py — Red tests for WrapCaptionsOptions (contract coverage target: 100%).
+"""test_schemas.py — Contract tests for WrapCaptionsOptions (contract coverage target: 100%).
 
 Pins the WrapCaptionsOptions spec from architecture WR-AD-05.
-These tests are intended to fail due to ImportError when schemas.py does not exist yet
-(Red phase).
 
 DC-AM-005 gate: language pattern allows only languages confirmed loadable via real spike.
   ja / zh-hans / zh-hant / th (all 4 loaded successfully)

@@ -1,20 +1,12 @@
-"""test_subprocess_safe_message.py — Red tests for SR-NEW / SR L-1 DRY fix.
+"""test_subprocess_safe_message.py — Tests for SR-NEW / SR L-1 DRY fix.
 
-Targets the two new public symbols to be added to clipwright.process:
+Targets the two public symbols in clipwright.process:
 
   SUBPROCESS_SAFE_MESSAGE  (module-level constant)
   safe_subprocess_message(exc) -> str  (helper function)
 
-These consolidate the duplicated _SUBPROCESS_SAFE_MESSAGE string that currently
-lives independently in detect.py:44 and vad_cli.py:39 (SR I-1 [SR-NEW]).
-
-Design:
-  - Neither symbol exists in process.py today → ImportError on every test →
-    genuine deterministic Red.
-  - Once the developer adds the constant and helper to process.py the tests
-    become Green.
-
-Red classification: deterministic-Red (ImportError — symbols not yet exported).
+These consolidate the duplicated _SUBPROCESS_SAFE_MESSAGE string that previously
+lived independently in detect.py and vad_cli.py (SR I-1 [SR-NEW]).
 """
 
 from __future__ import annotations

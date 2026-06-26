@@ -1,4 +1,4 @@
-"""test_template_subprocess_message.py — Red test for round-4 SR I-1 [SR-NEW]
+"""test_template_subprocess_message.py — Test for round-4 SR I-1 [SR-NEW]
 template fix.
 
 Asserts that the template's module-level ``_SUBPROCESS_SAFE_MESSAGE`` literal value
@@ -11,13 +11,8 @@ Design:
     it keeps its own local copy of the constant.
   - This test reads the template as plain text, extracts the assigned literal via
     regex, and asserts the extracted value equals the imported core constant.
-  - Red today because the template has ``_SUBPROCESS_SAFE_MESSAGE = "Internal subprocess
-    failed"`` (capital "I"), while core has ``"internal subprocess failed"``
-    (lowercase).
   - Do NOT import the template module: the path contains placeholder tokens
     (``__TOOL__``) that are not importable.
-
-Red classification: deterministic-Red (string value mismatch, capital vs lowercase "i").
 """
 
 from __future__ import annotations
@@ -103,9 +98,6 @@ class TestTemplateSubprocessSafeMessage:
         This is the cross-package matching-key assertion (SR I-1 [SR-NEW]).
         The template must stay self-contained (no core import), but its local
         constant value must match the canonical core value to prevent divergence.
-
-        RED TODAY because: template has "Internal subprocess failed" (capital "I"),
-        but core SUBPROCESS_SAFE_MESSAGE == "internal subprocess failed" (lowercase).
 
         Arrange: read the template literal via regex; import core constant.
         Act:     compare string values directly.

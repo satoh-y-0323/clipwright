@@ -1,4 +1,4 @@
-"""test_plan_hw.py — Red tests for plan.py HW encoder path (ADR-7).
+"""test_plan_hw.py — Tests for plan.py HW encoder path (ADR-7).
 
 Target:
   - _build_ffmpeg_args(..., resolved_encoder=None)  → backward-compat argv (AC-1/NFR-1)
@@ -6,7 +6,6 @@ Target:
   - build_plan(..., resolved_encoder=...)  → passes resolved_encoder through (ADR-7)
 
 Mock boundary: ResolvedEncoder is passed directly (no _resolve_hw_encoder mock needed).
-All tests will fail with TypeError/AttributeError until impl-plan-hw adds the new argument.
 """
 
 from __future__ import annotations

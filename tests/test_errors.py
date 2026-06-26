@@ -1,4 +1,4 @@
-"""test_errors.py — Contract tests for errors.py (Red phase).
+"""test_errors.py — Contract tests for errors.py.
 
 Covers:
 - ErrorCode(Enum): verify all required members exist (§4 + §13.1 DC-AM-002/DC-AS-003)

@@ -415,7 +415,7 @@ class TestOutputValidation:
         """DC-AS-004: output in a different directory from media must now return ok=True.
 
         Updated from old policy (INVALID_INPUT) to new policy (ok=True).
-        RED: pre-migration code returns INVALID_INPUT (same-dir block L110-125).
+        Previously: pre-migration code returned INVALID_INPUT (same-dir block L110-125).
         """
         from clipwright_stabilize.schemas import (  # type: ignore[import-not-found]
             DetectShakeOptions,

@@ -1,4 +1,4 @@
-"""test_loudness.py — Red tests for the loudness extension of clipwright-render (ADR-L5/L5b/L6).
+"""test_loudness.py — Tests for the loudness extension of clipwright-render (ADR-L5/L5b/L6).
 
 Targets:
   - build_plan(ranges, probe_info, options, denoise=..., loudness=...) — loudnorm/peak injection

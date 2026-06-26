@@ -1,4 +1,4 @@
-"""test_vad_cli.py — Red tests for clipwright_silence.vad_cli.
+"""test_vad_cli.py — Tests for clipwright_silence.vad_cli.
 
 Target:
   CLI contract validation for clipwright_silence.vad_cli.main(argv) (§7.1/7.2/7.3)

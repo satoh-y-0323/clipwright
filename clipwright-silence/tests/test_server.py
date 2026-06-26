@@ -1,4 +1,4 @@
-"""test_server.py — Red tests for clipwright-silence server.py (MCP + CLI).
+"""test_server.py — Tests for clipwright-silence server.py (MCP + CLI).
 
 Target:
   - clipwright_detect_silence tool must be registered in MCP and delegate to detect.detect_silence

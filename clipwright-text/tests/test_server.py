@@ -29,7 +29,7 @@ try:
 except (ImportError, ModuleNotFoundError):
     _SERVER_AVAILABLE = False
 
-# Mark all tests as xfail unless server.py is importable (Red phase: expected)
+# Mark all tests as xfail unless server.py is importable.
 pytestmark = pytest.mark.xfail(
     not _SERVER_AVAILABLE,
     reason="server.py is not implemented",

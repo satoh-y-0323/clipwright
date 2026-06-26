@@ -1,4 +1,4 @@
-"""test_track_cli.py — Unit tests for clipwright_reframe.track_cli (Red phase).
+"""test_track_cli.py — Unit tests for clipwright_reframe.track_cli.
 
 These tests verify the motion-centroid detection logic in track_cli.py.
 numpy is required; the test module is skipped entirely when numpy is absent.
@@ -120,8 +120,6 @@ def _make_raw_bytes_onset(
 
 # ---------------------------------------------------------------------------
 # Import helpers: we call internal functions directly where possible.
-# If track_cli does not yet exist the import fails with ModuleNotFoundError,
-# which is exactly the expected Red state.
 # ---------------------------------------------------------------------------
 
 

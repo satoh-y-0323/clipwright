@@ -1,8 +1,6 @@
-"""test_captions.py — Red tests for captions.py pure logic (contract coverage target: 100%).
+"""test_captions.py — Contract tests for captions.py pure logic (contract coverage target: 100%).
 
 Pins the spec from architecture WR-AD-03/04/06/12/14/15.
-These tests are intended to fail due to ImportError when captions.py does not exist yet
-(Red phase).
 
 Target API (all budoux-independent):
   - Cue: dataclass (index, start, end, text)
@@ -1039,15 +1037,15 @@ class TestSerializeCaptionsUnsupportedFmt:
 
 # ===========================================================================
 # CR H-1: Rejection of invalid SRT timecodes (R1 fix tests)
-# Red tests that pass after _SRT_TIMELINE_RE is tightened to \d{2}
+# _SRT_TIMELINE_RE is tightened to \d{2} to reject malformed timecodes
 # ===========================================================================
 
 
 class TestSrtTimecodeValidation:
     r"""CR H-1: Verify that _SRT_TIMELINE_RE rejects invalid timecodes with fixed \d{2} digits.
 
-    The following malformed patterns must be rejected as ValueError or ClipwrightError (Green after impl fix).
-    The current _SRT_TIMELINE_RE = \d+ accepts them as valid, so these tests are Red.
+    The following malformed patterns must be rejected as ValueError or ClipwrightError.
+    _SRT_TIMELINE_RE uses \d{2} to enforce fixed-digit fields.
     """
 
     # --- Valid cases (non-regression) ---
@@ -1071,8 +1069,7 @@ class TestSrtTimecodeValidation:
     def test_invalid_srt_seconds_over_60_raises_exception(self) -> None:
         """SRT timecode with seconds > 60 raises an exception (CR H-1).
 
-        The current _SRT_TIMELINE_RE = \\d+ accepts '00:00:60,000' as valid, so this test is Red.
-        Tightening _SRT_TIMELINE_RE to \\d{2} rejects it and turns this Green.
+        _SRT_TIMELINE_RE = \\d{2} rejects '00:00:60,000' as a malformed timecode.
         """
         srt = "1\n00:00:60,000 --> 00:00:61,000\nテキスト\n"
         with pytest.raises((ValueError, Exception)) as exc_info:
@@ -1085,7 +1082,7 @@ class TestSrtTimecodeValidation:
     def test_invalid_srt_seconds_three_digits_raises_exception(self) -> None:
         """SRT timecode with 3-digit seconds raises an exception (CR H-1).
 
-        '00:00:100,000' violates the spec (seconds = 100). The current \\d+ accepts it, so this test is Red.
+        '00:00:100,000' violates the spec (seconds = 100); _SRT_TIMELINE_RE = \\d{2} rejects it.
         """
         srt = "1\n00:00:100,000 --> 00:00:101,000\nテキスト\n"
         with pytest.raises((ValueError, Exception)) as exc_info:
@@ -1097,8 +1094,8 @@ class TestSrtTimecodeValidation:
     def test_invalid_srt_timecode_digit_drop_raises_exception(self) -> None:
         """SRT timecode with dropped digits (1-digit fields) raises an exception (CR H-1).
 
-        '0:0:0,0' is outside the SRT spec (fixed HH:MM:SS,mmm digits are required).
-        The current \\d+ accepts it, so this test is Red.
+        '0:0:0,0' is outside the SRT spec (fixed HH:MM:SS,mmm digits are required);
+        _SRT_TIMELINE_RE = \\d{2} rejects it.
         """
         srt = "1\n0:0:0,0 --> 0:0:1,0\nテキスト\n"
         with pytest.raises((ValueError, Exception)) as exc_info:
@@ -1115,10 +1112,10 @@ class TestSrtTimecodeValidation:
 
 
 class TestVttInlineTagHandling:
-    """SR L-1: Normal inline tag cues must be preserved after the _VTT_INLINE_TAG_RE upper bound is introduced.
+    """SR L-1: Normal inline tag cues are preserved with the _VTT_INLINE_TAG_RE upper bound in place.
 
-    Recommended fix for captions.py SR L-1: [^>]* → [^>]{0,200}.
-    Tests are written from the perspective that normal tagged cues are preserved after the limit is added (Green after impl fix).
+    captions.py SR L-1 fix: [^>]* → [^>]{0,200}.
+    Verifies that normal tagged cues are preserved and huge tag-like strings do not crash.
     """
 
     def test_normal_c_tag_cue_text_preserved(self) -> None:
@@ -1198,10 +1195,10 @@ class TestWrAd12TranscribeCompatibility:
         assert cues[2].text == "最後の cue（末尾空行なし）"
 
     def test_two_digit_fixed_timecode_accepted_after_regex_fix(self) -> None:
-        """Fixed 2-digit HH:MM:SS,mmm timecodes are still accepted after the _SRT_TIMELINE_RE fix.
+        """Fixed 2-digit HH:MM:SS,mmm timecodes are accepted with the tightened _SRT_TIMELINE_RE.
 
         Verifies that normal transcribe-generated SRT (fixed 2-digit fields, 3-digit milliseconds)
-        is parsed correctly after the impl changes _SRT_TIMELINE_RE to \\d{2}:\\d{2}:\\d{2},\\d{3}.
+        is parsed correctly with _SRT_TIMELINE_RE = \\d{2}:\\d{2}:\\d{2},\\d{3} (non-regression).
         """
         srt = "1\n00:01:30,500 --> 00:01:31,000\nテスト\n"
         cues = parse_captions(srt, "srt")

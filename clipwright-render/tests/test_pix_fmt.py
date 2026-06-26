@@ -1,4 +1,4 @@
-"""test_pix_fmt.py — Red tests for the -pix_fmt yuv420p output option (D1 fix).
+"""test_pix_fmt.py — Tests for the -pix_fmt yuv420p output option (D1 fix).
 
 Verifies that build_plan always places exactly one adjacent "-pix_fmt" / "yuv420p"
 pair in ffmpeg_args across every render path:

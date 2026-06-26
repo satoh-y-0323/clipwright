@@ -1,4 +1,4 @@
-"""test_schemas.py — Red tests for DetectSilenceOptions.
+"""test_schemas.py — Tests for DetectSilenceOptions.
 
 Fixes the DetectSilenceOptions specification from architecture §AD-2/AD-3 and DC-AM-001
 as test observations.
@@ -184,7 +184,7 @@ def test_detect_silence_options_does_not_redefine_core_types() -> None:
 
 
 # ===========================================================================
-# VAD extension fields — Red tests (VAD-AD-01 / VAD-AD-05 / §7.6)
+# VAD extension fields (VAD-AD-01 / VAD-AD-05 / §7.6)
 # ===========================================================================
 
 

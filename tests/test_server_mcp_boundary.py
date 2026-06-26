@@ -1,4 +1,4 @@
-"""test_server_mcp_boundary.py — MCP wire boundary tests (Red phase).
+"""test_server_mcp_boundary.py — MCP wire boundary tests.
 
 Covers:
 - outputSchema for all 4 tools must be typed (not generic DictOutput with additionalProperties=true)
@@ -243,7 +243,6 @@ class TestToolResultUnification:
 
         Before: schemas.py exports ToolErrorResult (Literal[False] model).
         After:  ToolErrorResult is deleted; ToolResult is a unified model with ok: bool.
-        This test is Red until ToolErrorResult is removed.
         """
         try:
             from clipwright.schemas import (
