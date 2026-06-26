@@ -8,6 +8,7 @@ All functions follow ADR-PP-1 (absolute escape hatch) and ADR-PP-2
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -107,7 +108,7 @@ def validate_source_file(path: str) -> None:
     if _has_symlink_component(p):
         raise ClipwrightError(
             code=ErrorCode.PATH_NOT_ALLOWED,
-            message=f"Symbolic links are not accepted: {path}",
+            message=f"Symbolic links are not accepted: {p.name}",
             hint="Specify the path to a real file, not a symbolic link.",
         )
 
@@ -199,6 +200,9 @@ def check_media_ref(ref: str, otio_dir: Path, kind: str) -> None:
     Consolidates render._check_within_timeline_dir with the absolute escape
     hatch unified across media/subtitle/image references (ADR-PP-1).
 
+    Relative refs: boundary only; existence is checked by the caller before
+    this function is invoked.
+
     Args:
         ref: Reference string from the OTIO target_url field.
         otio_dir: Directory containing the OTIO file.
@@ -232,6 +236,14 @@ def check_media_ref(ref: str, otio_dir: Path, kind: str) -> None:
             )
     else:
         # Relative ref: must resolve within the otio_dir tree (CWE-22 guard).
+        # SR-M-2 / ADR-PP-2: islink check must precede resolve() to prevent
+        # CWE-59 bypass.  Apply to the full joined path (otio_dir / ref_path).
+        if _has_symlink_component(otio_dir / ref_path):
+            raise ClipwrightError(
+                code=ErrorCode.PATH_NOT_ALLOWED,
+                message=f"Symbolic links are not accepted for {kind} reference.",
+                hint=(f"Specify the path to a real {kind} file, not a symbolic link."),
+            )
         try:
             target_resolved = str((otio_dir / ref_path).resolve())
             base_resolved = str(otio_dir.resolve())
@@ -265,8 +277,15 @@ def check_media_ref(ref: str, otio_dir: Path, kind: str) -> None:
             except ClipwrightError:
                 raise
             except OSError:
-                # Skip only when absolute() also fails (truly unresolvable path)
-                pass
+                # Both resolve() and absolute() failed: boundary check is skipped.
+                # Emit a warning so callers are aware the guard could not run
+                # (CR-L-7 / SR-L-3: silent pass may hide path injection attempts).
+                warnings.warn(
+                    f"check_media_ref: boundary check skipped for {kind!r} reference"
+                    f" {ref!r} — path is unresolvable (both resolve() and absolute()"
+                    " raised OSError).",
+                    stacklevel=2,
+                )
 
 
 def check_within_boundary(base_dir: Path, target: Path, kind: str) -> None:
@@ -315,4 +334,12 @@ def check_within_boundary(base_dir: Path, target: Path, kind: str) -> None:
         except ClipwrightError:
             raise
         except OSError:
-            pass
+            # Both resolve() and absolute() failed: containment check is skipped.
+            # Emit a warning so callers are aware the guard could not run
+            # (CR-L-7 / SR-L-3: silent pass may hide path injection attempts).
+            warnings.warn(
+                f"check_within_boundary: containment check skipped for {kind!r}"
+                f" target {target!r} — path is unresolvable (both resolve() and"
+                " absolute() raised OSError).",
+                stacklevel=2,
+            )
