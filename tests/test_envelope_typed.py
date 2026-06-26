@@ -1,4 +1,4 @@
-"""test_envelope_typed.py — Typed ToolResult contract tests (Red phase).
+"""test_envelope_typed.py — Typed ToolResult contract tests.
 
 Covers:
 - ok_result returns a ToolResult instance (not a plain dict)
@@ -18,7 +18,7 @@ from pydantic import ValidationError
 from clipwright.schemas import Artifact, ToolError, ToolResult
 
 # ---------------------------------------------------------------------------
-# to_tool_result import — expected to fail until implemented (Red)
+# to_tool_result import — optional import with availability flag
 # ---------------------------------------------------------------------------
 try:
     from clipwright.envelope import to_tool_result  # type: ignore[attr-defined]
@@ -166,13 +166,13 @@ class TestErrorResultTyped:
 
 _SKIP_TO_TOOL_RESULT = pytest.mark.skipif(
     not _TO_TOOL_RESULT_AVAILABLE,
-    reason="to_tool_result not yet implemented — expected Red",
+    reason="to_tool_result not available",
 )
 
 
 @pytest.mark.xfail(
     not _TO_TOOL_RESULT_AVAILABLE,
-    reason="to_tool_result() not yet implemented (Red — feature not implemented)",
+    reason="to_tool_result() not available",
     strict=True,
 )
 class TestToToolResult:
@@ -335,9 +335,7 @@ class TestWireCompatibility:
 
     def test_new_tool_result_unified_model_has_ok_bool(self) -> None:
         """New unified ToolResult allows ok=False (no Literal[True] constraint)."""
-        # This tests that the NEW ToolResult definition accepts ok=False.
-        # Current ToolResult has ok: Literal[True], so this raises ValidationError.
-        # After the redefinition to ok: bool, this must succeed.
+        # ToolResult accepts ok=False (ok: bool, not Literal[True]).
         try:
             result = ToolResult(
                 ok=False, error=ToolError(code="X", message="m", hint="h")

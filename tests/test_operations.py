@@ -1,7 +1,4 @@
-"""test_operations.py — Red phase tests for operations.py.
-
-This test file expects ImportError because operations.py is not yet implemented (Red).
-Failures due to unimplemented features are the expected behaviour.
+"""test_operations.py — Tests for operations.py.
 
 Target (§6 / §13.1 / §13.5):
 - AddClipOp / AddGapOp / AddMarkerOp (Pydantic discriminated union, discriminator="op")
@@ -21,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-# --- Import (operations.py not yet implemented → ImportError expected → Red) ---
+# --- Import ---
 from clipwright.operations import (
     AddClipOp,
     AddGapOp,

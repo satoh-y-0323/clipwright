@@ -36,7 +36,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-# ImportError at this point means wrap.py is not yet implemented → confirms Red phase
 from clipwright_wrap.schemas import WrapCaptionsOptions
 
 # ===========================================================================
@@ -106,7 +105,7 @@ def _make_input_vtt(tmp_path: Path, content: str | None = None) -> str:
 
 
 # ===========================================================================
-# Import wrap_captions (ImportError → Red if not implemented)
+# Import wrap_captions
 # ===========================================================================
 
 
@@ -1022,9 +1021,8 @@ class TestEmptyCaptions:
 class TestTimecodeInjectionSafety:
     """Verify that invalid SRT timecode line content does not leak into error.message (CR M-2 / SR M-1).
 
-    In the current implementation, wrap.py L160 concatenates the ValueError message via str(exc),
-    causing user-supplied input (timeline_line) to bleed into message.
-    These tests only pass after changing to a fixed message string (Red phase).
+    wrap.py uses a fixed message string instead of concatenating the ValueError content,
+    preventing user-supplied input (timeline_line) from bleeding into message.
     """
 
     def test_inject_payload_not_in_error_message(self, tmp_path: Path) -> None:
@@ -1066,10 +1064,7 @@ class TestTimecodeInjectionSafety:
             assert "X-Injected" not in result["error"]["message"]
 
     def test_error_message_is_fixed_string(self, tmp_path: Path) -> None:
-        """error.message on invalid timecode must be a fixed string (SR M-1 recommended action).
-
-        The current implementation concatenates the timecode line via f-string, so this test is Red.
-        """
+        """error.message on invalid timecode must be a fixed string (SR M-1 recommended action)."""
         wrap_captions = _import_wrap_captions()
         inp = tmp_path / "bad.srt"
         inp.write_text("1\nINVALID_TC_LINE_UNIQUE_MARKER\nテキスト\n", encoding="utf-8")
@@ -1086,11 +1081,7 @@ class TestTimecodeInjectionSafety:
 
 
 class TestSubprocessTextMode:
-    """Verify that wrap.py passes text=True, encoding='utf-8' to subprocess.run (CR M-3).
-
-    The current implementation omits the text parameter (defaults to False) and uses bytes I/O;
-    this test is Red until text=True is set.
-    """
+    """Verify that wrap.py passes text=True, encoding='utf-8' to subprocess.run (CR M-3)."""
 
     def test_subprocess_called_with_text_true(
         self, tmp_path: Path, mocker: Any

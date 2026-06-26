@@ -147,10 +147,7 @@ class TestOutputValidation:
         assert result.error.code == ErrorCode.PATH_NOT_ALLOWED
 
     def test_output_different_dir_allowed(self, tmp_path: Path) -> None:
-        """output in a different directory is now allowed (new policy: TR-AD-08 check removed).
-
-        RED: impl still raises INVALID_INPUT at transcribe.py L548-567; must be True after fix.
-        """
+        """output in a different directory is now allowed (new policy: TR-AD-08 check removed)."""
         media = tmp_path / "a" / "video.mp4"
         media.parent.mkdir()
         media.write_bytes(b"x")
@@ -174,7 +171,6 @@ class TestOutputValidation:
             result = transcribe_media(
                 str(media), str(out), _opts(model_path=str(model))
             )
-        # RED: currently INVALID_INPUT — must be True after impl removes same-dir check
         assert result.ok is True
 
 

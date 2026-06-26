@@ -1,12 +1,10 @@
-"""test_process.py — Unit tests for the subprocess runner in process.py (Red phase).
+"""test_process.py — Unit tests for the subprocess runner in process.py.
 
 Covers:
 - resolve_tool: PATH (shutil.which) → env fallback → ClipwrightError(DEPENDENCY_MISSING)
 - run(cmd, timeout): success / non-zero exit → SUBPROCESS_FAILED /
   TimeoutExpired → SUBPROCESS_TIMEOUT
 - Verify subprocess is called with shell=False and an argument list
-
-[RED] process.py is not yet implemented; ImportError causes test failure.
 """
 
 from __future__ import annotations
@@ -349,7 +347,7 @@ class TestResolveToolEnvVarExecutability:
     def test_non_executable_env_path_raises_dependency_missing(
         self, mocker: MagicMock
     ) -> None:
-        """[Red] env_var path exists but is not executable → DEPENDENCY_MISSING.
+        """env_var path exists but is not executable → DEPENDENCY_MISSING.
 
         Arrange: which=None, isfile=True, os.access(X_OK)=False
         Act: resolve_tool("ffprobe", env_var="CLIPWRIGHT_FFPROBE")
@@ -368,7 +366,7 @@ class TestResolveToolEnvVarExecutability:
         assert exc_info.value.code == ErrorCode.DEPENDENCY_MISSING
 
     def test_non_executable_env_path_is_not_returned(self, mocker: MagicMock) -> None:
-        """[Red] A non-executable path is not returned (an exception is raised instead).
+        """A non-executable path is not returned (an exception is raised instead).
 
         Arrange: which=None, isfile=True, os.access(X_OK)=False
         Act: resolve_tool("ffprobe", env_var="CLIPWRIGHT_FFPROBE")
@@ -414,7 +412,7 @@ class TestResolveToolEnvVarExecutability:
     def test_non_executable_check_applies_to_various_paths(
         self, mocker: MagicMock, env_path: str
     ) -> None:
-        """[Red] DEPENDENCY_MISSING is raised for any non-executable path (parametrize).
+        """DEPENDENCY_MISSING is raised for any non-executable path (parametrize).
 
         Arrange: which=None, isfile=True, os.access(X_OK)=False (each path)
         Act: resolve_tool("ffprobe", env_var="CLIPWRIGHT_FFPROBE")
@@ -433,7 +431,7 @@ class TestResolveToolEnvVarExecutability:
         assert exc_info.value.code == ErrorCode.DEPENDENCY_MISSING
 
     def test_os_access_called_with_x_ok_flag(self, mocker: MagicMock) -> None:
-        """[Red] Executability is checked with os.access(path, os.X_OK).
+        """Executability is checked with os.access(path, os.X_OK).
 
         Arrange: which=None, isfile=True, os.access=False
         Act: resolve_tool("ffprobe", env_var="CLIPWRIGHT_FFPROBE")
@@ -516,7 +514,7 @@ class TestRunShellFalseInvariant:
 
 
 class TestRunUTF8EncodingKwargs:
-    """[Red] Verify that run() passes encoding="utf-8" and errors="replace"
+    """Verify that run() passes encoding="utf-8" and errors="replace"
     to subprocess.run().
 
     Category A: core subprocess output decode (cp932 デコード対策).
@@ -529,7 +527,7 @@ class TestRunUTF8EncodingKwargs:
     """
 
     def test_subprocess_run_called_with_encoding_utf8(self, mocker: MagicMock) -> None:
-        """[Red] subprocess.run is called with encoding='utf-8' keyword argument.
+        """subprocess.run is called with encoding='utf-8' keyword argument.
 
         Arrange: Mock subprocess.run to return success.
         Act: Call run(["echo", "test"]).
@@ -549,7 +547,7 @@ class TestRunUTF8EncodingKwargs:
         )
 
     def test_subprocess_run_called_with_errors_replace(self, mocker: MagicMock) -> None:
-        """[Red] subprocess.run is called with errors='replace' keyword argument.
+        """subprocess.run is called with errors='replace' keyword argument.
 
         Arrange: Mock subprocess.run to return success.
         Act: Call run(["echo", "test"]).
@@ -575,7 +573,7 @@ class TestRunUTF8EncodingKwargs:
 
 
 class TestRunUTF8StdoutRoundTrip:
-    """[Red] Verify that run() successfully decodes UTF-8 stdout with Japanese text.
+    """Verify that run() successfully decodes UTF-8 stdout with Japanese text.
 
     Category A: core subprocess output decode.
     This test spawns a real child process that writes UTF-8 Japanese to stdout,
@@ -585,7 +583,7 @@ class TestRunUTF8StdoutRoundTrip:
     """
 
     def test_run_decodes_utf8_japanese_stdout_without_error(self) -> None:
-        """[Red] run() successfully decodes UTF-8 Japanese characters from stdout.
+        """run() successfully decodes UTF-8 Japanese characters from stdout.
 
         Arrange: Prepare a child command that outputs UTF-8 Japanese.
         Act: Call run() with the command.
@@ -618,7 +616,7 @@ class TestRunUTF8StdoutRoundTrip:
 
 
 class TestRunUTF8StderrRegression:
-    """[Red] Verify stderr_summary preserves UTF-8 Japanese text in error messages.
+    """Verify stderr_summary preserves UTF-8 Japanese text in error messages.
 
     Category A: core subprocess output decode (DC-GP-003: stderr mojibake fix).
     This test reproduces the actual reported bug: a child process writes UTF-8
@@ -632,7 +630,7 @@ class TestRunUTF8StderrRegression:
     """
 
     def test_run_preserves_utf8_japanese_in_stderr_on_failure(self) -> None:
-        """[Red] run() preserves UTF-8 Japanese in error message when child fails.
+        """run() preserves UTF-8 Japanese in error message when child fails.
 
         Arrange: Child command that writes UTF-8 Japanese to stderr and exits non-zero.
         Act: Call run() (which will raise ClipwrightError(SUBPROCESS_FAILED)).

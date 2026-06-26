@@ -1,8 +1,7 @@
-"""test_schemas.py — Red tests for DetectScenesOptions.
+"""test_schemas.py — Tests for DetectScenesOptions.
 
 Encodes the DetectScenesOptions specification from architecture §3 Schema Design
-as executable test observations. All tests are expected to fail with ImportError
-until clipwright_scene/schemas.py is implemented.
+as executable test observations.
 """
 
 from __future__ import annotations

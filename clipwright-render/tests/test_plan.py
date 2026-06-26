@@ -1,4 +1,4 @@
-"""test_plan.py — Red tests for plan.py (pure logic).
+"""test_plan.py — Tests for plan.py (pure logic).
 
 Target functions:
   - resolve_kept_ranges(timeline) -> list[KeptRange]
@@ -3974,7 +3974,7 @@ class TestBuildPlanEvenRoundingSingleSource:
 
 
 # ---------------------------------------------------------------------------
-# ADR-F4: fit + counter-scale via build_plan (single-source) (Red)
+# ADR-F4: fit + counter-scale via build_plan (single-source)
 # ---------------------------------------------------------------------------
 
 
@@ -4174,7 +4174,7 @@ class TestBuildPlanFitMultiSource:
 
 
 # ---------------------------------------------------------------------------
-# ADR-F4: Multi-source counter-scale (Red: frame_h not wired)
+# ADR-F4: Multi-source counter-scale
 # ---------------------------------------------------------------------------
 
 

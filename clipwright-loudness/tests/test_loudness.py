@@ -554,15 +554,11 @@ class TestOutputDifferentDir:
     """DC-AS-004: output is allowed in a different directory from media (create type).
 
     Updated from old policy (INVALID_INPUT) to new policy (ok=True) after
-    pathpolicy migration.  RED against pre-migration code because the inline
-    same-dir block (loudness.py L121-136) still raises INVALID_INPUT.
+    pathpolicy migration.
     """
 
     def test_output_in_different_dir_now_allowed(self, tmp_path: Path) -> None:
-        """Output in a different dir from media must now return ok=True (DC-AS-004).
-
-        RED: pre-migration code returns INVALID_INPUT (same-dir block L121-136).
-        """
+        """Output in a different dir from media must now return ok=True (DC-AS-004)."""
         from clipwright_loudness.loudness import detect_loudness
 
         media_dir = tmp_path / "src"
@@ -594,10 +590,7 @@ class TestOutputDifferentDir:
         )
 
     def test_output_in_different_dir_creates_otio_file(self, tmp_path: Path) -> None:
-        """When output is allowed in a different dir, the .otio file must be created.
-
-        RED: pre-migration code raises INVALID_INPUT so no .otio is written.
-        """
+        """When output is allowed in a different dir, the .otio file must be created."""
         from clipwright_loudness.loudness import detect_loudness
 
         media_dir = tmp_path / "media_src_dir"
@@ -1146,8 +1139,6 @@ class TestTimelineSourceBoundaryCheck:
     to new policy (check_media_ref accepts absolute existing regular files).
     When the accepted source does not match the input media, INVALID_INPUT is raised
     (source mismatch), not PATH_NOT_ALLOWED.
-
-    RED against pre-migration code which raises PATH_NOT_ALLOWED first.
     """
 
     def test_source_outside_timeline_dir_mismatching_media_returns_invalid_input(
@@ -1158,8 +1149,6 @@ class TestTimelineSourceBoundaryCheck:
         Old behavior: PATH_NOT_ALLOWED (rejected by _check_source_within_timeline_dir).
         New behavior: check_media_ref accepts the absolute existing file; the subsequent
         source-vs-media comparison fires INVALID_INPUT (different files).
-
-        RED: pre-migration code raises PATH_NOT_ALLOWED before the mismatch check.
         """
         import opentimelineio as otio
 

@@ -1,4 +1,4 @@
-"""test_render.py — Red tests for render.py (orchestration + _probe()).
+"""test_render.py — Tests for render.py (orchestration + _probe()).
 
 Targets:
   - _probe(source) -> ProbeInfo
@@ -518,9 +518,6 @@ class TestInputValidation:
         rejected with PATH_NOT_ALLOWED.  Under ADR-PP-1, render.py delegates to
         pathpolicy.check_media_ref which allows absolute references to existing real
         files regardless of their location.
-
-        Red: current render.py still calls _check_source_within_timeline_dir, which
-        raises PATH_NOT_ALLOWED → ok is False → this test FAILS until impl is done.
         """
         from clipwright_render.render import render_timeline
 
@@ -555,7 +552,6 @@ class TestInputValidation:
                 dry_run=True,
             )
         # ADR-PP-1: absolute external real file must be allowed.
-        # Red until render.py delegates to pathpolicy.check_media_ref.
         assert result["ok"] is True
 
     def test_symlink_source_raises_path_not_allowed(self, tmp_path: Path) -> None:
@@ -1718,9 +1714,6 @@ class TestMultiSourceBoundaryCheck:
         Under old policy (ADR-C8 / Sec M-2), any source outside the timeline directory
         was rejected.  Under ADR-PP-1, both sources pass as long as they are absolute
         references to existing real files without symlinks.
-
-        Red: current render.py raises PATH_NOT_ALLOWED for the second source via
-        _check_source_within_timeline_dir → this test FAILS until impl is done.
         """
         from clipwright_render.render import render_timeline
 
@@ -1758,7 +1751,6 @@ class TestMultiSourceBoundaryCheck:
             )
 
         # ADR-PP-1: absolute external real file must be allowed for all sources.
-        # Red until render.py delegates to pathpolicy.check_media_ref.
         assert result["ok"] is True
 
     def test_second_source_equals_output_raises_path_not_allowed(
@@ -2209,8 +2201,6 @@ class TestBgmResolveBgmCalled:
     ) -> None:
         """BGM-containing timeline -> resolve_bgm called once, bgm=BgmClip passed to
         build_plan (ADR-B4-r2/B5-r2).
-
-        Red: render.resolve_bgm does not yet exist -> AttributeError expected.
         """
         from clipwright_render.render import render_timeline
 
@@ -2287,8 +2277,6 @@ class TestBgmFfmpegInputOrder:
     ) -> None:
         """Single source + BGM ffmpeg command: 2 -i flags, -stream_loop -1 before
         the second -i (ADR-B6-r2).
-
-        Red: RenderPlan.bgm_source attribute not yet defined -> TypeError expected.
         """
         from clipwright_render.plan import RenderPlan
         from clipwright_render.render import render_timeline
@@ -2305,7 +2293,6 @@ class TestBgmFfmpegInputOrder:
         output = str(tmp_path / "out.mp4")
 
         # Mock build_plan to return a RenderPlan with bgm_source
-        # bgm_source field not yet implemented -> type: ignore[call-arg]
         fake_plan = RenderPlan(
             filter_complex=(
                 "[0:v]trim=0:5,setpts=PTS-STARTPTS[v0];"
@@ -2399,9 +2386,6 @@ class TestBgmSourceBoundaryCheck:
         Under old policy (ADR-B8), any source including BGM outside the timeline directory
         was rejected.  Under ADR-PP-1, the BGM source also benefits from the unified
         pathpolicy.check_media_ref which allows absolute external refs to existing real files.
-
-        Red: current render.py raises PATH_NOT_ALLOWED for BGM source via
-        _check_source_within_timeline_dir → this test FAILS until impl is done.
         """
         from clipwright_render.render import render_timeline
 
@@ -2441,7 +2425,6 @@ class TestBgmSourceBoundaryCheck:
             )
 
         # ADR-PP-1: absolute external real BGM source must be allowed.
-        # Red until render.py delegates to pathpolicy.check_media_ref for BGM.
         assert result["ok"] is True
 
     def test_output_equals_bgm_source_raises_path_not_allowed(
@@ -2450,7 +2433,6 @@ class TestBgmSourceBoundaryCheck:
         """output == BGM source -> PATH_NOT_ALLOWED (ADR-B8, non-destructive).
 
         _check_path_not_allowed must also apply to the BGM source.
-        Red: render_timeline does not yet return PATH_NOT_ALLOWED -> ok=True or other error.
         """
         from clipwright_render.render import render_timeline
 
@@ -2486,10 +2468,7 @@ class TestBgmSourceNotFound:
     """
 
     def test_bgm_source_not_found_returns_file_not_found(self, tmp_path: Path) -> None:
-        """BGM source does not exist -> FILE_NOT_FOUND (ADR-B8).
-
-        Red: render_timeline does not yet return FILE_NOT_FOUND -> test fails.
-        """
+        """BGM source does not exist -> FILE_NOT_FOUND (ADR-B8)."""
         from clipwright_render.render import render_timeline
 
         src = str(tmp_path / "main.mp4")
@@ -2521,10 +2500,7 @@ class TestBgmSourceNotFound:
     def test_bgm_source_not_found_basename_only_in_message(
         self, tmp_path: Path
     ) -> None:
-        """Missing BGM source error message exposes only basename, not absolute path (CWE-209).
-
-        Red: basename-only verification not yet satisfied -> test fails.
-        """
+        """Missing BGM source error message exposes only basename, not absolute path (CWE-209)."""
         from clipwright_render.render import render_timeline
 
         src = str(tmp_path / "main.mp4")
@@ -2569,10 +2545,7 @@ class TestBgmBackwardCompat:
     """
 
     def test_no_bgm_build_plan_receives_bgm_none(self, tmp_path: Path) -> None:
-        """No-BGM timeline -> build_plan receives bgm=None (ADR-B7).
-
-        Red: bgm=None not forwarded, or resolve_bgm not yet importable -> ImportError.
-        """
+        """No-BGM timeline -> build_plan receives bgm=None (ADR-B7)."""
         from clipwright_render.render import render_timeline
 
         src = str(tmp_path / "main.mp4")
@@ -2624,10 +2597,7 @@ class TestBgmBackwardCompat:
         assert build_plan_bgm_args[0] is None
 
     def test_no_bgm_ffmpeg_has_no_stream_loop(self, tmp_path: Path) -> None:
-        """No BGM clip -> ffmpeg command must not contain -stream_loop (ADR-B7).
-
-        Red: -stream_loop not excluded, or resolve_bgm not yet importable -> ImportError.
-        """
+        """No BGM clip -> ffmpeg command must not contain -stream_loop (ADR-B7)."""
         from clipwright_render.plan import RenderPlan
         from clipwright_render.render import render_timeline
 
@@ -2693,7 +2663,6 @@ class TestBgmBackwardCompat:
 
         Backward compatibility test: repeats the same assertions as
         test_dry_run_summary_contains_segment_count_and_duration after BGM extension.
-        Red: resolve_bgm not yet importable -> ImportError.
         """
         from clipwright_render.render import render_timeline
 
@@ -2738,10 +2707,7 @@ class TestBgmDryRun:
     """
 
     def test_bgm_dry_run_returns_ok_and_no_run(self, tmp_path: Path) -> None:
-        """BGM-present dry_run=True -> ok=True returned, ffmpeg run not called.
-
-        Red: resolve_bgm or RenderPlan.bgm_source does not yet exist -> AttributeError.
-        """
+        """BGM-present dry_run=True -> ok=True returned, ffmpeg run not called."""
         from clipwright_render.plan import RenderPlan
         from clipwright_render.render import render_timeline
 
@@ -2887,9 +2853,6 @@ class TestSubtitleBoundaryAndValidation:
     - extension whitelist (srt/vtt/ass; others -> INVALID_INPUT)
     - fonts_dir missing -> INVALID_INPUT
     - absolutised and forwarded to build_plan (DC-AS-005)
-
-    SubtitleOptions / RenderOptions.subtitle not yet implemented, so all tests
-    are expected to fail Red with ImportError / AttributeError.
     """
 
     def test_subtitle_within_timeline_dir_builds_plan_with_absolute_path(
@@ -2900,13 +2863,11 @@ class TestSubtitleBoundaryAndValidation:
 
         Strictly verifies that options.subtitle.path passed to build_plan is absolute
         (filename= is cwd-independent, DC-AS-005).
-        Red: SubtitleOptions not yet importable -> ImportError.
         """
         from clipwright_render.render import render_timeline
 
         src, subtitle, output, tl_path = _make_subtitle_render_setup(tmp_path)
 
-        # SubtitleOptions and RenderOptions.subtitle not yet implemented -> type: ignore
         from clipwright_render.schemas import (  # type: ignore[attr-defined]
             RenderOptions,
             SubtitleOptions,
@@ -2978,9 +2939,6 @@ class TestSubtitleBoundaryAndValidation:
         Under old policy (ADR-S7), subtitle path was required to be within the
         timeline directory.  Under ADR-PP-1, pathpolicy.check_media_ref allows
         absolute references to existing real files regardless of location.
-
-        Red: current render.py raises PATH_NOT_ALLOWED via
-        _check_subtitle_within_timeline_dir → this test FAILS until impl is done.
         """
         from clipwright_render.render import render_timeline
 
@@ -3015,7 +2973,6 @@ class TestSubtitleBoundaryAndValidation:
             )
 
         # ADR-PP-1: absolute external subtitle must be allowed.
-        # Red until render.py delegates to pathpolicy.check_media_ref for subtitle.
         assert result["ok"] is True
 
     def test_subtitle_in_subdir_of_timeline_dir_is_allowed(
@@ -3092,7 +3049,6 @@ class TestSubtitleBoundaryAndValidation:
         """Aspect 3: missing subtitle path -> FILE_NOT_FOUND, basename only, no absolute path (CWE-209).
 
         error.message must not contain the absolute path (directory part), only the basename.
-        Red: render_timeline does not yet return FILE_NOT_FOUND -> test fails.
         """
         from clipwright_render.render import render_timeline
 
@@ -3136,10 +3092,7 @@ class TestSubtitleBoundaryAndValidation:
     def test_invalid_subtitle_extension_raises_invalid_input(
         self, tmp_path: Path, bad_ext: str
     ) -> None:
-        """Aspect 4: extension not on whitelist (.srt/.vtt/.ass) -> INVALID_INPUT (ADR-S3).
-
-        Red: render_timeline does not yet return INVALID_INPUT -> test fails.
-        """
+        """Aspect 4: extension not on whitelist (.srt/.vtt/.ass) -> INVALID_INPUT (ADR-S3)."""
         from clipwright_render.render import render_timeline
 
         src = str(tmp_path / "source.mp4")
@@ -3178,7 +3131,6 @@ class TestSubtitleBoundaryAndValidation:
         """Aspect 5: fonts_dir points to non-existent directory -> INVALID_INPUT (ADR-S7).
 
         fonts_dir has no boundary enforcement, but existence as a directory is validated.
-        Red: render_timeline does not yet return INVALID_INPUT -> test fails.
         """
         from clipwright_render.render import render_timeline
 
@@ -3310,7 +3262,6 @@ class TestSubtitleNoAdditionalInputFlag:
 
     Subtitles are read directly via filename= inside -filter_complex, so no extra -i.
     Unlike BGM, no additional -i flag.
-    Red: -i count increases, or AttributeError -> test fails.
     """
 
     def test_subtitle_present_i_flag_count_equals_source_count(
@@ -3390,7 +3341,6 @@ class TestSubtitleBackwardCompat:
     """Aspect 7: subtitle=None -> subtitle validation skipped, existing -i/summary unchanged (ADR-S8).
 
     Backward compatibility: adding subtitle field must not change behaviour when None.
-    None must work even when SubtitleOptions is not yet implemented.
     """
 
     def test_subtitle_none_skips_subtitle_validation(self, tmp_path: Path) -> None:
@@ -3490,7 +3440,6 @@ class TestSubtitleDryRun:
 
     filter_complex returned by build_plan must be present in data, including the
     subtitle filename= stage. run must not be called.
-    Red: AttributeError or subtitle stage absent -> test fails.
     """
 
     def test_subtitle_dry_run_filter_complex_contains_subtitle_segment(

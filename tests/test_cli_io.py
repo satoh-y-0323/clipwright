@@ -1,4 +1,4 @@
-"""test_cli_io.py — Red tests for the shared UTF-8 I/O helper in core.
+"""test_cli_io.py — Tests for the shared UTF-8 I/O helper in core.
 
 Target: clipwright.cli_io.force_utf8_io()
 Design: DRY refactor of the per-CLI _force_utf8_io() helper (CR L-2 / SR I-1).
@@ -13,8 +13,7 @@ Verification perspectives:
   (2) force_utf8_io() guards against streams lacking a reconfigure() method
       (e.g. pytest capture objects) without raising AttributeError.
 
-Pre-fix (Red): FAILS at import — src/clipwright/cli_io.py does not exist yet.
-Post-fix: PASSES; both streams' .encoding become "utf-8" and the guard is safe.
+Both streams' .encoding are reconfigured to "utf-8" and the guard is safe.
 """
 
 from __future__ import annotations
@@ -26,15 +25,12 @@ import sys
 def test_force_utf8_io_reconfigures_stdin_stdout() -> None:
     """Verify force_utf8_io() reconfigures sys.stdin and sys.stdout to UTF-8.
 
-    Deterministic behavioral Red:
+    Steps:
       1. Build fake TextIOWrapper streams with non-UTF-8 encoding (cp932),
          simulating a child process whose stdio was inherited as cp932.
       2. Monkeypatch sys.stdin/sys.stdout to those fake streams.
       3. Call clipwright.cli_io.force_utf8_io().
       4. Assert both streams' .encoding attribute is now "utf-8".
-
-    Pre-fix: FAILS with ModuleNotFoundError (clipwright.cli_io missing).
-    Post-fix: PASSES; both wrappers' encoding is "utf-8".
     """
     from clipwright import cli_io
 
@@ -82,8 +78,7 @@ def test_force_utf8_io_guards_against_missing_reconfigure() -> None:
     no reconfigure() method. force_utf8_io() must use a getattr() guard so that
     calling it in that situation does not raise AttributeError.
 
-    Pre-fix: FAILS at import (clipwright.cli_io missing).
-    Post-fix: PASSES; calling force_utf8_io() against capture-like streams is safe.
+    Calling force_utf8_io() against capture-like streams is safe.
     """
     from clipwright import cli_io
 

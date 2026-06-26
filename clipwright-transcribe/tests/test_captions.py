@@ -1,9 +1,7 @@
-"""test_captions.py — Red tests for the captions.py pure logic layer
+"""test_captions.py — Tests for the captions.py pure logic layer
 (target: 100% contract coverage).
 
 Fixes the specification from architecture TR-AD-02/06/07 and DC-GP-002/DC-AS-005.
-This file is intended to fail at import when captions.py does not exist, thereby
-signalling that the feature is not yet implemented (Red test suite).
 
 Note (DC-GP-001-R):
   100% contract coverage is measured against the hypothetical spike fixture

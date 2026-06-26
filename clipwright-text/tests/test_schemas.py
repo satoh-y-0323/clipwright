@@ -290,22 +290,18 @@ class TestFieldTypes:
 
 # ===========================================================================
 # S-L-2: font_path max_length constraint
-# These tests are RED until font_path is annotated with Field(max_length=4096).
 # ===========================================================================
 
 
 class TestFontPathMaxLength:
     """font_path must enforce max_length=4096 at the schema level (S-L-2).
 
-    S-L-2: AddTextOptions.font_path has no length or pattern constraint.
     A path exceeding 4096 characters must be rejected with ValidationError.
     A normal Windows font path must be accepted.
     """
 
     def test_font_path_over_4096_rejected(self) -> None:
         """font_path longer than 4096 characters must raise ValidationError (S-L-2)."""
-        # S-L-2 Red: font_path currently has no max_length constraint.
-        # Implementation must add: font_path: Annotated[str, Field(max_length=4096)] | None = None
         long_path = "C:/fonts/" + "a" * 4090 + ".ttf"  # total > 4096
         with pytest.raises(ValidationError):
             AddTextOptions(

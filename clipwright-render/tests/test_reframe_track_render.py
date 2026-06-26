@@ -1,9 +1,4 @@
-"""test_reframe_track_render.py — Red-phase tests for mode='track' render path.
-
-TDD Red phase: all tests MUST fail with NotImplementedError / ImportError /
-AttributeError / AssertionError because the implementation (crop-from-source
-branch in _append_reframe_filter, N_max guard in _validate_reframe, multi-source
-track fallback in build_plan) is not yet written.
+"""test_reframe_track_render.py — Tests for mode='track' render path.
 
 Design context (DC-AS-007 / ADR-T10 confusion guard):
     AC-06 backward compat (existing mode='crop' = legacy scale-first crop) and
@@ -92,11 +87,7 @@ def _run_track_filter(
     src_h: int = _SRC_H,
     label: str = _IN_LABEL,
 ) -> tuple[list[str], str]:
-    """Call _append_reframe_filter for track mode and return (parts, terminal_label).
-
-    When the implementation adds src_w/src_h parameters, this helper passes them.
-    For the Red phase the call may raise TypeError (signature not yet extended).
-    """
+    """Call _append_reframe_filter for track mode and return (parts, terminal_label)."""
     parts: list[str] = []
     result_label = _append_reframe_filter(
         parts, label, reframe, src_w=src_w, src_h=src_h

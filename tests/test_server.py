@@ -1,7 +1,5 @@
-"""test_server.py — Red tests for server.py (FastMCP 4 tools).
+"""test_server.py — Tests for server.py (FastMCP 4 tools).
 
-server.py is not yet implemented, so all tests are expected to fail
-as Red due to unimplemented features.
 Test perspectives:
   - ToolResult / ToolErrorResult envelope contract (§6.3/§6.4) for success and failure
   - MCP annotations match the §7 table
@@ -16,12 +14,7 @@ from unittest.mock import patch
 
 import pytest
 
-# ---- Import unimplemented module
-# (Red phase: ModuleNotFoundError or ImportError is expected)
-# server.py does not exist yet, so the import below will fail.
-# To structure the tests, the import is done directly without try/except or
-# pytestmark, so ImportError/AttributeError will appear per test class/function
-# as an explicit failure.
+# ---- Import with availability flag (xfail guard when server.py is absent)
 
 try:
     from clipwright.server import (
@@ -36,10 +29,10 @@ try:
 except (ImportError, ModuleNotFoundError):
     _SERVER_AVAILABLE = False
 
-# Mark all tests as XFAIL until server.py is implemented
+# Mark all tests as XFAIL when server.py is not available
 pytestmark = pytest.mark.xfail(
     not _SERVER_AVAILABLE,
-    reason="server.py is not yet implemented (Red — feature not implemented)",
+    reason="server.py is not available",
     strict=True,
 )
 

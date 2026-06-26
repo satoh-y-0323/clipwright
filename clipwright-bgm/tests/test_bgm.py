@@ -1,4 +1,4 @@
-"""test_bgm.py — Contract tests for the add_bgm orchestration layer (Red phase).
+"""test_bgm.py — Contract tests for the add_bgm orchestration layer.
 
 Mocking policy:
   - clipwright_bgm.bgm.inspect_media is monkeypatched to supply MediaInfo.
@@ -790,8 +790,6 @@ class TestAddBgmPathValidation:
 
         Previously (ADR-B8) bgm was required to be in the same directory as the timeline.
         New policy: bgm may be any existing regular non-symlink file (external allowed).
-
-        Red: _check_bgm_within_timeline_dir still enforces co-location → PATH_NOT_ALLOWED.
         """
         # tmp_path is a different dir (parent of tmp_timeline_dir)
         outside_bgm = tmp_path / "outside_bgm.mp3"
@@ -809,7 +807,6 @@ class TestAddBgmPathValidation:
                 options=BgmOptions(volume_db=-6.0),
             )
 
-        # RED: currently returns PATH_NOT_ALLOWED; new policy must succeed
         assert result["ok"] is True, (
             "External bgm must be accepted under the new path-boundary policy. "
             f"Got error: {result.get('error')}"
@@ -906,8 +903,6 @@ class TestAddBgmOutputPathBoundary:
         """add_bgm must succeed when output is placed outside the timeline directory (new policy).
 
         Previously PATH_NOT_ALLOWED was returned (SR L-3); new policy relaxes this restriction.
-
-        Red: _check_output_within_timeline_dir still enforces co-location → PATH_NOT_ALLOWED.
         """
         tl = _make_simple_timeline()
         timeline_path = tmp_timeline_dir / "timeline.otio"
@@ -923,7 +918,6 @@ class TestAddBgmOutputPathBoundary:
                 options=BgmOptions(volume_db=-6.0),
             )
 
-        # RED: currently returns PATH_NOT_ALLOWED; new policy must succeed
         assert result["ok"] is True, (
             "output outside the timeline directory must be accepted under the new policy. "
             f"Got error: {result.get('error')}"

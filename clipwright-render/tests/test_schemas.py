@@ -1,8 +1,6 @@
-"""test_schemas.py — Red tests for RenderOptions (DC-AM-004).
+"""test_schemas.py — Tests for RenderOptions and SubtitleOptions (DC-AM-004).
 
 Fixes the confirmed RenderOptions specification from architecture §6.1.
-This file is intended to fail when schemas.py does not exist or RenderOptions
-is not yet implemented.
 """
 
 from __future__ import annotations
@@ -282,7 +280,7 @@ def test_render_options_does_not_redefine_core_types() -> None:
 
 
 # ===========================================================================
-# SubtitleOptions — Red tests (subtitle burn-in / ADR-S2-r2 / ADR-S6-r2 / ADR-S6-r3)
+# SubtitleOptions tests (subtitle burn-in / ADR-S2-r2 / ADR-S6-r2 / ADR-S6-r3)
 # ===========================================================================
 # Verified on real hardware (M2 2026-06-11):
 #   - Windows path escaping: \ -> \\ then : -> \: is the confirmed syntax
@@ -644,7 +642,7 @@ class TestRenderOptionsSubtitleField:
 
 
 # ===========================================================================
-# RenderOptions.fit — Red tests (ADR-F1 / fit: contain | cover | stretch)
+# RenderOptions.fit tests (ADR-F1 / fit: contain | cover | stretch)
 # ===========================================================================
 
 

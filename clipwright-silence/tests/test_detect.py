@@ -773,10 +773,7 @@ class TestInputValidation:
         assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
 
     def test_output_in_different_dir_allowed(self, tmp_path: Path) -> None:
-        """output in a different directory than media is now allowed (new policy: DC-AS-001 removed).
-
-        RED: impl still raises INVALID_INPUT at detect.py L393-415; must be True after fix.
-        """
+        """output in a different directory than media is now allowed (new policy: DC-AS-001 removed)."""
         from clipwright_silence.detect import detect_silence
 
         media_dir = tmp_path / "src"
@@ -803,7 +800,6 @@ class TestInputValidation:
         ):
             result = detect_silence(media, output, _opts())
 
-        # RED: currently INVALID_INPUT — must be True after impl removes same-dir check
         assert result["ok"] is True
 
     def test_output_invalid_extension_returns_invalid_input(

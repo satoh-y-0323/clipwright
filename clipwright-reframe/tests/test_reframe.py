@@ -51,7 +51,7 @@ Verification points:
      G-4: idempotentHint=True
      G-5: openWorldHint=False
 
-  H. track mode / fallback (wave2-B Red phase)
+  H. track mode / fallback
      H-1: mode='track' -> track_cli spawned, directive has mode='track' and track (AC-01改)
      H-2: track_cli DEPENDENCY_MISSING -> ok:true, constant-center track, warning has '[track]'
      H-3: track_cli SUBPROCESS_FAILED -> ok:true, constant-center track, warning set (AC-03)
@@ -361,9 +361,6 @@ class TestOutputValidation:
         _check_output_within_media_dir is removed in impl-reframe (plan-report wave 6).
         The output .otio can be placed in any existing directory; the only remaining
         constraints are: parent dir must exist, and output != any source.
-
-        Red (impl not yet done): _check_output_within_media_dir still raises
-        PATH_NOT_ALLOWED, so ok=False and the assert ok=True fails.
         """
         media_dir = tmp_path / "media"
         media_dir.mkdir()
@@ -922,7 +919,7 @@ class TestMcpAnnotations:
 
 
 # ===========================================================================
-# H. track mode and fallback (wave2-B Red phase)
+# H. track mode and fallback
 #
 # Design note (DC-AS-007 / architecture-report §5):
 #   The fallback constant-center track [{t_s:0, cx:0.5, cy:0.5}] is processed
@@ -1043,9 +1040,6 @@ class TestTrackMode:
         """mode='track' run must write directive with mode=='track' (AC-01改, DC-AM-001).
 
         Identification is by mode field, not version (DC-AM-001).
-
-        Red: reframe.py has no mode='track' branch yet — returns mode='track' from
-        options but without calling track_cli or storing the track list.
         """
         result = _run_track_reframe(
             tmp_path, track_cli_stdout=_make_track_result_json(3)
@@ -1060,10 +1054,7 @@ class TestTrackMode:
         )
 
     def test_track_mode_directive_stores_track_list(self, tmp_path: Path) -> None:
-        """mode='track' directive must contain non-empty track list from track_cli (AC-01改).
-
-        Red: reframe.py does not call track_cli; directive.track will be None.
-        """
+        """mode='track' directive must contain non-empty track list from track_cli (AC-01改)."""
         result = _run_track_reframe(
             tmp_path, track_cli_stdout=_make_track_result_json(3)
         )
@@ -1077,10 +1068,7 @@ class TestTrackMode:
         assert len(track) >= 1, "track must have at least one keyframe"
 
     def test_track_mode_track_elements_in_range(self, tmp_path: Path) -> None:
-        """All track elements must have cx, cy in [0.0, 1.0] and t_s >= 0 (AC-01改).
-
-        Red: same as above — track_cli not called.
-        """
+        """All track elements must have cx, cy in [0.0, 1.0] and t_s >= 0 (AC-01改)."""
         result = _run_track_reframe(
             tmp_path, track_cli_stdout=_make_track_result_json(3)
         )
@@ -1095,10 +1083,7 @@ class TestTrackMode:
             assert kf["t_s"] >= 0.0, f"t_s={kf['t_s']} must be non-negative"
 
     def test_track_mode_t_s_ascending(self, tmp_path: Path) -> None:
-        """track t_s must be strictly ascending (no duplicates).
-
-        Red: track_cli not called; directive.track is None.
-        """
+        """track t_s must be strictly ascending (no duplicates)."""
         result = _run_track_reframe(
             tmp_path, track_cli_stdout=_make_track_result_json(3)
         )
@@ -1115,10 +1100,7 @@ class TestTrackMode:
                 )
 
     def test_track_mode_new_otio_created(self, tmp_path: Path) -> None:
-        """mode='track' must create a new .otio file (AC-01改 / AC-02).
-
-        Red: reframe.py mode='track' branch absent; may or may not create file.
-        """
+        """mode='track' must create a new .otio file (AC-01改 / AC-02)."""
         result = _run_track_reframe(
             tmp_path, track_cli_stdout=_make_track_result_json(3)
         )
@@ -1131,10 +1113,7 @@ class TestTrackMode:
     # -----------------------------------------------------------------------
 
     def test_dependency_missing_ok_true(self, tmp_path: Path) -> None:
-        """track_cli DEPENDENCY_MISSING must return ok:true (graceful fallback, AC-02).
-
-        Red: reframe.py has no track_cli spawn or fallback logic.
-        """
+        """track_cli DEPENDENCY_MISSING must return ok:true (graceful fallback, AC-02)."""
         result = _run_track_reframe(tmp_path, track_cli_stdout=_DEPENDENCY_MISSING_JSON)
         assert result["ok"] is True, (
             "DEPENDENCY_MISSING must not propagate as ok=False; "
@@ -1142,10 +1121,7 @@ class TestTrackMode:
         )
 
     def test_dependency_missing_constant_center_track(self, tmp_path: Path) -> None:
-        """DEPENDENCY_MISSING fallback must write constant-center track [{0, 0.5, 0.5}].
-
-        Red: reframe.py does not call track_cli; directive.track is None.
-        """
+        """DEPENDENCY_MISSING fallback must write constant-center track [{0, 0.5, 0.5}]."""
         result = _run_track_reframe(tmp_path, track_cli_stdout=_DEPENDENCY_MISSING_JSON)
         assert result["ok"] is True
         tl = otio.adapters.read_from_file(str(tmp_path / "out.otio"))
@@ -1158,10 +1134,7 @@ class TestTrackMode:
     def test_dependency_missing_warning_contains_track_extra(
         self, tmp_path: Path
     ) -> None:
-        """DEPENDENCY_MISSING warning must mention '[track]' install hint (AC-02).
-
-        Red: reframe.py does not produce fallback warnings.
-        """
+        """DEPENDENCY_MISSING warning must mention '[track]' install hint (AC-02)."""
         result = _run_track_reframe(tmp_path, track_cli_stdout=_DEPENDENCY_MISSING_JSON)
         assert result["ok"] is True
         warnings = result.get("warnings", [])
@@ -1174,19 +1147,12 @@ class TestTrackMode:
     # -----------------------------------------------------------------------
 
     def test_subprocess_failed_ok_true(self, tmp_path: Path) -> None:
-        """track_cli SUBPROCESS_FAILED must return ok:true (fallback, AC-03).
-
-        Red: reframe.py no track_cli call; returns ok:true from existing logic
-        but without fallback track.
-        """
+        """track_cli SUBPROCESS_FAILED must return ok:true (fallback, AC-03)."""
         result = _run_track_reframe(tmp_path, track_cli_stdout=_SUBPROCESS_FAILED_JSON)
         assert result["ok"] is True
 
     def test_subprocess_failed_constant_center_track(self, tmp_path: Path) -> None:
-        """SUBPROCESS_FAILED must write constant-center track (AC-03).
-
-        Red: track_cli not called; directive.track is None.
-        """
+        """SUBPROCESS_FAILED must write constant-center track (AC-03)."""
         result = _run_track_reframe(tmp_path, track_cli_stdout=_SUBPROCESS_FAILED_JSON)
         assert result["ok"] is True
         tl = otio.adapters.read_from_file(str(tmp_path / "out.otio"))
@@ -1197,10 +1163,7 @@ class TestTrackMode:
         )
 
     def test_subprocess_failed_warning_set(self, tmp_path: Path) -> None:
-        """SUBPROCESS_FAILED must produce at least one warning (AC-03).
-
-        Red: no fallback warning generated.
-        """
+        """SUBPROCESS_FAILED must produce at least one warning (AC-03)."""
         result = _run_track_reframe(tmp_path, track_cli_stdout=_SUBPROCESS_FAILED_JSON)
         assert result["ok"] is True
         warnings = result.get("warnings", [])
@@ -1213,10 +1176,7 @@ class TestTrackMode:
     # -----------------------------------------------------------------------
 
     def test_run_raises_constant_center_fallback(self, tmp_path: Path) -> None:
-        """If core run() raises ClipwrightError, fallback must be constant-center track.
-
-        Red: reframe.py does not call track_cli.
-        """
+        """If core run() raises ClipwrightError, fallback must be constant-center track."""
         from clipwright.errors import ClipwrightError, ErrorCode
 
         media_path = tmp_path / "video.mp4"
@@ -1260,11 +1220,7 @@ class TestTrackMode:
     # -----------------------------------------------------------------------
 
     def test_track_mode_input_media_bytes_unchanged(self, tmp_path: Path) -> None:
-        """Input media bytes must be identical before and after track run (AC-07 / NFR-1).
-
-        Red: reframe.py mode='track' branch absent; existing code already passes
-        this for mode='pad', but we need explicit coverage for mode='track'.
-        """
+        """Input media bytes must be identical before and after track run (AC-07 / NFR-1)."""
         original_bytes = b"specific dummy content for track test"
         media_path = tmp_path / "video.mp4"
         media_path.write_bytes(original_bytes)
@@ -1301,11 +1257,7 @@ class TestTrackMode:
     # -----------------------------------------------------------------------
 
     def test_track_mode_idempotent_track_list(self, tmp_path: Path) -> None:
-        """Two track runs on same media must produce identical track keyframe lists (AC-08).
-
-        Red: track_cli not called; track is always None, so comparison trivially
-        passes but the test intent (non-None track identity) will fail.
-        """
+        """Two track runs on same media must produce identical track keyframe lists (AC-08)."""
         opts = _make_track_opts()
         fake_run = MagicMock(
             returncode=0,
@@ -1350,10 +1302,7 @@ class TestTrackMode:
     # -----------------------------------------------------------------------
 
     def test_warning_no_path_leak_on_dependency_missing(self, tmp_path: Path) -> None:
-        """CWE-209: DEPENDENCY_MISSING warning must not echo the media file path.
-
-        Red: reframe.py does not generate fallback warnings.
-        """
+        """CWE-209: DEPENDENCY_MISSING warning must not echo the media file path."""
         media_path = tmp_path / "secret_video_name.mp4"
         media_path.write_bytes(b"dummy")
         output_path = tmp_path / "out.otio"
@@ -1393,10 +1342,7 @@ class TestTrackMode:
             )
 
     def test_warning_no_stack_leak_on_run_exception(self, tmp_path: Path) -> None:
-        """CWE-209: warning from run() exception must not contain stack trace.
-
-        Red: reframe.py does not call track_cli, so no warning is generated at all.
-        """
+        """CWE-209: warning from run() exception must not contain stack trace."""
         from clipwright.errors import ClipwrightError, ErrorCode
 
         media_path = tmp_path / "video.mp4"

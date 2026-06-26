@@ -13,7 +13,7 @@ Target (§7 / §13.2 DC-AM-007):
 - find_project(start_dir): Walks up ancestor directories looking for clipwright.json
 - load_manifest / save_manifest(project_dir, manifest): round-trip serialization
 
-Additional Red tests (review M-3 / F-03 / L-4=F-08):
+Additional tests (review M-3 / F-03 / L-4=F-08):
 - [M-3] save_manifest uses atomic write (temp → os.replace)
 - [F-03] find_project raises an error when start_dir is not a directory
 - [L-4/F-08] The hint on find_project not-found does not duplicate the full start_dir
@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pytest
 
-# --- Import (project.py not yet implemented → ImportError expected → Red) ---
+# --- Import ---
 from clipwright.project import (
     find_project,
     init_project,
@@ -382,11 +382,10 @@ class TestSaveManifestAtomic:
     """
 
     def test_save_manifest_uses_os_replace(self, tmp_project: Path) -> None:
-        """Confirms save_manifest calls os.replace via monkeypatch.
+        """Confirms save_manifest calls os.replace via monkeypatch (M-3 contract).
 
-        The current implementation uses a direct write_text overwrite,
-        so this test shows os.replace is NOT called (Red: feature not implemented).
-        After implementation, os.replace in clipwright.project must be called once.
+        save_manifest uses atomic write (temp file → os.replace), so os.replace
+        must be called at least once.
         """
         proj = tmp_project / "proj"
         init_project(str(proj), name="proj")
@@ -497,12 +496,8 @@ class TestFindProjectValidation:
     def test_raises_error_when_start_dir_is_file(self, tmp_project: Path) -> None:
         """Raises an error when start_dir is a file.
 
-        The current implementation calls Path(start_dir).resolve() without an
-        is_dir() check, so passing a file starts the search from its parent
-        directory — unintended behaviour.
-        This test expects the appropriate error code
-        (PROJECT_NOT_FOUND or INVALID_INPUT) to be returned
-        (Red: is_dir() check not yet implemented).
+        Passing a file path must return an error code of either
+        PROJECT_NOT_FOUND or INVALID_INPUT (F-03: is_dir() check).
         """
         from clipwright.errors import ClipwrightError, ErrorCode
 
@@ -588,8 +583,8 @@ class TestFindProjectHintQuality:
     def test_hint_does_not_contain_full_start_dir(self, tmp_project: Path) -> None:
         """PROJECT_NOT_FOUND hint does not contain the full start_dir path.
 
-        The current implementation embeds start_dir in the hint, so this
-        test fails (Red: L-4/F-08 not yet fixed).
+        Path information belongs in message only; hint contains next-step guidance
+        (L-4/F-08 fix: path removed from hint).
         """
         from clipwright.errors import ClipwrightError
 
