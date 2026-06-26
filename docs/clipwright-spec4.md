@@ -312,7 +312,17 @@ time-varying crop window.
 
 ---
 
-### Scene-driven frame extraction  *Medium*  *(frames extension)*
+### Scene-driven frame extraction  *Medium*  *(frames extension)*  ✅ **SHIPPED (frames 0.2.0)**
+
+> Implemented as a `scene_sample` parameter (values `"midpoint"` / `"start"` / `"boundary"`,
+> default `"midpoint"`) added to the **existing** `mode="scene"` in `clipwright_extract_frames`.
+> No new `mode="scenes"` (plural) was introduced — reusing `mode="scene"` avoids the single/plural
+> ambiguity that would cause AI agents to select the wrong mode. `"midpoint"` (default) emits one
+> thumbnail per shot interval at the temporal midpoint (N+1 frames for N boundaries); `"start"`
+> emits one thumbnail at the shot start (N+1 frames); `"boundary"` reproduces the pre-0.2.0
+> per-boundary behaviour exactly (N frames). When `scene_sample="midpoint"` or `"start"` and no
+> boundaries are present, one representative frame is extracted from the full clip (no warning);
+> `"boundary"` with no boundaries returns no frames with a warning (unchanged from v0.1.0).
 
 **What it does**
 Lets `clipwright_extract_frames` emit one representative frame per detected scene
@@ -452,5 +462,5 @@ color        ✓
 2. **G — cut-aware caption alignment** (High): the silence+subtitle combination degrades caption quality. Split by home: the *ordering* fix is orchestration, not a tool. ✅ **Layers 1 & 2 SHIPPED (render 0.12.0 / transcribe 0.3.1 / silence 0.2.1)** — Layer 1 makes render's fragmentation advisory prescribe the clean "cut → render → transcribe → burn" order (helps every AI user, zero setup); Layer 2 carries that guidance in the always-visible channels (tool docstrings + README "Recommended Workflows"), not a user-authored skill. **Layer 3** (cue-boundary snapping input to `silence`) remains deferred until a true single pass is required.
 3. ~~**D2 — scene PySceneDetect 0.7 incompat** (Medium): the content-aware backend is dead against current PySceneDetect; contained CSV-file fix.~~ ✅ **FIXED (scene 0.2.1)** — `list-scenes -o <tmpdir>` CSV-file read.
 4. ~~**Content-aware reframe** (Medium–High): static vertical reframe caps shorts quality.~~ ✅ **SHIPPED (reframe 0.2.0 / render 0.13.0)** — motion-centroid `mode="track"` writes a keyframed crop-centre track that render materialises as a subject-following crop; falls back to a static centre crop when the optional `[track]` (numpy) extra is absent.
-5. **Scene-driven frames** / **trim ergonomics** / **path-policy consistency** (Medium): composition and DX gaps.
+5. ~~**Scene-driven frames**~~ ✅ **SHIPPED (frames 0.2.0)** / **trim ergonomics** / **path-policy consistency** (Medium): composition and DX gaps.
 6. **HW decode for filter graphs** (Low): known spec3 limit.

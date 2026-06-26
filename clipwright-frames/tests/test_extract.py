@@ -967,6 +967,33 @@ class TestSubprocessFailure:
         error_msg = result.error.message if result.error else ""
         assert secret_path not in error_msg
 
+    def test_subprocess_error_cause_is_suppressed(self, tmp_path: Path) -> None:
+        """_run_with_safe_error must raise ClipwrightError with __cause__ = None.
+
+        SR-NEW/L-3: verifies that 'raise ... from None' is used (not 'from exc'),
+        so the original ClipwrightError (which may contain subprocess stderr) cannot
+        leak through __cause__ if the outer catch scope widens in future.
+        """
+        from clipwright_frames.extract import _run_with_safe_error
+
+        def _fail(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            raise ClipwrightError(
+                code=ErrorCode.SUBPROCESS_FAILED,
+                message="ffmpeg: /secret/path/video.mp4: No such file",
+                hint="Check ffmpeg.",
+            )
+
+        with patch("clipwright_frames.extract.run", side_effect=_fail):
+            try:
+                _run_with_safe_error(["ffmpeg", "-i", "x.mp4"], timeout=10.0)
+            except ClipwrightError as exc:
+                assert exc.__cause__ is None, (
+                    "_run_with_safe_error must use 'raise ... from None'; "
+                    f"__cause__ is {exc.__cause__!r}"
+                )
+            else:
+                pytest.fail("Expected ClipwrightError was not raised")
+
 
 # ===========================================================================
 # (12) frames.json schema verification
@@ -1571,7 +1598,6 @@ class TestBoundaryChecks:
 
 # ===========================================================================
 # scene_sample dispatch: midpoint / start / boundary
-# (Red: scene_sample not yet in ExtractFramesOptions or extract.py dispatch)
 # ===========================================================================
 
 
@@ -1587,9 +1613,6 @@ def _extract_ss_from_cmds(captured_cmds: list[list[str]]) -> list[float]:
 
 class TestSceneSampleDispatch:
     """Tests for mode='scene' x scene_sample(midpoint/start/boundary) dispatch.
-
-    Red: ExtractFramesOptions.scene_sample and extract.py dispatch are not yet
-    implemented.  After impl-scene-dispatch (task) these must all turn Green.
 
     Fixture: boundaries=[2.0, 5.0], duration=10.0
     Expected representative timestamps per mode:
@@ -1657,6 +1680,17 @@ class TestSceneSampleDispatch:
         assert result.data.get("frame_count") == expected_count, (
             f"scene_sample={scene_sample!r}: expected frame_count={expected_count}, "
             f"got {result.data.get('frame_count')}"
+        )
+        # CR-NEW/L-5: data["scene_sample"] must reflect the requested strategy.
+        assert result.data.get("scene_sample") == scene_sample, (
+            f"data['scene_sample'] must equal {scene_sample!r}, "
+            f"got {result.data.get('scene_sample')!r}"
+        )
+        # CR-NEW/L-5: summary must contain scene_sample so AI can identify strategy
+        # without reading the manifest.
+        assert result.summary is not None
+        assert f"scene_sample={scene_sample}" in result.summary, (
+            f"summary must contain 'scene_sample={scene_sample}'; got: {result.summary!r}"
         )
 
     # ------------------------------------------------------------------
@@ -1981,3 +2015,326 @@ class TestSceneSampleDispatch:
         assert "manifest" in roles, "Missing role='manifest' artifact"
         assert "otio" in formats, "Missing format='otio' artifact"
         assert "json" in formats, "Missing format='json' artifact"
+
+
+# ===========================================================================
+# CR-NEW: frames.json manifest scene_sample presence / absence
+# ===========================================================================
+
+
+class TestManifestSceneSample:
+    """CR-NEW: frames.json must include scene_sample for mode='scene' only.
+
+    Regression guard: ensures _write_frames_json persists scene_sample in the
+    manifest when mode='scene', and omits it for interval/timestamps modes.
+    """
+
+    @pytest.mark.parametrize("scene_sample", ["midpoint", "start", "boundary"])
+    def test_scene_mode_manifest_has_scene_sample(
+        self, tmp_path: Path, scene_sample: str
+    ) -> None:
+        """mode='scene' manifest must contain scene_sample matching the requested value.
+
+        Verifies that _write_frames_json writes manifest['scene_sample'] for
+        each valid scene_sample value so AI can identify the strategy used
+        without a MCP round-trip.
+        """
+        from clipwright_frames.extract import extract_frames
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        out_dir = tmp_path / "frames_out"
+        out_dir.mkdir()
+        scene_otio = _make_scene_timeline_with_markers(tmp_path, [2.0, 5.0])
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            if cmd:
+                out = Path(cmd[-1])
+                if out.suffix in {".jpg", ".png", ".jpeg"}:
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    out.write_bytes(b"FAKE_IMAGE")
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with (
+            patch("clipwright_frames.extract.inspect_media", return_value=media_info),
+            patch("clipwright_frames.extract.run", side_effect=_fake_run),
+        ):
+            result = extract_frames(
+                media,
+                str(out_dir),
+                _opts(
+                    mode="scene", scene_timeline=scene_otio, scene_sample=scene_sample
+                ),
+            )
+
+        assert result.ok is True
+        assert result.artifacts is not None
+
+        manifest_path: str | None = None
+        for a in result.artifacts:
+            role = a.role if hasattr(a, "role") else a.get("role", "")
+            if role == "manifest":
+                manifest_path = a.path if hasattr(a, "path") else a.get("path", "")
+                break
+
+        assert manifest_path is not None, "No manifest artifact found"
+        with open(str(manifest_path), encoding="utf-8") as f:
+            manifest = json.load(f)
+
+        assert "scene_sample" in manifest, (
+            f"frames.json must contain 'scene_sample' for mode='scene'; "
+            f"keys found: {list(manifest.keys())}"
+        )
+        assert manifest["scene_sample"] == scene_sample, (
+            f"manifest['scene_sample'] must be {scene_sample!r}; "
+            f"got {manifest['scene_sample']!r}"
+        )
+
+    @pytest.mark.parametrize("mode", ["interval", "timestamps"])
+    def test_non_scene_mode_manifest_has_no_scene_sample(
+        self, tmp_path: Path, mode: str
+    ) -> None:
+        """mode!='scene' manifest must NOT contain 'scene_sample' key.
+
+        Regression guard: ensures _write_frames_json only adds scene_sample
+        when mode=='scene'; other modes must not pollute the manifest schema.
+        """
+        from clipwright_frames.extract import extract_frames
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        out_dir = tmp_path / "frames_out"
+        out_dir.mkdir()
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            if cmd:
+                out = Path(cmd[-1])
+                if out.suffix in {".jpg", ".png", ".jpeg"}:
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    out.write_bytes(b"FAKE_IMAGE")
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        opts = (
+            _opts(mode="interval", interval_sec=5.0)
+            if mode == "interval"
+            else _opts(mode="timestamps", timestamps=[2.0, 5.0])
+        )
+
+        with (
+            patch("clipwright_frames.extract.inspect_media", return_value=media_info),
+            patch("clipwright_frames.extract.run", side_effect=_fake_run),
+        ):
+            result = extract_frames(media, str(out_dir), opts)
+
+        assert result.ok is True
+        assert result.artifacts is not None
+
+        manifest_path: str | None = None
+        for a in result.artifacts:
+            role = a.role if hasattr(a, "role") else a.get("role", "")
+            if role == "manifest":
+                manifest_path = a.path if hasattr(a, "path") else a.get("path", "")
+                break
+
+        assert manifest_path is not None, "No manifest artifact found"
+        with open(str(manifest_path), encoding="utf-8") as f:
+            manifest = json.load(f)
+
+        assert "scene_sample" not in manifest, (
+            f"frames.json must NOT contain 'scene_sample' for mode={mode!r}; "
+            f"keys found: {list(manifest.keys())}"
+        )
+
+
+# ===========================================================================
+# frames-2-L-1 / SR-R-001: FILE_NOT_FOUND __cause__ is None (CI lock)
+# ===========================================================================
+
+
+class TestFileNotFoundCauseIsNone:
+    """frames-2-L-1 / SR-R-001: FILE_NOT_FOUND must be re-raised with 'from None'.
+
+    Prevents regression where 'from exc' would leak the original ClipwrightError
+    (potentially containing a full media path) via __cause__ (CWE-209 path disclosure).
+    """
+
+    def test_file_not_found_cause_is_none(self, tmp_path: Path) -> None:
+        """_extract_frames_inner must raise FILE_NOT_FOUND with __cause__ == None.
+
+        SR-R-001: uses 'raise ClipwrightError(...) from None' so the original
+        exception (which may contain an absolute path in its message) cannot
+        be accessed through __cause__ by any outer catch scope.
+        Regression guard: changing 'from None' to 'from exc' would fail this test.
+        """
+        from clipwright_frames.extract import _extract_frames_inner
+
+        media = str(tmp_path / "nonexistent.mp4")
+        out_dir = tmp_path / "frames_out"
+        out_dir.mkdir()
+
+        # Original exception simulates inspect_media leaking a full path.
+        original_exc = ClipwrightError(
+            code=ErrorCode.FILE_NOT_FOUND,
+            message="File not found: /secret/internal/path/nonexistent.mp4",
+            hint="Specify a valid media file path.",
+        )
+
+        with patch(
+            "clipwright_frames.extract.inspect_media",
+            side_effect=original_exc,
+        ):
+            try:
+                _extract_frames_inner(media, str(out_dir), _opts())
+            except ClipwrightError as exc:
+                assert exc.__cause__ is None, (
+                    "_extract_frames_inner must use 'raise ... from None' for "
+                    f"FILE_NOT_FOUND; __cause__ is {exc.__cause__!r}"
+                )
+            else:
+                pytest.fail("Expected ClipwrightError was not raised")
+
+
+# ===========================================================================
+# frames-3-L-1: inspect_media SUBPROCESS_FAILED/TIMEOUT -> safe_subprocess_message
+# ===========================================================================
+
+
+class TestInspectMediaSubprocessFailureSanitised:
+    """frames-3-L-1: inspect_media raising SUBPROCESS_FAILED/TIMEOUT must be
+    re-raised with safe_subprocess_message() applied (CWE-209 multi-layer defence).
+
+    CI lock: prevents regression where the frames-3-L-1 catch block is removed or
+    weakened, which would allow raw ffprobe stderr (potentially embedding absolute
+    input paths) to surface in the MCP error envelope.
+
+    Three sub-properties are verified for each error code:
+    (a) __cause__ is None  — 'raise ... from None' prevents path leakage via chaining.
+    (b) full path absent   — safe_subprocess_message() removes raw message content.
+    (c) code + hint kept   — diagnostic context is not discarded.
+    """
+
+    @pytest.mark.parametrize(
+        "error_code",
+        [ErrorCode.SUBPROCESS_FAILED, ErrorCode.SUBPROCESS_TIMEOUT],
+    )
+    def test_cause_is_none(self, tmp_path: Path, error_code: ErrorCode) -> None:
+        """_extract_frames_inner must re-raise with __cause__ = None (from None).
+
+        Regression guard: changing 'from None' to 'from exc' would allow the
+        original ClipwrightError (containing ffprobe stderr with an absolute path)
+        to be accessed through __cause__ by a future outer handler.
+        """
+        from clipwright_frames.extract import _extract_frames_inner
+
+        out_dir = tmp_path / "frames_out"
+        out_dir.mkdir()
+
+        original_exc = ClipwrightError(
+            code=error_code,
+            message="/secret/video.mp4: Invalid data found when processing input",
+            hint="Check the input file and ffprobe version.",
+        )
+
+        with patch(
+            "clipwright_frames.extract.inspect_media",
+            side_effect=original_exc,
+        ):
+            try:
+                _extract_frames_inner(
+                    str(tmp_path / "video.mp4"), str(out_dir), _opts()
+                )
+            except ClipwrightError as exc:
+                assert exc.__cause__ is None, (
+                    f"[frames-3-L-1] _extract_frames_inner must use 'raise ... from None' "
+                    f"for {error_code}; __cause__ is {exc.__cause__!r}"
+                )
+            else:
+                pytest.fail(f"Expected ClipwrightError({error_code}) was not raised")
+
+    @pytest.mark.parametrize(
+        "error_code",
+        [ErrorCode.SUBPROCESS_FAILED, ErrorCode.SUBPROCESS_TIMEOUT],
+    )
+    def test_full_path_not_in_message(
+        self, tmp_path: Path, error_code: ErrorCode
+    ) -> None:
+        """The re-raised error message must not contain the original absolute path.
+
+        frames-3-L-1: safe_subprocess_message() replaces raw ffprobe stderr with
+        the generic safe token 'internal subprocess failed (code: <CODE>)' before
+        the error reaches the MCP envelope (CWE-209 path disclosure prevention).
+        """
+        from clipwright_frames.extract import _extract_frames_inner
+
+        out_dir = tmp_path / "frames_out"
+        out_dir.mkdir()
+
+        secret_path = "/secret/video.mp4"
+        original_exc = ClipwrightError(
+            code=error_code,
+            message=f"{secret_path}: Invalid data found when processing input",
+            hint="Check the input file and ffprobe version.",
+        )
+
+        with patch(
+            "clipwright_frames.extract.inspect_media",
+            side_effect=original_exc,
+        ):
+            try:
+                _extract_frames_inner(
+                    str(tmp_path / "video.mp4"), str(out_dir), _opts()
+                )
+            except ClipwrightError as exc:
+                assert secret_path not in exc.message, (
+                    f"[frames-3-L-1] Absolute path {secret_path!r} must not appear "
+                    f"in the re-raised message for {error_code}; got: {exc.message!r}"
+                )
+            else:
+                pytest.fail(f"Expected ClipwrightError({error_code}) was not raised")
+
+    @pytest.mark.parametrize(
+        "error_code",
+        [ErrorCode.SUBPROCESS_FAILED, ErrorCode.SUBPROCESS_TIMEOUT],
+    )
+    def test_code_and_hint_preserved(
+        self, tmp_path: Path, error_code: ErrorCode
+    ) -> None:
+        """The re-raised error must preserve the original code and hint.
+
+        frames-3-L-1: only the message is replaced by safe_subprocess_message();
+        code and hint are carried through so the caller retains diagnostic context.
+        """
+        from clipwright_frames.extract import _extract_frames_inner
+
+        out_dir = tmp_path / "frames_out"
+        out_dir.mkdir()
+
+        original_hint = "Check the input file and ffprobe version."
+        original_exc = ClipwrightError(
+            code=error_code,
+            message="/secret/video.mp4: Invalid data found when processing input",
+            hint=original_hint,
+        )
+
+        with patch(
+            "clipwright_frames.extract.inspect_media",
+            side_effect=original_exc,
+        ):
+            try:
+                _extract_frames_inner(
+                    str(tmp_path / "video.mp4"), str(out_dir), _opts()
+                )
+            except ClipwrightError as exc:
+                assert exc.code == error_code, (
+                    f"[frames-3-L-1] code must be preserved as {error_code}; "
+                    f"got {exc.code!r}"
+                )
+                assert exc.hint == original_hint, (
+                    f"[frames-3-L-1] hint must be preserved; got {exc.hint!r}"
+                )
+            else:
+                pytest.fail(f"Expected ClipwrightError({error_code}) was not raised")

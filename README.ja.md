@@ -262,7 +262,7 @@ src/clipwright/
 | `clipwright-text` | `clipwright_add_text` | OTIO タイムラインにテキストオーバーレイ設定（drawtext）を注記する。映像への描画は `clipwright-render` が行う |
 | `clipwright-wrap` | `clipwright_wrap_text` | 長いテキスト行に改行注記を付けて OTIO タイムラインで折り返す |
 | `clipwright-scene` | `clipwright_detect_scenes` | FFmpeg `scdet` または PySceneDetect（`backend='pyscenedetect'`）でショット境界を検出し OTIO マーカーを書く。0 境界の場合は具体的な閾値半減提案を返し、ffmpeg バックエンドでは pyscenedetect への切替を推奨する。PySceneDetect は `pip install scenedetect`（または `clipwright-scene[pyscenedetect]`）でインストール。PATH 上にない場合は `CLIPWRIGHT_SCENEDETECT` で実行ファイルパスを指定する |
-| `clipwright-frames` | `clipwright_extract_frames` | 指定時刻 / シーン境界 / 固定間隔で動画から静止画を抽出し、画像・OTIO マーカー・JSON マニフェストを出力する |
+| `clipwright-frames` | `clipwright_extract_frames` | 指定時刻 / シーン境界 / 固定間隔で動画から静止画を抽出し、画像・OTIO マーカー・JSON マニフェストを出力する。`mode="scene"` では `scene_sample` パラメータでショット区間内のサンプリング位置を制御する: `"midpoint"` *（デフォルト）* — 各ショット区間の中点で 1 枚（N 境界に対し N+1 枚。コンタクトシート用途に最適）/ `"start"` — 各ショット区間の先頭で 1 枚（同 N+1 枚）/ `"boundary"` — 各 `scene_boundary` マーカー位置で 1 枚（N 枚。0.2.0 以前の動作を完全再現）。境界が 0 個の場合、`midpoint`/`start` はクリップ全体から 1 枚抽出し、`boundary` は warning を出して 0 枚を返す |
 | `clipwright-color` | `clipwright_detect_color` | FFmpeg `signalstats` で平均輝度を測定し、`eq` カラー補正ディレクティブを OTIO タイムラインのメタデータに書き込む。補正は `clipwright-render` が一括レンダリングパスで適用する |
 | `clipwright-stabilize` | `clipwright_detect_shake` | FFmpeg `vidstabdetect`（libvidstab 必須）でカメラ手ブレを解析し、`.trf` モーション解析ファイルと stabilize ディレクティブを OTIO タイムラインのメタデータに書き込む。`clipwright-render` が一括レンダリングパスで `vidstabtransform` として適用する |
 | `clipwright-trim` | `clipwright_trim` | 明示した keep/drop 時間範囲から kept-range の OTIO タイムラインを生成する（オプション省略時はクリップ全体をパススルー）。`clipwright-render` がそのまま連結する。「どの区間を残すか」を指定する最も基本的なプリミティブ |

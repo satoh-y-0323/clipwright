@@ -47,6 +47,11 @@ from clipwright_frames.plan import (
 )
 from clipwright_frames.schemas import ExtractFramesOptions
 
+# Clamp applied before timeout multiplication to prevent OverflowError on
+# extreme ffprobe-derived duration values (CWE-400 / SR-V-001).
+# Mirrors clipwright-reframe _MAX_TIMEOUT_DURATION_S (10 years).
+_MAX_TIMEOUT_DURATION_S: float = 315_360_000.0
+
 
 def _check_within_boundary(path: Path, base: Path) -> None:
     """Verify that path resolves within base directory (CWE-22 prevention).
@@ -182,12 +187,16 @@ def _write_frames_json(
             }
         )
 
-    manifest = {
+    manifest: dict[str, object] = {
         "count": len(extracted_frames),
         "mode": options.mode,
         "format": options.format,
         "frames": frame_entries,
     }
+    if options.mode == "scene":
+        # CR-NEW: persist scene_sample so AI can later determine which strategy
+        # produced this manifest (midpoint/start/boundary) without MCP round-trip.
+        manifest["scene_sample"] = options.scene_sample
 
     tmp_path = out_dir / "frames.json.tmp"
     tmp_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -224,7 +233,16 @@ def _extract_frames_inner(
                 code=ErrorCode.FILE_NOT_FOUND,
                 message=f"File not found: {media_path.name}",
                 hint=exc.hint,
-            ) from exc
+            ) from None  # SR-R-001: drop __cause__ to prevent path exposure (CWE-209)
+        if exc.code in (ErrorCode.SUBPROCESS_FAILED, ErrorCode.SUBPROCESS_TIMEOUT):
+            # frames-3-L-1: ffprobe stderr (which may embed absolute input paths)
+            # must not reach the MCP error envelope. Replace message with a safe
+            # generic token; retain code and hint for diagnostic context (CWE-209).
+            raise ClipwrightError(
+                code=exc.code,
+                message=safe_subprocess_message(exc),
+                hint=exc.hint,
+            ) from None
         raise
 
     # --- 3. has_video validation ---
@@ -256,7 +274,11 @@ def _extract_frames_inner(
     rate = media_info.duration.rate
 
     # Compute timeout once (used by all modes that call ffmpeg).
-    timeout = float(max(60, math.ceil(duration_sec * 2)))
+    # Clamp duration_sec to prevent OverflowError on extreme ffprobe values
+    # (CWE-400 / SR-V-001). Mirrors clipwright-reframe _MAX_TIMEOUT_DURATION_S.
+    _safe_dur = min(duration_sec, _MAX_TIMEOUT_DURATION_S)
+    _prod = _safe_dur * 2
+    timeout = float(max(60, math.ceil(_prod) if math.isfinite(_prod) else 630_720_000))
 
     # --- 5. Mode dispatch ---
 
@@ -383,19 +405,37 @@ def _extract_frames_inner(
     # --- 9. Build return envelope ---
 
     frame_count = len(extracted_frames)
-    summary = (
-        f"Extracted {frame_count} frame(s) from {media_path.name} "
-        f"in {options.mode} mode (format={options.format}). "
-        f"Output directory: {out_dir.name}."
-    )
-
-    return ok_result(
-        summary,
-        data={
+    if options.mode == "scene":
+        # CR-NEW / L-5: include scene_sample in data and summary so AI can
+        # distinguish midpoint (N shots) from boundary (N boundaries) without
+        # reading the manifest.
+        summary = (
+            f"Extracted {frame_count} frame(s) from {media_path.name} "
+            f"in scene mode (scene_sample={options.scene_sample}, "
+            f"format={options.format}). "
+            f"Output directory: {out_dir.name}."
+        )
+        data: dict[str, object] = {
+            "frame_count": frame_count,
+            "mode": options.mode,
+            "scene_sample": options.scene_sample,
+            "format": options.format,
+        }
+    else:
+        summary = (
+            f"Extracted {frame_count} frame(s) from {media_path.name} "
+            f"in {options.mode} mode (format={options.format}). "
+            f"Output directory: {out_dir.name}."
+        )
+        data = {
             "frame_count": frame_count,
             "mode": options.mode,
             "format": options.format,
-        },
+        }
+
+    return ok_result(
+        summary,
+        data=data,
         artifacts=[
             {
                 "role": "timeline",
@@ -425,7 +465,7 @@ def _run_with_safe_error(cmd: list[str], timeout: float) -> None:
                 code=exc.code,
                 message=safe_subprocess_message(exc),
                 hint=exc.hint,
-            ) from exc
+            ) from None
         raise
 
 
@@ -452,3 +492,12 @@ def extract_frames(
         return _extract_frames_inner(media, output_dir, options)
     except ClipwrightError as exc:
         return error_result(exc.code, exc.message, exc.hint)
+    except Exception:
+        # SR-R-001: catch unexpected exceptions (e.g. OTIOError from save_timeline,
+        # OSError from _write_frames_json) with fixed wording to prevent internal
+        # path exposure (CWE-209).
+        return error_result(
+            ErrorCode.INTERNAL,
+            "Frame extraction failed due to an internal error.",
+            "Retry after verifying that the output directory is writable.",
+        )

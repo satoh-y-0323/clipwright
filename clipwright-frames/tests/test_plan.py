@@ -581,3 +581,191 @@ class TestFrameFilename:
         digits = match.group(1)
         assert len(digits) == 5, f"Expected 5 digits, got {len(digits)} in {result!r}"
         assert digits == "00007"
+
+
+# ===========================================================================
+# (G) compute_scene_segment_timestamps — scene segment sampling (pure function)
+#
+# Function signature:
+#   compute_scene_segment_timestamps(
+#       boundaries: list[float],
+#       duration_sec: float,
+#       anchor: Literal["midpoint", "start"],
+#   ) -> list[float]
+#
+# Algorithm (architecture-report §4):
+#   1. Internal dedup: sorted(set(boundaries)) collapses duplicate boundaries.
+#   2. Only boundaries strictly inside (0, duration_sec) are used to form edges.
+#      edges = [0.0] + filtered_boundaries + [duration_sec]
+#   3. For each adjacent pair (s, e): zero-length segments (e <= s) are excluded.
+#      anchor="start"    -> representative ts = s
+#      anchor="midpoint" -> representative ts = (s + e) / 2
+#   4. Return is sorted and all elements are in [0, duration_sec).
+#      midpoint is strictly < duration_sec.
+#   5. With zero boundaries, edges = [0.0, duration_sec] yields one segment -> one ts.
+#
+# Import is deferred inside each test body so that only the target symbol needs
+# to be importable; other tests in this module are unaffected if the symbol moves.
+# ===========================================================================
+
+# Parametrize table: (boundaries, duration_sec, anchor, expected)
+_SEGMENT_TS_CASES: list[tuple[list[float], float, str, list[float]]] = [
+    # midpoint derivation: segments [0,2),[2,5),[5,10) -> midpoints 1.0, 3.5, 7.5
+    ([2.0, 5.0], 10.0, "midpoint", [1.0, 3.5, 7.5]),
+    # start derivation: segments [0,2),[2,5),[5,10) -> starts 0.0, 2.0, 5.0
+    ([2.0, 5.0], 10.0, "start", [0.0, 2.0, 5.0]),
+    # zero boundaries midpoint: single segment [0,10) -> midpoint 5.0
+    ([], 10.0, "midpoint", [5.0]),
+    # zero boundaries start: single segment [0,10) -> start 0.0
+    ([], 10.0, "start", [0.0]),
+    # one boundary start: segments [0,5),[5,10) -> starts 0.0, 5.0
+    ([5.0], 10.0, "start", [0.0, 5.0]),
+    # one boundary midpoint: segments [0,5),[5,10) -> midpoints 2.5, 7.5
+    ([5.0], 10.0, "midpoint", [2.5, 7.5]),
+    # duplicate boundary midpoint: dedup [3.0] -> segments [0,3),[3,10) -> midpoints 1.5, 6.5
+    ([3.0, 3.0], 10.0, "midpoint", [1.5, 6.5]),
+    # duplicate boundary start: dedup [3.0] -> segments [0,3),[3,10) -> starts 0.0, 3.0
+    ([3.0, 3.0], 10.0, "start", [0.0, 3.0]),
+    # boundary at 0.0 excluded (not strictly inside (0, duration)):
+    # effective [5.0] -> segments [0,5),[5,10) -> starts 0.0, 5.0
+    ([0.0, 5.0], 10.0, "start", [0.0, 5.0]),
+    # boundary at duration excluded (not strictly inside (0, duration)):
+    # effective [5.0] -> segments [0,5),[5,10) -> starts 0.0, 5.0
+    ([5.0, 10.0], 10.0, "start", [0.0, 5.0]),
+]
+
+_SEGMENT_TS_IDS = [
+    "midpoint-two-boundaries",
+    "start-two-boundaries",
+    "zero-boundaries-midpoint",
+    "zero-boundaries-start",
+    "one-boundary-start",
+    "one-boundary-midpoint",
+    "duplicate-boundary-midpoint",
+    "duplicate-boundary-start",
+    "boundary-at-zero-excluded",
+    "boundary-at-duration-excluded",
+]
+
+
+class TestComputeSceneSegmentTimestamps:
+    """Tests for compute_scene_segment_timestamps (plan.py).
+
+    All tests import the target function inside the test body so that the
+    import location can be refactored without breaking the test file.
+    """
+
+    @pytest.mark.parametrize(
+        "boundaries, duration_sec, anchor, expected",
+        _SEGMENT_TS_CASES,
+        ids=_SEGMENT_TS_IDS,
+    )
+    def test_g1_expected_timestamps(
+        self,
+        boundaries: list[float],
+        duration_sec: float,
+        anchor: str,
+        expected: list[float],
+    ) -> None:
+        """Each case verifies the exact timestamp list returned by the function.
+
+        Floating-point comparison uses pytest.approx to tolerate rounding errors.
+        """
+        from clipwright_frames.plan import (
+            compute_scene_segment_timestamps,
+        )
+
+        result = compute_scene_segment_timestamps(boundaries, duration_sec, anchor)
+        assert result == pytest.approx(expected)
+
+    @pytest.mark.parametrize(
+        "boundaries, duration_sec, anchor",
+        [
+            ([2.0, 5.0], 10.0, "midpoint"),
+            ([2.0, 5.0], 10.0, "start"),
+            ([], 10.0, "midpoint"),
+            ([], 10.0, "start"),
+            ([3.0, 3.0, 6.0], 12.0, "midpoint"),
+        ],
+        ids=[
+            "two-boundaries-midpoint",
+            "two-boundaries-start",
+            "zero-boundaries-midpoint",
+            "zero-boundaries-start",
+            "duplicate-with-extra-midpoint",
+        ],
+    )
+    def test_g2_all_timestamps_within_range(
+        self,
+        boundaries: list[float],
+        duration_sec: float,
+        anchor: str,
+    ) -> None:
+        """Invariant: every returned timestamp must satisfy 0 <= ts < duration_sec."""
+        from clipwright_frames.plan import compute_scene_segment_timestamps
+
+        result = compute_scene_segment_timestamps(boundaries, duration_sec, anchor)
+        for ts in result:
+            assert 0.0 <= ts < duration_sec, (
+                f"timestamp {ts!r} is outside [0, {duration_sec!r})"
+            )
+
+    @pytest.mark.parametrize(
+        "boundaries, duration_sec, anchor",
+        [
+            ([2.0, 5.0], 10.0, "midpoint"),
+            ([2.0, 5.0], 10.0, "start"),
+            ([1.0, 4.0, 7.0], 10.0, "midpoint"),
+            ([1.0, 4.0, 7.0], 10.0, "start"),
+        ],
+        ids=[
+            "two-boundaries-midpoint",
+            "two-boundaries-start",
+            "three-boundaries-midpoint",
+            "three-boundaries-start",
+        ],
+    )
+    def test_g3_output_is_sorted(
+        self,
+        boundaries: list[float],
+        duration_sec: float,
+        anchor: str,
+    ) -> None:
+        """Invariant: returned list is sorted in ascending order."""
+        from clipwright_frames.plan import compute_scene_segment_timestamps
+
+        result = compute_scene_segment_timestamps(boundaries, duration_sec, anchor)
+        assert result == sorted(result), f"Result is not sorted: {result!r}"
+
+    @pytest.mark.parametrize(
+        "boundaries, duration_sec",
+        [
+            ([2.0, 5.0], 10.0),
+            ([], 10.0),
+            ([5.0], 10.0),
+            ([3.0, 3.0], 10.0),
+        ],
+        ids=[
+            "two-boundaries",
+            "zero-boundaries",
+            "one-boundary",
+            "duplicate-boundary",
+        ],
+    )
+    def test_g4_midpoint_never_equals_duration(
+        self,
+        boundaries: list[float],
+        duration_sec: float,
+    ) -> None:
+        """Invariant: midpoint = (s+e)/2 < e <= duration, so midpoint < duration always.
+
+        The midpoint of any non-zero-length segment is strictly less than duration_sec,
+        so ts == duration_sec can never occur (architecture-report §4 last row of §6 table).
+        """
+        from clipwright_frames.plan import compute_scene_segment_timestamps
+
+        result = compute_scene_segment_timestamps(boundaries, duration_sec, "midpoint")
+        for ts in result:
+            assert ts < duration_sec, (
+                f"midpoint {ts!r} must be strictly less than duration {duration_sec!r}"
+            )

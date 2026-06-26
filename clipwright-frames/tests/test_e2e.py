@@ -735,3 +735,315 @@ class TestFramesOtioValidity:
             assert cw.get("kind") == "extracted_frame", (
                 f"Expected kind='extracted_frame', got {cw.get('kind')!r}"
             )
+
+
+# ---------------------------------------------------------------------------
+# e2e: scene mode × scene_sample (midpoint / start / boundary)
+# ---------------------------------------------------------------------------
+
+
+class TestSceneModeSampleStrategies:
+    """End-to-end tests for mode='scene' with scene_sample=midpoint/start/boundary.
+
+    Synthetic setup: 10-second video, 2 scene_boundary markers at 2s and 5s.
+    Resulting shot intervals: [0,2), [2,5), [5,10)  =>  N=2 boundaries.
+
+    Expected frame counts by strategy:
+      - midpoint:  N+1 = 3  (one representative per shot interval, at midpoints)
+      - start:     N+1 = 3  (one representative per shot interval, at each interval start)
+      - boundary:  N   = 2  (one frame per marker, v0.1.0-compatible behavior)
+    """
+
+    _BOUNDARY_SECONDS: list[float] = [2.0, 5.0]  # N=2 boundaries
+    _VIDEO_DURATION: float = 10.0
+    _VIDEO_RATE: int = 10
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _run_scene_extract(
+        self,
+        tmp_path: Path,
+        ffmpeg: str,
+        scene_sample: str,
+    ) -> tuple[Path, dict]:
+        """Generate a synthetic video + scene OTIO, call extract_frames, return (out_dir, response).
+
+        Each scene_sample value gets its own subdirectory so the three
+        parametrised tests can share the same tmp_path without collision.
+        """
+        video_path = str(tmp_path / "video.mp4")
+        out_dir = tmp_path / f"frames_{scene_sample}"
+        out_dir.mkdir()
+        scene_otio_path = str(tmp_path / "scene.otio")
+
+        _generate_solid_color_video(
+            ffmpeg,
+            video_path,
+            duration=self._VIDEO_DURATION,
+            rate=self._VIDEO_RATE,
+        )
+        _make_scene_otio(
+            scene_otio_path, self._BOUNDARY_SECONDS, rate=float(self._VIDEO_RATE)
+        )
+
+        _content, structured = asyncio.run(
+            mcp.call_tool(
+                "clipwright_extract_frames",
+                {
+                    "media": video_path,
+                    "output_dir": str(out_dir),
+                    "options": {
+                        "mode": "scene",
+                        "scene_timeline": scene_otio_path,
+                        "format": "jpeg",
+                        "scene_sample": scene_sample,
+                    },
+                },
+            )
+        )
+        return out_dir, structured
+
+    @staticmethod
+    def _find_manifest(structured: dict) -> str | None:
+        """Return the manifest artifact path from a call_tool response, or None."""
+        for artifact in structured.get("artifacts", []):
+            if artifact.get("role") == "manifest":
+                return artifact.get("path")
+        return None
+
+    # ------------------------------------------------------------------
+    # Frame count verification
+    # ------------------------------------------------------------------
+
+    def test_midpoint_frame_count_is_n_plus_one(
+        self, tmp_path: Path, require_ffmpeg: str
+    ) -> None:
+        """scene + midpoint: N boundaries => N+1 frames (one per shot interval)."""
+        _out_dir, structured = self._run_scene_extract(
+            tmp_path, require_ffmpeg, "midpoint"
+        )
+
+        assert structured["ok"] is True, (
+            f"Expected ok=True, got: {structured.get('error')}"
+        )
+        frame_count = structured.get("data", {}).get("frame_count", -1)
+        expected = len(self._BOUNDARY_SECONDS) + 1
+        assert frame_count == expected, (
+            f"midpoint: expected {expected} frames for {len(self._BOUNDARY_SECONDS)} boundaries, "
+            f"got {frame_count}"
+        )
+
+    def test_start_frame_count_is_n_plus_one(
+        self, tmp_path: Path, require_ffmpeg: str
+    ) -> None:
+        """scene + start: N boundaries => N+1 frames (one per shot interval)."""
+        _out_dir, structured = self._run_scene_extract(
+            tmp_path, require_ffmpeg, "start"
+        )
+
+        assert structured["ok"] is True, (
+            f"Expected ok=True, got: {structured.get('error')}"
+        )
+        frame_count = structured.get("data", {}).get("frame_count", -1)
+        expected = len(self._BOUNDARY_SECONDS) + 1
+        assert frame_count == expected, (
+            f"start: expected {expected} frames for {len(self._BOUNDARY_SECONDS)} boundaries, "
+            f"got {frame_count}"
+        )
+
+    def test_boundary_frame_count_is_n(
+        self, tmp_path: Path, require_ffmpeg: str
+    ) -> None:
+        """scene + boundary: N boundaries => N frames (one per marker position)."""
+        _out_dir, structured = self._run_scene_extract(
+            tmp_path, require_ffmpeg, "boundary"
+        )
+
+        assert structured["ok"] is True, (
+            f"Expected ok=True, got: {structured.get('error')}"
+        )
+        frame_count = structured.get("data", {}).get("frame_count", -1)
+        expected = len(self._BOUNDARY_SECONDS)
+        assert frame_count == expected, (
+            f"boundary: expected {expected} frames for {len(self._BOUNDARY_SECONDS)} boundaries, "
+            f"got {frame_count}"
+        )
+
+    # ------------------------------------------------------------------
+    # File existence + numbering (frame_00000 start, no offset)
+    # ------------------------------------------------------------------
+
+    def test_midpoint_disk_files_match_manifest_and_start_at_zero(
+        self, tmp_path: Path, require_ffmpeg: str
+    ) -> None:
+        """midpoint: frame_00000.jpg is first, disk files match frames.json exactly."""
+        out_dir, structured = self._run_scene_extract(
+            tmp_path, require_ffmpeg, "midpoint"
+        )
+
+        assert structured["ok"] is True
+
+        manifest_path = self._find_manifest(structured)
+        assert manifest_path is not None, "No manifest artifact in response"
+        assert Path(manifest_path).exists(), f"frames.json missing: {manifest_path}"
+
+        with open(manifest_path, encoding="utf-8") as f:
+            manifest = json.load(f)
+
+        frames = manifest.get("frames", [])
+        assert len(frames) > 0, "frames.json contains no entries"
+
+        # 0-based numbering: first file must be frame_00000.jpg
+        first_name = Path(frames[0]["path"]).name
+        assert first_name == "frame_00000.jpg", (
+            f"Expected first entry to be frame_00000.jpg, got {first_name!r}"
+        )
+
+        # Every path in frames.json must exist on disk (no phantom entries)
+        missing = [e["path"] for e in frames if not Path(e["path"]).exists()]
+        assert not missing, f"Manifest paths absent on disk: {missing[:5]}"
+
+        # Disk .jpg set must equal manifest path set (no orphan files)
+        manifest_paths = {Path(e["path"]) for e in frames}
+        disk_paths = set(out_dir.glob("frame_?????.jpg"))
+        phantom = manifest_paths - disk_paths
+        orphan = disk_paths - manifest_paths
+        assert not phantom, f"Phantom paths (in manifest, not on disk): {phantom}"
+        assert not orphan, f"Orphan files (on disk, not in manifest): {orphan}"
+
+    def test_start_disk_files_match_manifest_and_start_at_zero(
+        self, tmp_path: Path, require_ffmpeg: str
+    ) -> None:
+        """start: frame_00000.jpg is first, disk files match frames.json exactly."""
+        out_dir, structured = self._run_scene_extract(tmp_path, require_ffmpeg, "start")
+
+        assert structured["ok"] is True
+
+        manifest_path = self._find_manifest(structured)
+        assert manifest_path is not None, "No manifest artifact in response"
+        assert Path(manifest_path).exists(), f"frames.json missing: {manifest_path}"
+
+        with open(manifest_path, encoding="utf-8") as f:
+            manifest = json.load(f)
+
+        frames = manifest.get("frames", [])
+        assert len(frames) > 0, "frames.json contains no entries"
+
+        first_name = Path(frames[0]["path"]).name
+        assert first_name == "frame_00000.jpg", (
+            f"Expected first entry to be frame_00000.jpg, got {first_name!r}"
+        )
+
+        missing = [e["path"] for e in frames if not Path(e["path"]).exists()]
+        assert not missing, f"Manifest paths absent on disk: {missing[:5]}"
+
+        manifest_paths = {Path(e["path"]) for e in frames}
+        disk_paths = set(out_dir.glob("frame_?????.jpg"))
+        phantom = manifest_paths - disk_paths
+        orphan = disk_paths - manifest_paths
+        assert not phantom, f"Phantom paths (in manifest, not on disk): {phantom}"
+        assert not orphan, f"Orphan files (on disk, not in manifest): {orphan}"
+
+    def test_boundary_disk_files_match_manifest_and_start_at_zero(
+        self, tmp_path: Path, require_ffmpeg: str
+    ) -> None:
+        """boundary: frame_00000.jpg is first, disk files match frames.json exactly."""
+        out_dir, structured = self._run_scene_extract(
+            tmp_path, require_ffmpeg, "boundary"
+        )
+
+        assert structured["ok"] is True
+
+        manifest_path = self._find_manifest(structured)
+        assert manifest_path is not None, "No manifest artifact in response"
+        assert Path(manifest_path).exists(), f"frames.json missing: {manifest_path}"
+
+        with open(manifest_path, encoding="utf-8") as f:
+            manifest = json.load(f)
+
+        frames = manifest.get("frames", [])
+        assert len(frames) > 0, "frames.json contains no entries"
+
+        first_name = Path(frames[0]["path"]).name
+        assert first_name == "frame_00000.jpg", (
+            f"Expected first entry to be frame_00000.jpg, got {first_name!r}"
+        )
+
+        missing = [e["path"] for e in frames if not Path(e["path"]).exists()]
+        assert not missing, f"Manifest paths absent on disk: {missing[:5]}"
+
+        manifest_paths = {Path(e["path"]) for e in frames}
+        disk_paths = set(out_dir.glob("frame_?????.jpg"))
+        phantom = manifest_paths - disk_paths
+        orphan = disk_paths - manifest_paths
+        assert not phantom, f"Phantom paths (in manifest, not on disk): {phantom}"
+        assert not orphan, f"Orphan files (on disk, not in manifest): {orphan}"
+
+    # ------------------------------------------------------------------
+    # manifest (frames.json) count consistency
+    # ------------------------------------------------------------------
+
+    def test_manifest_count_field_equals_frames_array_length_for_all_samples(
+        self, tmp_path: Path, require_ffmpeg: str
+    ) -> None:
+        """frames.json count field == len(frames) array for all three scene_sample values.
+
+        Creates three separate out_dirs within tmp_path to avoid file collisions.
+        """
+        n = len(self._BOUNDARY_SECONDS)
+        expected_counts = {"midpoint": n + 1, "start": n + 1, "boundary": n}
+
+        video_path = str(tmp_path / "video.mp4")
+        scene_otio_path = str(tmp_path / "scene.otio")
+        _generate_solid_color_video(
+            require_ffmpeg,
+            video_path,
+            duration=self._VIDEO_DURATION,
+            rate=self._VIDEO_RATE,
+        )
+        _make_scene_otio(
+            scene_otio_path, self._BOUNDARY_SECONDS, rate=float(self._VIDEO_RATE)
+        )
+
+        for scene_sample, expected in expected_counts.items():
+            out_dir = tmp_path / f"frames_count_{scene_sample}"
+            out_dir.mkdir()
+
+            _content, structured = asyncio.run(
+                mcp.call_tool(
+                    "clipwright_extract_frames",
+                    {
+                        "media": video_path,
+                        "output_dir": str(out_dir),
+                        "options": {
+                            "mode": "scene",
+                            "scene_timeline": scene_otio_path,
+                            "format": "jpeg",
+                            "scene_sample": scene_sample,
+                        },
+                    },
+                )
+            )
+            assert structured["ok"] is True, (
+                f"scene_sample={scene_sample!r}: expected ok=True, got: {structured.get('error')}"
+            )
+
+            manifest_path = self._find_manifest(structured)
+            assert manifest_path is not None, (
+                f"scene_sample={scene_sample!r}: no manifest artifact"
+            )
+
+            with open(manifest_path, encoding="utf-8") as f:
+                manifest = json.load(f)
+
+            count_field = manifest.get("count", -1)
+            frames_len = len(manifest.get("frames", []))
+            assert count_field == frames_len, (
+                f"scene_sample={scene_sample!r}: manifest count={count_field} != "
+                f"len(frames)={frames_len}"
+            )
+            assert count_field == expected, (
+                f"scene_sample={scene_sample!r}: expected count={expected}, got {count_field}"
+            )

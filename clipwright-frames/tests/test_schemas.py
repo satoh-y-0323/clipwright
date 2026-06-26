@@ -376,10 +376,11 @@ class TestFieldExistence:
         "format",
         "quality",
         "max_width",
+        "scene_sample",
     }
 
     def test_all_expected_fields_exist(self) -> None:
-        """model_fields must contain exactly the 7 specified fields."""
+        """model_fields must contain exactly the 8 specified fields."""
         actual = set(ExtractFramesOptions.model_fields.keys())
         missing = self.EXPECTED_FIELDS - actual
         extra = actual - self.EXPECTED_FIELDS
@@ -413,6 +414,10 @@ class TestFieldExistence:
     def test_max_width_field_exists(self) -> None:
         """model_fields must contain 'max_width'."""
         assert "max_width" in ExtractFramesOptions.model_fields
+
+    def test_scene_sample_field_exists(self) -> None:
+        """model_fields must contain 'scene_sample'."""
+        assert "scene_sample" in ExtractFramesOptions.model_fields
 
 
 # ===========================================================================
@@ -512,3 +517,41 @@ def test_timestamps_accepts_empty_list() -> None:
     """timestamps must accept an empty list."""
     opts = ExtractFramesOptions(timestamps=[])
     assert opts.timestamps == []
+
+
+# ===========================================================================
+# scene_sample: Literal["midpoint","start","boundary"], default "midpoint"
+# ===========================================================================
+
+
+class TestSceneSample:
+    """scene_sample must be Literal['midpoint','start','boundary'] with default 'midpoint'."""
+
+    def test_default_scene_sample_is_midpoint(self) -> None:
+        """Default scene_sample must be 'midpoint' when no value is supplied."""
+        opts = ExtractFramesOptions()
+        assert opts.scene_sample == "midpoint"
+
+    @pytest.mark.parametrize("sample", ["midpoint", "start", "boundary"])
+    def test_valid_scene_sample_accepted(self, sample: str) -> None:
+        """Values in Literal['midpoint', 'start', 'boundary'] must be accepted."""
+        opts = ExtractFramesOptions(scene_sample=sample)
+        assert opts.scene_sample == sample
+
+    @pytest.mark.parametrize(
+        "invalid_sample",
+        ["invalid", "center", "end", "", "MidPoint", "BOUNDARY", "Start"],
+    )
+    def test_invalid_scene_sample_rejected(self, invalid_sample: str) -> None:
+        """Values outside Literal['midpoint', 'start', 'boundary'] must raise ValidationError.
+
+        extra='forbid' rejects unknown fields; Literal rejects out-of-range values.
+        """
+        with pytest.raises(ValidationError):
+            ExtractFramesOptions(scene_sample=invalid_sample)  # type: ignore[call-arg]
+
+    def test_scene_sample_description_is_non_empty(self) -> None:
+        """scene_sample field must have a non-empty description for AI consumers."""
+        field_info = ExtractFramesOptions.model_fields.get("scene_sample")
+        assert field_info is not None, "scene_sample field must exist in model_fields"
+        assert field_info.description, "scene_sample field must have a description"

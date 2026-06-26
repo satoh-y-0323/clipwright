@@ -5,6 +5,21 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0] - 2026-06-26
+
+Scene-driven frame extraction via `clipwright-frames`. `mode="scene"` gains a `scene_sample`
+parameter (default `"midpoint"`) that emits one representative thumbnail per detected shot
+interval instead of one frame per scene boundary, enabling contact-sheet workflows.
+
+### Changed (`clipwright-frames` v0.2.0)
+
+- **`scene_sample` parameter for `mode="scene"` (behaviour change — treat as breaking)**: `clipwright_extract_frames` with `mode="scene"` now accepts `scene_sample: "midpoint" | "start" | "boundary"` (default `"midpoint"`). The default is a behaviour change from v0.1.0, which always sampled at each scene boundary:
+  - `"midpoint"` *(new default)* — emits one frame at the temporal midpoint of each shot interval, producing N+1 frames for N scene boundaries. Enables "one thumbnail per shot" contact-sheet workflows without manual timestamp computation.
+  - `"start"` — emits one frame at the beginning of each shot interval (also N+1 frames for N boundaries).
+  - `"boundary"` — emits one frame at each `scene_boundary` marker position, reproducing the pre-0.2.0 behaviour exactly (N frames for N boundaries, where N is the number of detected boundaries).
+  - When `scene_sample="midpoint"` or `"start"` and no boundaries are present, one representative frame is extracted from the full clip (single shot, no warning). When `scene_sample="boundary"` and no boundaries are found, the tool returns no frames with a warning (unchanged from v0.1.0).
+  - **Migration**: callers that relied on the v0.1.0 per-boundary behaviour should pass `scene_sample="boundary"` explicitly to restore the original output.
+
 ## [0.21.0] - 2026-06-25
 
 Motion-tracking reframe. `clipwright-reframe` gains a content-aware `track` fit mode that keeps

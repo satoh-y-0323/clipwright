@@ -115,7 +115,8 @@ class ExtractFramesOptions(BaseModel):
                 "Sampling position for mode='scene'. 'midpoint' (default) extracts one "
                 "frame at the midpoint of each shot segment (one thumbnail per shot); "
                 "'start' extracts one frame at each shot's start; 'boundary' extracts "
-                "one frame at each scene_boundary marker (the pre-0.2.0 behavior). "
+                "one frame at each scene_boundary marker (the legacy per-boundary "
+                "behavior). "
                 "Ignored unless mode='scene'."
             ),
         ),

@@ -5,6 +5,8 @@ All functions are IO-free and subprocess-free; they build data structures only.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import opentimelineio as otio
 
 from clipwright_frames.schemas import ExtractFramesOptions
@@ -124,6 +126,43 @@ def build_single_frame_command(
 
     cmd.append(out_path)
     return cmd
+
+
+def compute_scene_segment_timestamps(
+    boundaries: list[float],
+    duration_sec: float,
+    anchor: Literal["midpoint", "start"],
+) -> list[float]:
+    """Compute representative frame timestamps for scene segments.
+
+    Derives shot segments from scene boundary positions and returns one
+    representative timestamp per segment according to the anchor mode.
+    Always yields at least one entry: when no valid boundaries exist, the
+    entire media is treated as a single segment.
+
+    Args:
+        boundaries: Scene boundary positions in seconds. Duplicates and values
+            outside (0, duration_sec) are ignored internally.
+        duration_sec: Total media duration in seconds.
+        anchor: Sampling position within each segment. "start" returns the
+            segment's first second; "midpoint" returns the segment midpoint.
+
+    Returns:
+        Sorted list of timestamps, each in [0, duration_sec).
+    """
+    # Deduplicate and keep only boundaries strictly inside (0, duration_sec).
+    filtered = [b for b in sorted(set(boundaries)) if 0.0 < b < duration_sec]
+    edges = [0.0] + filtered + [duration_sec]
+    result: list[float] = []
+    for i in range(len(edges) - 1):
+        s, e = edges[i], edges[i + 1]
+        if e <= s:
+            continue  # skip zero-length segments (defensive)
+        if anchor == "start":
+            result.append(s)
+        else:  # "midpoint"
+            result.append((s + e) / 2)
+    return result
 
 
 def frame_filename(index: int, fmt: str) -> str:
