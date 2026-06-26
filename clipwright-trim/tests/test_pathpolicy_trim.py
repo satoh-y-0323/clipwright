@@ -1,20 +1,15 @@
-"""test_pathpolicy_trim.py — Red-phase tests for trim output-placement policy update.
+"""test_pathpolicy_trim.py — Path-boundary policy tests for trim output-placement.
 
-Policy change (impl-trim target): the same-directory constraint is removed from
-trim_media.  After impl-trim, output may be placed in any directory provided:
+Policy (impl-trim): the same-directory constraint is removed from trim_media.
+Output may be placed in any directory provided:
   - parent directory exists
   - output extension is .otio
   - output path does not resolve to the same file as the source media
 
-Red state (before impl-trim):
-  - trim.py L120-154 same-directory check raises PATH_NOT_ALLOWED when
-    output is in a different directory than media.
-  - output==media currently raises INVALID_INPUT, not PATH_NOT_ALLOWED.
-
 Test groups:
   A. output in different directory from media → ok=True (new policy)
   B. OTIO media reference is absolute when media is outside the otio_dir
-  C. output == media → PATH_NOT_ALLOWED (error code change from INVALID_INPUT)
+  C. output == media → PATH_NOT_ALLOWED
   D. preserved checks: .otio extension, parent dir existence (regression guards)
 """
 
@@ -82,18 +77,10 @@ def _keep_opts(*ranges: tuple[float, float]) -> TrimOptions:
 
 
 class TestOutputAnyDirectory:
-    """After impl-trim, output may live in any directory.
-
-    Red: current same-directory check in trim.py L120-154 rejects this and
-    returns PATH_NOT_ALLOWED before writing the OTIO.
-    """
+    """After impl-trim, output may live in any directory."""
 
     def test_output_in_separate_workdir_succeeds(self, tmp_path: Path) -> None:
-        """media in src/, output in work/ → ok=True.
-
-        Red: trim_media currently returns PATH_NOT_ALLOWED because the
-        same-directory check fires after inspect_media.
-        """
+        """media in src/, output in work/ → ok=True."""
         src_dir = tmp_path / "src"
         src_dir.mkdir()
         work_dir = tmp_path / "work"
@@ -110,14 +97,10 @@ class TestOutputAnyDirectory:
             result = trim_media(media, output, _keep_opts((2.0, 5.0)))
 
         # New policy: different directory is allowed.
-        # Red: current code returns ok=False with PATH_NOT_ALLOWED.
         assert result["ok"] is True
 
     def test_output_in_nested_workdir_succeeds(self, tmp_path: Path) -> None:
-        """media at project root, output in a nested artifacts/ subdir → ok=True.
-
-        Red: same-directory check rejects nested subdirectory output.
-        """
+        """media at project root, output in a nested artifacts/ subdir → ok=True."""
         media = str(tmp_path / "raw.mp4")
         Path(media).touch()
         artifacts_dir = tmp_path / "artifacts" / "trim"
@@ -131,18 +114,12 @@ class TestOutputAnyDirectory:
             result = trim_media(media, output, _keep_opts((1.0, 4.0)))
 
         # New policy: nested output directories are allowed.
-        # Red: current code returns ok=False.
         assert result["ok"] is True
 
     def test_output_different_dir_inspect_media_is_called(self, tmp_path: Path) -> None:
         """inspect_media must be called even when output is in a different directory.
 
-        This confirms the old same-directory check (which ran AFTER inspect_media)
-        no longer blocks the execution flow.
-
-        Red: inspect_media would be called, but the same-directory check that
-        follows returns PATH_NOT_ALLOWED, so ok=False.  After impl-trim,
-        ok=True confirms inspect_media ran and the function completed normally.
+        This confirms the old same-directory check no longer blocks the execution flow.
         """
         src_dir = tmp_path / "src"
         src_dir.mkdir()
@@ -166,7 +143,6 @@ class TestOutputAnyDirectory:
             result = trim_media(media, output, _keep_opts((0.0, 5.0)))
 
         assert len(inspect_called) == 1
-        # Red: result["ok"] is False due to same-directory check.
         assert result["ok"] is True
 
 
@@ -178,20 +154,12 @@ class TestOutputAnyDirectory:
 class TestOtioMediaReferenceAbsolute:
     """When media lives outside the OTIO file's directory, the reference must be
     an absolute path so the OTIO is self-consistent regardless of cwd.
-
-    Red: the same-directory check prevents trim_media from writing the OTIO at
-    all when media and output are in different directories, so the OTIO file
-    never exists and the load_timeline call below fails.
     """
 
     def test_media_ref_is_absolute_when_media_outside_otio_dir(
         self, tmp_path: Path
     ) -> None:
-        """OTIO clip target_url is absolute when media is not under the output dir.
-
-        Red: current code never writes the OTIO (PATH_NOT_ALLOWED), so
-        load_timeline raises an error → the assertion is never reached.
-        """
+        """OTIO clip target_url is absolute when media is not under the output dir."""
         src_dir = tmp_path / "raw_footage"
         src_dir.mkdir()
         work_dir = tmp_path / "project"
@@ -207,7 +175,7 @@ class TestOtioMediaReferenceAbsolute:
         ):
             result = trim_media(media, output, _keep_opts((1.0, 8.0)))
 
-        # Step 1 — trim must succeed (Red: currently PATH_NOT_ALLOWED).
+        # Step 1 — trim must succeed.
         assert result["ok"] is True, f"trim_media failed: {result.get('error')}"
 
         # Step 2 — inspect the OTIO media reference.
@@ -230,8 +198,6 @@ class TestOtioMediaReferenceAbsolute:
 
         Verifies that the reference is not only absolute but also correct
         (no stale path, no wrong file).
-
-        Red: same-directory check prevents OTIO write → assertion unreachable.
         """
         src_dir = tmp_path / "footage"
         src_dir.mkdir()
@@ -271,19 +237,13 @@ class TestOtioMediaReferenceAbsolute:
 class TestOutputEqualsMediaPathNotAllowed:
     """output resolving to the same file as media must be rejected.
 
-    After impl-trim, this uses check_output_not_source which raises
-    PATH_NOT_ALLOWED.  Current code raises INVALID_INPUT — so asserting
-    PATH_NOT_ALLOWED is Red until the implementation is updated.
+    Uses check_output_not_source which raises PATH_NOT_ALLOWED.
     """
 
     def test_output_same_path_as_media_is_path_not_allowed(
         self, tmp_path: Path
     ) -> None:
-        """output resolving to the same file as media → PATH_NOT_ALLOWED.
-
-        Red: current code raises INVALID_INPUT at the pre-probe check, not
-        PATH_NOT_ALLOWED.
-        """
+        """output resolving to the same file as media → PATH_NOT_ALLOWED."""
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
         # output is exactly the same path as media
@@ -292,15 +252,10 @@ class TestOutputEqualsMediaPathNotAllowed:
         result = trim_media(media, output, _keep_opts((1.0, 5.0)))
 
         assert result["ok"] is False
-        # Red: current code returns INVALID_INPUT, not PATH_NOT_ALLOWED.
         assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
 
     def test_output_same_path_as_media_no_path_in_message(self, tmp_path: Path) -> None:
-        """CWE-209: absolute path must not appear in error message or hint.
-
-        Red: the error code assertion (PATH_NOT_ALLOWED) drives the Red;
-        CWE-209 guard is inherited from the existing policy.
-        """
+        """CWE-209: absolute path must not appear in error message or hint."""
         media = str(tmp_path / "private" / "footage.mp4")
         Path(media).parent.mkdir(parents=True)
         Path(media).touch()

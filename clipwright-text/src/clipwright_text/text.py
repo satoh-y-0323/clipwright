@@ -12,11 +12,7 @@ Design decisions:
 - Non-destructive: input OTIO bytes are never modified; output is always new.
 - Rate determination (OQ-2): first clip source_range -> existing text_overlay
   marker rate -> fallback 1000.0 with warning.
-- Boundary check _check_output_within_timeline_dir is a local copy of the
-  clipwright-speed implementation to avoid cross-package imports.
-  When changing the logic here, ensure behaviour remains in sync with
-  clipwright-speed's _check_output_within_timeline_dir; the two functions must
-  enforce the same boundary contract.
+- Boundary check uses pathpolicy.check_output_not_source (core helper).
 """
 
 from __future__ import annotations

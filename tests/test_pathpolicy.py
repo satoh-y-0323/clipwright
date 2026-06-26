@@ -1,18 +1,21 @@
-"""test_pathpolicy.py — Red-phase unit tests for clipwright.pathpolicy.
+"""test_pathpolicy.py — Unit tests for clipwright.pathpolicy.
 
-Target module: clipwright/pathpolicy.py (not yet implemented).
-Until the module ships, pytest raises ModuleNotFoundError at collection time
-(correct Red state — file is valid Python; tests fail due to missing implementation).
+Target module: clipwright/pathpolicy.py.
 
 Test groups:
-  A. validate_source_file: exists / missing / leaf-symlink / intermediate-dir-symlink
+  A. validate_source_file: exists / missing / leaf-symlink / intermediate-dir-symlink /
+     basename-only error (SR-L-1)
   B. check_output_not_source: same-path / different / multi-source / separator-variants /
      resolve→absolute→str fallback
   C. media_ref_for_otio: within-tree / outside / nested / backslash-input
   D. check_media_ref: relative-within / relative-outside / abs-ok / abs-missing /
-     abs-symlink / mixed (DC-AM-003)
-  E. check_within_boundary: within / outside / kind label propagated
+     abs-symlink / mixed (DC-AM-003) / nonexistent-relative-ok (CR-L-8) /
+     double-OSError-warning (CR-L-7 / SR-L-3)
+  E. check_within_boundary: within / outside / kind label propagated /
+     double-OSError-warning (CR-L-7 / SR-L-3)
   F. ADR-PP-2 ordering: islink-before-resolve for leaf and intermediate symlinks
+  G. check_media_ref relative symlink (SR-M-2): within-boundary leaf /
+     outside-boundary / intermediate-dir symlink
 """
 
 from __future__ import annotations
@@ -23,8 +26,7 @@ import pytest
 
 from clipwright.errors import ClipwrightError, ErrorCode
 
-# Module-level import — raises ModuleNotFoundError until pathpolicy.py is implemented.
-# This is the intended Red state (ADR-PP-1 / ADR-PP-2).
+# clipwright.pathpolicy is implemented and available (ADR-PP-1 / ADR-PP-2).
 from clipwright.pathpolicy import (
     check_media_ref,
     check_output_not_source,
@@ -53,6 +55,43 @@ def _try_symlink(link: Path, target: Path) -> None:
         pytest.skip(
             "Cannot create symlinks on this system (requires elevated privileges)"
         )
+
+
+# ---------------------------------------------------------------------------
+# Symlink availability detection (for pytest.mark.skipif at collection time)
+# ---------------------------------------------------------------------------
+
+
+def _probe_symlink_support() -> bool:
+    """Return True when the runtime environment allows symlink creation.
+
+    Executed once at module import (collection) time so pytest.mark.skipif
+    can reference the result.  Uses a TemporaryDirectory that is cleaned up
+    before any test runs.
+    """
+    import tempfile
+
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            real = base / "_probe_real.txt"
+            real.write_bytes(b"probe")
+            link = base / "_probe_link.txt"
+            link.symlink_to(real)
+        return True
+    except OSError:
+        return False
+
+
+_SYMLINK_SUPPORTED: bool = _probe_symlink_support()
+_SKIP_SYMLINK_REASON = (
+    "Symlink creation requires elevated privileges on this system (WinError 1314)."
+    " Enable Windows Developer Mode or run as Administrator."
+)
+_skip_no_symlinks = pytest.mark.skipif(
+    not _SYMLINK_SUPPORTED,
+    reason=_SKIP_SYMLINK_REASON,
+)
 
 
 # ===========================================================================
@@ -110,6 +149,26 @@ class TestValidateSourceFile:
             validate_source_file(str(sym_dir / real_file.name))
 
         assert exc_info.value.code == ErrorCode.PATH_NOT_ALLOWED
+
+    def test_symlink_error_message_basename_only(self, tmp_path: Path) -> None:
+        """SR-L-1: symlink rejection exposes only the basename, not the full path.
+
+        CWE-209 guard: full filesystem paths must not leak through error messages.
+        The error message must contain the filename for identification but must not
+        expose the full absolute path (e.g. C:\\Users\\...\\link.mp4).
+        """
+        real_file = _write_file(tmp_path / "real.mp4")
+        link = tmp_path / "link.mp4"
+        _try_symlink(link, real_file)
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            validate_source_file(str(link))
+
+        error_message = exc_info.value.message
+        # Filename component must appear for identification
+        assert link.name in error_message
+        # Full absolute path must NOT appear (CWE-209)
+        assert str(link) not in error_message
 
 
 # ===========================================================================
@@ -375,6 +434,41 @@ class TestCheckMediaRef:
 
         assert exc_info.value.code == ErrorCode.PATH_NOT_ALLOWED
 
+    def test_relative_ref_nonexistent_within_boundary_ok(self, tmp_path: Path) -> None:
+        """CR-L-8: relative ref that does not yet exist but is within boundary is accepted.
+
+        Existence is the caller's responsibility for relative references.
+        Only boundary containment is checked (asymmetric contract vs. absolute refs).
+        Regression guard: the implementation must not add an existence check to this branch.
+        """
+        otio_dir = tmp_path / "project"
+        otio_dir.mkdir()
+        # Intentionally do NOT create the referenced file
+
+        # Should not raise — boundary-only check, no existence check for relative refs
+        check_media_ref("not_yet_created/clip.mp4", otio_dir, kind="media")
+
+    def test_relative_ref_double_oserror_emits_warning(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """CR-L-7 / SR-L-3: double OSError on relative ref boundary check emits warnings.warn.
+
+        When both resolve() and absolute() raise OSError, the boundary check cannot
+        proceed.  Rather than silently passing (which may hide path injection attempts),
+        a UserWarning must be emitted so callers are aware the guard was skipped.
+        """
+        otio_dir = tmp_path / "project"
+        otio_dir.mkdir()
+
+        def _raise_os(self: object, *args: object, **kwargs: object) -> object:
+            raise OSError("mocked unresolvable path")
+
+        monkeypatch.setattr(Path, "resolve", _raise_os)
+        monkeypatch.setattr(Path, "absolute", _raise_os)
+
+        with pytest.warns(Warning):
+            check_media_ref("some/ref.mp4", otio_dir, kind="media")
+
 
 # ===========================================================================
 # E. check_within_boundary
@@ -431,6 +525,28 @@ class TestCheckWithinBoundary:
         assert (
             "thumbnail" in exc_info.value.message or "thumbnail" in exc_info.value.hint
         )
+
+    def test_double_oserror_emits_warning(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """CR-L-7 / SR-L-3: double OSError on boundary check emits warnings.warn.
+
+        When both resolve() and absolute() raise OSError in check_within_boundary,
+        the containment check cannot proceed.  A UserWarning must be emitted rather
+        than silently skipping (silent pass may allow path injection to go undetected).
+        """
+        base = tmp_path / "artifacts"
+        base.mkdir()
+        target = base / "frame.jpg"
+
+        def _raise_os(self: object, *args: object, **kwargs: object) -> object:
+            raise OSError("mocked unresolvable path")
+
+        monkeypatch.setattr(Path, "resolve", _raise_os)
+        monkeypatch.setattr(Path, "absolute", _raise_os)
+
+        with pytest.warns(Warning):
+            check_within_boundary(base, target, kind="frame")
 
 
 # ===========================================================================
@@ -501,5 +617,83 @@ class TestIsLinkBeforeResolveOrdering:
 
         with pytest.raises(ClipwrightError) as exc_info:
             check_media_ref(str(link), otio_dir, kind="media")
+
+        assert exc_info.value.code == ErrorCode.PATH_NOT_ALLOWED
+
+
+# ===========================================================================
+# G. check_media_ref relative symlink (SR-M-2)
+# ===========================================================================
+
+
+class TestCheckMediaRefRelativeSymlink:
+    """SR-M-2: check_media_ref relative branch must apply _has_symlink_component.
+
+    The relative path branch currently performs boundary-containment checking only.
+    It must also reject paths whose components are symlinks, using the same
+    islink-before-resolve ordering as the absolute branch (ADR-PP-2).
+
+    Tests are marked skipif when symlink creation is not supported on this system
+    (WinError 1314); _try_symlink provides a runtime safety net.
+    """
+
+    @_skip_no_symlinks
+    def test_relative_leaf_symlink_within_boundary_raises(self, tmp_path: Path) -> None:
+        """SR-M-2: a within-boundary leaf symlink via relative ref is rejected.
+
+        The symlink resolves inside the otio_dir tree, so the boundary check passes.
+        However _has_symlink_component must fire before resolve() and reject the path.
+        Regression marker: if this raises nothing, the symlink check is missing from
+        the relative branch.
+        """
+        otio_dir = tmp_path / "project"
+        otio_dir.mkdir()
+        real_file = _write_file(otio_dir / "real.mp4")
+        link = otio_dir / "link.mp4"
+        _try_symlink(link, real_file)
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            check_media_ref("link.mp4", otio_dir, kind="media")
+
+        assert exc_info.value.code == ErrorCode.PATH_NOT_ALLOWED
+
+    @_skip_no_symlinks
+    def test_relative_leaf_symlink_outside_boundary_raises(
+        self, tmp_path: Path
+    ) -> None:
+        """SR-M-2: a within-directory symlink pointing outside boundary is rejected as symlink.
+
+        The boundary check would also catch the escape via resolve(), but the symlink
+        guard must fire first (islink-before-resolve ordering contract, ADR-PP-2).
+        Both mechanisms must result in PATH_NOT_ALLOWED.
+        """
+        otio_dir = tmp_path / "project"
+        otio_dir.mkdir()
+        external_file = _write_file(tmp_path / "external.mp4")
+        link = otio_dir / "escape.mp4"
+        _try_symlink(link, external_file)
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            check_media_ref("escape.mp4", otio_dir, kind="media")
+
+        assert exc_info.value.code == ErrorCode.PATH_NOT_ALLOWED
+
+    @_skip_no_symlinks
+    def test_relative_intermediate_dir_symlink_raises(self, tmp_path: Path) -> None:
+        """SR-M-2: relative ref via a symlinked intermediate directory is rejected.
+
+        All path components — not just the leaf — must be checked for symlinks
+        (ADR-PP-2).  The symlink here is on a subdirectory, not the final file.
+        """
+        otio_dir = tmp_path / "project"
+        otio_dir.mkdir()
+        real_subdir = otio_dir / "media"
+        real_subdir.mkdir()
+        _write_file(real_subdir / "clip.mp4")
+        sym_subdir = otio_dir / "sym_media"
+        _try_symlink(sym_subdir, real_subdir)
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            check_media_ref("sym_media/clip.mp4", otio_dir, kind="media")
 
         assert exc_info.value.code == ErrorCode.PATH_NOT_ALLOWED

@@ -57,6 +57,15 @@ shared `pathpolicy` helpers. The unified boundary rules:
   containment within `output_dir` is unchanged in behaviour (DC-GP-002 /
   `check_within_boundary`).
 
+> **Migration note — symlink error code change**: Prior to v0.23.0, passing a path
+> whose components contained a symbolic link could return `FILE_NOT_FOUND` (because
+> the symlink target might not exist, or the existence check ran before the symlink
+> walk). From v0.23.0 onward, all 17 satellite tools uniformly return
+> `PATH_NOT_ALLOWED` for any path whose components contain a symlink (ADR-PP-2 /
+> CWE-59). Callers that branch on `error.code == "FILE_NOT_FOUND"` to detect
+> missing-path conditions must also handle `PATH_NOT_ALLOWED` from v0.23.0 onwards
+> to avoid treating symlink-rejection as an unexpected error.
+
 #### Version table — satellite packages (path-validation delegation; no API change)
 
 | Package | Version |

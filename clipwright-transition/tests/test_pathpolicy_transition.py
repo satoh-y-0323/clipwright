@@ -1,21 +1,14 @@
-"""test_pathpolicy_transition.py — Red-phase tests for transition output-placement
-policy update.
+"""test_pathpolicy_transition.py — Path-boundary policy tests for transition output-placement.
 
-Policy change (impl-transform target): the co-location constraint is removed from
-add_transition.  After impl-transform, output may be placed in any directory provided:
+Policy (impl-transform): the co-location constraint is removed from add_transition.
+After impl-transform, output may be placed in any directory provided:
   - parent directory exists
   - output extension is .otio
   - output path does not resolve to the same file as the input timeline
 
-Red state (before impl-transform):
-  - transition.py _check_output_within_timeline_dir raises PATH_NOT_ALLOWED when
-    output is not under the timeline's parent directory tree.
-  - output == timeline currently raises INVALID_INPUT (via _check_output_not_input),
-    not PATH_NOT_ALLOWED.
-
 Test groups:
   A. output in different directory from timeline → ok=True (new policy)
-  B. output == timeline → PATH_NOT_ALLOWED (error code change from INVALID_INPUT)
+  B. output == timeline → PATH_NOT_ALLOWED
   C. DC-AM-003: mixed relative/absolute media refs preserved after round-trip
      when output resides outside the timeline directory
   D. preserved checks: .otio extension, parent dir existence, missing timeline
@@ -88,17 +81,10 @@ def _uniform_opts(
 
 
 class TestOutputOutsideTimelineDir:
-    """After impl-transform, output may live outside the timeline directory.
-
-    Red: current _check_output_within_timeline_dir in transition.py returns
-    PATH_NOT_ALLOWED when output is not under the timeline's parent directory.
-    """
+    """After impl-transform, output may live outside the timeline directory."""
 
     def test_output_in_sibling_dir_allowed(self, tmp_path: Path) -> None:
-        """Output in a sibling directory must succeed (removed co-location constraint).
-
-        Red: current code returns ok=False with PATH_NOT_ALLOWED.
-        """
+        """Output in a sibling directory must succeed (removed co-location constraint)."""
         proj_dir = tmp_path / "project"
         work_dir = tmp_path / "work"
         proj_dir.mkdir()
@@ -116,17 +102,12 @@ class TestOutputOutsideTimelineDir:
         )
 
         # New policy: different directory is allowed.
-        # Red: current code returns ok=False (PATH_NOT_ALLOWED).
         assert result["ok"] is True, (
             f"Output in sibling dir must be allowed; got: {result.get('error')}"
         )
 
     def test_output_in_parent_dir_allowed(self, tmp_path: Path) -> None:
-        """Output placed in the parent directory of the timeline must succeed.
-
-        Red: parent dir is outside the timeline's own dir tree; current boundary
-        check returns PATH_NOT_ALLOWED.
-        """
+        """Output placed in the parent directory of the timeline must succeed."""
         proj_dir = tmp_path / "project"
         proj_dir.mkdir()
 
@@ -146,10 +127,7 @@ class TestOutputOutsideTimelineDir:
         )
 
     def test_output_in_deeply_nested_external_dir_allowed(self, tmp_path: Path) -> None:
-        """Output deeply nested under an unrelated directory must succeed.
-
-        Red: any path outside the timeline directory tree is currently rejected.
-        """
+        """Output deeply nested under an unrelated directory must succeed."""
         src_dir = tmp_path / "src" / "project"
         out_dir = tmp_path / "artifacts" / "transition" / "v1"
         src_dir.mkdir(parents=True)
@@ -172,23 +150,15 @@ class TestOutputOutsideTimelineDir:
 
 
 # ===========================================================================
-# B. output == timeline → PATH_NOT_ALLOWED (error code change from INVALID_INPUT)
+# B. output == timeline → PATH_NOT_ALLOWED
 # ===========================================================================
 
 
 class TestOutputEqualsSource:
-    """check_output_not_source: output == timeline must return PATH_NOT_ALLOWED.
-
-    Red: current _check_output_not_input in transition.py raises INVALID_INPUT when
-    output and timeline paths resolve to the same file.  After impl-transform
-    delegates to check_output_not_source, the error code must be PATH_NOT_ALLOWED.
-    """
+    """check_output_not_source: output == timeline must return PATH_NOT_ALLOWED."""
 
     def test_output_equals_timeline_path_not_allowed(self, tmp_path: Path) -> None:
-        """output path identical to timeline must return PATH_NOT_ALLOWED.
-
-        Red: current code returns INVALID_INPUT (code mismatch).
-        """
+        """output path identical to timeline must return PATH_NOT_ALLOWED."""
         tl = _make_two_clip_timeline()
         tl_path = tmp_path / "timeline.otio"
         _write_timeline(tl, tl_path)
@@ -208,11 +178,7 @@ class TestOutputEqualsSource:
         assert error.get("hint"), "hint must be non-empty"
 
     def test_output_equals_timeline_no_path_in_message(self, tmp_path: Path) -> None:
-        """CWE-209: error message must not expose the full filesystem path.
-
-        Red: error code assertion above drives the Red; this is an additional
-        CWE-209 guard for the new PATH_NOT_ALLOWED path.
-        """
+        """CWE-209: error message must not expose the full filesystem path."""
         tl = _make_two_clip_timeline()
         tl_path = tmp_path / "private" / "project.otio"
         tl_path.parent.mkdir(parents=True)
@@ -244,18 +210,10 @@ class TestDCAM003MixedMediaRefs:
     directive into timeline metadata, and saves to a new path.  Media references
     (target_url strings) are NOT modified by add_transition; they must be written
     to the output file unchanged.
-
-    Red: these tests depend on add_transition succeeding with output in a different
-    directory than the timeline (group A above).  Currently, the boundary check
-    causes ok=False, so assertions on the output OTIO are never reached.
     """
 
     def test_absolute_url_preserved_after_add_transition(self, tmp_path: Path) -> None:
-        """Absolute media reference in timeline survives add_transition unchanged.
-
-        Red: add_transition currently returns PATH_NOT_ALLOWED (output outside
-        timeline dir), so the output OTIO is never written.
-        """
+        """Absolute media reference in timeline survives add_transition unchanged."""
         proj_dir = tmp_path / "proj"
         work_dir = tmp_path / "work"
         proj_dir.mkdir()
@@ -275,7 +233,6 @@ class TestDCAM003MixedMediaRefs:
             options=_uniform_opts(),
         )
 
-        # Red: currently ok=False because output is outside timeline dir.
         assert result["ok"] is True, (
             f"add_transition with output outside timeline dir must succeed; "
             f"got: {result.get('error')}"
@@ -308,9 +265,6 @@ class TestDCAM003MixedMediaRefs:
         Layout:
           tmp_path/proj/timeline.otio  (clip0: relative URL, clip1: absolute URL)
           tmp_path/work/out.otio       (output; outside proj/)
-
-        Red: add_transition currently returns PATH_NOT_ALLOWED (output not under proj/).
-        After impl-transform, both refs must be unchanged in out.otio.
         """
         proj_dir = tmp_path / "proj"
         work_dir = tmp_path / "work"
@@ -331,7 +285,6 @@ class TestDCAM003MixedMediaRefs:
             options=_uniform_opts(),
         )
 
-        # Red: currently ok=False (output outside timeline dir is rejected).
         assert result["ok"] is True, (
             f"add_transition with mixed refs and output outside timeline dir must succeed; "
             f"got: {result.get('error')}"
@@ -364,8 +317,6 @@ class TestDCAM003MixedMediaRefs:
         After add_transition on a timeline with mixed refs:
           - output metadata["clipwright"]["transition"] exists
           - both media refs are unchanged
-
-        Red: add_transition returns PATH_NOT_ALLOWED before the directive is written.
         """
         proj_dir = tmp_path / "proj"
         work_dir = tmp_path / "work"
@@ -386,7 +337,6 @@ class TestDCAM003MixedMediaRefs:
             options=_uniform_opts(transition_type="dissolve", duration=0.5),
         )
 
-        # Red: currently PATH_NOT_ALLOWED because output is outside timeline dir.
         assert result["ok"] is True, f"Expected ok=True; got: {result.get('error')}"
 
         out_tl = otio.adapters.read_from_file(str(output))

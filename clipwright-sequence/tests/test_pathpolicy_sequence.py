@@ -1,7 +1,7 @@
-"""test_pathpolicy_sequence.py — Red-phase tests for external-source path policy.
+"""test_pathpolicy_sequence.py — Path-boundary policy tests for external-source placement.
 
 Encodes the new path policy for clipwright-sequence where sources may reside
-outside the output OTIO directory (impl-sequence task pending).
+outside the output OTIO directory.
 
 New policy under test:
 - External sources (outside otio_dir) are ALLOWED if they exist as regular
@@ -10,12 +10,6 @@ New policy under test:
     - Source under otio_dir: relative POSIX path.
     - Source outside otio_dir: absolute path.
 - output == any source (resolved equal) is rejected (PATH_NOT_ALLOWED).
-
-All tests in TestExternalSourcesAllowed and TestMediaRefForOtio should FAIL
-(Red) until impl-sequence replaces _resolve_and_check_colocation with
-pathpolicy helpers.  TestOutputEqualsAnySource includes both a Red test
-(multi-source message guard) and a regression test (single-source, green under
-both old and new code).
 """
 
 from __future__ import annotations
@@ -82,16 +76,12 @@ def _clip(
 
 
 # ===========================================================================
-# External sources: allowed under new policy (Red until impl-sequence)
+# External sources: allowed under new policy
 # ===========================================================================
 
 
 class TestExternalSourcesAllowed:
-    """Sources outside the output OTIO directory must be accepted after impl-sequence.
-
-    All tests here fail (Red) under the current impl because
-    _resolve_and_check_colocation raises PATH_NOT_ALLOWED for external sources.
-    """
+    """Sources outside the output OTIO directory must be accepted."""
 
     def test_single_external_source_ok_true(self, tmp_path: Path) -> None:
         """Single source outside output.parent -> ok=True (new external-source policy)."""
@@ -108,7 +98,6 @@ class TestExternalSourcesAllowed:
             return_value=_make_media_info(path=media),
         ):
             result = build_sequence(clips=clips, output=output)
-        # Red: current code returns PATH_NOT_ALLOWED from _resolve_and_check_colocation
         assert result["ok"] is True
 
     def test_multiple_external_sources_ok_true(self, tmp_path: Path) -> None:
@@ -138,7 +127,6 @@ class TestExternalSourcesAllowed:
             side_effect=_fake_inspect,
         ):
             result = build_sequence(clips=clips, output=output)
-        # Red: first external source fails co-location, second is never reached
         assert result["ok"] is True
 
     def test_mixed_external_internal_sources_ok_true(self, tmp_path: Path) -> None:
@@ -165,17 +153,16 @@ class TestExternalSourcesAllowed:
             side_effect=_fake_inspect,
         ):
             result = build_sequence(clips=clips, output=output)
-        # Red: external source fails co-location under current code
         assert result["ok"] is True
 
 
 # ===========================================================================
-# media_ref_for_otio: target_url rules for OTIO references (Red until impl)
+# media_ref_for_otio: target_url rules for OTIO references
 # ===========================================================================
 
 
 class TestMediaRefForOtio:
-    """OTIO target_url must follow media_ref_for_otio rules after impl-sequence.
+    """OTIO target_url must follow media_ref_for_otio rules.
 
     - External source (outside otio_dir): absolute path.
     - Internal source (under otio_dir): relative POSIX path.
@@ -196,7 +183,6 @@ class TestMediaRefForOtio:
             return_value=_make_media_info(path=media),
         ):
             result = build_sequence(clips=clips, output=output)
-        # Red: build_sequence fails at co-location before writing OTIO
         assert result["ok"] is True
         tl = load_timeline(output)
         v1_clips = [it for it in tl.tracks[0] if isinstance(it, otio.schema.Clip)]
@@ -225,7 +211,6 @@ class TestMediaRefForOtio:
         # media_ref_for_otio: source under otio_dir -> relative POSIX path
         expected_url = "footage/video.mp4"
         for clip in v1_clips:
-            # Red: current code stores absolute path; new impl stores relative posix
             assert clip.media_reference.target_url == expected_url
 
 
@@ -240,11 +225,9 @@ class TestOutputEqualsAnySource:
     test_output_equals_external_source_path_not_allowed: regression (green under
     both old and new code, because co-location passes for this setup).
 
-    test_output_equals_one_of_multiple_sources_path_not_allowed: Red under
-    current code because the external source in clips[0] triggers co-location
-    before the output==source check on clips[1], yielding a different error message.
-    After impl-sequence, the external source is accepted and the output==source
-    check fires with the correct message.
+    test_output_equals_one_of_multiple_sources_path_not_allowed: verifies that
+    when clips[0] is external and clips[1] equals output, the identity error
+    message is returned (not the co-location boundary message).
     """
 
     def test_output_equals_external_source_path_not_allowed(
@@ -275,11 +258,10 @@ class TestOutputEqualsAnySource:
     ) -> None:
         """output == one of multiple sources; first source is external -> PATH_NOT_ALLOWED.
 
-        Red test: clips[0] is an external valid source; clips[1] path equals
-        output.  Current code rejects clips[0] at co-location and produces the
-        boundary error message.  After impl-sequence, clips[0] is accepted and
-        the output==source check on clips[1] produces the identity error message.
-        The message assertion distinguishes these two code paths.
+        clips[0] is an external valid source; clips[1] path equals output.
+        After impl-sequence, clips[0] is accepted and the output==source check
+        on clips[1] produces the identity error message.
+        The message assertion distinguishes the identity error from any boundary error.
         """
         ext_dir = tmp_path / "external"
         ext_dir.mkdir()
@@ -307,7 +289,6 @@ class TestOutputEqualsAnySource:
             result = build_sequence(clips=clips, output=output)
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
-        # Red: current code produces the co-location boundary message for clips[0];
-        # new impl produces the output==source identity message for clips[1].
+        # New impl produces the output==source identity message for clips[1].
         msg = result["error"]["message"].lower()
         assert "same" in msg or "equal" in msg or "identical" in msg

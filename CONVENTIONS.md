@@ -78,9 +78,9 @@ specifies.
 
 | Term | Meaning | Examples |
 |------|---------|---------|
-| **create** | Takes one or more media paths; produces a new OTIO timeline. | `clipwright-trim`, `clipwright-silence`, `clipwright-scene`, `clipwright-transcribe` |
-| **accumulate** | Takes a media path **and** an existing OTIO; appends annotations to a new OTIO. | `clipwright-text`, `clipwright-color`, `clipwright-reframe`, `clipwright-stabilize`, `clipwright-bgm`, `clipwright-noise`, `clipwright-overlay`, `clipwright-transition` |
-| **transform** | Takes an OTIO (and optionally media paths); produces a new OTIO. | `clipwright-sequence`, `clipwright-wrap`, `clipwright-speed`, `clipwright-loudness` |
+| **create** | Takes one or more media paths; produces a new OTIO timeline. Does not require an existing OTIO as input (tools that accept an optional OTIO also belong here). | `clipwright-trim`, `clipwright-silence`, `clipwright-scene`, `clipwright-transcribe`, `clipwright-reframe`, `clipwright-loudness`, `clipwright-stabilize`, `clipwright-color`, `clipwright-noise`, `clipwright-sequence` |
+| **accumulate** | Takes a media path **and** an existing OTIO; adds the new media as annotations to a new OTIO. Only `clipwright-bgm` and `clipwright-overlay` use this pattern. | `clipwright-bgm`, `clipwright-overlay` |
+| **transform** | Takes an existing OTIO (no new media input); produces a new OTIO. | `clipwright-speed`, `clipwright-text`, `clipwright-transition`, `clipwright-wrap` |
 | **materialise** | Takes an OTIO; produces media. **Only `clipwright-render` does this.** | `clipwright-render` |
 
 The distinct-OTIO rule applies to all three: every call must write a new OTIO file;

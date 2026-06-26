@@ -8,15 +8,6 @@ Tests the new behavior after pathpolicy migration (spec4 #5, DC-AS-004 / DC-AM-0
       absolute existing sources are accepted; relative traversal rejected (CWE-22).
   - output==media and output==timeline remain rejected (non-destructive invariant).
 
-All tests in TestOutputInDifferentDirAllowed, TestMediaRefForOtioRule, and
-TestCheckMediaRefNewPolicy.test_absolute_external_source_in_timeline_allowed are RED
-(failing) against the pre-migration implementation because:
-  - inline same-dir block (stabilize.py L110-125) returns INVALID_INPUT for
-    different-directory output.
-  - _add_full_clip() always writes str(media_path.resolve()) (absolute).
-  - _check_source_within_timeline_dir() raises PATH_NOT_ALLOWED for absolute sources
-    that resolve outside the timeline parent directory.
-
 TestCheckMediaRefNewPolicy.test_relative_traversal_in_timeline_rejected and
 TestOutputConflictPreserved are regression guards (expected to remain passing).
 """
@@ -104,17 +95,10 @@ def _build_v1_timeline_with_absolute_source(
 
 
 class TestOutputInDifferentDirAllowed:
-    """DC-AS-004: output may be placed in a different directory from media (create type).
-
-    RED against pre-migration code: inline same-dir block (stabilize.py L110-125)
-    raises INVALID_INPUT before any probe or OTIO I/O occurs.
-    """
+    """DC-AS-004: output may be placed in a different directory from media (create type)."""
 
     def test_output_in_different_dir_succeeds(self, tmp_path: Path) -> None:
-        """output in different dir from media, timeline=None: must return ok=True.
-
-        RED: current implementation returns INVALID_INPUT (same-dir block L110-125).
-        """
+        """output in different dir from media, timeline=None: must return ok=True."""
         from clipwright_stabilize.schemas import (  # type: ignore[import-not-found]
             DetectShakeOptions,
         )
@@ -154,12 +138,7 @@ class TestOutputInDifferentDirAllowed:
     def test_output_in_different_dir_with_timeline_colocated_succeeds(
         self, tmp_path: Path
     ) -> None:
-        """output in different dir from media, timeline in media dir: must return ok=True.
-
-        The timeline is placed in the same directory as media so that the timeline
-        source (media) passes the old boundary check; only the same-dir output
-        block (L110-125) causes the RED failure.
-        """
+        """output in different dir from media, timeline in media dir: must return ok=True."""
         from clipwright_stabilize.schemas import (  # type: ignore[import-not-found]
             DetectShakeOptions,
         )
@@ -215,11 +194,7 @@ class TestMediaRefForOtioRule:
     """DC-AM-004: written OTIO target_url must follow media_ref_for_otio() rule."""
 
     def test_media_ref_relative_when_media_in_otio_dir(self, tmp_path: Path) -> None:
-        """When media is co-located with the output OTIO, target_url must be relative.
-
-        RED: current _add_full_clip() always writes str(media_path.resolve()),
-        which is absolute regardless of whether media is inside the output directory.
-        """
+        """When media is co-located with the output OTIO, target_url must be relative."""
         from clipwright_stabilize.schemas import (  # type: ignore[import-not-found]
             DetectShakeOptions,
         )
@@ -264,11 +239,7 @@ class TestMediaRefForOtioRule:
     def test_media_ref_absolute_when_media_outside_otio_dir(
         self, tmp_path: Path
     ) -> None:
-        """When media is outside the output directory, target_url must be absolute.
-
-        RED: fails because same-dir block (L110-125) prevents OTIO creation
-        when output is in a different directory from media.
-        """
+        """When media is outside the output directory, target_url must be absolute."""
         from clipwright_stabilize.schemas import (  # type: ignore[import-not-found]
             DetectShakeOptions,
         )
@@ -333,8 +304,6 @@ class TestCheckMediaRefNewPolicy:
         pointing to media; output in media_dir (same as media to isolate from the
         same-dir block and focus on check_media_ref behavior).
 
-        RED: current _check_source_within_timeline_dir raises PATH_NOT_ALLOWED
-        for absolute source that resolves outside the timeline parent directory.
         After migration: check_media_ref accepts absolute existing regular files.
         """
         from clipwright_stabilize.schemas import (  # type: ignore[import-not-found]

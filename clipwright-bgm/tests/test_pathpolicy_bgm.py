@@ -1,4 +1,4 @@
-"""test_pathpolicy_bgm.py — Red-phase path-boundary migration tests for add_bgm.
+"""test_pathpolicy_bgm.py — Path-boundary policy tests for add_bgm.
 
 These tests encode the NEW path-boundary policy that replaces
 _check_bgm_within_timeline_dir(L281) and _check_output_within_timeline_dir(L309):
@@ -12,33 +12,6 @@ _check_bgm_within_timeline_dir(L281) and _check_output_within_timeline_dir(L309)
                          - bgm outside otio_dir               → absolute (no ../ traversal)
   4. output_source_collision: output == bgm → PATH_NOT_ALLOWED
                               (check_output_not_source covers bgm, not just timeline).
-
-All assertions that verify NEW behaviour will FAIL (Red phase) because the
-implementation still uses the old boundary helpers.
-
-Failure modes per test
-~~~~~~~~~~~~~~~~~~~~~~
-output_anywhere tests:
-  _check_output_within_timeline_dir raises PATH_NOT_ALLOWED → ok=False
-  → assert result["ok"] is True fails  (correct Red: feature not yet implemented)
-
-external_bgm tests:
-  _check_bgm_within_timeline_dir raises PATH_NOT_ALLOWED → ok=False
-  → assert result["ok"] is True fails  (correct Red: feature not yet implemented)
-
-media_ref_rule / co-location:
-  Case A (bgm and output in the same dir): all old boundary checks pass,
-  but current code stores str(bgm_path) = absolute; new code must store relative.
-  → assert not Path(target_url).is_absolute() fails  (correct Red: rule not yet applied)
-
-  Case B (bgm outside output dir): _check_bgm_within_timeline_dir fails first.
-  → assert result["ok"] is True fails  (correct Red: boundary check not yet updated)
-
-output_source_collision / output == bgm:
-  Old code reaches output.exists() before checking output != bgm;
-  bgm_file already exists → INVALID_INPUT ("Output file already exists").
-  → assert error code == PATH_NOT_ALLOWED fails  (correct Red: check_output_not_source
-    not yet extended to include bgm in sources list)
 """
 
 from __future__ import annotations
@@ -94,11 +67,7 @@ def _bgm_target_url(output_path: Path) -> str:
 
 
 class TestOutputAnywhereAllowed:
-    """New policy: output file may reside in a directory other than the timeline directory.
-
-    Red: _check_output_within_timeline_dir currently enforces co-location and
-    returns PATH_NOT_ALLOWED for output outside the timeline directory.
-    """
+    """New policy: output file may reside in a directory other than the timeline directory."""
 
     def test_output_in_separate_dir_succeeds(
         self,
@@ -126,7 +95,6 @@ class TestOutputAnywhereAllowed:
                 options=BgmOptions(volume_db=-6.0),
             )
 
-        # RED: _check_output_within_timeline_dir currently returns PATH_NOT_ALLOWED
         assert result["ok"] is True, (
             "output outside the timeline directory must be allowed (new policy). "
             f"Got error: {result.get('error')}"
@@ -158,7 +126,6 @@ class TestOutputAnywhereAllowed:
                 options=BgmOptions(volume_db=-6.0),
             )
 
-        # RED: _check_output_within_timeline_dir currently returns PATH_NOT_ALLOWED
         assert result["ok"] is True, (
             "output in a nested dir outside timeline directory must be allowed. "
             f"Got error: {result.get('error')}"
@@ -171,11 +138,7 @@ class TestOutputAnywhereAllowed:
 
 
 class TestExternalBgmAllowed:
-    """New policy: bgm can be any existing regular non-symlink file regardless of directory.
-
-    Red: _check_bgm_within_timeline_dir currently enforces co-location and
-    returns PATH_NOT_ALLOWED for bgm outside the timeline directory.
-    """
+    """New policy: bgm can be any existing regular non-symlink file regardless of directory."""
 
     def test_bgm_in_external_dir_succeeds(
         self,
@@ -203,7 +166,6 @@ class TestExternalBgmAllowed:
                 options=BgmOptions(volume_db=-6.0),
             )
 
-        # RED: _check_bgm_within_timeline_dir currently returns PATH_NOT_ALLOWED
         assert result["ok"] is True, (
             "bgm file outside the timeline directory must be allowed (new policy). "
             f"Got error: {result.get('error')}"
@@ -250,15 +212,8 @@ class TestExternalBgmAllowed:
 
 class TestMediaRefForOtioRule:
     """New policy: stored OTIO target_url follows media_ref_for_otio:
-      - bgm under output's parent dir (otio_dir) → relative POSIX path (no backslash, no ../)
-      - bgm outside otio_dir                     → absolute path (no ../ traversal)
-
-    Case A (bgm and output co-located): all OLD boundary checks pass,
-    but current code stores str(bgm_path) which is absolute.
-    Red failure: assertion `not Path(target_url).is_absolute()` fails.
-
-    Case B (bgm outside output dir / outside timeline dir): OLD boundary check fails first.
-    Red failure: assertion `result["ok"] is True` fails.
+    - bgm under output's parent dir (otio_dir) → relative POSIX path (no backslash, no ../)
+    - bgm outside otio_dir                     → absolute path (no ../ traversal)
     """
 
     def test_bgm_colocated_with_output_stores_relative_posix_ref(
@@ -266,10 +221,7 @@ class TestMediaRefForOtioRule:
         tmp_path: Path,
         media_info_bgm: Any,
     ) -> None:
-        """When bgm is under the output's parent dir, stored target_url must be a relative POSIX path.
-
-        Red: current code stores str(bgm_path) which is absolute even when bgm is co-located.
-        """
+        """When bgm is under the output's parent dir, stored target_url must be a relative POSIX path."""
         project_dir = tmp_path / "project"
         project_dir.mkdir()
 
@@ -292,7 +244,6 @@ class TestMediaRefForOtioRule:
         assert result["ok"] is True, f"Expected success, got: {result.get('error')}"
         target_url = _bgm_target_url(output_path)
         assert target_url, "BGM clip must have a target_url"
-        # RED: current code stores absolute; new code must store relative POSIX
         assert not Path(target_url).is_absolute(), (
             f"BGM in otio_dir must be stored as relative ref, got: {target_url!r}"
         )
@@ -305,10 +256,7 @@ class TestMediaRefForOtioRule:
         tmp_path: Path,
         media_info_bgm: Any,
     ) -> None:
-        """When bgm is outside the output's parent dir, stored target_url must be absolute with no ../ traversal.
-
-        Red: _check_bgm_within_timeline_dir currently fails before reaching the storage step.
-        """
+        """When bgm is outside the output's parent dir, stored target_url must be absolute with no ../ traversal."""
         project_dir = tmp_path / "project"
         project_dir.mkdir()
         music_dir = tmp_path / "music"
@@ -330,7 +278,6 @@ class TestMediaRefForOtioRule:
                 options=BgmOptions(volume_db=-6.0),
             )
 
-        # RED: _check_bgm_within_timeline_dir currently returns PATH_NOT_ALLOWED
         assert result["ok"] is True, f"Expected success, got: {result.get('error')}"
         target_url = _bgm_target_url(output_path)
         assert target_url, "BGM clip must have a target_url"
@@ -352,10 +299,7 @@ class TestMediaRefForOtioRule:
         tmp_path: Path,
         media_info_bgm: Any,
     ) -> None:
-        """bgm in a subdir of output's parent dir → relative POSIX ref (no backslash, no ../).
-
-        Red: _check_bgm_within_timeline_dir currently fails (bgm is outside timeline dir).
-        """
+        """bgm in a subdir of output's parent dir → relative POSIX ref (no backslash, no ../)."""
         project_dir = tmp_path / "project"
         project_dir.mkdir()
         work_dir = tmp_path / "work"
@@ -379,7 +323,6 @@ class TestMediaRefForOtioRule:
                 options=BgmOptions(volume_db=-6.0),
             )
 
-        # RED: _check_bgm_within_timeline_dir fails (bgm is outside timeline dir = project_dir)
         assert result["ok"] is True, f"Expected success, got: {result.get('error')}"
         target_url = _bgm_target_url(output_path)
         assert target_url, "BGM clip must have a target_url"
@@ -404,21 +347,13 @@ class TestOutputBgmCollision:
 
     check_output_not_source(output, [str(timeline_path), str(bgm_path)]) must include bgm
     in the sources list.
-
-    Red: current code only compares output vs timeline (_same_path check).
-    When output == bgm, the code reaches output.exists() and returns
-    INVALID_INPUT ("Output file already exists") instead of PATH_NOT_ALLOWED.
     """
 
     def test_output_same_as_bgm_returns_path_not_allowed(
         self,
         tmp_path: Path,
     ) -> None:
-        """When output path equals bgm path, PATH_NOT_ALLOWED must be returned.
-
-        Red: current code returns INVALID_INPUT (output already exists) rather than
-        PATH_NOT_ALLOWED (check_output_not_source does not yet cover bgm).
-        """
+        """When output path equals bgm path, PATH_NOT_ALLOWED must be returned."""
         project_dir = tmp_path / "project"
         project_dir.mkdir()
 
@@ -438,8 +373,6 @@ class TestOutputBgmCollision:
         )
 
         assert result["ok"] is False
-        # RED: current code returns INVALID_INPUT ("Output file already exists"),
-        # not PATH_NOT_ALLOWED (check_output_not_source does not yet include bgm).
         assert result["error"]["code"] == "PATH_NOT_ALLOWED", (
             "output == bgm must return PATH_NOT_ALLOWED (check_output_not_source). "
             f"Got: {result['error']['code']!r}"
