@@ -347,7 +347,21 @@ boundaries from the timeline/OTIO.
 
 ---
 
-### Large-source working-clip ergonomics (trim co-location)  *Medium*  *(trim / path policy)*
+### Large-source working-clip ergonomics (trim co-location)  *Medium*  *(trim / path policy)*  ✅ **SHIPPED (core 0.4.0 / all 17 satellites)**
+
+> Shipped as part of the unified path-boundary policy (spec4 #5). `clipwright_trim`
+> output OTIOs may now live in any writable directory while referencing the source
+> media by absolute path; the co-location requirement is removed. The implementation
+> centralises all path validation in `clipwright.pathpolicy` (five public helpers:
+> `validate_source_file`, `check_output_not_source`, `media_ref_for_otio`,
+> `check_media_ref`, `check_within_boundary`), which all 17 satellite tools delegate
+> to. Source files may reside anywhere readable; outputs may go anywhere (only
+> output ≠ any source is enforced). OTIO media references are stored as relative
+> POSIX paths for files within the OTIO directory tree and as absolute paths for
+> external files; `clipwright-render` validates all references at materialisation time
+> via `check_media_ref`. Symbolic links are rejected on all path components
+> everywhere (ADR-PP-2 / CWE-59); absolute paths to existing regular files are
+> accepted as an escape hatch (ADR-PP-1). (Originally catalogued below.)
 
 **What it does**
 Makes it ergonomic to carve a small working clip out of a large external source
@@ -375,7 +389,23 @@ concept.
 
 ---
 
-### Cross-tool path-boundary & I/O-contract consistency  *Medium*  *(suite-wide DX)*
+### Cross-tool path-boundary & I/O-contract consistency  *Medium*  *(suite-wide DX)*  ✅ **SHIPPED (core 0.4.0 / all 17 satellites)**
+
+> Shipped together with the trim co-location fix as the cross-cutting
+> `clipwright.pathpolicy` core module (core 0.4.0), which all 17 satellite tools
+> delegate to. Unified boundary rules: **outputs** go anywhere (only output ≠ any
+> source is rejected); **sources** are accepted from anywhere readable (existence +
+> regular file + no symlinks); **OTIO media/subtitle/image references** use relative
+> POSIX paths for files within the OTIO directory tree and absolute paths for external
+> files (`media_ref_for_otio`); **`clipwright-render` reader** validates relative refs
+> within the tree (CWE-22 guard) and absolute refs as existing regular files with no
+> symlink on any path component (ADR-PP-1 / ADR-PP-2 / CWE-59). The
+> `clipwright-scene` and `clipwright-frames` output artifacts remain constrained to
+> their designated `output_dir` as a named exception (`check_within_boundary` /
+> DC-GP-002). The **create / accumulate / transform** input-contract vocabulary is now
+> documented in `CONVENTIONS.md` and in each tool's docstring: *create* (media →
+> new OTIO), *accumulate* (media + timeline → OTIO), *transform* (timeline → OTIO).
+> (Originally catalogued below.)
 
 **What it does**
 Unifies the per-tool path-boundary rules and clarifies each tool's media-vs-
@@ -462,5 +492,5 @@ color        ✓
 2. **G — cut-aware caption alignment** (High): the silence+subtitle combination degrades caption quality. Split by home: the *ordering* fix is orchestration, not a tool. ✅ **Layers 1 & 2 SHIPPED (render 0.12.0 / transcribe 0.3.1 / silence 0.2.1)** — Layer 1 makes render's fragmentation advisory prescribe the clean "cut → render → transcribe → burn" order (helps every AI user, zero setup); Layer 2 carries that guidance in the always-visible channels (tool docstrings + README "Recommended Workflows"), not a user-authored skill. **Layer 3** (cue-boundary snapping input to `silence`) remains deferred until a true single pass is required.
 3. ~~**D2 — scene PySceneDetect 0.7 incompat** (Medium): the content-aware backend is dead against current PySceneDetect; contained CSV-file fix.~~ ✅ **FIXED (scene 0.2.1)** — `list-scenes -o <tmpdir>` CSV-file read.
 4. ~~**Content-aware reframe** (Medium–High): static vertical reframe caps shorts quality.~~ ✅ **SHIPPED (reframe 0.2.0 / render 0.13.0)** — motion-centroid `mode="track"` writes a keyframed crop-centre track that render materialises as a subject-following crop; falls back to a static centre crop when the optional `[track]` (numpy) extra is absent.
-5. ~~**Scene-driven frames**~~ ✅ **SHIPPED (frames 0.2.0)** / **trim ergonomics** / **path-policy consistency** (Medium): composition and DX gaps.
+5. ~~**Scene-driven frames**~~ ✅ **SHIPPED (frames 0.2.0)** / ~~**trim ergonomics** / **path-policy consistency**~~ ✅ **SHIPPED (core 0.4.0 / all 17 satellites)** (Medium): all three composition and DX gaps complete — unified `pathpolicy.py` removes co-location restrictions and standardises boundary rules across the suite.
 6. **HW decode for filter graphs** (Low): known spec3 limit.

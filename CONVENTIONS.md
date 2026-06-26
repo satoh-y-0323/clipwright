@@ -41,10 +41,50 @@ The absolute minimum to ship as a Clipwright suite tool. **Five rules only.**
 
 ### M5. Input/Output and Non-Destructive
 - Input: receive **existing file paths** (not byte streams).
-- Output: generate **new files** (`outputs/` or `artifacts/`), return paths via `artifacts`.
-- **Never overwrite source media, OTIO, or inputs.** Reject `output == input`.
+- Output: generate **new files** anywhere the caller chooses (not restricted to a
+  fixed subdirectory), return paths via `artifacts`.
+- **Never overwrite source media, OTIO, or inputs.** Reject `output == any source`.
+- Path validation is centralised in `clipwright.pathpolicy`; delegate to it rather
+  than reimplementing per tool (see §1.5 below).
 
 > These five are the entire MUST list. No other rule will block your implementation.
+
+---
+
+### §1.5. Path-Boundary Policy (core `clipwright.pathpolicy` — all tools follow this)
+
+All path validation lives in `clipwright.pathpolicy`. Use the shared helpers; do not
+reimplement these rules per tool.
+
+**The unified rules:**
+
+| Concern | Rule |
+|---------|------|
+| **Outputs** | May be placed anywhere. Only `output == any source` is rejected (`check_output_not_source`). |
+| **Source / input files** | May reside anywhere readable. Must be existing regular files with no symlink in any path component (`validate_source_file`; ADR-PP-2 / CWE-59). |
+| **OTIO media / subtitle / image references** (write time) | Stored as a relative POSIX path when the file is within the OTIO directory tree (portable round-trip); stored as an absolute path when outside (`media_ref_for_otio`). |
+| **Stored references** (read / materialise time) | Relative refs must resolve within the OTIO directory tree — CWE-22 guard. Absolute refs must point to an existing regular file with no symlink on any path component — ADR-PP-1 absolute escape hatch + ADR-PP-2 / CWE-59 (`check_media_ref`). |
+| **Symlinks** | Rejected on all path components, everywhere, always. `is_symlink()` is called from the leaf up to the root before any `resolve()` call to prevent CWE-59 bypass (ADR-PP-2). |
+
+**Exception — scene and frames output containment (DC-GP-002):**
+`clipwright-scene` and `clipwright-frames` always write their output artifacts (frame
+images, marker OTIO, manifest) inside the caller-supplied `output_dir`.  Path
+traversal attempts (e.g. `../`) are rejected by `check_within_boundary`.  This
+containment is intentional: these tools can produce many small files and the caller
+must name the directory explicitly.  All other tools place outputs wherever the caller
+specifies.
+
+**Input-contract vocabulary (use in every tool's docstring):**
+
+| Term | Meaning | Examples |
+|------|---------|---------|
+| **create** | Takes one or more media paths; produces a new OTIO timeline. | `clipwright-trim`, `clipwright-silence`, `clipwright-scene`, `clipwright-transcribe` |
+| **accumulate** | Takes a media path **and** an existing OTIO; appends annotations to a new OTIO. | `clipwright-text`, `clipwright-color`, `clipwright-reframe`, `clipwright-stabilize`, `clipwright-bgm`, `clipwright-noise`, `clipwright-overlay`, `clipwright-transition` |
+| **transform** | Takes an OTIO (and optionally media paths); produces a new OTIO. | `clipwright-sequence`, `clipwright-wrap`, `clipwright-speed`, `clipwright-loudness` |
+| **materialise** | Takes an OTIO; produces media. **Only `clipwright-render` does this.** | `clipwright-render` |
+
+The distinct-OTIO rule applies to all three: every call must write a new OTIO file;
+passing the same path for input and output is `INVALID_INPUT`.
 
 ---
 
@@ -58,6 +98,7 @@ Don't enforce values, but **write them truthfully** for AI and peer tools.
 - **OTIO metadata goes in `metadata["clipwright"]` namespace**. Times use OTIO `opentime` (RationalTime / TimeRange), not float seconds.
 - **Subprocess discipline details**: args array (`shell=False`), `timeout` mandatory, stderr collected, exit code checked, failures converted to M2 errors. Core `clipwright.process.run` handles this.
 - **Reuse common types**: `MediaRef`, `TimeRange`, `Artifact`, `ToolResult` (from `clipwright.schemas`). Don't redefine per tool.
+- **State the input contract in your docstring**: is the tool *create* (media → OTIO), *accumulate* (media + OTIO → OTIO), *transform* (OTIO → OTIO), or *materialise* (OTIO → media)? See §1.5 for definitions. One sentence at the top of the docstring is enough.
 - **Missing deps are fixable**: If ffmpeg is absent, return `DEPENDENCY_MISSING` with install instructions in `hint`.
 
 ---
@@ -152,7 +193,7 @@ MCP Inspector connectivity (§5) only confirms the tool starts and responds. **W
 - [ ] M2: Success returns `{ok,summary,data,artifacts,warnings}` / failure returns `{ok:false,error:{code,message,hint}}`
 - [ ] M3: detect/inspect don't modify media (realization delegated to render)
 - [ ] M4: External OSS run as separate processes (no library linking)
-- [ ] M5: Input is paths, non-destructive, output newly generated (reject `output==input`)
+- [ ] M5: Input is paths, non-destructive, output newly generated (reject `output==any source`); delegate path validation to `clipwright.pathpolicy` (§1.5)
 
 **SHOULD (recommended)**
 - [ ] Annotations match reality (`openWorldHint:true` if network-using)

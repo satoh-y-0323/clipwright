@@ -5,6 +5,81 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.0] - 2026-06-27
+
+Cross-tool path-boundary & I/O-contract unification (spec4 #5). All 17 satellite
+tools delegate path validation to a new `clipwright.pathpolicy` module in core.
+Sources may now reside anywhere readable; outputs may be placed anywhere; symbolic
+links are rejected on all path components; absolute paths to existing regular files
+are accepted as an escape hatch. The co-location restriction on `clipwright-sequence`
+sources and `clipwright-overlay` images is removed.
+
+### Added (`clipwright` core v0.4.0)
+
+- **`clipwright.pathpolicy` module** — five shared path-validation helpers used by
+  all 17 satellite tools:
+  - `validate_source_file(path)`: asserts existence + regular file + no symlink on
+    any path component; raises `FILE_NOT_FOUND` or `PATH_NOT_ALLOWED` (ADR-PP-2 /
+    CWE-59).
+  - `check_output_not_source(output, sources)`: raises `PATH_NOT_ALLOWED` when the
+    output path canonically equals any source (three-stage canonicalisation:
+    `resolve() → absolute() → str`).
+  - `media_ref_for_otio(source, otio_dir)`: returns a relative POSIX path when the
+    source is within the OTIO directory tree (portable round-trip) or an absolute
+    path when outside (external reference). Normalises backslashes on Windows.
+  - `check_media_ref(ref, otio_dir, kind)`: validates a stored OTIO media / subtitle
+    / image reference at materialisation time. Relative refs must resolve within the
+    OTIO directory tree (CWE-22 guard). Absolute refs must point to an existing
+    regular file with no symlink on any path component (ADR-PP-1 absolute escape
+    hatch + ADR-PP-2 / CWE-59).
+  - `check_within_boundary(base_dir, target, kind)`: containment guard for
+    detect/extract output artifacts (`clipwright-scene`, `clipwright-frames`);
+    ensures outputs remain within the designated `output_dir` (DC-GP-002).
+
+### Changed (all 17 satellite tools)
+
+All 17 satellite tools replace their local path-validation code with calls to the
+shared `pathpolicy` helpers. The unified boundary rules:
+
+- **Outputs** may be placed anywhere; only `output == any source` is rejected.
+- **Sources** (input media) may reside anywhere readable; no co-location restriction.
+  Symlinks are rejected on all path components (ADR-PP-2 / CWE-59).
+- **OTIO references** stored at annotation time: relative POSIX path for files within
+  the OTIO directory tree; absolute path for external files. `clipwright-render`
+  validates both forms at materialisation time via `check_media_ref` (ADR-PP-1).
+- **`clipwright-sequence`** v0.2.0: the former requirement that all sources be
+  co-located under the output OTIO directory is removed (ADR-SEQ-6 relaxed). External
+  sources are accepted and stored as absolute paths in the written OTIO.
+- **`clipwright-overlay`** v0.2.0: the former requirement that the image file be
+  co-located under the output timeline's parent directory is removed (ADR-PP-1).
+  External images are accepted and stored as absolute paths.
+- **`clipwright-scene`** v0.3.0 and **`clipwright-frames`** v0.3.0: output artifact
+  containment within `output_dir` is unchanged in behaviour (DC-GP-002 /
+  `check_within_boundary`).
+
+#### Version table — satellite packages (path-validation delegation; no API change)
+
+| Package | Version |
+|---------|---------|
+| `clipwright-render` | v0.14.0 |
+| `clipwright-transcribe` | v0.4.0 |
+| `clipwright-silence` | v0.3.0 |
+| `clipwright-noise` | v0.3.0 |
+| `clipwright-loudness` | v0.3.0 |
+| `clipwright-reframe` | v0.3.0 |
+| `clipwright-bgm` | v0.3.0 |
+| `clipwright-scene` | v0.3.0 |
+| `clipwright-frames` | v0.3.0 |
+| `clipwright-trim` | v0.2.0 |
+| `clipwright-overlay` | v0.2.0 |
+| `clipwright-sequence` | v0.2.0 |
+| `clipwright-stabilize` | v0.2.0 |
+| `clipwright-color` | v0.2.0 |
+| `clipwright-speed` | v0.2.0 |
+| `clipwright-text` | v0.2.0 |
+| `clipwright-transition` | v0.2.0 |
+| `clipwright-wrap` | v0.2.0 |
+
 ## [0.22.0] - 2026-06-26
 
 Scene-driven frame extraction via `clipwright-frames`. `mode="scene"` gains a `scene_sample`
