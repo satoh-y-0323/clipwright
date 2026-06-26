@@ -5,7 +5,7 @@ integration pipeline using real ffmpeg/ffprobe binaries.
 
 Verification flow (DC-AS-001/002/005):
   (1) Generate a video+audio source (speech + silence + speech) via ffmpeg lavfi
-  (2) Run detect_silence to produce a KEEP-clip timeline.otio (V1, absolute target_url)
+  (2) Run detect_silence to produce a KEEP-clip timeline.otio (V1, resolvable target_url)
   (3) Run render_timeline to materialize the timeline; confirm output mp4 is shorter than source
   (4) Confirm audio duration is also shortened (DC-AS-005: audio trimmed at the same coordinates)
   (5) Confirm silence->render succeeds via contract, OTIO, and file paths only (dogfooding)
@@ -179,7 +179,7 @@ def test_silence_detect_to_render_e2e(
     Verification points:
       - (1) detect_silence returns ok=True and timeline.otio is generated
       - (2) V1 track contains a KEEP clip list (keep-clip list, metadata.kind=keep)
-      - (3) clip.target_url is an absolute path to the media (DC-AS-001)
+      - (3) clip.target_url resolves to the media file (DC-AS-001; relative when co-located, absolute when external)
       - (4) render_timeline returns ok=True and the output mp4 is generated
       - (5) Output video duration is shorter than the source (silence interval was cut)
       - (6) Output audio duration is also shortened (DC-AS-005: audio trimmed at same coordinates)
@@ -240,20 +240,30 @@ def test_silence_detect_to_render_e2e(
     assert Path(artifacts[0]["path"]).resolve() == otio_path.resolve()
     assert artifacts[0]["format"] == "otio"
 
-    # --- (3) Validate OTIO content: V1 has keep-clip list and absolute target_url ---
+    # --- (3) Validate OTIO content: V1 has keep-clip list and resolvable target_url ---
     timeline = otio.adapters.read_from_file(str(otio_path))
     v1 = timeline.tracks[0]
     assert v1.kind == otio.schema.TrackKind.Video, "V1 track is not Video"
     clips = [c for c in v1 if isinstance(c, otio.schema.Clip)]
     assert len(clips) >= 1, "V1 track contains no clips"
 
-    # target_url must be an absolute path (DC-AS-001)
+    # target_url must resolve to the source media (DC-AS-001).
+    # media_ref_for_otio policy: relative POSIX when media is co-located with the
+    # OTIO file (same directory), absolute path when media is external.
+    otio_dir = otio_path.parent
     for clip in clips:
         ref = clip.media_reference
         assert isinstance(ref, otio.schema.ExternalReference)
         target_url = ref.target_url
-        assert Path(target_url).is_absolute(), (
-            f"target_url is not an absolute path: {target_url!r}"
+        ref_path = Path(target_url)
+        if ref_path.is_absolute():
+            resolved = ref_path.resolve()
+        else:
+            # Relative path: resolve from the OTIO file's directory
+            resolved = (otio_dir / ref_path).resolve()
+        assert resolved == source.resolve(), (
+            f"target_url {target_url!r} resolved to {resolved!r},"
+            f" expected {source.resolve()!r}"
         )
         # metadata.clipwright.kind = "keep"
         meta = clip.metadata.get("clipwright", {})

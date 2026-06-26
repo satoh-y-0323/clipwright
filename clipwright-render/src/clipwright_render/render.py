@@ -34,6 +34,7 @@ from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.media import inspect_media
 from clipwright.otio_utils import get_clipwright_metadata, load_timeline
+from clipwright.pathpolicy import check_media_ref
 from clipwright.process import resolve_tool, run
 from clipwright.schemas import ToolResult
 from pydantic import ValidationError as PydanticValidationError
@@ -171,7 +172,15 @@ def _check_within_timeline_dir(
     """
     try:
         allowed_base = timeline_path.parent.resolve()
-        target_resolved = Path(path_to_check).resolve()
+        # Resolve relative paths against the timeline directory so that OTIO files
+        # with relative target_urls (e.g. produced by clipwright-sequence using
+        # media_ref_for_otio) are validated correctly (SR L-2).
+        _p = Path(path_to_check)
+        target_resolved = (
+            (timeline_path.parent / _p).resolve()
+            if not _p.is_absolute()
+            else _p.resolve()
+        )
         # Compare with path separator to avoid false prefix matches on directory names
         target_str = str(target_resolved)
         base_str = str(allowed_base)
@@ -200,7 +209,12 @@ def _check_within_timeline_dir(
         # _check_path_not_allowed fallback pattern).
         try:
             allowed_base_abs = str(timeline_path.parent.absolute())
-            target_abs = str(Path(path_to_check).absolute())
+            _p2 = Path(path_to_check)
+            target_abs = str(
+                (timeline_path.parent / _p2).absolute()
+                if not _p2.is_absolute()
+                else _p2.absolute()
+            )
             if not (
                 target_abs == allowed_base_abs
                 or target_abs.startswith(allowed_base_abs + "/")
@@ -870,43 +884,76 @@ def _render_inner(
         )
 
     # --- 4. Apply boundary validation, existence check, and path collision check
-    #        to all unique sources (ADR-C8) ---
+    #        to all unique sources (ADR-C8 / ADR-PP-1) ---
     for src in unique_sources:
-        # Verify source is within the same directory as the timeline (Sec M-2)
-        _check_source_within_timeline_dir(timeline_path, src)
-
         # output == source check (PATH_NOT_ALLOWED; DC-AM-002)
         _check_path_not_allowed(output_path, src)
 
-        # Verify source file exists (DC-GP-005)
-        if not Path(src).exists():
+        # Existence check first (FILE_NOT_FOUND; DC-GP-005).
+        # Must run before check_media_ref because check_media_ref raises
+        # PATH_NOT_ALLOWED for non-file absolute refs (ADR-PP-1), masking the
+        # more informative FILE_NOT_FOUND for simply-missing sources.
+        # Relative paths are resolved against the timeline directory (not CWD).
+        _src_p = Path(src.replace("\\", "/"))
+        _src_exists_p = (
+            (timeline_path.parent / _src_p) if not _src_p.is_absolute() else _src_p
+        )
+        if not _src_exists_p.exists():
             raise ClipwrightError(
                 code=ErrorCode.FILE_NOT_FOUND,
-                message=f"Source media file not found: {Path(src).name}",
+                message=f"Source media file not found: {_src_p.name}",
                 hint=(
                     "Place the source file recorded in the OTIO timeline in the"
                     " expected location."
                 ),
             )
 
-    # --- 4b. Detailed boundary validation for BGM source (ADR-B8) ---
+        # Unified boundary/symlink check (ADR-PP-1): absolute refs to existing
+        # real files are accepted regardless of location; relative refs must
+        # resolve within the timeline directory (CWE-22 guard).
+        check_media_ref(src, timeline_path.parent, "media")
+
+    # Resolve any relative target_urls to absolute paths against the timeline
+    # directory.  This MUST run after check_media_ref so that the CWE-22
+    # guard fires on relative paths (including "../" traversal) before they are
+    # converted to absolute.  After security validation, downstream code
+    # (probe, plan.py unique_sources_in_order, ffmpeg -i args) needs only
+    # absolute paths and must not depend on the working directory.
+    _tl_dir = timeline_path.parent
+    unique_sources = [
+        str((_tl_dir / s).resolve()) if not Path(s).is_absolute() else s
+        for s in unique_sources
+    ]
+    for _kr in ranges:
+        if not Path(_kr.source).is_absolute():
+            try:
+                _kr.source = str((_tl_dir / _kr.source).resolve())
+            except OSError:
+                _kr.source = str((_tl_dir / _kr.source).absolute())
+
+    # --- 4b. Detailed boundary validation for BGM source (ADR-B8 / ADR-PP-1) ---
     # Apply the same all-source boundary validation to the BGM source.
     # Early path collision check (step 2b) already verified output == BGM.
     if isinstance(bgm_clip, BgmClip):
         bgm_src = bgm_clip.source
-        _check_source_within_timeline_dir(timeline_path, bgm_src)
-        # output == bgm_src was already checked early, but re-applied here for
-        # defence-in-depth
+        # output == bgm_src (defence-in-depth; early check at step 2b already ran)
         _check_path_not_allowed(output_path, bgm_src)
-        if not Path(bgm_src).exists():
+        # Existence check before check_media_ref (same rationale as step 4)
+        _bgm_p = Path(bgm_src.replace("\\", "/"))
+        _bgm_exists_p = (
+            (timeline_path.parent / _bgm_p) if not _bgm_p.is_absolute() else _bgm_p
+        )
+        if not _bgm_exists_p.exists():
             raise ClipwrightError(
                 code=ErrorCode.FILE_NOT_FOUND,
-                message=f"BGM source file not found: {Path(bgm_src).name}",
+                message=f"BGM source file not found: {_bgm_p.name}",
                 hint=(
                     "Place the BGM source file recorded in the OTIO timeline"
                     " in the expected location."
                 ),
             )
+        # Unified boundary/symlink check (ADR-PP-1)
+        check_media_ref(bgm_src, timeline_path.parent, "media")
 
     # --- 4c. Boundary validation, existence check, extension WL, and fonts_dir
     #         validation for subtitle options ---
@@ -915,18 +962,23 @@ def _render_inner(
     # compatible; ADR-S8).
     if options.subtitle is not None:
         sub_path_raw = options.subtitle.path
-
-        # Verify subtitle is in the same directory as the timeline file (ADR-S7)
-        _check_subtitle_within_timeline_dir(timeline_path, sub_path_raw)
-
-        # Verify subtitle file exists (FILE_NOT_FOUND; basename only; CWE-209)
         sub_path_obj = Path(sub_path_raw)
-        if not sub_path_obj.exists():
+
+        # Existence check before check_media_ref (FILE_NOT_FOUND > PATH_NOT_ALLOWED;
+        # resolves relative paths against the timeline directory, not CWD).
+        _sub_p = Path(sub_path_raw.replace("\\", "/"))
+        _sub_exists_p = (
+            (timeline_path.parent / _sub_p) if not _sub_p.is_absolute() else _sub_p
+        )
+        if not _sub_exists_p.exists():
             raise ClipwrightError(
                 code=ErrorCode.FILE_NOT_FOUND,
                 message=f"Subtitle file not found: {sub_path_obj.name}",
                 hint=("Specify a valid subtitle file path (.srt / .vtt / .ass)."),
             )
+
+        # Unified boundary/symlink check (ADR-PP-1): absolute external subtitle allowed
+        check_media_ref(sub_path_raw, timeline_path.parent, "subtitle")
 
         # Extension whitelist validation (INVALID_INPUT; ADR-S3)
         sub_ext = sub_path_obj.suffix.lower()
@@ -1186,7 +1238,33 @@ def _render_inner(
         f"{plan.total_duration_seconds:g}" if plan.image_sources else None
     )
     for img in plan.image_sources:
-        _check_image_overlay_within_timeline_dir(timeline_path, img)
+        _img_p = Path(img.replace("\\", "/"))
+        _img_exists_p = (
+            (timeline_path.parent / _img_p) if not _img_p.is_absolute() else _img_p
+        )
+        # Existence check (FILE_NOT_FOUND; basename only; CWE-209)
+        if not _img_exists_p.exists():
+            raise ClipwrightError(
+                code=ErrorCode.FILE_NOT_FOUND,
+                message=f"Image overlay file not found: {_img_p.name}",
+                hint=(
+                    "Place the image overlay file referenced in the OTIO timeline"
+                    " in the expected location."
+                ),
+            )
+        # Extension allowlist (INVALID_INPUT; after existence check per ADR-OV-3)
+        _img_ext = _img_p.suffix.lower()
+        if _img_ext not in _ALLOWED_IMAGE_EXTENSIONS:
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message=f"Image overlay file extension is not allowed: {_img_ext!r}.",
+                hint=(
+                    "Use an image overlay file with extension .png, .jpg, .jpeg,"
+                    " or .webp."
+                ),
+            )
+        # Unified boundary/symlink check (ADR-PP-1): absolute external images allowed
+        check_media_ref(img, timeline_path.parent, "image")
         _verify_image_magic(img)  # fast corrupt-check before -loop 1 can hang
         if _img_dur is not None:
             inputs += ["-loop", "1", "-t", _img_dur]

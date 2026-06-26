@@ -45,7 +45,7 @@ def clipwright_detect_noise(
         Field(
             description=(
                 "Output OTIO timeline file path (.otio extension). "
-                "Must be placed in the same directory as the media file."
+                "May be placed in any directory (parent must exist; output != source)."
             )
         ),
     ],

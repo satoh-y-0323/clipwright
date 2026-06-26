@@ -11,10 +11,11 @@ Design decisions:
 - Unique sources are deduplicated by resolved absolute path in first-occurrence
   order (§V2.6 DC-AM-002). probe is called exactly once per unique source.
 - Per-source validation order: probe -> duration None -> rate sentinel ->
-  has_video -> co-location -> output==source (§V2.2 DC-AS-002).
-- _resolve_and_check_colocation resolves the source path exactly once and
-  returns the resolved absolute path string, which is reused as SourceProbe.abs_path
-  and OTIO target_url (§V2.1 DC-AS-001; no double resolve).
+  has_video (§V2.2 DC-AS-002). No co-location check (ADR-SEQ-6 relaxed).
+- Sources may reside anywhere readable; no project-boundary restriction on sources.
+  output == any source is still rejected (§V2.8 DC-AM-001).
+- target_url in OTIO: relative POSIX path when source is under the otio_dir tree;
+  absolute path for external sources (pathpolicy.media_ref_for_otio).
 - All ClipwrightError from inspect_media (including DEPENDENCY_MISSING /
   SUBPROCESS_*) propagate transparently through the 2-layer boundary
   (§V2.10 DC-AM-004/005).
@@ -29,6 +30,7 @@ from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.media import inspect_media
 from clipwright.otio_utils import add_clip, new_timeline, save_timeline
+from clipwright.pathpolicy import check_output_not_source, media_ref_for_otio
 from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel, ToolResult
 
 import clipwright_sequence
@@ -48,6 +50,10 @@ def build_sequence(clips: list[SequenceClip], output: str) -> ToolResult:
 
     Assembles the ordered clips list into a single OTIO timeline written to
     the output path.  Non-destructive: input media files are never modified.
+
+    Source files may reside in any readable location (no project-boundary
+    restriction on sources; ADR-SEQ-6 relaxed).  Output must not equal any
+    source path.
 
     Args:
         clips: Ordered list of SequenceClip specs to assemble.
@@ -71,12 +77,14 @@ def _build_sequence_inner(clips: list[SequenceClip], output: str) -> ToolResult:
       1. Fast-fail checks (before ffprobe): empty clips, clips>1000, .otio
          extension, output parent dir existence.
       2. Per unique source (first-occurrence order, resolved-path dedup):
-         inspect_media -> duration None -> rate sentinel -> has_video ->
-         co-location -> output==source.
-      3. resolve_clip_specs (pure range arithmetic / defaulting / tolerance).
-      4. OTIO build: new_timeline -> V1 clips with add_clip.
-      5. save_timeline (atomic write).
-      6. Return ok_result envelope.
+         inspect_media -> duration None -> rate sentinel -> has_video.
+      3. Output == any source check (pathpolicy.check_output_not_source).
+      4. resolve_clip_specs (pure range arithmetic / defaulting / tolerance).
+      5. OTIO build: new_timeline -> V1 clips with add_clip.
+         target_url = media_ref_for_otio(source, output_dir): relative POSIX
+         for internal sources, absolute for external sources.
+      6. save_timeline (atomic write).
+      7. Return ok_result envelope.
     """
     output_path = Path(output)
 
@@ -125,16 +133,16 @@ def _build_sequence_inner(clips: list[SequenceClip], output: str) -> ToolResult:
 
     # Determine unique sources by resolved absolute path in first-occurrence order
     # (§V2.6 DC-AM-002). All clip.media strings are pre-resolved to a temporary
-    # key for dedup; the canonical abs_path used as target_url comes from
-    # _resolve_and_check_colocation in the probe loop (DC-AS-001: single resolve).
+    # key for dedup; the canonical abs_path used as target_url comes from the
+    # three-stage fallback (resolve -> absolute -> str) in the probe loop.
     #
-    # TOCTOU note: this pre-resolve and the second resolve in
-    # _resolve_and_check_colocation create a two-resolve window per source path.
-    # The window is closed by the inspect_media call (step 1 in the probe loop)
-    # which runs between the two resolves: inspect_media -> _validate_existing_file
-    # rejects symlinks and non-existent paths with FILE_NOT_FOUND, so any path
-    # manipulation between the two resolves is caught before the canonical abs_path
-    # is used as target_url (SR L-1 / DC-AS-005).
+    # TOCTOU note: this pre-resolve and the second resolution in the probe loop
+    # create a two-resolve window per source path.  The window is closed by
+    # inspect_media (step 1 in the probe loop) which runs between the two
+    # resolutions: inspect_media -> _validate_existing_file rejects symlinks and
+    # non-existent paths with FILE_NOT_FOUND, so any path manipulation between
+    # the two resolutions is caught before the canonical abs_path is used
+    # as target_url (SR L-1 / DC-AS-005).
     #
     # pre_resolved_map: maps every clip.media string -> its temporary resolved key.
     # This is used both for dedup and for mapping back after probing.
@@ -221,12 +229,17 @@ def _build_sequence_inner(clips: list[SequenceClip], output: str) -> ToolResult:
                 ),
             )
 
-        # (5) co-location check: resolve once, reuse as abs_path and target_url
-        #     (§V2.1 DC-AS-001 / §V2.2 step 5 / ADR-SEQ-6).
-        abs_path = _resolve_and_check_colocation(media, output_path)
-
-        # (6) output == source -> PATH_NOT_ALLOWED (§V2.8 DC-AM-001)
-        _check_output_not_source(output_path, abs_path)
+        # (5) Resolve source path to canonical abs_path (three-stage fallback).
+        #     No co-location check: sources may reside outside the output directory
+        #     (ADR-SEQ-6 relaxed).  The abs_path is reused as the probes dict key
+        #     and the OTIO target_url input (DC-AS-001: single resolve).
+        try:
+            abs_path = str(Path(media).resolve())
+        except OSError:
+            try:
+                abs_path = str(Path(media).absolute())
+            except OSError:
+                abs_path = str(Path(media))
 
         probes[abs_path] = SourceProbe(
             abs_path=abs_path,
@@ -239,6 +252,14 @@ def _build_sequence_inner(clips: list[SequenceClip], output: str) -> ToolResult:
         # the same pre-resolved key (handles "./a.mp4" vs "a.mp4" dedup).
         media_key = pre_resolved_map[media]
         canonical_map[media_key] = abs_path
+
+    # ------------------------------------------------------------------
+    # 3. Output == any source check (§V2.8 DC-AM-001)
+    # ------------------------------------------------------------------
+
+    # check_output_not_source compares the canonicalised output path against each
+    # source abs_path.  Raises PATH_NOT_ALLOWED when any match is found.
+    check_output_not_source(output_path, probes.keys())
 
     # Build resolved-key clips for plan.resolve_clip_specs (§V2.6):
     # replace each clip.media with its canonical abs_path so that plan.py
@@ -253,17 +274,18 @@ def _build_sequence_inner(clips: list[SequenceClip], output: str) -> ToolResult:
     ]
 
     # ------------------------------------------------------------------
-    # 3. Resolve clip specs (pure arithmetic; raises INVALID_INPUT on range errors)
+    # 4. Resolve clip specs (pure arithmetic; raises INVALID_INPUT on range errors)
     # ------------------------------------------------------------------
 
     resolved_clips, warnings = resolve_clip_specs(probes, resolved_key_clips)
 
     # ------------------------------------------------------------------
-    # 4. Build OTIO timeline (ADR-SEQ-5)
+    # 5. Build OTIO timeline (ADR-SEQ-5)
     # ------------------------------------------------------------------
 
     timeline = new_timeline(output_path.stem)
     v1 = timeline.tracks[0]  # V1 (Video) track; index 0 per new_timeline
+    otio_dir = output_path.parent
 
     for rc in resolved_clips:
         source_range = TimeRangeModel(
@@ -272,9 +294,12 @@ def _build_sequence_inner(clips: list[SequenceClip], output: str) -> ToolResult:
                 value=(rc.end_sec - rc.start_sec) * rc.rate, rate=rc.rate
             ),
         )
+        # target_url: relative POSIX path for internal sources (under otio_dir),
+        # absolute path for external sources (media_ref_for_otio, ADR-SEQ-6).
+        target_url = media_ref_for_otio(rc.source, otio_dir)
         add_clip(
             v1,
-            MediaRef(target_url=rc.source),
+            MediaRef(target_url=target_url),
             source_range,
             name="sequence_clip",
             metadata={
@@ -286,13 +311,13 @@ def _build_sequence_inner(clips: list[SequenceClip], output: str) -> ToolResult:
         )
 
     # ------------------------------------------------------------------
-    # 5. Save timeline (atomic write)
+    # 6. Save timeline (atomic write)
     # ------------------------------------------------------------------
 
     save_timeline(timeline, output)
 
     # ------------------------------------------------------------------
-    # 6. Build and return ok_result envelope (ADR-SEQ-7)
+    # 7. Build and return ok_result envelope (ADR-SEQ-7)
     # ------------------------------------------------------------------
 
     clip_count = len(resolved_clips)
@@ -317,110 +342,3 @@ def _build_sequence_inner(clips: list[SequenceClip], output: str) -> ToolResult:
         artifacts=[{"role": "timeline", "path": str(output), "format": "otio"}],
         warnings=warnings,
     )
-
-
-def _resolve_and_check_colocation(media: str, output_path: Path) -> str:
-    """Resolve the source path once and verify co-location against output directory.
-
-    Resolves the source path exactly once and returns the resolved absolute path
-    string.  The return value is reused as SourceProbe.abs_path and the OTIO
-    target_url (DC-AS-001: no double resolve).
-
-    Mirrors render._check_within_timeline_dir (keep in sync).
-    Allows recursive subdirectories; raises PATH_NOT_ALLOWED only when the
-    source points outside the output parent directory tree (ADR-SEQ-6).
-    Falls back to absolute()-based comparison when resolve() raises OSError
-    (§V2.11 DC-GP-002 / SR L-1).
-
-    Error message uses fixed wording without exposing the full path (CWE-209).
-
-    Args:
-        media: Original source media path string.
-        output_path: Output OTIO file path (its parent is the project boundary).
-
-    Returns:
-        Resolved (or absolute, as fallback) absolute path string.
-
-    Raises:
-        ClipwrightError: PATH_NOT_ALLOWED when source is outside the project tree.
-    """
-    try:
-        base = output_path.parent.resolve()
-        target = Path(media).resolve()
-        base_str = str(base)
-        target_str = str(target)
-        if not (
-            target_str == base_str
-            or target_str.startswith(base_str + "/")
-            or target_str.startswith(base_str + "\\")
-        ):
-            raise ClipwrightError(
-                code=ErrorCode.PATH_NOT_ALLOWED,
-                message="Source file points outside the project boundary.",
-                hint=(
-                    "Use a source file located under the same directory"
-                    " as the OTIO timeline."
-                ),
-            )
-        return target_str
-    except ClipwrightError:
-        raise
-    except OSError:
-        # resolve() failure (network paths, extremely long paths, symlink loops):
-        # fall back to absolute()-based best-effort comparison (§V2.11 DC-GP-002).
-        try:
-            base_abs = str(output_path.parent.absolute())
-            target_abs = str(Path(media).absolute())
-            if not (
-                target_abs == base_abs
-                or target_abs.startswith(base_abs + "/")
-                or target_abs.startswith(base_abs + "\\")
-            ):
-                raise ClipwrightError(
-                    code=ErrorCode.PATH_NOT_ALLOWED,
-                    message="Source file points outside the project boundary.",
-                    hint=(
-                        "Use a source file located under the same directory"
-                        " as the OTIO timeline."
-                    ),
-                )
-            return target_abs
-        except ClipwrightError:
-            raise
-        except OSError:
-            # Truly unresolvable (e.g. extremely long path, network path, or symlink
-            # loop where both resolve() and absolute() fail): accept the raw absolute
-            # path and skip boundary comparison. This is an intentional best-effort
-            # boundary-skip, consistent with the render/color/loudness precedent
-            # (SR L-2 / §V2.11 DC-GP-002). Only triggers under extreme path conditions
-            # not present in normal operation; real existence is verified upstream by
-            # inspect_media.
-            return str(Path(media).absolute())
-
-
-def _check_output_not_source(output_path: Path, abs_source: str) -> None:
-    """Verify that output and source do not resolve to the same path (§V2.8 DC-AM-001).
-
-    abs_source is already a resolved (or absolute-fallback) path from
-    _resolve_and_check_colocation, so only the output needs resolving.
-
-    Raises:
-        ClipwrightError: PATH_NOT_ALLOWED when paths are equal.
-    """
-    try:
-        out_resolved = str(output_path.resolve())
-    except OSError:
-        try:
-            out_resolved = str(output_path.absolute())
-        except OSError:
-            out_resolved = str(output_path)
-
-    if out_resolved == abs_source:
-        raise ClipwrightError(
-            code=ErrorCode.PATH_NOT_ALLOWED,
-            message="Output path and input source path are the same.",
-            hint=(
-                "Change the output file path to be different from the"
-                " input source file."
-            ),
-        )

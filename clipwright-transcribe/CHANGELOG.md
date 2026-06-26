@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-06-26
+
+### Changed
+
+- **Removed same-directory constraint**: `clipwright_transcribe` / `transcribe_media`
+  no longer requires the output `.otio` file to reside in the same directory as the
+  input media.  The output may now be placed in any directory whose parent already
+  exists, enabling cross-directory workflow chaining.
+- **`target_url` via `media_ref_for_otio`**: Clip `target_url` is now computed by
+  `clipwright.pathpolicy.media_ref_for_otio()`.  When the media file is under the OTIO
+  output directory the URL is relative (portable); when it is outside, the URL is
+  absolute (ADR-PP-1).
+- Bumped dependency `clipwright>=0.2.0` → `clipwright>=0.4.0` to pick up
+  `pathpolicy.media_ref_for_otio`.
+
 ## [0.3.0] - 2026-06-22
 
 ### Added

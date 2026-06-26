@@ -511,9 +511,16 @@ class TestInputValidation:
     def test_source_outside_timeline_dir_raises_path_not_allowed(
         self, tmp_path: Path
     ) -> None:
-        """Source outside the timeline dir -> PATH_NOT_ALLOWED (Sec M-2: OTIO boundary check).
+        """ADR-PP-1: Absolute external source (existing real file) outside timeline dir
+        must be allowed (not raise PATH_NOT_ALLOWED).
 
-        Guards against arbitrary paths embedded in a malicious OTIO file.
+        Under the old policy (Sec M-2), any source outside the timeline directory was
+        rejected with PATH_NOT_ALLOWED.  Under ADR-PP-1, render.py delegates to
+        pathpolicy.check_media_ref which allows absolute references to existing real
+        files regardless of their location.
+
+        Red: current render.py still calls _check_source_within_timeline_dir, which
+        raises PATH_NOT_ALLOWED → ok is False → this test FAILS until impl is done.
         """
         from clipwright_render.render import render_timeline
 
@@ -522,7 +529,7 @@ class TestInputValidation:
         subdir1.mkdir()
         tl_path = subdir1 / "tl.otio"
 
-        # source in a different directory (outside boundary)
+        # source in a different directory (outside boundary, but real file, no symlink)
         subdir2 = tmp_path / "outside"
         subdir2.mkdir()
         outside_source = str(subdir2 / "secret.mp4")
@@ -531,13 +538,25 @@ class TestInputValidation:
         _write_timeline(tl_path, [_make_clip(outside_source, 0.0, 5.0)])
         output = str(subdir1 / "out.mp4")
 
-        result = render_timeline(
-            timeline=str(tl_path),
-            output=output,
-            options=RenderOptions(),
-        )
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=outside_source),
+            ),
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(),
+                dry_run=True,
+            )
+        # ADR-PP-1: absolute external real file must be allowed.
+        # Red until render.py delegates to pathpolicy.check_media_ref.
+        assert result["ok"] is True
 
     def test_symlink_source_raises_file_not_found(self, tmp_path: Path) -> None:
         """Symlink source passed to render_timeline returns FILE_NOT_FOUND (DC-AS-001).
@@ -1691,9 +1710,15 @@ class TestMultiSourceBoundaryCheck:
     def test_second_source_outside_timeline_dir_raises_path_not_allowed(
         self, tmp_path: Path
     ) -> None:
-        """Second source outside the timeline directory -> PATH_NOT_ALLOWED (ADR-C8).
+        """ADR-PP-1: Second source absolute + outside timeline dir (existing real file)
+        must be allowed (not raise PATH_NOT_ALLOWED).
 
-        First source is within boundary; second source outside must be detected.
+        Under old policy (ADR-C8 / Sec M-2), any source outside the timeline directory
+        was rejected.  Under ADR-PP-1, both sources pass as long as they are absolute
+        references to existing real files without symlinks.
+
+        Red: current render.py raises PATH_NOT_ALLOWED for the second source via
+        _check_source_within_timeline_dir → this test FAILS until impl is done.
         """
         from clipwright_render.render import render_timeline
 
@@ -1703,7 +1728,7 @@ class TestMultiSourceBoundaryCheck:
         outside_dir.mkdir()
 
         src0 = str(project_dir / "src0.mp4")
-        src1 = str(outside_dir / "secret.mp4")  # outside boundary
+        src1 = str(outside_dir / "clip1.mp4")  # outside boundary, existing real file
         Path(src0).touch()
         Path(src1).touch()
 
@@ -1713,18 +1738,26 @@ class TestMultiSourceBoundaryCheck:
         )
         output = str(project_dir / "out.mp4")
 
-        with patch(
-            "clipwright_render.render.inspect_media",
-            side_effect=lambda path: _make_media_info_with_video_stream(path),
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                side_effect=lambda path: _make_media_info_with_video_stream(path),
+            ),
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
         ):
             result = render_timeline(
                 timeline=str(tl_path),
                 output=output,
                 options=RenderOptions(),
+                dry_run=True,
             )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
+        # ADR-PP-1: absolute external real file must be allowed for all sources.
+        # Red until render.py delegates to pathpolicy.check_media_ref.
+        assert result["ok"] is True
 
     def test_second_source_equals_output_raises_path_not_allowed(
         self, tmp_path: Path
@@ -2358,10 +2391,15 @@ class TestBgmSourceBoundaryCheck:
     def test_bgm_source_outside_timeline_dir_raises_path_not_allowed(
         self, tmp_path: Path
     ) -> None:
-        """BGM source outside timeline directory -> PATH_NOT_ALLOWED (ADR-B8).
+        """ADR-PP-1: BGM source absolute + outside timeline dir (existing real file)
+        must be allowed (not raise PATH_NOT_ALLOWED).
 
-        _check_source_within_timeline_dir must also apply to the BGM source.
-        Red: render_timeline does not yet return PATH_NOT_ALLOWED -> ok=True or other error.
+        Under old policy (ADR-B8), any source including BGM outside the timeline directory
+        was rejected.  Under ADR-PP-1, the BGM source also benefits from the unified
+        pathpolicy.check_media_ref which allows absolute external refs to existing real files.
+
+        Red: current render.py raises PATH_NOT_ALLOWED for BGM source via
+        _check_source_within_timeline_dir → this test FAILS until impl is done.
         """
         from clipwright_render.render import render_timeline
 
@@ -2371,7 +2409,7 @@ class TestBgmSourceBoundaryCheck:
         outside_dir.mkdir()
 
         src = str(project_dir / "main.mp4")
-        bgm_outside = str(outside_dir / "bgm.mp3")  # outside boundary
+        bgm_outside = str(outside_dir / "bgm.mp3")  # outside boundary, real file
         Path(src).touch()
         Path(bgm_outside).touch()
 
@@ -2383,18 +2421,26 @@ class TestBgmSourceBoundaryCheck:
         )
         output = str(project_dir / "out.mp4")
 
-        with patch(
-            "clipwright_render.render.inspect_media",
-            return_value=_make_media_info(path=src),
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=src),
+            ),
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
         ):
             result = render_timeline(
                 timeline=str(tl_path),
                 output=output,
                 options=RenderOptions(),
+                dry_run=True,
             )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
+        # ADR-PP-1: absolute external real BGM source must be allowed.
+        # Red until render.py delegates to pathpolicy.check_media_ref for BGM.
+        assert result["ok"] is True
 
     def test_output_equals_bgm_source_raises_path_not_allowed(
         self, tmp_path: Path
@@ -2924,10 +2970,15 @@ class TestSubtitleBoundaryAndValidation:
     def test_subtitle_outside_timeline_dir_raises_path_not_allowed(
         self, tmp_path: Path
     ) -> None:
-        """Aspect 2: subtitle path outside timeline dir -> PATH_NOT_ALLOWED (ADR-S7).
+        """ADR-PP-1: Absolute subtitle ref (existing .srt) outside timeline dir
+        must be allowed (not raise PATH_NOT_ALLOWED).
 
-        _check_source_within_timeline_dir must also apply to subtitle path.
-        Red: render_timeline does not yet return PATH_NOT_ALLOWED -> ok=True or other error.
+        Under old policy (ADR-S7), subtitle path was required to be within the
+        timeline directory.  Under ADR-PP-1, pathpolicy.check_media_ref allows
+        absolute references to existing real files regardless of location.
+
+        Red: current render.py raises PATH_NOT_ALLOWED via
+        _check_subtitle_within_timeline_dir → this test FAILS until impl is done.
         """
         from clipwright_render.render import render_timeline
 
@@ -2944,18 +2995,26 @@ class TestSubtitleBoundaryAndValidation:
             subtitle=SubtitleOptions(path=subtitle)  # type: ignore[call-arg]
         )
 
-        with patch(
-            "clipwright_render.render.inspect_media",
-            return_value=_make_media_info(path=src),
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_media_info(path=src),
+            ),
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
         ):
             result = render_timeline(
                 timeline=str(tl_path),
                 output=output,
                 options=options,
+                dry_run=True,
             )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
+        # ADR-PP-1: absolute external subtitle must be allowed.
+        # Red until render.py delegates to pathpolicy.check_media_ref for subtitle.
+        assert result["ok"] is True
 
     def test_subtitle_in_subdir_of_timeline_dir_is_allowed(
         self, tmp_path: Path

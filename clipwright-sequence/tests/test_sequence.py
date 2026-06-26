@@ -44,7 +44,7 @@ from clipwright_sequence.sequence import build_sequence
 
 FPS = 30.0
 DURATION_SEC = 10.0
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 # ===========================================================================
 # Helpers
@@ -285,9 +285,6 @@ class TestHappyPath:
             _clip(media_a, 5.0, 10.0),
         ]
 
-        resolved_a = str(Path(media_a).resolve())
-        resolved_b = str(Path(media_b).resolve())
-
         def _fake_inspect(path: str) -> MediaInfo:
             return _make_media_info(path=path)
 
@@ -300,9 +297,11 @@ class TestHappyPath:
         tl = load_timeline(output)
         v1_clips = [it for it in tl.tracks[0] if isinstance(it, otio.schema.Clip)]
         assert len(v1_clips) == 3
-        assert v1_clips[0].media_reference.target_url == resolved_a
-        assert v1_clips[1].media_reference.target_url == resolved_b
-        assert v1_clips[2].media_reference.target_url == resolved_a
+        # Both sources are co-located with the output (in tmp_path), so
+        # media_ref_for_otio returns relative POSIX paths.
+        assert v1_clips[0].media_reference.target_url == "a.mp4"
+        assert v1_clips[1].media_reference.target_url == "b.mp4"
+        assert v1_clips[2].media_reference.target_url == "a.mp4"
 
 
 # ===========================================================================
@@ -453,8 +452,14 @@ class TestColocation:
 
         assert result["ok"] is True
 
-    def test_source_outside_output_dir_path_not_allowed(self, tmp_path: Path) -> None:
-        """Source outside output.parent tree -> PATH_NOT_ALLOWED."""
+    def test_source_outside_output_dir_allowed(self, tmp_path: Path) -> None:
+        """Source outside output.parent tree -> ok=True under new external-source policy.
+
+        Updated from PATH_NOT_ALLOWED to ok=True (ADR-SEQ-6 relaxed: co-location
+        restriction removed; external absolute sources are allowed when they exist
+        as regular non-symlink files).
+        Red until impl-sequence replaces _resolve_and_check_colocation.
+        """
         outside = tmp_path / "outside"
         outside.mkdir()
         media = str(outside / "video.mp4")
@@ -469,8 +474,8 @@ class TestColocation:
         ):
             result = build_sequence(clips=clips, output=output)
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
+        # Red: current code raises PATH_NOT_ALLOWED from _resolve_and_check_colocation
+        assert result["ok"] is True
 
     def test_target_url_equals_resolved_path(self, tmp_path: Path) -> None:
         """target_url in OTIO equals Path(media).resolve() (DC-AS-001 single-resolve)."""
@@ -486,7 +491,9 @@ class TestColocation:
 
         tl = load_timeline(output)
         v1_clips = [it for it in tl.tracks[0] if isinstance(it, otio.schema.Clip)]
-        expected_url = str(Path(media).resolve())
+        # Source is co-located with the output (same tmp_path), so
+        # media_ref_for_otio returns the relative POSIX path (DC-AS-001).
+        expected_url = "video.mp4"
         for clip in v1_clips:
             assert clip.media_reference.target_url == expected_url
 
@@ -675,11 +682,17 @@ class TestDurationNone:
 
 
 class TestOutputEqualsSource:
-    """DC-AM-001: output == source path (resolved equal) -> PATH_NOT_ALLOWED."""
+    """DC-AM-001: output == any source path (resolved equal) -> PATH_NOT_ALLOWED.
+
+    Under the new external-source policy, this rejection applies to ANY source
+    regardless of whether it is co-located with the output or in a different
+    directory.
+    """
 
     def test_output_same_as_source_path_not_allowed(self, tmp_path: Path) -> None:
         """output resolved path equal to source resolved path -> PATH_NOT_ALLOWED."""
-        # Use .otio extension so the source passes extension check
+        # Use .otio extension so the source file path can equal the output path
+        # (output must always have .otio extension per fast-fail check).
         media = str(tmp_path / "video.otio")
         Path(media).touch()
         output = media  # same path
@@ -714,6 +727,33 @@ class TestOutputEqualsSource:
             isinstance(result["error"]["message"], str) and result["error"]["message"]
         )
         assert isinstance(result["error"]["hint"], str) and result["error"]["hint"]
+
+    def test_output_same_as_source_in_external_dir_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """output == source when both are in an external directory -> PATH_NOT_ALLOWED.
+
+        Verifies that the output==any source rejection is not scoped to sources
+        co-located with the output: even when source and output share the same
+        path in a directory unrelated to any 'project' dir, the check fires.
+        Regression guard for the new 'output==any source' contract.
+        """
+        ext_dir = tmp_path / "external"
+        ext_dir.mkdir()
+        # source and output are the same path in ext_dir (output == source).
+        media = str(ext_dir / "video.otio")
+        Path(media).touch()
+        output = media  # same path; both in ext_dir
+        clips = [_clip(media, 0.0, 5.0)]
+
+        with patch(
+            "clipwright_sequence.sequence.inspect_media",
+            return_value=_make_media_info(path=media),
+        ):
+            result = build_sequence(clips=clips, output=output)
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
 
 
 # ===========================================================================
@@ -895,8 +935,14 @@ class TestFastFailValidation:
 class TestOsErrorFallback:
     """DC-GP-002: resolve() OSError -> absolute() comparison; message hides full path."""
 
-    def test_oserror_fallback_outside_tree_still_rejected(self, tmp_path: Path) -> None:
-        """When Path.resolve() raises OSError, absolute() comparison rejects outside source."""
+    def test_oserror_fallback_external_source_allowed(self, tmp_path: Path) -> None:
+        """When Path.resolve() raises OSError, absolute() fallback allows external source.
+
+        Under the new external-source policy (ADR-SEQ-6 relaxed), sources outside
+        the output directory are accepted.  The OSError fallback (absolute()-based
+        comparison) must not change this: external sources remain ok=True even when
+        resolve() is unavailable.
+        """
         outside_dir = tmp_path / "outside"
         outside_dir.mkdir()
         media = str(outside_dir / "video.mp4")
@@ -923,19 +969,21 @@ class TestOsErrorFallback:
         ):
             result = build_sequence(clips=clips, output=output)
 
-        # After OSError fallback, outside source must still be rejected
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
+        # Under new external-source policy: external source is allowed even with OSError fallback
+        assert result["ok"] is True
 
     def test_path_not_allowed_message_hides_full_path(self, tmp_path: Path) -> None:
-        """PATH_NOT_ALLOWED message must NOT contain full path (CWE-209 / DC-GP-002)."""
-        outside = tmp_path / "outside"
-        outside.mkdir()
-        media = str(outside / "video.mp4")
+        """PATH_NOT_ALLOWED message must NOT contain full path (CWE-209 / DC-GP-002).
+
+        Under the new external-source policy, PATH_NOT_ALLOWED is raised only when
+        output == source.  Verifies that the error message does not expose the
+        absolute path of the output or source file (CWE-209).
+        """
+        # Use .otio extension so the source file can equal the output path
+        # (output must always have .otio extension per fast-fail check).
+        media = str(tmp_path / "video.otio")
         Path(media).touch()
-        project_dir = tmp_path / "project"
-        project_dir.mkdir()
-        output = str(project_dir / "out.otio")
+        output = media  # output == source -> PATH_NOT_ALLOWED
         clips = [_clip(media, 0.0, 5.0)]
 
         with patch(
@@ -947,11 +995,10 @@ class TestOsErrorFallback:
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
         error_msg = result["error"]["message"]
-        # Must NOT contain full path components (CWE-209)
+        # Must NOT contain full path (CWE-209)
         assert str(tmp_path) not in error_msg
-        assert str(outside) not in error_msg
-        # Must contain fixed "boundary" wording
-        assert "boundary" in error_msg.lower() or "outside" in error_msg.lower()
+        # Message must be non-empty
+        assert error_msg
 
     def test_oserror_fallback_subdir_still_allowed(self, tmp_path: Path) -> None:
         """When Path.resolve() raises OSError, absolute() comparison allows subdirectory."""

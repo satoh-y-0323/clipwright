@@ -30,6 +30,7 @@ import opentimelineio as otio
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.otio_utils import add_marker, get_markers, load_timeline, save_timeline
+from clipwright.pathpolicy import check_output_not_source
 from clipwright.schemas import RationalTimeModel, TimeRangeModel, ToolResult
 
 from clipwright_text import __version__
@@ -50,79 +51,6 @@ _CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x1f\x7f]")
 # Tolerance for float comparison in idempotency checks (rate-invariant).
 # Keep in sync with _is_duplicate_overlay float comparison logic.
 _IDEMPOTENCY_EPS: float = 1e-6
-
-
-# ===========================================================================
-# Path boundary helper (local copy; keep in sync with clipwright-speed)
-# ===========================================================================
-
-
-def _check_output_within_timeline_dir(timeline: Path, output: Path) -> None:
-    """Verify that output is within the timeline's parent directory tree.
-
-    Mirrors clipwright-speed _check_output_within_timeline_dir boundary contract.
-    Allows recursive subdirectories; raises PATH_NOT_ALLOWED only when the
-    resolved output is outside the timeline directory tree.
-
-    Intentionally re-implemented locally to avoid cross-package import of
-    clipwright-speed (NR-L-4: cross-package imports between satellite tools
-    create tight coupling and break independent packaging/deployment).
-    When changing the logic here, ensure the behaviour remains in sync with
-    clipwright-speed's _check_output_within_timeline_dir; the two functions
-    must enforce the same boundary contract.
-
-    Args:
-        timeline: Path to the input OTIO timeline file.
-        output: Output path to validate against the boundary.
-
-    Raises:
-        ClipwrightError: PATH_NOT_ALLOWED when output is outside the
-            timeline's parent directory tree.
-    """
-    try:
-        allowed_base = timeline.parent.resolve()
-        target_resolved = output.resolve()
-        target_str = str(target_resolved)
-        base_str = str(allowed_base)
-        if not (
-            target_str == base_str
-            or target_str.startswith(base_str + "/")
-            or target_str.startswith(base_str + "\\")
-        ):
-            raise ClipwrightError(
-                code=ErrorCode.PATH_NOT_ALLOWED,
-                message="Output path points outside the project boundary.",
-                hint=(
-                    "Place the output file within the same directory as the "
-                    "OTIO timeline, or in a subdirectory of it."
-                ),
-            )
-    except ClipwrightError:
-        raise
-    except OSError:
-        # resolve() failed (network path, symlink loop, etc.): fall back to
-        # absolute()-based best-effort comparison.
-        try:
-            allowed_base_abs = str(timeline.parent.absolute())
-            target_abs = str(output.absolute())
-            if not (
-                target_abs == allowed_base_abs
-                or target_abs.startswith(allowed_base_abs + "/")
-                or target_abs.startswith(allowed_base_abs + "\\")
-            ):
-                raise ClipwrightError(
-                    code=ErrorCode.PATH_NOT_ALLOWED,
-                    message="Output path points outside the project boundary.",
-                    hint=(
-                        "Place the output file within the same directory as the "
-                        "OTIO timeline, or in a subdirectory of it."
-                    ),
-                )
-        except ClipwrightError:
-            raise
-        except OSError:
-            # Skip only when absolute() also fails (truly unresolvable path).
-            pass
 
 
 # ===========================================================================
@@ -406,16 +334,19 @@ def _add_text_inner(
     Validation order:
       1. output suffix == .otio
       2. output parent directory exists
-      3. output boundary check (PATH_NOT_ALLOWED when outside timeline dir)
-      4. output != timeline
-      5. field validation (_validate_text_overlay_fields)
-      6. load timeline (FILE_NOT_FOUND / OTIO_ERROR propagate)
-      7. first TrackKind.Video track exists
-      8. rate determination (OQ-2)
-      9. idempotency check (exact duplicate -> no-op)
-     10. add marker (text_{n}, all metadata fields)
-     11. save timeline atomically
-     12. return ok_result
+      3. output != timeline (PATH_NOT_ALLOWED via check_output_not_source)
+      4. field validation (_validate_text_overlay_fields)
+      5. load timeline (FILE_NOT_FOUND / OTIO_ERROR propagate)
+      6. first TrackKind.Video track exists
+      7. rate determination (OQ-2)
+      8. idempotency check (exact duplicate -> no-op)
+      9. add marker (text_{n}, all metadata fields)
+     10. save timeline atomically
+     11. return ok_result
+
+    Output may reside in any directory (transform tool: no co-location
+    constraint).  check_output_not_source raises PATH_NOT_ALLOWED when
+    output and timeline resolve to the same file.
 
     Args:
         timeline: Input OTIO timeline file path.
@@ -447,20 +378,11 @@ def _add_text_inner(
             hint="Create the output directory before calling clipwright_add_text.",
         )
 
-    # --- Step 3: output boundary check ---
-    _check_output_within_timeline_dir(inp, out)
+    # --- Step 3: output must not resolve to the same file as the timeline ---
+    # PATH_NOT_ALLOWED (not INVALID_INPUT) for consistent transform tool contract.
+    check_output_not_source(out, [timeline])
 
-    # --- Step 4: output != timeline ---
-    if out.resolve() == inp.resolve():
-        raise ClipwrightError(
-            code=ErrorCode.INVALID_INPUT,
-            message="Output path must differ from the input timeline path.",
-            hint=(
-                "Provide a distinct output path (e.g., append '_text' before .otio)."
-            ),
-        )
-
-    # --- Step 5: field validation ---
+    # --- Step 4: field validation ---
     _validate_text_overlay_fields(options)
 
     # --- Step 6: load timeline ---

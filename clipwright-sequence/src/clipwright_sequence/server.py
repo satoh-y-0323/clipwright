@@ -54,8 +54,10 @@ def clipwright_build_sequence(
         Field(
             description=(
                 "Output OTIO timeline file path (.otio extension required). "
-                "Must be in the same directory as the source media files. "
-                "The file is created or overwritten atomically."
+                "A new file is created at this path (create semantics: "
+                "the parent directory must exist). "
+                "Source files may reside in any readable location; "
+                "output must differ from every source path."
             )
         ),
     ],

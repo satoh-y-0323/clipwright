@@ -1,0 +1,235 @@
+"""test_pathpolicy_transcribe.py — Path-boundary constraint tests for transcribe_media.
+
+Verifies removal of the same-directory output constraint (TR-AD-08 inline check at
+transcribe.py L548-567) while maintaining all other safety invariants.
+
+All tests are whisper-binary-independent: inspect_media and _run_whisper are mocked.
+
+Test ID -> RED/GREEN:
+  DP-T-1  test_external_dir_output_allowed               RED  (same-dir check still in impl)
+  DP-T-2  test_clip_target_url_absolute_external_media   RED  (follows DP-T-1)
+  DP-T-3  test_output_equals_media_still_rejected        GREEN (regression guard)
+  DP-T-4  test_non_otio_extension_still_rejected         GREEN (regression guard)
+  DP-T-5  test_missing_parent_dir_still_rejected         GREEN (regression guard)
+
+DP-T-1 and DP-T-2 are RED because transcribe.py L548-567 still enforces same-dir
+and returns INVALID_INPUT instead of succeeding.  Will become GREEN after impl-detectcut
+removes that block.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from unittest.mock import patch
+
+import opentimelineio as otio
+from clipwright.errors import ErrorCode
+from clipwright.otio_utils import load_timeline
+from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo
+
+from clipwright_transcribe.schemas import TranscribeOptions
+from clipwright_transcribe.transcribe import WhisperRun
+
+# ===========================================================================
+# Helpers
+# ===========================================================================
+
+FPS = 30.0
+
+
+def _make_media_info(
+    path: str,
+    *,
+    duration_sec: float = 10.0,
+    rate: float = FPS,
+) -> MediaInfo:
+    """Build a MediaInfo with one video + one audio stream."""
+    streams = [
+        StreamInfo(index=0, codec_type="video", codec_name="h264"),
+        StreamInfo(index=1, codec_type="audio", codec_name="aac"),
+    ]
+    return MediaInfo(
+        path=path,
+        container="mov,mp4,m4a,3gp,3g2,mj2",
+        duration=RationalTimeModel(value=duration_sec * rate, rate=rate),
+        streams=streams,
+        bit_rate=8_000_000,
+    )
+
+
+def _fake_whisper_run() -> WhisperRun:
+    """Return a minimal WhisperRun with no segments for use as a _run_whisper mock."""
+    return WhisperRun(
+        segments=[],
+        language="en",
+        backend={"device": "cpu", "detail": "cpu"},
+        wall_seconds=0.1,
+    )
+
+
+def _opts(**kwargs: object) -> TranscribeOptions:
+    return TranscribeOptions(**kwargs)  # type: ignore[arg-type]
+
+
+# ===========================================================================
+# DP-T-1 / DP-T-2: external dir output allowed + absolute media ref
+# ===========================================================================
+
+
+class TestExternalDirOutput:
+    """Output placed in a directory different from media must now be accepted.
+
+    Tests are whisper-independent: inspect_media and _run_whisper are mocked.
+    """
+
+    def test_external_dir_output_allowed(self, tmp_path: Path) -> None:
+        """DP-T-1: transcribe_media must succeed when output dir differs from media dir.
+
+        Whisper-independent: inspect_media and _run_whisper are mocked so no real
+        whisper binary is required.
+        RED: impl still raises INVALID_INPUT at transcribe.py L548-567 (same-dir check).
+        Will become GREEN after impl-detectcut removes that block.
+        """
+        from clipwright_transcribe.transcribe import transcribe_media
+
+        media_dir = tmp_path / "src"
+        media_dir.mkdir()
+        out_dir = tmp_path / "work"
+        out_dir.mkdir()
+        model_dir = tmp_path / "models"
+        model_dir.mkdir()
+
+        media = media_dir / "video.mp4"
+        media.write_bytes(b"x")
+        model = model_dir / "ggml-base.bin"
+        model.write_bytes(b"model")
+        output = out_dir / "out.otio"
+
+        with (
+            patch(
+                "clipwright_transcribe.transcribe.inspect_media",
+                return_value=_make_media_info(str(media)),
+            ),
+            patch(
+                "clipwright_transcribe.transcribe._run_whisper",
+                return_value=_fake_whisper_run(),
+            ),
+        ):
+            result = transcribe_media(
+                str(media), str(output), _opts(model_path=str(model))
+            )
+
+        # RED: currently INVALID_INPUT — must be True after impl removes same-dir check
+        assert result.ok is True
+
+    def test_clip_target_url_absolute_external_media(self, tmp_path: Path) -> None:
+        """DP-T-2: When media is outside otio_dir, clip target_url must be absolute.
+
+        Whisper-independent.
+        RED: follows DP-T-1.  Target_url check runs only when ok=True is reached.
+        Verifies media_ref_for_otio rule (media outside otio_dir -> absolute).
+        """
+        from clipwright_transcribe.transcribe import transcribe_media
+
+        media_dir = tmp_path / "src"
+        media_dir.mkdir()
+        out_dir = tmp_path / "work"
+        out_dir.mkdir()
+        model_dir = tmp_path / "models"
+        model_dir.mkdir()
+
+        media = media_dir / "video.mp4"
+        media.write_bytes(b"x")
+        model = model_dir / "ggml-base.bin"
+        model.write_bytes(b"model")
+        output = out_dir / "out.otio"
+
+        with (
+            patch(
+                "clipwright_transcribe.transcribe.inspect_media",
+                return_value=_make_media_info(str(media)),
+            ),
+            patch(
+                "clipwright_transcribe.transcribe._run_whisper",
+                return_value=_fake_whisper_run(),
+            ),
+        ):
+            result = transcribe_media(
+                str(media), str(output), _opts(model_path=str(model))
+            )
+
+        # RED: currently INVALID_INPUT — assertions below run only after impl is fixed
+        assert result.ok is True
+
+        tl = load_timeline(str(output))
+        v1 = next(t for t in tl.tracks if t.kind == otio.schema.TrackKind.Video)
+        clips = [it for it in v1 if isinstance(it, otio.schema.Clip)]
+        assert clips, "No clips in V1 after transcribe_media succeeded"
+        for clip in clips:
+            ref = clip.media_reference
+            assert isinstance(ref, otio.schema.ExternalReference)
+            ref_path = Path(ref.target_url)
+            assert ref_path.is_absolute(), (
+                "target_url must be absolute when media is outside otio_dir; "
+                f"got {ref.target_url!r}"
+            )
+            try:
+                resolved = str(ref_path.resolve())
+            except OSError:
+                resolved = str(ref_path.absolute())
+            assert resolved == str(media.resolve()), (
+                f"target_url resolved to {resolved!r}, expected {media.resolve()!r}"
+            )
+
+
+# ===========================================================================
+# DP-T-3 .. DP-T-5: regression guards (already pass; must not regress)
+# ===========================================================================
+
+
+class TestRegressionGuards:
+    """Removing the same-dir constraint must not weaken other path safety invariants."""
+
+    def test_output_equals_media_still_rejected(self, tmp_path: Path) -> None:
+        """DP-T-3: output path identical to media path must remain INVALID_INPUT."""
+        from clipwright_transcribe.transcribe import transcribe_media
+
+        media = tmp_path / "same.otio"
+        media.write_bytes(b"x")
+
+        result = transcribe_media(str(media), str(media), _opts())
+
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.INVALID_INPUT
+
+    def test_non_otio_extension_still_rejected(self, tmp_path: Path) -> None:
+        """DP-T-4: output with non-.otio extension must remain INVALID_INPUT."""
+        from clipwright_transcribe.transcribe import transcribe_media
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"x")
+        output = tmp_path / "out.srt"
+
+        result = transcribe_media(str(media), str(output), _opts())
+
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.INVALID_INPUT
+
+    def test_missing_parent_dir_still_rejected(self, tmp_path: Path) -> None:
+        """DP-T-5: output whose parent directory does not exist must remain rejected."""
+        from clipwright_transcribe.transcribe import transcribe_media
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"x")
+        output = tmp_path / "nonexistent_dir" / "out.otio"
+
+        result = transcribe_media(str(media), str(output), _opts())
+
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code in (
+            ErrorCode.INVALID_INPUT,
+            ErrorCode.FILE_NOT_FOUND,
+        )

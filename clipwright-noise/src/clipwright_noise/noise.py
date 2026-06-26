@@ -1,8 +1,7 @@
 """noise.py — clipwright-noise orchestration layer (design §1.1).
 
 Flow:
-  1. Output validation (extension, parent dir, output==media,
-     output==timeline, same dir)
+  1. Output validation (extension, parent dir, output==media, output==timeline)
   2. inspect_media: video + audio required check (ADR-N8)
   3. Timeline resolution (None → new / path → load + validate)
   4. measure_noise: measure noise floor via astats → calculate params
@@ -11,7 +10,10 @@ Flow:
 
 Design decisions:
 - FILE_NOT_FOUND / SUBPROCESS_FAILED messages use basename only (DC-GP-005).
-- output must be in the same directory as media (MUST; DC-AS-002).
+- output may be placed in any directory (parent must exist; output != source).
+- target_url in generated OTIO clips follows the media_ref_for_otio policy:
+  relative POSIX when media is under the OTIO directory (enabling project-level
+  portability), absolute otherwise (ADR-PP-1 escape hatch for external media).
 - source==media comparison is normalized with Path.resolve() (DC-AS-003 / B-4).
 - Timeline validation: exactly one Video-kind track (B-5).
 """
@@ -32,6 +34,7 @@ from clipwright.otio_utils import (
     save_timeline,
     set_clipwright_metadata,
 )
+from clipwright.pathpolicy import media_ref_for_otio
 from clipwright.schemas import RationalTimeModel, ToolResult
 
 import clipwright_noise
@@ -49,7 +52,8 @@ def detect_noise(
 
     Args:
         media: Input media file path (video + audio required).
-        output: Output OTIO timeline file path (.otio; same directory as media).
+        output: Output OTIO timeline file path (.otio; parent dir must exist;
+            may be placed in any directory).
         options: DetectNoiseOptions.
         timeline: Existing timeline path (None = create new).
 
@@ -104,23 +108,6 @@ def _detect_noise_inner(
             hint="Change the output file path to differ from the input timeline.",
         )
 
-    # output must be in same directory as media (MUST; DC-AS-002)
-    try:
-        media_resolved_dir = media_path.resolve().parent
-        output_resolved_dir = output_path.resolve().parent
-    except OSError:
-        media_resolved_dir = media_path.absolute().parent
-        output_resolved_dir = output_path.absolute().parent
-
-    if media_resolved_dir != output_resolved_dir:
-        raise ClipwrightError(
-            code=ErrorCode.INVALID_INPUT,
-            message=(
-                "The output file must be in the same directory as the media file."
-            ),
-            hint="Change the output path to the same directory as the media file.",
-        )
-
     # --- 2. inspect_media: video + audio required (ADR-N8 / DC-AS-003) ---
 
     if not media_path.exists():
@@ -159,10 +146,12 @@ def _detect_noise_inner(
     if timeline is None:
         # New timeline: append one full-length keep clip to V1
         tl = new_timeline(media_path.name)
-        _add_full_clip(tl, media_path, duration_sec, media_info.duration)
+        _add_full_clip(
+            tl, media_path, duration_sec, media_info.duration, output_path.parent
+        )
     else:
         tl = _load_and_validate_timeline(
-            timeline, media_path, duration_sec, media_info.duration
+            timeline, media_path, duration_sec, media_info.duration, output_path.parent
         )
 
     # --- 4. Noise analysis ---
@@ -235,16 +224,15 @@ def _add_full_clip(
     media_path: Path,
     duration_sec: float,
     duration_rt: RationalTimeModel | None,
+    otio_dir: Path,
 ) -> None:
     """Append one full-length keep clip to the V1/A1 tracks of the timeline.
 
     Used for new timelines.
-    target_url is the absolute path of media_path.resolve() (DC-AS-002).
+    target_url follows the media_ref_for_otio policy: relative POSIX when media
+    is under otio_dir, absolute path otherwise (ADR-PP-1 escape hatch).
     """
-    try:
-        target_url = str(media_path.resolve())
-    except OSError:
-        target_url = str(media_path.absolute())
+    target_url = media_ref_for_otio(media_path, otio_dir)
 
     # Determine rate: use the measured duration rate if available, otherwise 1000.0
     rate = duration_rt.rate if duration_rt is not None else 1000.0
@@ -270,6 +258,7 @@ def _load_and_validate_timeline(
     media_path: Path,
     duration_sec: float,
     duration_rt: RationalTimeModel | None,
+    otio_dir: Path,
 ) -> otio.schema.Timeline:
     """Load an existing timeline and validate its consistency.
 
@@ -310,7 +299,7 @@ def _load_and_validate_timeline(
         # V1 is empty: append a full-length keep clip and continue
         # (equivalent to creating a new timeline).
         # Prevents render's resolve_kept_ranges from rejecting due to zero clips.
-        _add_full_clip(tl, media_path, duration_sec, duration_rt)
+        _add_full_clip(tl, media_path, duration_sec, duration_rt, otio_dir)
         return tl
 
     urls: set[str] = set()

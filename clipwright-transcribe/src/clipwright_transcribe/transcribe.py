@@ -35,6 +35,7 @@ from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.media import inspect_media
 from clipwright.otio_utils import add_clip, add_marker, new_timeline, save_timeline
+from clipwright.pathpolicy import media_ref_for_otio
 from clipwright.process import resolve_tool, run, safe_subprocess_message
 from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel, ToolResult
 
@@ -545,27 +546,6 @@ def _transcribe_inner(
             ) from None
         raise
 
-    # Verify that output is in the same directory as media (TR-AD-08).
-    # ClipwrightError propagates; OSError is skipped best-effort.
-    try:
-        media_dir = media_path.resolve().parent
-        output_dir = output_path.parent.resolve()
-        if media_dir != output_dir:
-            raise ClipwrightError(
-                code=ErrorCode.INVALID_INPUT,
-                message=(
-                    "Output timeline must be placed in the same directory as "
-                    f"the input media (input: {media_path.name})."
-                ),
-                hint=(
-                    "Change the output path to a location inside the same directory as "
-                    "the media file."
-                ),
-            )
-    except OSError:
-        # resolve() may fail for network paths; skip best-effort.
-        pass
-
     # Audio stream check (TR-AD-03). Video is optional (audio-only sources accepted).
     has_audio = any(s.codec_type == "audio" for s in media_info.streams)
     if not has_audio:
@@ -625,7 +605,7 @@ def _transcribe_inner(
     )
     add_clip(
         v1,
-        MediaRef(target_url=abs_media),
+        MediaRef(target_url=media_ref_for_otio(media_path, output_path.parent)),
         full_source_range,
         name=media_path.name,
         metadata={

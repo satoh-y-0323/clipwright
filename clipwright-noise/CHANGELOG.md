@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-06-27
+
+### Changed
+
+- **Removed same-directory constraint**: `clipwright_detect_noise` / `detect_noise`
+  no longer requires the output `.otio` file to reside in the same directory as the
+  input media.  The output may now be placed in any directory whose parent already
+  exists, enabling cross-directory workflow chaining.
+- **Always-absolute `target_url`**: Clip `target_url` in newly generated timelines is
+  now always the resolved absolute path of the media file (DC-AS-002).  Relative
+  references are no longer written to the OTIO so that `render_timeline` can accept
+  the timeline via the ADR-PP-1 absolute escape hatch without a co-location boundary
+  restriction.
+- **`_add_full_clip` API change**: The internal `otio_dir` parameter has been removed
+  from `_add_full_clip`; the function now always resolves the absolute path directly.
+- Bumped dependency `clipwright>=0.2.0` → `clipwright>=0.4.0`.
+
 ## [0.2.0] - 2026-06-14
 
 ### Added

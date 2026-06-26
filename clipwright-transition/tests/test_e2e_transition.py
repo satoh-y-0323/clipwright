@@ -331,13 +331,17 @@ class TestE2EInvalidInputClipCount:
 
 
 class TestE2EOutputEqualsInput:
-    """INVALID_INPUT when output path == input timeline path."""
+    """PATH_NOT_ALLOWED when output path == input timeline path."""
 
-    def test_output_same_as_input_returns_invalid_input(
+    def test_output_same_as_input_returns_path_not_allowed(
         self,
         timeline_file: Path,
     ) -> None:
-        """Passing the same path for both timeline and output must return INVALID_INPUT."""
+        """Passing the same path for both timeline and output must return PATH_NOT_ALLOWED.
+
+        Delegates to clipwright.pathpolicy.check_output_not_source; consistent
+        transform tool error contract.
+        """
         result = add_transition(
             timeline=str(timeline_file),
             output=str(timeline_file),
@@ -345,4 +349,4 @@ class TestE2EOutputEqualsInput:
         )
 
         assert result["ok"] is False
-        assert result["error"]["code"] == "INVALID_INPUT"
+        assert result["error"]["code"] == "PATH_NOT_ALLOWED"

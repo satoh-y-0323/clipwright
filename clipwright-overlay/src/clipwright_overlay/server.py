@@ -35,7 +35,10 @@ def clipwright_add_overlay(
         Field(
             description=(
                 "Output OTIO file path where the annotated timeline is written. "
-                "Must end in .otio and differ from the input timeline path."
+                "Must end in .otio and differ from the input timeline path. "
+                "May be placed anywhere (not constrained to the timeline's directory). "
+                "Accumulate pattern: pass the previous call's output as the next "
+                "call's timeline to build up multiple overlays (image_0, image_1, ...)."
             )
         ),
     ],
@@ -44,23 +47,28 @@ def clipwright_add_overlay(
         Field(
             description=(
                 "Image overlay options. image_path, start_sec, and duration_sec are "
-                "required; all other fields have sensible defaults."
+                "required; all other fields have sensible defaults. "
+                "image_path may be inside or outside the output OTIO's directory: "
+                "inside -> relative POSIX path stored; "
+                "outside -> absolute path stored."
             )
         ),
     ] = None,
 ) -> ToolResult:
-    """Add an image_overlay marker to an OTIO timeline.
+    """Add an image_overlay marker to an OTIO timeline (accumulate type).
 
     readOnlyHint=True: this tool writes only a new .otio output file; the input
     media and the input timeline are never modified. The new-file write is outside
     the readOnly scope per the MCP annotation contract — readOnly refers to
     existing resources, and the output is a freshly created file.
 
-    Later rendering by clipwright-render materializes image_overlay markers as
-    ffmpeg overlay filters. Idempotent: calling with identical options on an
-    already-annotated timeline produces applied=0 with a warning rather than
-    duplicating the marker. Multiple distinct calls accumulate image_0/image_1/...
-    markers which clipwright-render reads to apply overlay filters.
+    Accumulate pattern: each call appends one image_overlay marker (image_0,
+    image_1, ...) to the first video track. Pass the previous output as the next
+    input to layer multiple overlays. clipwright-render materializes all markers
+    as ffmpeg overlay filters in a single render pass.
+
+    Idempotent: calling with identical options on an already-annotated timeline
+    produces applied=0 with a warning rather than duplicating the marker.
     """
     if options is None:
         return error_result(

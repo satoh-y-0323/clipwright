@@ -780,13 +780,19 @@ class TestAddBgmExtensionWhitelist:
 class TestAddBgmPathValidation:
     """BGM path boundary validation and file-not-found checks (ADR-B8, ADR-B10)."""
 
-    def test_bgm_outside_timeline_dir_returns_path_not_allowed(
+    def test_bgm_outside_timeline_dir_succeeds(
         self,
         tmp_timeline_dir: Path,
         media_info_bgm: Any,
         tmp_path: Path,
     ) -> None:
-        """When bgm is not under the same directory as timeline, PATH_NOT_ALLOWED must be returned (ADR-B8)."""
+        """External bgm (outside the timeline directory) must be accepted under the new policy.
+
+        Previously (ADR-B8) bgm was required to be in the same directory as the timeline.
+        New policy: bgm may be any existing regular non-symlink file (external allowed).
+
+        Red: _check_bgm_within_timeline_dir still enforces co-location → PATH_NOT_ALLOWED.
+        """
         # tmp_path is a different dir (parent of tmp_timeline_dir)
         outside_bgm = tmp_path / "outside_bgm.mp3"
         outside_bgm.write_bytes(b"outside bgm")
@@ -795,15 +801,19 @@ class TestAddBgmPathValidation:
         output_path = tmp_timeline_dir / "output.otio"
         _save_timeline_to_file(tl, timeline_path)
 
-        result = add_bgm(
-            timeline=str(timeline_path),
-            bgm=str(outside_bgm),
-            output=str(output_path),
-            options=BgmOptions(volume_db=-6.0),
-        )
+        with patch("clipwright_bgm.bgm.inspect_media", return_value=media_info_bgm):
+            result = add_bgm(
+                timeline=str(timeline_path),
+                bgm=str(outside_bgm),
+                output=str(output_path),
+                options=BgmOptions(volume_db=-6.0),
+            )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == "PATH_NOT_ALLOWED"
+        # RED: currently returns PATH_NOT_ALLOWED; new policy must succeed
+        assert result["ok"] is True, (
+            "External bgm must be accepted under the new path-boundary policy. "
+            f"Got error: {result.get('error')}"
+        )
 
     def test_bgm_file_not_found_returns_file_not_found(
         self,
@@ -879,32 +889,44 @@ class TestAddBgmPathValidation:
 
 
 class TestAddBgmOutputPathBoundary:
-    """Output path boundary validation: writing outside the timeline directory is forbidden (SR L-3)."""
+    """Output path boundary: output may now be placed outside the timeline directory (new policy).
 
-    def test_output_outside_timeline_dir_returns_path_not_allowed(
+    Previously (SR L-3) output was required to be in the same directory as the timeline.
+    New policy: output parent directory must exist and output must not equal any source;
+    co-location with the timeline is no longer required.
+    """
+
+    def test_output_outside_timeline_dir_succeeds(
         self,
         tmp_timeline_dir: Path,
         bgm_audio_file: Path,
         media_info_bgm: Any,
         tmp_path: Path,
     ) -> None:
-        """When output points outside the timeline directory, PATH_NOT_ALLOWED must be returned (SR L-3)."""
+        """add_bgm must succeed when output is placed outside the timeline directory (new policy).
+
+        Previously PATH_NOT_ALLOWED was returned (SR L-3); new policy relaxes this restriction.
+
+        Red: _check_output_within_timeline_dir still enforces co-location → PATH_NOT_ALLOWED.
+        """
         tl = _make_simple_timeline()
         timeline_path = tmp_timeline_dir / "timeline.otio"
         _save_timeline_to_file(tl, timeline_path)
         # tmp_path is outside tmp_timeline_dir (directly under the parent directory)
         outside_output = tmp_path / "outside_output.otio"
 
-        result = add_bgm(
-            timeline=str(timeline_path),
-            bgm=str(bgm_audio_file),
-            output=str(outside_output),
-            options=BgmOptions(volume_db=-6.0),
-        )
+        with patch("clipwright_bgm.bgm.inspect_media", return_value=media_info_bgm):
+            result = add_bgm(
+                timeline=str(timeline_path),
+                bgm=str(bgm_audio_file),
+                output=str(outside_output),
+                options=BgmOptions(volume_db=-6.0),
+            )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == "PATH_NOT_ALLOWED", (
-            "PATH_NOT_ALLOWED must be returned when output is outside the timeline directory (SR L-3)"
+        # RED: currently returns PATH_NOT_ALLOWED; new policy must succeed
+        assert result["ok"] is True, (
+            "output outside the timeline directory must be accepted under the new policy. "
+            f"Got error: {result.get('error')}"
         )
 
 
@@ -961,50 +983,6 @@ class TestAddBgmDurationNone:
 
 
 # ===========================================================================
-# Test scope 10d: Path.resolve raises OSError (fallback verification)
-# ===========================================================================
-
-
-class TestAddBgmOsErrorFallback:
-    """Verify that when Path.resolve raises OSError, absolute() is used as fallback
-    and PATH_NOT_ALLOWED is still triggered correctly (CR M-3)."""
-
-    def test_check_bgm_within_timeline_dir_oserror_fallback_path_not_allowed(
-        self,
-        tmp_timeline_dir: Path,
-        media_info_bgm: Any,
-        tmp_path: Path,
-    ) -> None:
-        """On OSError fallback in _check_bgm_within_timeline_dir,
-        bgm outside the boundary must return PATH_NOT_ALLOWED (CR M-3)."""
-        # Prepare a BGM file outside the timeline directory
-        outside_bgm = tmp_path / "outside_bgm.mp3"
-        outside_bgm.write_bytes(b"outside bgm")
-        tl = _make_simple_timeline()
-        timeline_path = tmp_timeline_dir / "timeline.otio"
-        output_path = tmp_timeline_dir / "output.otio"
-        _save_timeline_to_file(tl, timeline_path)
-
-        # Monkeypatch Path.resolve to raise OSError
-
-        def mock_resolve(self: Path, strict: bool = False) -> Path:  # type: ignore[override]
-            raise OSError("mock resolve failure")
-
-        with patch.object(Path, "resolve", mock_resolve):
-            result = add_bgm(
-                timeline=str(timeline_path),
-                bgm=str(outside_bgm),
-                output=str(output_path),
-                options=BgmOptions(volume_db=-6.0),
-            )
-
-        assert result["ok"] is False
-        assert result["error"]["code"] == "PATH_NOT_ALLOWED", (
-            "bgm outside boundary must return PATH_NOT_ALLOWED even on OSError fallback (CR M-3)"
-        )
-
-
-# ===========================================================================
 # Test scope 11: output == input timeline / existing output collision
 # ===========================================================================
 
@@ -1018,7 +996,11 @@ class TestAddBgmOutputCollision:
         bgm_audio_file: Path,
         media_info_bgm: Any,
     ) -> None:
-        """When output == input timeline path, INVALID_INPUT must be returned (overwrite forbidden, M5)."""
+        """When output == input timeline path, an error must be returned (overwrite forbidden, M5).
+
+        check_output_not_source raises PATH_NOT_ALLOWED when output equals any source.
+        Acceptable codes: INVALID_INPUT or PATH_NOT_ALLOWED (both reject the operation).
+        """
         tl = _make_simple_timeline()
         timeline_path = tmp_timeline_dir / "timeline.otio"
         _save_timeline_to_file(tl, timeline_path)
@@ -1031,7 +1013,9 @@ class TestAddBgmOutputCollision:
         )
 
         assert result["ok"] is False
-        assert result["error"]["code"] == "INVALID_INPUT"
+        assert result["error"]["code"] in ("INVALID_INPUT", "PATH_NOT_ALLOWED"), (
+            f"output == timeline must be rejected. Got: {result['error']['code']!r}"
+        )
 
     def test_output_already_exists_returns_error(
         self,

@@ -11,7 +11,11 @@ Design decisions:
   with a common contract so derive_keep_ranges onward uses a shared flow.
 - source_range rate is taken from inspect_media MediaInfo.duration.rate,
   and value = seconds * rate (DC-AS-003).
-- output is only permitted in the same directory as media (DC-AS-001).
+- Both backends accept output in any directory (parent must exist; output !=
+  source). No co-location constraint is applied to either backend.
+- target_url in generated OTIO clips follows the media_ref_for_otio policy:
+  relative POSIX when media is under the OTIO directory (enabling project-level
+  portability), absolute otherwise (ADR-PP-1 escape hatch for external media).
 - Error messages do not expose full paths or raw ffmpeg stderr: FILE_NOT_FOUND
   uses basename only (M-1 / SR L-2). SUBPROCESS_FAILED/TIMEOUT from both the
   silencedetect run() seam and the VAD CLI spawn run() seam are replaced with
@@ -32,6 +36,7 @@ from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.media import inspect_media
 from clipwright.otio_utils import add_clip, new_timeline, save_timeline
+from clipwright.pathpolicy import media_ref_for_otio
 from clipwright.process import resolve_tool, run, safe_subprocess_message
 from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel, ToolResult
 
@@ -298,7 +303,7 @@ def detect_silence(
     Output returns the path of the newly created timeline.otio in artifacts.
 
     Flow:
-      1. Output validation (extension, parent directory, output==media, same directory)
+      1. Output validation (extension, parent directory, output==media)
       2. inspect_media -> verify audio/video streams and duration
       3. Run ffmpeg silencedetect and parse stderr
       4. Derive KEEP intervals with derive_keep_ranges
@@ -307,7 +312,8 @@ def detect_silence(
 
     Args:
         media: Input media file path.
-        output: Output timeline.otio file path (must be in the same directory as media).
+        output: Output timeline.otio file path (.otio; parent dir must exist;
+            may be placed in any directory).
         options: DetectSilenceOptions.
 
     Returns:
@@ -390,30 +396,6 @@ def _detect_inner(
             ) from exc
         raise
 
-    # Verify output is in the same directory as media (DC-AS-001)
-    # Done after inspect_media so the path has been confirmed to exist before resolve()
-    try:
-        media_dir = media_path.resolve().parent
-        output_dir = output_path.parent.resolve()
-        if media_dir != output_dir:
-            raise ClipwrightError(
-                code=ErrorCode.INVALID_INPUT,
-                message=(
-                    "The output timeline must be placed in the same"
-                    f" directory as the input media (input: {media_path.name})."
-                ),
-                hint=(
-                    "Change the output path to be in the same directory"
-                    " as the media file."
-                    " (e.g., output = same directory as media / timeline.otio)"
-                ),
-            )
-    except ClipwrightError:
-        raise
-    except OSError:
-        # resolve failure (network paths, etc.) is skipped on best-effort basis
-        pass
-
     # Verify video stream (DC-AS-002)
     has_video = any(s.codec_type == "video" for s in media_info.streams)
     has_audio = any(s.codec_type == "audio" for s in media_info.streams)
@@ -488,7 +470,9 @@ def _detect_inner(
             start_time=RationalTimeModel(value=start_value, rate=rate),
             duration=RationalTimeModel(value=dur_value, rate=rate),
         )
-        media_ref = MediaRef(target_url=abs_media)
+        media_ref = MediaRef(
+            target_url=media_ref_for_otio(media_path, output_path.parent)
+        )
         add_clip(
             v1,
             media_ref,

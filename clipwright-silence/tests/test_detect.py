@@ -110,6 +110,12 @@ def _fake_run_ok(stderr: str) -> Any:
     return _impl
 
 
+def _fake_vad_run_ok(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+    """Successful mock for VAD CLI run: returns empty speech_segments JSON."""
+    payload = json.dumps({"speech_segments": []})
+    return CompletedProcess(args=cmd, returncode=0, stdout=payload, stderr="")
+
+
 def _opts(
     silence_threshold_db: float = -30.0,
     min_silence_duration: float = 0.5,
@@ -508,8 +514,12 @@ class TestKeepClipOtio:
         assert clip.source_range.start_time.value == pytest.approx(0.0)
         assert clip.source_range.duration.value == pytest.approx(90.0)
 
-    def test_target_url_is_absolute_path_of_media(self, tmp_path: Path) -> None:
-        """clip's target_url must be the absolute path of media (DC-AS-001)."""
+    def test_target_url_resolves_to_media_path(self, tmp_path: Path) -> None:
+        """clip target_url must resolve to the media file (DC-AS-001).
+
+        When media is inside the OTIO output directory, media_ref_for_otio returns a
+        relative POSIX path.  Resolve relative to the OTIO directory to compare.
+        """
         from clipwright.otio_utils import load_timeline
 
         from clipwright_silence.detect import detect_silence
@@ -538,9 +548,19 @@ class TestKeepClipOtio:
         v1 = tl.tracks[0]
         clips = [it for it in v1 if isinstance(it, otio.schema.Clip)]
         abs_media = str(Path(media).resolve())
+        out_dir = Path(output).parent
         for clip in clips:
             assert isinstance(clip.media_reference, otio.schema.ExternalReference)
-            assert clip.media_reference.target_url == abs_media
+            ref_url = clip.media_reference.target_url
+            ref_path = Path(ref_url)
+            # Resolve relative to OTIO dir (media_ref_for_otio may return relative path)
+            if ref_path.is_absolute():
+                resolved = str(ref_path.resolve())
+            else:
+                resolved = str((out_dir / ref_path).resolve())
+            assert resolved == abs_media, (
+                f"target_url {ref_url!r} resolved to {resolved!r}, expected {abs_media!r}"
+            )
 
     def test_clip_metadata_has_clipwright_key(self, tmp_path: Path) -> None:
         """clip.metadata["clipwright"] must contain tool/version/kind="keep"."""
@@ -752,10 +772,11 @@ class TestInputValidation:
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
 
-    def test_output_in_different_dir_returns_invalid_input(
-        self, tmp_path: Path
-    ) -> None:
-        """output in a different directory than media -> INVALID_INPUT (DC-AS-001)."""
+    def test_output_in_different_dir_allowed(self, tmp_path: Path) -> None:
+        """output in a different directory than media is now allowed (new policy: DC-AS-001 removed).
+
+        RED: impl still raises INVALID_INPUT at detect.py L393-415; must be True after fix.
+        """
         from clipwright_silence.detect import detect_silence
 
         media_dir = tmp_path / "src"
@@ -766,14 +787,24 @@ class TestInputValidation:
         Path(media).touch()
         output = str(out_dir / "out.otio")
 
-        with patch(
-            "clipwright_silence.detect.inspect_media",
-            return_value=_make_media_info(path=media, duration_sec=10.0),
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=_make_media_info(path=media, duration_sec=10.0),
+            ),
+            patch(
+                "clipwright_silence.detect.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
+            patch(
+                "clipwright_silence.detect.run",
+                side_effect=_fake_run_ok(""),
+            ),
         ):
             result = detect_silence(media, output, _opts())
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        # RED: currently INVALID_INPUT — must be True after impl removes same-dir check
+        assert result["ok"] is True
 
     def test_output_invalid_extension_returns_invalid_input(
         self, tmp_path: Path
@@ -2369,10 +2400,12 @@ class TestVadCommonInputValidation:
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.INVALID_INPUT
 
-    def test_vad_output_in_different_dir_returns_invalid_input(
-        self, tmp_path: Path
-    ) -> None:
-        """output in a different directory than media on VAD path -> INVALID_INPUT."""
+    def test_vad_output_in_different_dir_is_allowed(self, tmp_path: Path) -> None:
+        """VAD backend with output in a different directory than media -> ok=True.
+
+        The co-location constraint (DC-AS-001-VAD) was removed by impl-detectcut.
+        VAD CLI reads media directly and does not depend on the output OTIO path.
+        """
         from clipwright_silence.detect import detect_silence
 
         media_dir = tmp_path / "src"
@@ -2383,14 +2416,19 @@ class TestVadCommonInputValidation:
         Path(media).touch()
         output = str(out_dir / "out.otio")
 
-        with patch(
-            "clipwright_silence.detect.inspect_media",
-            return_value=_make_media_info(path=media, duration_sec=10.0),
+        with (
+            patch(
+                "clipwright_silence.detect.inspect_media",
+                return_value=_make_media_info(path=media, duration_sec=10.0),
+            ),
+            patch("clipwright_silence.detect.run", side_effect=_fake_vad_run_ok),
         ):
             result = detect_silence(media, output, _vad_opts())
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        assert result["ok"] is True, (
+            f"Expected ok=True after removing VAD co-location constraint; "
+            f"got ok=False: {result.get('error')}"
+        )
 
     def test_vad_source_range_rate_matches_media_info_duration_rate(
         self, tmp_path: Path

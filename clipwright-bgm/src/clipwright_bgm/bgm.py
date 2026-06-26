@@ -1,8 +1,9 @@
-"""bgm.py — clipwright-bgm orchestration layer (design ADR-B1/B2/B3/B8/B10).
+"""bgm.py — clipwright-bgm orchestration layer (design ADR-B1/B2/B3/B10).
 
 Flow:
   1. Input validation (timeline exists, bgm exists, extension whitelist,
-     boundary check, output collision)
+     output-vs-source collision, output parent directory existence,
+     output overwrite guard)
   2. Load timeline
   3. Re-invocation detection
      (kind=='bgm' clip exists → INVALID_INPUT, ADR-B2-r3)
@@ -19,6 +20,11 @@ Design decisions:
 - Re-invocation detection is based on kind=='bgm' clip presence,
   not track name "A2" (ADR-B2-r3).
 - BGM extension whitelist rejects disallowed extensions (DC-AM-007, ADR-B2-r3).
+- BGM may reside in any directory (external files accepted; ADR-B8 co-location
+  constraint removed in favour of pathpolicy.check_output_not_source).
+- OTIO target_url is produced via pathpolicy.media_ref_for_otio:
+    relative POSIX path when bgm is under output's parent dir,
+    absolute path otherwise (no ../ traversal).
 """
 
 from __future__ import annotations
@@ -30,6 +36,7 @@ from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.media import inspect_media
 from clipwright.otio_utils import load_timeline, save_timeline
+from clipwright.pathpolicy import check_output_not_source, media_ref_for_otio
 from clipwright.schemas import ToolResult
 
 import clipwright_bgm
@@ -58,7 +65,10 @@ def add_bgm(
     Args:
         timeline: Input OTIO timeline file path.
         bgm: BGM file path (audio or video; see allowed extension whitelist).
-        output: Output OTIO timeline file path (must differ from timeline, M5).
+            May reside in any directory (external files accepted).
+        output: Output OTIO timeline file path.  Must differ from timeline and
+            bgm (non-destructive, M5).  May reside in any directory whose
+            parent already exists (accumulate contract).
         options: BGM options. When None, BgmOptions(volume_db=-6.0) is used.
 
     Returns:
@@ -113,26 +123,21 @@ def _add_bgm_inner(
             ),
         )
 
-    # BGM path boundary check: bgm must be under the same directory as timeline (ADR-B8)
-    _check_bgm_within_timeline_dir(bgm_path, timeline_path)
+    # Output-vs-source collision: output must not overwrite timeline or bgm
+    # (non-destructive, M5).  Raises PATH_NOT_ALLOWED when they coincide.
+    check_output_not_source(output_path, [str(timeline_path), str(bgm_path)])
 
-    # Output collision check: output == input timeline is forbidden
-    # (non-destructive, M5)
-    if _same_path(output_path, timeline_path):
+    # Output parent directory must already exist (accumulate contract)
+    if not output_path.parent.exists():
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message="Output path and input timeline path are identical.",
-            hint=(
-                "Specify a different path for the output file from the input timeline."
+            message=(
+                f"Output parent directory does not exist: {output_path.parent.name}"
             ),
+            hint="Create the output directory before calling add_bgm.",
         )
 
-    # Output boundary check: output must be under the same directory
-    # as timeline (SR L-3)
-    _check_output_within_timeline_dir(output_path, timeline_path)
-
-    # Output collision check: overwriting an existing file is forbidden
-    # (non-destructive)
+    # Output overwrite guard: refuse to clobber an existing file (non-destructive)
     if output_path.exists():
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
@@ -214,7 +219,9 @@ def _add_bgm_inner(
         ),
     )
 
-    ref = otio.schema.ExternalReference(target_url=str(bgm_path))
+    ref = otio.schema.ExternalReference(
+        target_url=media_ref_for_otio(bgm_path, output_path.parent)
+    )
     bgm_clip = otio.schema.Clip(
         name=bgm_path.name,
         media_reference=ref,
@@ -276,73 +283,3 @@ def _collect_bgm_clips(tl: otio.schema.Timeline) -> list[otio.schema.Clip]:
                     if meta.get("kind") == "bgm":
                         bgm_clips.append(item)
     return bgm_clips
-
-
-def _check_bgm_within_timeline_dir(bgm_path: Path, timeline_path: Path) -> None:
-    """Verify that the BGM file is under the same directory as the timeline (ADR-B8).
-
-    Boundary check: raises PATH_NOT_ALLOWED if the BGM path is outside
-    the timeline directory.
-    Falls back to absolute() when resolve() fails (Windows compatibility).
-
-    Raises:
-        ClipwrightError: PATH_NOT_ALLOWED (out of boundary).
-    """
-    try:
-        bgm_resolved = bgm_path.resolve()
-        timeline_dir = timeline_path.resolve().parent
-    except OSError:
-        bgm_resolved = bgm_path.absolute()
-        timeline_dir = timeline_path.absolute().parent
-
-    # Check whether bgm is under timeline_dir
-    try:
-        bgm_resolved.relative_to(timeline_dir)
-    except ValueError:
-        raise ClipwrightError(
-            code=ErrorCode.PATH_NOT_ALLOWED,
-            message=(f"BGM file is outside the timeline directory: {bgm_path.name}"),
-            hint="Place the BGM file in the same directory as the timeline.",
-        ) from None
-
-
-def _check_output_within_timeline_dir(output_path: Path, timeline_path: Path) -> None:
-    """Verify that the output file is under the same directory as the timeline (SR L-3).
-
-    Boundary check: raises PATH_NOT_ALLOWED if output is outside
-    the timeline directory.
-    Falls back to absolute() when resolve() fails (Windows compatibility).
-
-    Raises:
-        ClipwrightError: PATH_NOT_ALLOWED (out of boundary).
-    """
-    try:
-        output_resolved = output_path.resolve()
-        timeline_dir = timeline_path.resolve().parent
-    except OSError:
-        output_resolved = output_path.absolute()
-        timeline_dir = timeline_path.absolute().parent
-
-    # Check whether output's parent directory is under (or equal to) timeline_dir.
-    # The parent directory of output (not output itself) must be within timeline_dir.
-    try:
-        output_resolved.parent.relative_to(timeline_dir)
-    except ValueError:
-        raise ClipwrightError(
-            code=ErrorCode.PATH_NOT_ALLOWED,
-            message=(
-                f"Output path is outside the timeline directory: {output_path.name}"
-            ),
-            hint="Place the output file in the same directory as the timeline.",
-        ) from None
-
-
-def _same_path(a: Path, b: Path) -> bool:
-    """Return True if both paths point to the same entity.
-
-    Falls back to string comparison when resolve fails.
-    """
-    try:
-        return a.resolve() == b.resolve()
-    except OSError:
-        return str(a) == str(b)

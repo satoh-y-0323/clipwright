@@ -1,6 +1,6 @@
 [project]
 name = "clipwright-overlay"
-version = "0.1.0"
+version = "0.2.0"
 description = "MCP tool for adding image overlays to an OTIO timeline."
 readme = "README.md"
 license = { text = "MIT" }
@@ -9,7 +9,7 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "clipwright>=0.3.0",
+    "clipwright>=0.4.0",
     "mcp[cli]>=1.27.2",
     "opentimelineio>=0.18",
     "pydantic>=2",

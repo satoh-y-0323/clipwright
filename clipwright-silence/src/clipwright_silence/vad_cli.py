@@ -89,7 +89,7 @@ def _load_audio_as_float32(
     (numpy is kept out of the server process; only the separate vad_cli subprocess
     imports it).
     """
-    import numpy as np  # type: ignore[import-not-found]  # optional VAD extra
+    import numpy as np  # optional VAD extra
 
     with wave.open(pcm_path, "rb") as wf:
         n_frames = wf.getnframes()

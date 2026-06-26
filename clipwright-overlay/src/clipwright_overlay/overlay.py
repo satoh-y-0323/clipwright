@@ -7,26 +7,24 @@ Design decisions:
 - _add_overlay_inner() is the raising implementation; add_overlay() is the public
   boundary that catches ClipwrightError and converts to error_result.
 - Value-range validation is performed manually (OQ-1) for precise error hints.
-- image_path is stored as a RELATIVE posix path under the output timeline parent
-  dir (V2-3) to ensure round-trip stability across project moves.
+- image_path is stored via media_ref_for_otio (ADR-PP-1): relative posix when
+  the image is under the output timeline's parent directory; absolute path when
+  outside.  render resolves both forms via check_media_ref at materialisation time.
 - x/y allowlist ^[A-Za-z0-9_()+\\-*/. ]+$ prevents filtergraph injection (V2-5).
 - Idempotency: exact duplicate (all metadata fields match) -> no-op with warning.
-  Comparison uses the stored relative image_path string (V2-3).
+  Comparison uses the same media_ref_for_otio result as storage (handles both
+  relative and absolute stored paths).
 - Non-destructive: input OTIO bytes are never modified; output is always new.
+- Output path: may be placed anywhere; only restriction is output != source
+  (checked via check_output_not_source from pathpolicy).
 - Rate determination: first clip source_range -> existing image_overlay marker
   rate -> fallback 1000.0 with warning.
-- Boundary check _check_output_within_timeline_dir is a local copy of the
-  clipwright-text implementation to avoid cross-package imports.
-  When changing the logic here, ensure behaviour remains in sync with
-  clipwright-text's _check_output_within_timeline_dir; the two functions must
-  enforce the same boundary contract.
 - This module is subprocess-free (annotation layer; no ffmpeg/ffprobe calls).
 """
 
 from __future__ import annotations
 
 import collections.abc
-import os
 import re
 from pathlib import Path
 from typing import Any
@@ -35,6 +33,7 @@ import opentimelineio as otio
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.otio_utils import add_marker, get_markers, load_timeline, save_timeline
+from clipwright.pathpolicy import media_ref_for_otio
 from clipwright.schemas import RationalTimeModel, TimeRangeModel, ToolResult
 
 from clipwright_overlay import __version__
@@ -67,169 +66,40 @@ _MAX_IMAGE_OVERLAYS: int = 64
 
 
 # ===========================================================================
-# Path boundary helpers (local copies; keep in sync with clipwright-text)
-# ===========================================================================
-
-
-def _check_output_within_timeline_dir(timeline: Path, output: Path) -> None:
-    """Verify that output is within the timeline's parent directory tree.
-
-    Mirrors clipwright-text _check_output_within_timeline_dir boundary contract.
-    Allows recursive subdirectories; raises PATH_NOT_ALLOWED only when the
-    resolved output is outside the timeline directory tree.
-
-    Intentionally re-implemented locally to avoid cross-package import of
-    clipwright-text (NR-L-4: cross-package imports between satellite tools
-    create tight coupling and break independent packaging/deployment).
-
-    Args:
-        timeline: Path to the input OTIO timeline file.
-        output: Output path to validate against the boundary.
-
-    Raises:
-        ClipwrightError: PATH_NOT_ALLOWED when output is outside the
-            timeline's parent directory tree.
-    """
-    try:
-        allowed_base = timeline.parent.resolve()
-        target_resolved = output.resolve()
-        target_str = str(target_resolved)
-        base_str = str(allowed_base)
-        if not (
-            target_str == base_str
-            or target_str.startswith(base_str + "/")
-            or target_str.startswith(base_str + "\\")
-        ):
-            raise ClipwrightError(
-                code=ErrorCode.PATH_NOT_ALLOWED,
-                message="Output path points outside the project boundary.",
-                hint=(
-                    "Place the output file within the same directory as the "
-                    "OTIO timeline, or in a subdirectory of it."
-                ),
-            )
-    except ClipwrightError:
-        raise
-    except OSError:
-        # resolve() failed (network path, symlink loop, etc.): fall back to
-        # absolute()-based best-effort comparison.
-        try:
-            allowed_base_abs = str(timeline.parent.absolute())
-            target_abs = str(output.absolute())
-            if not (
-                target_abs == allowed_base_abs
-                or target_abs.startswith(allowed_base_abs + "/")
-                or target_abs.startswith(allowed_base_abs + "\\")
-            ):
-                raise ClipwrightError(
-                    code=ErrorCode.PATH_NOT_ALLOWED,
-                    message="Output path points outside the project boundary.",
-                    hint=(
-                        "Place the output file within the same directory as the "
-                        "OTIO timeline, or in a subdirectory of it."
-                    ),
-                )
-        except ClipwrightError:
-            raise
-        except OSError:
-            # Skip only when absolute() also fails (truly unresolvable path).
-            pass
-
-
-def _check_within_image_overlay_dir(output_otio_path: Path, resolved: Path) -> None:
-    """Verify the resolved image path is within the output timeline's parent dir tree.
-
-    Uses the same boundary contract as _check_output_within_timeline_dir but
-    applied to the image file: the allowed base is the output OTIO's parent dir
-    (V2-3 / ADR-OV-3). This ensures that render-side re-validation (which uses
-    the timeline parent as the base) will also pass, since the output timeline
-    is the input to render.
-
-    Args:
-        output_otio_path: Path to the output OTIO file (determines allowed base).
-        resolved: Resolved absolute path to the image file to validate.
-
-    Raises:
-        ClipwrightError: PATH_NOT_ALLOWED when the image is outside the
-            output timeline's parent directory tree.
-    """
-    try:
-        allowed_base = output_otio_path.resolve().parent
-        target_str = str(resolved)
-        base_str = str(allowed_base)
-        if not (
-            target_str == base_str
-            or target_str.startswith(base_str + "/")
-            or target_str.startswith(base_str + "\\")
-        ):
-            raise ClipwrightError(
-                code=ErrorCode.PATH_NOT_ALLOWED,
-                message="Image path points outside the project boundary.",
-                hint=(
-                    "Place the image file within the same directory as the "
-                    "output OTIO timeline, or in a subdirectory of it."
-                ),
-            )
-    except ClipwrightError:
-        raise
-    except OSError:
-        try:
-            allowed_base_abs = str(output_otio_path.absolute().parent)
-            target_abs = str(resolved)
-            if not (
-                target_abs == allowed_base_abs
-                or target_abs.startswith(allowed_base_abs + "/")
-                or target_abs.startswith(allowed_base_abs + "\\")
-            ):
-                raise ClipwrightError(
-                    code=ErrorCode.PATH_NOT_ALLOWED,
-                    message="Image path points outside the project boundary.",
-                    hint=(
-                        "Place the image file within the same directory as the "
-                        "output OTIO timeline, or in a subdirectory of it."
-                    ),
-                )
-        except ClipwrightError:
-            raise
-        except OSError:
-            pass
-
-
-# ===========================================================================
 # Validation helpers
 # ===========================================================================
 
 
 def _validate_overlay_fields(options: AddOverlayOptions, output: str) -> None:
-    """Validate value-range, image_path (4-stage), and position expression fields.
+    """Validate value-range, image_path (3-stage), and position expression fields.
 
     Validation order (fixed to keep error messages deterministic — ADR-OV-2):
       1. Value ranges (start_sec, duration_sec, scale, opacity, fade_in_sec,
          fade_out_sec, fade sum)
-      2. image_path 4-stage:
+      2. image_path 3-stage:
          a. path safety: single-quote or control char (INVALID_INPUT)
             — checked before resolve() to prevent ValueError from control chars
               and to ensure safety always precedes existence/extension checks
-         b. co-location (PATH_NOT_ALLOWED)
-         c. existence (FILE_NOT_FOUND, basename only)
-         d. extension allowlist (INVALID_INPUT)
+         b. existence (FILE_NOT_FOUND, basename only)
+         c. extension allowlist (INVALID_INPUT)
       3. x/y allowlist (INVALID_INPUT) (V2-5)
 
-    Path safety is placed before co-location because:
+    Co-location restriction removed (ADR-PP-1 / impl-overlay): images may be
+    placed anywhere; media_ref_for_otio stores relative posix when inside the
+    output OTIO's parent dir, absolute when outside.
+
+    Path safety is placed first because:
     - control chars in the path cause Path.resolve() to raise ValueError on Windows
-    - single-quotes in the path must be rejected before the file's existence is
-      checked (the file is typically absent with a bad path)
+    - single-quotes must be rejected before existence/extension checks
     All violations raise ClipwrightError on the first failure.
 
     Args:
         options: AddOverlayOptions to validate.
-        output: Output OTIO file path (used for co-location boundary).
+        output: Output OTIO file path (used only for boundary context in callers).
 
     Raises:
         ClipwrightError: On the first validation failure.
     """
-    out = Path(output)
-
     # --- 1. Value ranges ---
     if options.start_sec < 0:
         raise ClipwrightError(
@@ -282,7 +152,7 @@ def _validate_overlay_fields(options: AddOverlayOptions, output: str) -> None:
             ),
         )
 
-    # --- 2. image_path 4-stage validation ---
+    # --- 2. image_path 3-stage validation ---
 
     # 2a. path safety: single-quote or control char — checked BEFORE resolve() to:
     #     (1) avoid ValueError from control chars embedded in the path on Windows,
@@ -305,10 +175,7 @@ def _validate_overlay_fields(options: AddOverlayOptions, output: str) -> None:
 
     resolved = Path(options.image_path).resolve()
 
-    # 2b. co-location: image must be within the output timeline's parent dir tree (V2-3)
-    _check_within_image_overlay_dir(out, resolved)
-
-    # 2c. existence
+    # 2b. existence
     if not resolved.exists():
         raise ClipwrightError(
             code=ErrorCode.FILE_NOT_FOUND,
@@ -316,7 +183,7 @@ def _validate_overlay_fields(options: AddOverlayOptions, output: str) -> None:
             hint="Verify the image path and ensure the file exists.",
         )
 
-    # 2d. extension allowlist
+    # 2c. extension allowlist
     if resolved.suffix.lower() not in _ALLOWED_IMAGE_EXTENSIONS:
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
@@ -362,55 +229,27 @@ def _overlay_metadata_dict(
 ) -> dict[str, Any]:
     """Build the clipwright metadata dict for an image_overlay marker.
 
-    Stores the image_path as a RELATIVE posix path from the output timeline
-    parent dir (V2-3): this ensures round-trip stability when the project is
-    moved, as long as the relative layout between the timeline and image is
-    preserved. render reconstructs the absolute path as:
-      (Path(timeline_path).resolve().parent / rel).resolve()
+    Stores image_path via media_ref_for_otio (ADR-PP-1):
+      - inside output OTIO's parent directory -> relative POSIX path
+      - outside -> absolute path (no '../' traversal stored)
+
+    render resolves both forms via check_media_ref at materialisation time.
 
     Args:
         options: Validated AddOverlayOptions.
-        output: Output OTIO file path (determines the relative base).
+        output: Output OTIO file path (determines the relative/absolute split).
         version: Package version string to embed in metadata.
 
     Returns:
         Dict to store under marker.metadata["clipwright"].
-
-    Raises:
-        ClipwrightError: PATH_NOT_ALLOWED if relpath contains '..', which
-            indicates the image is outside the output parent tree (defense-in-depth).
     """
-    resolved = Path(options.image_path).resolve()
-    timeline_parent = Path(output).resolve().parent
-    try:
-        rel_str = os.path.relpath(resolved, timeline_parent)
-    except ValueError:
-        # Different drive on Windows: relpath raises ValueError -> co-location violation
-        raise ClipwrightError(
-            code=ErrorCode.PATH_NOT_ALLOWED,
-            message="Image path points outside the project boundary.",
-            hint=(
-                "Place the image file within the same directory as the "
-                "output OTIO timeline, or in a subdirectory of it."
-            ),
-        ) from None
-    rel = Path(rel_str).as_posix()
-    # Defense-in-depth (V2-3): if co-location check passed but relpath still yields
-    # a '..' prefix, treat as PATH_NOT_ALLOWED.
-    if rel.startswith(".."):
-        raise ClipwrightError(
-            code=ErrorCode.PATH_NOT_ALLOWED,
-            message="Image path points outside the project boundary.",
-            hint=(
-                "Place the image file within the same directory as the "
-                "output OTIO timeline, or in a subdirectory of it."
-            ),
-        )
+    otio_dir = Path(output).resolve().parent
+    stored_path = media_ref_for_otio(options.image_path, otio_dir)
     return {
         "tool": "clipwright-overlay",
         "version": version,
         "kind": "image_overlay",
-        "image_path": rel,
+        "image_path": stored_path,
         "start_sec": options.start_sec,
         "duration_sec": options.duration_sec,
         "x": options.x,
@@ -429,14 +268,14 @@ def _is_duplicate_overlay(
 
     Compares all AddOverlayOptions fields stored in marker.metadata["clipwright"]
     against the current options. Uses approximate float comparison for numeric
-    fields to be rate-invariant. image_path comparison is done on the relative
-    posix string (V2-3): both the stored value and the computed relative path
-    of the new options must match exactly.
+    fields to be rate-invariant. image_path comparison uses media_ref_for_otio to
+    compute the same representation used at storage time (relative or absolute
+    depending on whether the image is inside the output OTIO's parent directory).
 
     Args:
         marker: An existing image_overlay marker to compare.
         options: Current AddOverlayOptions to check for duplication.
-        output: Output OTIO file path (for computing relative image_path).
+        output: Output OTIO file path (for computing stored image_path).
 
     Returns:
         True if all fields match (complete duplicate -> no-op).
@@ -447,22 +286,15 @@ def _is_duplicate_overlay(
     if cw.get("kind") != "image_overlay":
         return False
 
-    # Compute the relative posix path for the new options
+    # Compute the stored path for the new options using media_ref_for_otio
     try:
-        resolved = Path(options.image_path).resolve()
-        timeline_parent = Path(output).resolve().parent
-        try:
-            rel_str = os.path.relpath(resolved, timeline_parent)
-        except ValueError:
-            return False
-        new_rel = Path(rel_str).as_posix()
-        if new_rel.startswith(".."):
-            return False
+        otio_dir = Path(output).resolve().parent
+        new_stored_path = media_ref_for_otio(options.image_path, otio_dir)
     except Exception:
         return False
 
-    # String fields: exact match (image_path as relative, x, y)
-    if cw.get("image_path") != new_rel:
+    # String fields: exact match (image_path via media_ref_for_otio, x, y)
+    if cw.get("image_path") != new_stored_path:
         return False
     if cw.get("x") != options.x:
         return False
@@ -546,17 +378,19 @@ def _add_overlay_inner(
     Validation order:
       1. output suffix == .otio
       2. output parent directory exists
-      3. output boundary check (PATH_NOT_ALLOWED when outside timeline dir)
-      4. output != timeline
-      5. field validation (_validate_overlay_fields, including image_path 4-stage)
-      6. load timeline (FILE_NOT_FOUND / OTIO_ERROR propagate)
-      7. first TrackKind.Video track exists
-      8. rate determination
-      9. _MAX_IMAGE_OVERLAYS cap check (V2-9)
-     10. idempotency check (exact duplicate -> no-op)
-     11. add marker (image_{n}, all metadata fields, relative image_path)
-     12. save timeline atomically
-     13. return ok_result
+      3. output != timeline
+      4. field validation (_validate_overlay_fields, including image_path 3-stage)
+      5. load timeline (FILE_NOT_FOUND / OTIO_ERROR propagate)
+      6. first TrackKind.Video track exists
+      7. rate determination
+      8. _MAX_IMAGE_OVERLAYS cap check (V2-9)
+      9. idempotency check (exact duplicate -> no-op)
+     10. add marker (image_{n}, all metadata fields, via media_ref_for_otio)
+     11. save timeline atomically
+     12. return ok_result
+
+    Output boundary restriction removed (impl-overlay): output may be placed
+    anywhere; only the output != source constraint is enforced.
 
     Args:
         timeline: Input OTIO timeline file path.
@@ -588,10 +422,7 @@ def _add_overlay_inner(
             hint="Create the output directory before calling clipwright_add_overlay.",
         )
 
-    # --- Step 3: output boundary check ---
-    _check_output_within_timeline_dir(inp, out)
-
-    # --- Step 4: output != timeline ---
+    # --- Step 3: output != timeline ---
     if out.resolve() == inp.resolve():
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
@@ -601,10 +432,10 @@ def _add_overlay_inner(
             ),
         )
 
-    # --- Step 5: field validation (value ranges + image_path 4-stage + x/y) ---
+    # --- Step 4: field validation (value ranges + image_path 3-stage + x/y) ---
     _validate_overlay_fields(options, output)
 
-    # --- Step 6: load timeline ---
+    # --- Step 5: load timeline ---
     if not inp.exists():
         raise ClipwrightError(
             code=ErrorCode.FILE_NOT_FOUND,
@@ -613,7 +444,7 @@ def _add_overlay_inner(
         )
     timeline_obj = load_timeline(timeline)
 
-    # --- Step 7: find first Video track ---
+    # --- Step 6: find first Video track ---
     video_track: otio.schema.Track | None = None
     for track in timeline_obj.tracks:
         if track.kind == otio.schema.TrackKind.Video:
@@ -630,10 +461,10 @@ def _add_overlay_inner(
             ),
         )
 
-    # --- Step 8: rate determination ---
+    # --- Step 7: rate determination ---
     rate, rate_warnings = _resolve_rate(video_track)
 
-    # --- Step 9: _MAX_IMAGE_OVERLAYS cap (V2-9) ---
+    # --- Step 8: _MAX_IMAGE_OVERLAYS cap (V2-9) ---
     existing_markers = get_markers(timeline_obj, kind="image_overlay")
     if len(existing_markers) >= _MAX_IMAGE_OVERLAYS:
         raise ClipwrightError(
@@ -646,7 +477,7 @@ def _add_overlay_inner(
             ),
         )
 
-    # --- Step 10: idempotency check ---
+    # --- Step 9: idempotency check ---
     for existing in existing_markers:
         if _is_duplicate_overlay(existing, options, output):
             # Exact duplicate: save a copy of the timeline and return no-op result
@@ -676,12 +507,12 @@ def _add_overlay_inner(
                 warnings=["Identical image overlay already exists; no marker added."],
             )
 
-    # --- Step 11: add marker ---
+    # --- Step 10: add marker ---
     # Count existing image_overlay markers to determine name index
     n = len(existing_markers)
     marker_name = f"image_{n}"
 
-    # Build marker metadata with relative image_path (V2-3)
+    # Build marker metadata via media_ref_for_otio (relative or absolute)
     metadata = _overlay_metadata_dict(options, output, __version__)
 
     # Build marked_range using the resolved rate
@@ -704,10 +535,10 @@ def _add_overlay_inner(
         metadata=metadata,
     )
 
-    # --- Step 12: save timeline ---
+    # --- Step 11: save timeline ---
     save_timeline(timeline_obj, output)
 
-    # --- Step 13: build result ---
+    # --- Step 12: build result ---
     overlay_count = n + 1
     out_resolved = out.resolve()
     basename = Path(options.image_path).name
@@ -750,8 +581,14 @@ def add_overlay(
     Idempotent: calling with the same options on an already-annotated timeline
     produces applied=0 and a warning rather than duplicating the marker.
 
-    The image_path is stored as a relative posix path in the marker metadata
-    (V2-3) to ensure round-trip stability across project directory moves.
+    Accumulate pattern: each distinct call appends image_0, image_1, ... markers.
+    Output may be placed anywhere (not constrained to the input timeline's
+    directory); only the restriction output != timeline is enforced.
+
+    image_path storage follows media_ref_for_otio (ADR-PP-1):
+      - inside output OTIO's parent directory -> relative POSIX path
+      - outside -> absolute path (no '../' traversal)
+    clipwright-render resolves both forms at materialisation time.
 
     Returns a plain dict (ToolResult.model_dump()) so callers can use both
     dict-style access (``result["ok"]``, ``result.get(...)``) and

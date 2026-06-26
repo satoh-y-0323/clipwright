@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-06-26
+
+### Changed
+
+- **Internal: boundary helper consolidated into core** — The local `_check_within_boundary`
+  helper in `extract.py` has been replaced by `clipwright.pathpolicy.check_within_boundary`
+  (introduced in `clipwright>=0.4.0`). Artifact-containment behaviour is identical; only
+  the implementation is consolidated. Requires `clipwright>=0.4.0`.
+
 ## [0.1.0] — 2026-06-17
 
 ### Added

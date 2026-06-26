@@ -192,7 +192,9 @@ def test_negative_control_no_denoise_within_threshold(tmp_path: Path) -> None:
         else 2.0
     )
     neg_tl = new_timeline(fixture.name)
-    _add_full_clip(neg_tl, fixture, dur_sec, media_info.duration)
+    _add_full_clip(
+        neg_tl, fixture, dur_sec, media_info.duration, neg_timeline_path.parent
+    )
     save_timeline(neg_tl, str(neg_timeline_path))
 
     in_vol = _get_mean_volume(fixture)

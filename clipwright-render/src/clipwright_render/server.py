@@ -39,11 +39,23 @@ mcp = FastMCP("clipwright-render")
 def clipwright_render(
     timeline: Annotated[
         str,
-        Field(description="Input OTIO timeline file path."),
+        Field(
+            description=(
+                "Input OTIO timeline file path. The timeline directory is used"
+                " as the base for resolving relative media references; absolute"
+                " paths to existing real files are accepted regardless of location"
+                " (ADR-PP-1)."
+            )
+        ),
     ],
     output: Annotated[
         str,
-        Field(description="Output video file path (.mp4/.mkv/.mov/.webm)."),
+        Field(
+            description=(
+                "Output video file path (.mp4/.mkv/.mov/.webm). Must differ from"
+                " all source media paths (non-destructive; DC-AM-002)."
+            )
+        ),
     ],
     options: Annotated[
         RenderOptions | None,
@@ -63,6 +75,14 @@ def clipwright_render(
 
     Non-destructive: the input timeline file and source media are never modified.
     The output is a newly generated video file whose path is returned in artifacts.
+
+    I/O contract:
+    - Input: OTIO timeline (.otio). Source media, subtitle, and image overlay
+      references embedded in the timeline are resolved at materialise time.
+      Absolute refs to existing real files are accepted anywhere (ADR-PP-1).
+      Relative refs must resolve within the timeline directory (CWE-22 guard).
+    - Output: encoded video file at the specified output path. The timeline and
+      source files are never modified.
 
     Business logic is delegated to render.render_timeline.
     When options is None, default RenderOptions() is used.

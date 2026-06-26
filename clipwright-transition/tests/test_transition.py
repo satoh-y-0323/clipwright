@@ -148,7 +148,12 @@ class TestCountVideoClips:
 
 
 class TestOutputEqualsInput:
-    def test_same_path_raises_invalid_input(self, tmp_path: Path) -> None:
+    def test_same_path_raises_path_not_allowed(self, tmp_path: Path) -> None:
+        """output == timeline must return PATH_NOT_ALLOWED.
+
+        Delegates to clipwright.pathpolicy.check_output_not_source; consistent
+        transform tool error contract.
+        """
         tl = _two_clip_timeline(tmp_path)
         otio_path = tmp_path / "timeline.otio"
         _write_timeline(tl, otio_path)
@@ -159,7 +164,7 @@ class TestOutputEqualsInput:
             options=_uniform_opts(),
         )
         assert result["ok"] is False
-        assert result["error"]["code"] == "INVALID_INPUT"
+        assert result["error"]["code"] == "PATH_NOT_ALLOWED"
 
 
 # ---------------------------------------------------------------------------
@@ -427,12 +432,15 @@ class TestOkResultEnvelope:
 
 
 class TestOutputBoundary:
-    """SR L-3: output outside the timeline directory must return PATH_NOT_ALLOWED."""
+    """Output placement policy: output may reside in any directory (co-location removed)."""
 
-    def test_output_outside_timeline_dir_returns_path_not_allowed(
-        self, tmp_path: Path
-    ) -> None:
-        """Output placed in a sibling directory must be rejected with PATH_NOT_ALLOWED."""
+    def test_output_outside_timeline_dir_is_allowed(self, tmp_path: Path) -> None:
+        """Output placed in a sibling directory must succeed.
+
+        New policy: add_transition only requires that the output parent directory
+        exists and that output != timeline; placement outside the timeline
+        directory is explicitly allowed to support tool-chaining workflows.
+        """
         # Create two separate sibling directories under tmp_path.
         timeline_dir = tmp_path / "project"
         timeline_dir.mkdir()
@@ -443,14 +451,15 @@ class TestOutputBoundary:
         otio_path = timeline_dir / "timeline.otio"
         _write_timeline(tl, otio_path)
 
-        # Output points into other_dir, which is outside the timeline directory.
+        # Output points into other_dir, outside the timeline directory.
         result = add_transition(
             timeline=str(otio_path),
             output=str(other_dir / "output.otio"),
             options=_uniform_opts(),
         )
-        assert result["ok"] is False
-        assert result["error"]["code"] == "PATH_NOT_ALLOWED"
+        assert result["ok"] is True, (
+            f"Output in sibling dir must be allowed; got: {result.get('error')}"
+        )
 
     def test_output_in_same_dir_as_timeline_is_allowed(self, tmp_path: Path) -> None:
         """Output placed in the same directory as the timeline must succeed."""
@@ -482,28 +491,28 @@ class TestOutputBoundary:
         )
         assert result["ok"] is True
 
-    def test_path_not_allowed_message_does_not_expose_full_path(
+    def test_output_equals_timeline_message_does_not_expose_full_path(
         self, tmp_path: Path
     ) -> None:
-        """Error message must not expose the full filesystem path (CWE-209)."""
-        timeline_dir = tmp_path / "project"
-        timeline_dir.mkdir()
-        other_dir = tmp_path / "other"
-        other_dir.mkdir()
+        """CWE-209: PATH_NOT_ALLOWED error message must not expose the full path.
 
-        tl = _two_clip_timeline(timeline_dir)
-        otio_path = timeline_dir / "timeline.otio"
+        When output == timeline, check_output_not_source returns PATH_NOT_ALLOWED.
+        The error message and hint must not include the full filesystem path.
+        """
+        tl = _two_clip_timeline(tmp_path)
+        otio_path = tmp_path / "timeline.otio"
         _write_timeline(tl, otio_path)
 
         result = add_transition(
             timeline=str(otio_path),
-            output=str(other_dir / "output.otio"),
+            output=str(otio_path),
             options=_uniform_opts(),
         )
         assert result["ok"] is False
-        # Fixed wording must not include the full absolute path of other_dir.
-        assert str(other_dir) not in result["error"]["message"]
-        assert str(other_dir) not in result["error"].get("hint", "")
+        assert result["error"]["code"] == "PATH_NOT_ALLOWED"
+        # Fixed wording must not include the full absolute path.
+        assert str(tmp_path) not in result["error"]["message"]
+        assert str(tmp_path) not in result["error"].get("hint", "")
 
 
 # ---------------------------------------------------------------------------

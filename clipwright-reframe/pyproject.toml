@@ -1,6 +1,6 @@
 [project]
 name = "clipwright-reframe"
-version = "0.2.0"
+version = "0.3.0"
 description = "MCP tool for video reframing and OTIO timeline reframe annotation generation. Annotates a reframe directive (target resolution / fit mode / anchor) to timeline-level metadata for clipwright-render to apply."
 readme = "README.md"
 license = { text = "MIT" }
@@ -9,7 +9,7 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "clipwright>=0.2.0",
+    "clipwright>=0.4.0",
     "mcp[cli]>=1.27.2",
     "pydantic>=2",
 ]

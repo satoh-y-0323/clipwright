@@ -217,8 +217,14 @@ class TestNewTimeline:
         clips = [it for it in v1 if isinstance(it, otio.schema.Clip)]
         assert len(clips) >= 1
 
-    def test_new_timeline_clip_target_url_is_absolute(self, tmp_path: Path) -> None:
-        """The V1 clip target_url must be the absolute path of the media file (DC-AS-002)."""
+    def test_new_timeline_clip_target_url_resolves_to_media(
+        self, tmp_path: Path
+    ) -> None:
+        """The V1 clip target_url must resolve to the media file path (DC-AS-002).
+
+        When media is inside the OTIO output directory, media_ref_for_otio returns a
+        relative POSIX path.  Resolve relative to the OTIO directory to compare.
+        """
         from clipwright.otio_utils import load_timeline
 
         from clipwright_noise.noise import detect_noise
@@ -242,15 +248,25 @@ class TestNewTimeline:
         v1 = next(t for t in tl.tracks if t.kind == otio.schema.TrackKind.Video)
         clips = [it for it in v1 if isinstance(it, otio.schema.Clip)]
         abs_media = str(media.resolve())
+        otio_dir = output.parent
         for clip in clips:
             assert isinstance(clip.media_reference, otio.schema.ExternalReference)
-            # target_url must contain the absolute path (compare via resolve())
-            ref_path = Path(clip.media_reference.target_url)
-            try:
-                resolved = str(ref_path.resolve())
-            except OSError:
-                resolved = str(ref_path.absolute())
-            assert resolved == abs_media
+            ref_url = clip.media_reference.target_url
+            ref_path = Path(ref_url)
+            # Resolve relative to OTIO dir (media_ref_for_otio may return relative path)
+            if ref_path.is_absolute():
+                try:
+                    resolved = str(ref_path.resolve())
+                except OSError:
+                    resolved = str(ref_path.absolute())
+            else:
+                try:
+                    resolved = str((otio_dir / ref_path).resolve())
+                except OSError:
+                    resolved = str((otio_dir / ref_path).absolute())
+            assert resolved == abs_media, (
+                f"target_url {ref_url!r} resolved to {resolved!r}, expected {abs_media!r}"
+            )
 
     def test_new_timeline_has_denoise_metadata(self, tmp_path: Path) -> None:
         """The generated timeline's metadata["clipwright"]["denoise"] must be set."""
@@ -521,16 +537,21 @@ class TestOutputConflict:
 
 
 # ===========================================================================
-# (f) output in different dir from media → INVALID_INPUT (DC-AS-002)
+# (f) output in different dir from media — now ALLOWED (new policy: DC-AS-002 removed)
 # ===========================================================================
 
 
 class TestOutputDifferentDir:
-    """INVALID_INPUT must be returned when output is in a different directory from media (DC-AS-002)."""
+    """Output in a different directory from media is now ALLOWED (new policy: DC-AS-002 check removed).
 
-    def test_output_in_different_dir_returns_invalid_input(
-        self, tmp_path: Path
-    ) -> None:
+    RED: noise.py L107-122 same-dir check still in place; must succeed after impl-detectcut.
+    """
+
+    def test_output_in_different_dir_allowed(self, tmp_path: Path) -> None:
+        """detect_noise must succeed when output is in a different directory from media.
+
+        RED: impl still raises INVALID_INPUT at noise.py L107-122; must be True after fix.
+        """
         from clipwright_noise.noise import detect_noise
 
         media_dir = tmp_path / "src"
@@ -541,19 +562,31 @@ class TestOutputDifferentDir:
         media = media_dir / "video.mp4"
         media.write_bytes(b"dummy")
         output = out_dir / "out.otio"
+        media_info = _make_media_info(str(media))
 
-        result = detect_noise(
-            str(media), str(output), DetectNoiseOptions(), timeline=None
-        )
+        with (
+            patch("clipwright_noise.noise.inspect_media", return_value=media_info),
+            patch(
+                "clipwright_noise.noise.measure_noise",
+                return_value=_FAKE_MEASURE_RESULT,
+            ),
+        ):
+            result = detect_noise(
+                str(media), str(output), DetectNoiseOptions(), timeline=None
+            )
 
         d = _d(result)
-        assert d["ok"] is False
-        assert d["error"]["code"] == ErrorCode.INVALID_INPUT
+        # RED: currently INVALID_INPUT — must be True after impl removes same-dir check
+        assert d["ok"] is True
 
-    def test_output_different_dir_hint_does_not_contain_absolute_path(
+    def test_output_in_different_dir_allowed_with_separate_dirs(
         self, tmp_path: Path
     ) -> None:
-        """The same-dir error hint must not contain an absolute path (SR-M-2 / CWE-209)."""
+        """detect_noise must accept media and output in independently named directories.
+
+        RED: same-dir check still in impl; replaces the former CWE-209 hint check
+        that is now obsolete (no error is raised, so no hint to inspect).
+        """
         from clipwright_noise.noise import detect_noise
 
         media_dir = tmp_path / "media_src_dir"
@@ -564,21 +597,22 @@ class TestOutputDifferentDir:
         media = media_dir / "video.mp4"
         media.write_bytes(b"dummy")
         output = out_dir / "out.otio"
+        media_info = _make_media_info(str(media))
 
-        result = detect_noise(
-            str(media), str(output), DetectNoiseOptions(), timeline=None
-        )
+        with (
+            patch("clipwright_noise.noise.inspect_media", return_value=media_info),
+            patch(
+                "clipwright_noise.noise.measure_noise",
+                return_value=_FAKE_MEASURE_RESULT,
+            ),
+        ):
+            result = detect_noise(
+                str(media), str(output), DetectNoiseOptions(), timeline=None
+            )
 
         d = _d(result)
-        assert d["ok"] is False
-        hint = d["error"].get("hint", "")
-        # hint must not contain an absolute directory path (CWE-209)
-        assert str(media_dir) not in hint, (
-            f"SR-M-2: Absolute media directory path '{media_dir}' is present in the hint."
-        )
-        assert str(tmp_path) not in hint, (
-            f"SR-M-2: tmp_path '{tmp_path}' is present in the hint."
-        )
+        # RED: currently INVALID_INPUT — must be True after impl removes same-dir check
+        assert d["ok"] is True
 
 
 # ===========================================================================

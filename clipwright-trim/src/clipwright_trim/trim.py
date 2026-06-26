@@ -7,9 +7,12 @@ This module is the sole owner of the ClipwrightError -> error_result boundary.
 No business logic belongs in server.py; no error conversion in plan.py.
 
 Design decisions:
-- Output path validation (extension, parent dir, output==media) runs BEFORE
-  inspect_media so a bad output path fails fast without spawning ffprobe.
-- Same-directory check runs AFTER inspect_media (needs confirmed resolved paths).
+- Output path validation runs BEFORE inspect_media (fast fail without spawning ffprobe).
+  Order: (a) output==media (PATH_NOT_ALLOWED), (b) extension, (c) parent dir existence.
+- The same-directory co-location constraint is removed; output may live in any directory
+  whose parent already exists.
+- OTIO media reference uses media_ref_for_otio: relative when media is under the OTIO
+  dir, absolute otherwise (external reference).
 - Error messages use Path.name (basename) only — no full path exposure (CWE-209).
 """
 
@@ -21,6 +24,7 @@ from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.media import inspect_media
 from clipwright.otio_utils import add_clip, new_timeline, save_timeline
+from clipwright.pathpolicy import check_output_not_source, media_ref_for_otio
 from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel, ToolResult
 
 import clipwright_trim
@@ -52,13 +56,12 @@ def _trim_inner(media: str, output: str, options: TrimOptions) -> ToolResult:
     """Internal implementation. Raises ClipwrightError directly on any failure.
 
     Flow:
-      1. Output path validation (extension, parent dir, output==media) — before ffprobe.
+      1. Output path validation (output==media, extension, parent dir) — before ffprobe.
       2. inspect_media (ffprobe) — raises on missing file or probe failure.
-      3. Same-directory check (after inspect_media; needs resolved paths).
-      4. derive_keep_ranges — pure interval arithmetic.
-      5. Build OTIO timeline with keep Clips on V1.
-      6. save_timeline — atomic write.
-      7. Return ok_result envelope.
+      3. derive_keep_ranges — pure interval arithmetic.
+      4. Build OTIO timeline with keep Clips on V1.
+      5. save_timeline — atomic write.
+      6. Return ok_result envelope.
     """
     output_path = Path(output)
     media_path = Path(media)
@@ -66,6 +69,10 @@ def _trim_inner(media: str, output: str, options: TrimOptions) -> ToolResult:
     # ------------------------------------------------------------------
     # 1. Output path validation (runs before inspect_media — fast fail)
     # ------------------------------------------------------------------
+
+    # output must not resolve to the same file as media (PATH_NOT_ALLOWED).
+    # Checked first so the error code is consistent regardless of extension.
+    check_output_not_source(output_path, [media])
 
     # Extension must be .otio
     if output_path.suffix.lower() != ".otio":
@@ -81,21 +88,6 @@ def _trim_inner(media: str, output: str, options: TrimOptions) -> ToolResult:
             code=ErrorCode.INVALID_INPUT,
             message="The output directory does not exist.",
             hint="Create the output directory first, then re-run.",
-        )
-
-    # output must not equal media
-    try:
-        out_abs = output_path.resolve()
-        media_abs = media_path.resolve()
-    except OSError:
-        # Fall back to absolute() when resolve() fails (network/UNC paths, etc.)
-        out_abs = output_path.absolute()
-        media_abs = media_path.absolute()
-    if out_abs == media_abs:
-        raise ClipwrightError(
-            code=ErrorCode.INVALID_INPUT,
-            message="Output path equals input media path.",
-            hint="Choose an output path different from the media.",
         )
 
     # ------------------------------------------------------------------
@@ -114,47 +106,7 @@ def _trim_inner(media: str, output: str, options: TrimOptions) -> ToolResult:
         raise
 
     # ------------------------------------------------------------------
-    # 3. Same-directory check (after inspect_media; post-probe)
-    # ------------------------------------------------------------------
-
-    try:
-        media_dir = media_path.resolve().parent
-        output_dir = output_path.parent.resolve()
-        if media_dir != output_dir:
-            raise ClipwrightError(
-                code=ErrorCode.PATH_NOT_ALLOWED,
-                message=(
-                    "The output timeline must be placed in the same directory "
-                    f"as the input media ({media_path.name})."
-                ),
-                hint=(
-                    "Change the output path to be in the same directory as the media."
-                ),
-            )
-    except ClipwrightError:
-        raise
-    except OSError:
-        # Best-effort: fall back to absolute() when resolve() fails (network/UNC paths)
-        try:
-            media_dir = media_path.absolute().parent
-            output_dir = output_path.parent.absolute()
-            if media_dir != output_dir:
-                raise ClipwrightError(
-                    code=ErrorCode.PATH_NOT_ALLOWED,
-                    message=(
-                        "The output timeline must be placed in the same directory "
-                        f"as the input media ({media_path.name})."
-                    ),
-                    hint=(
-                        "Change the output path to be in the same"
-                        " directory as the media."
-                    ),
-                )
-        except OSError:
-            pass  # Truly unresolvable paths; accept the risk
-
-    # ------------------------------------------------------------------
-    # 4. Extract duration and rate; derive keep ranges
+    # 3. Extract duration and rate; derive keep ranges
     # ------------------------------------------------------------------
 
     if media_info.duration is None:
@@ -173,10 +125,13 @@ def _trim_inner(media: str, output: str, options: TrimOptions) -> ToolResult:
     keep_ranges, warnings, mode = derive_keep_ranges(duration_sec, options)
 
     # ------------------------------------------------------------------
-    # 5. Build OTIO timeline (mirrors silence detect.py §4.1)
+    # 4. Build OTIO timeline (mirrors silence detect.py §4.1)
     # ------------------------------------------------------------------
 
-    abs_media = str(media_path.resolve())
+    # Use media_ref_for_otio: relative when media is under the OTIO dir,
+    # absolute otherwise (external reference, e.g. media in a different tree).
+    otio_dir = output_path.parent
+    abs_media = media_ref_for_otio(media, otio_dir)
     timeline = new_timeline(media_path.name)
     v1 = timeline.tracks[0]  # V1 (Video) track
 
@@ -199,13 +154,13 @@ def _trim_inner(media: str, output: str, options: TrimOptions) -> ToolResult:
         )
 
     # ------------------------------------------------------------------
-    # 6. Save timeline (atomic write via save_timeline)
+    # 5. Save timeline (atomic write via save_timeline)
     # ------------------------------------------------------------------
 
     save_timeline(timeline, output)
 
     # ------------------------------------------------------------------
-    # 7. Build and return envelope (FR-8)
+    # 6. Build and return envelope (FR-8)
     # ------------------------------------------------------------------
 
     clip_count = len(keep_ranges)

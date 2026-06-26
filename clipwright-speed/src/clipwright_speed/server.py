@@ -34,8 +34,9 @@ def clipwright_set_speed(
         str,
         Field(
             description=(
-                "Output OTIO file path where the modified timeline is written. "
-                "Must end in .otio and differ from the input timeline path."
+                "Output OTIO file path (transform I/O contract: new file, "
+                "input unchanged). May be in any directory whose parent exists. "
+                "Must end in .otio and must not resolve to the same file as timeline."
             )
         ),
     ],

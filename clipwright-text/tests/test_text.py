@@ -673,10 +673,15 @@ class TestNonDestructive:
 
 
 class TestOutputBoundary:
-    """Output outside the timeline directory must return PATH_NOT_ALLOWED."""
+    """Output in any directory (new policy: co-location constraint removed)."""
 
-    def test_output_outside_timeline_dir_path_not_allowed(self) -> None:
-        """Output in a sibling directory must return PATH_NOT_ALLOWED."""
+    def test_output_outside_timeline_dir_is_allowed(self) -> None:
+        """Output in a sibling directory must succeed (co-location constraint removed).
+
+        New policy: add_text only requires that the output parent directory
+        exists and that output != timeline; placement outside the timeline
+        directory is explicitly allowed to support tool-chaining workflows.
+        """
         with tempfile.TemporaryDirectory() as tmpd:
             tmp = Path(tmpd)
             proj = tmp / "proj"
@@ -692,12 +697,9 @@ class TestOutputBoundary:
             opts = _default_opts()
             result = add_text(str(inp), str(out), opts)
 
-            assert result["ok"] is False
-            error = result.get("error") or {}
-            assert error.get("code") == "PATH_NOT_ALLOWED", (
-                f"Expected PATH_NOT_ALLOWED, got {error.get('code')!r}"
+            assert result["ok"] is True, (
+                f"Output in sibling dir must be allowed; got: {result.get('error')}"
             )
-            assert error.get("hint")
 
 
 # ===========================================================================
@@ -736,10 +738,14 @@ class TestOutputExtension:
 
 
 class TestOutputEqualsTimeline:
-    """output path identical to timeline path must return INVALID_INPUT."""
+    """output path identical to timeline path must return PATH_NOT_ALLOWED."""
 
-    def test_output_equals_timeline_returns_invalid_input(self) -> None:
-        """Passing the same path for timeline and output must return INVALID_INPUT."""
+    def test_output_equals_timeline_returns_path_not_allowed(self) -> None:
+        """Passing the same path for timeline and output must return PATH_NOT_ALLOWED.
+
+        Delegates to clipwright.pathpolicy.check_output_not_source; consistent
+        transform tool error contract.
+        """
         with tempfile.TemporaryDirectory() as tmpd:
             tmp = Path(tmpd)
             tl = _make_v1_timeline()
@@ -751,8 +757,8 @@ class TestOutputEqualsTimeline:
 
             assert result["ok"] is False
             error = result.get("error") or {}
-            assert error.get("code") == "INVALID_INPUT", (
-                f"Expected INVALID_INPUT when output==timeline, "
+            assert error.get("code") == "PATH_NOT_ALLOWED", (
+                f"Expected PATH_NOT_ALLOWED when output==timeline, "
                 f"got {error.get('code')!r}"
             )
             assert error.get("hint")

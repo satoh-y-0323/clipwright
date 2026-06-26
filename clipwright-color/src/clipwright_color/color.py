@@ -1,8 +1,7 @@
 """color.py — clipwright-color orchestration layer (architecture-report §5).
 
 Flow (7 steps):
-  1. Output validation (extension, parent dir, output==media,
-     output==timeline, same directory as media)
+  1. Output validation (extension, parent dir, output≠media/timeline)
   2. inspect_media: require video stream (audio NOT required; FR-2 Constraint)
   3. Timeline resolution (None -> create new / path -> load + validate)
   4. measure_brightness
@@ -13,11 +12,15 @@ Flow (7 steps):
 
 Design decisions:
 - Audio NOT required (Constraint, FR-2); color requires video stream only.
-- output must be in the same directory as media (DC-AS-002).
+- output may be placed anywhere; parent dir must exist, output≠media/timeline
+  (DC-AS-004). Replaces old DC-AS-002 same-dir constraint.
+- target_url in written OTIO follows media_ref_for_otio(): relative POSIX when
+  media is inside the output directory, absolute otherwise (DC-AM-004).
+- Timeline source validation uses check_media_ref(): accepts absolute existing
+  files regardless of directory; relative traversal rejected (CWE-22).
 - measured=None: skip directive, still save timeline + return warning (U-1 parity).
 - brightness = clamp((target_luma - yavg) / 255.0, -1.0, 1.0).
-- Mirrors loudness.py helper structure (_same_path / _add_full_clip /
-  _load_and_validate_timeline / _check_source_within_timeline_dir).
+- Mirrors loudness.py helper structure (_add_full_clip / _load_and_validate_timeline).
 """
 
 from __future__ import annotations
@@ -35,6 +38,11 @@ from clipwright.otio_utils import (
     new_timeline,
     save_timeline,
     set_clipwright_metadata,
+)
+from clipwright.pathpolicy import (
+    check_media_ref,
+    check_output_not_source,
+    media_ref_for_otio,
 )
 from clipwright.schemas import RationalTimeModel, ToolResult
 from pydantic import ValidationError
@@ -59,7 +67,9 @@ def detect_color(
 
     Args:
         media: Input video file path (video stream required).
-        output: Output OTIO timeline file path (.otio, same directory as media).
+        output: Output OTIO timeline file path (.otio). Parent directory must
+            exist; output may be placed anywhere (create type, DC-AS-004).
+            Must not equal media or timeline.
         options: DetectColorOptions.
         timeline: Existing timeline path (None = create new).
 
@@ -98,38 +108,11 @@ def _detect_color_inner(
             hint="Create the output directory first, then re-run.",
         )
 
-    # Prohibit output == media (non-destructive)
-    if _same_path(output_path, media_path):
-        raise ClipwrightError(
-            code=ErrorCode.INVALID_INPUT,
-            message="Output path and input media path are the same.",
-            hint="Change the output file path to differ from the input media.",
-        )
-
-    # Prohibit output == timeline (non-destructive)
-    if timeline is not None and _same_path(output_path, Path(timeline)):
-        raise ClipwrightError(
-            code=ErrorCode.INVALID_INPUT,
-            message="Output path and input timeline path are the same.",
-            hint="Change the output file path to differ from the input timeline.",
-        )
-
-    # output must be in the same directory as media (DC-AS-002)
-    try:
-        media_resolved_dir = media_path.resolve().parent
-        output_resolved_dir = output_path.resolve().parent
-    except OSError:
-        media_resolved_dir = media_path.absolute().parent
-        output_resolved_dir = output_path.absolute().parent
-
-    if media_resolved_dir != output_resolved_dir:
-        raise ClipwrightError(
-            code=ErrorCode.INVALID_INPUT,
-            message=(
-                "Output file must be placed in the same directory as the media file."
-            ),
-            hint="Change the output path to the same directory as the media file.",
-        )
+    # Prohibit output == media or output == timeline (non-destructive invariant)
+    _sources: list[str] = [media]
+    if timeline is not None:
+        _sources.append(timeline)
+    check_output_not_source(output_path, _sources)
 
     # --- 2. inspect_media: video required, audio NOT required ---
 
@@ -159,12 +142,14 @@ def _detect_color_inner(
 
     # --- 3. Timeline resolution ---
 
+    otio_dir = output_path.parent
+
     if timeline is None:
         tl = new_timeline(media_path.name)
-        _add_full_clip(tl, media_path, duration_sec, media_info.duration)
+        _add_full_clip(tl, media_path, duration_sec, media_info.duration, otio_dir)
     else:
         tl = _load_and_validate_timeline(
-            timeline, media_path, duration_sec, media_info.duration
+            timeline, media_path, duration_sec, media_info.duration, otio_dir
         )
 
     # --- 4. measure_brightness ---
@@ -256,35 +241,24 @@ def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
 
 
-def _same_path(a: Path, b: Path) -> bool:
-    """Return True if both paths refer to the same entity (DC-GP-005 / B-4).
-
-    Falls back to string comparison on OSError.
-    """
-    try:
-        return a.resolve() == b.resolve()
-    except OSError:
-        return str(a) == str(b)
-
-
 def _add_full_clip(
     tl: otio.schema.Timeline,
     media_path: Path,
     duration_sec: float,
     duration_rt: RationalTimeModel | None,
+    otio_dir: Path,
 ) -> None:
     """Add one full-length keep clip to V1/A1 tracks of the timeline (new creation).
 
-    target_url is set to the absolute path of media_path.resolve() (DC-AS-002).
+    target_url follows media_ref_for_otio(): relative POSIX when media is inside
+    otio_dir, absolute path when media is outside (DC-AM-004).
 
     Args:
         duration_rt: Pydantic model RationalTimeModel (not OTIO RationalTime).
             Used to obtain the rate. Falls back to rate=1000.0 when None.
+        otio_dir: Directory where the output OTIO file will be saved.
     """
-    try:
-        target_url = str(media_path.resolve())
-    except OSError:
-        target_url = str(media_path.absolute())
+    target_url = media_ref_for_otio(media_path, otio_dir)
 
     rate = duration_rt.rate if duration_rt is not None else 1000.0
 
@@ -308,18 +282,25 @@ def _load_and_validate_timeline(
     media_path: Path,
     duration_sec: float,
     duration_rt: RationalTimeModel | None,
+    otio_dir: Path,
 ) -> otio.schema.Timeline:
     """Load an existing timeline and validate its consistency (B-4 / B-5).
 
     Validates:
+    - OTIO source references via check_media_ref (absolute existing files
+      allowed; relative traversal rejected, CWE-22).
     - The target_url of V1 clips matches media_path
     - Single source (all clips share the same target_url)
     - Exactly one Video-kind track (B-5)
 
     If V1 is empty, adds a full-length keep clip and continues.
 
+    Args:
+        otio_dir: Output OTIO directory used for media_ref_for_otio() when
+            the clip list is empty.
+
     Raises:
-        ClipwrightError: INVALID_INPUT / OTIO_ERROR.
+        ClipwrightError: INVALID_INPUT / OTIO_ERROR / PATH_NOT_ALLOWED.
     """
     tl = load_timeline(timeline_path)
 
@@ -340,7 +321,7 @@ def _load_and_validate_timeline(
     clips = [item for item in v1 if isinstance(item, otio.schema.Clip)]
 
     if not clips:
-        _add_full_clip(tl, media_path, duration_sec, duration_rt)
+        _add_full_clip(tl, media_path, duration_sec, duration_rt, otio_dir)
         return tl
 
     urls: set[str] = set()
@@ -349,10 +330,11 @@ def _load_and_validate_timeline(
         if isinstance(ref, otio.schema.ExternalReference):
             urls.add(ref.target_url)
 
-    # Boundary check: target_url must be within timeline parent dir (SR L-2)
-    tl_path = Path(timeline_path)
+    # Boundary check: validate each source reference (DC-AM-004 / CWE-22).
+    # check_media_ref accepts absolute existing files and rejects relative traversal.
+    tl_dir = Path(timeline_path).parent
     for url in urls:
-        _check_source_within_timeline_dir(tl_path, url)
+        check_media_ref(url, tl_dir, "media")
 
     if len(urls) > 1:
         raise ClipwrightError(
@@ -385,63 +367,3 @@ def _load_and_validate_timeline(
             )
 
     return tl
-
-
-def _check_source_within_timeline_dir(timeline_path: Path, source: str) -> None:
-    """Validate that the source path is within the timeline parent directory (SR L-2).
-
-    Guards against malicious OTIO embedding arbitrary paths in target_url.
-
-    Args:
-        timeline_path: Path to the OTIO timeline file.
-        source: Media source path obtained from OTIO target_url.
-
-    Raises:
-        ClipwrightError: PATH_NOT_ALLOWED (source outside timeline parent dir).
-    """
-    try:
-        allowed_base = timeline_path.parent.resolve()
-        source_resolved = Path(source).resolve()
-        source_str = str(source_resolved)
-        base_str = str(allowed_base)
-        if not (
-            source_str == base_str
-            or source_str.startswith(base_str + "/")
-            or source_str.startswith(base_str + "\\")
-        ):
-            raise ClipwrightError(
-                code=ErrorCode.PATH_NOT_ALLOWED,
-                message="Source file points outside the timeline directory boundary.",
-                hint=(
-                    "Use a source file located within the same directory"
-                    " as the OTIO timeline."
-                ),
-            )
-    except ClipwrightError:
-        raise
-    except OSError:
-        # Fallback to absolute() comparison when resolve() fails (e.g. broken symlink).
-        # Prevents silently skipping boundary validation, reducing CWE-22 risk.
-        try:
-            allowed_base_abs = str(timeline_path.parent.absolute())
-            source_abs = str(Path(source).absolute())
-            if not (
-                source_abs == allowed_base_abs
-                or source_abs.startswith(allowed_base_abs + "/")
-                or source_abs.startswith(allowed_base_abs + "\\")
-            ):
-                raise ClipwrightError(
-                    code=ErrorCode.PATH_NOT_ALLOWED,
-                    message=(
-                        "Source file points outside the timeline directory boundary."
-                    ),
-                    hint=(
-                        "Use a source file located within the same directory"
-                        " as the OTIO timeline."
-                    ),
-                )
-        except ClipwrightError:
-            raise
-        except OSError:
-            # absolute() also failed (truly unresolvable path) — best-effort skip
-            pass

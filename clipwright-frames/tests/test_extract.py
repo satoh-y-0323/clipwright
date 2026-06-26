@@ -1544,8 +1544,8 @@ class TestBoundaryChecks:
     ) -> None:
         """Artifacts resolving outside out_dir boundary -> PATH_NOT_ALLOWED.
 
-        SR M-1: We mock _check_within_boundary to raise PATH_NOT_ALLOWED when
-        the resolved artifact path is outside out_dir.resolve().
+        SR M-1: We mock check_within_boundary (clipwright.pathpolicy) to raise
+        PATH_NOT_ALLOWED when the resolved artifact path is outside out_dir.resolve().
         This verifies that extract.py calls the boundary check and propagates
         the error correctly without exposing raw paths.
 
@@ -1570,7 +1570,7 @@ class TestBoundaryChecks:
             return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
         # Patch the boundary-check function to simulate an escape
-        def _boundary_escape(path: Path, base: Path) -> None:
+        def _boundary_escape(base_dir: Path, target: Path, kind: str) -> None:
             raise ClipwrightError(
                 code=ErrorCode.PATH_NOT_ALLOWED,
                 message="Output path is outside the allowed boundary.",
@@ -1581,7 +1581,7 @@ class TestBoundaryChecks:
             patch("clipwright_frames.extract.inspect_media", return_value=media_info),
             patch("clipwright_frames.extract.run", side_effect=_fake_run),
             patch(
-                "clipwright_frames.extract._check_within_boundary",
+                "clipwright_frames.extract.check_within_boundary",
                 side_effect=_boundary_escape,
             ),
         ):

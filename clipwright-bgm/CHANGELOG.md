@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-27
+
+### Changed
+
+- Relaxed BGM path policy: BGM file may now reside in any directory (external
+  files accepted).  The ADR-B8 co-location constraint has been removed.
+- Relaxed output path policy: output file may now be written to any directory
+  whose parent already exists (accumulate contract).  The SR L-3 co-location
+  constraint has been removed.
+- Output collision detection is now performed via
+  `clipwright.pathpolicy.check_output_not_source(output, [timeline, bgm])`,
+  returning `PATH_NOT_ALLOWED` when output equals either source file.
+- OTIO `target_url` for the BGM clip is now produced by
+  `clipwright.pathpolicy.media_ref_for_otio`: relative POSIX path when BGM is
+  under the output's parent directory, absolute path otherwise.
+- Removed internal helpers `_check_bgm_within_timeline_dir`,
+  `_check_output_within_timeline_dir`, and `_same_path` from `bgm.py`.
+- Bumped dependency to `clipwright>=0.4.0` (requires `pathpolicy` module).
+
 ## [0.2.0] - 2026-06-14
 
 ### Added
@@ -33,7 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - BgmOptions schema (volume_db / fade_in_sec / fade_out_sec / ducking).
 - MCP annotations: `readOnlyHint=False` / `destructiveHint=False` / `idempotentHint=True` / `openWorldHint=False`.
 
-[Unreleased]: https://github.com/satoh-y-0323/clipwright/compare/clipwright-bgm-v0.2.0...HEAD
+[Unreleased]: https://github.com/satoh-y-0323/clipwright/compare/clipwright-bgm-v0.3.0...HEAD
+[0.3.0]: https://github.com/satoh-y-0323/clipwright/compare/clipwright-bgm-v0.2.0...clipwright-bgm-v0.3.0
 [0.2.0]: https://github.com/satoh-y-0323/clipwright/compare/clipwright-bgm-v0.1.1...clipwright-bgm-v0.2.0
 [0.1.1]: https://github.com/satoh-y-0323/clipwright/compare/clipwright-bgm-v0.1.0...clipwright-bgm-v0.1.1
 [0.1.0]: https://github.com/satoh-y-0323/clipwright/releases/tag/clipwright-bgm-v0.1.0

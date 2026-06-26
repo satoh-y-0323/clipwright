@@ -489,17 +489,21 @@ class TestMissingOutputParent:
 
 
 class TestOutputEqualsTimeline:
-    """output == timeline path must return INVALID_INPUT."""
+    """output == timeline path must return PATH_NOT_ALLOWED (impl-transform policy)."""
 
-    def test_output_equals_timeline_returns_invalid_input(
+    def test_output_equals_timeline_returns_path_not_allowed(
         self, simple_timeline_file: Path
     ) -> None:
-        """output path identical to timeline path must return INVALID_INPUT."""
+        """output path identical to timeline path must return PATH_NOT_ALLOWED.
+
+        Policy updated in impl-transform: check_output_not_source raises
+        PATH_NOT_ALLOWED (previously INVALID_INPUT).
+        """
         opts = SetSpeedOptions(speed=2.0)
         result = set_speed(str(simple_timeline_file), str(simple_timeline_file), opts)
         assert result["ok"] is False
         error = result.get("error") or {}
-        assert error.get("code") == "INVALID_INPUT"
+        assert error.get("code") == "PATH_NOT_ALLOWED"
         assert error.get("hint"), "hint must be non-empty"
 
 
@@ -820,23 +824,26 @@ class TestBadExtensionNoSuffixLeak:
 
 
 # ===========================================================================
-# SR M-2 — output boundary: output outside timeline dir must be PATH_NOT_ALLOWED
+# Output placement: output may be in any directory (impl-transform policy)
 # ===========================================================================
 
 
 class TestOutputBoundaryCheck:
-    """SR M-2: output path must be within the timeline's directory tree.
+    """Output may reside in any directory whose parent exists (impl-transform).
 
-    Mirrors clipwright-render _check_within_timeline_dir boundary contract.
-    FAILS until speed.py adds the boundary validation.
+    Co-location constraint removed in impl-transform.  Output outside the
+    timeline directory is now allowed; only output==timeline is rejected.
     """
 
-    def test_output_outside_timeline_dir_path_not_allowed(self, tmp_path: Path) -> None:
-        """Output outside timeline directory must return PATH_NOT_ALLOWED.
+    def test_output_outside_timeline_dir_allowed(self, tmp_path: Path) -> None:
+        """Output outside timeline directory must succeed (co-location removed).
+
+        Policy updated in impl-transform: no boundary check; output may be
+        placed in any directory, including outside the timeline's directory tree.
 
         Layout:
           tmp_path/proj/timeline.otio   <- timeline
-          tmp_path/elsewhere/out.otio   <- output (outside proj/)
+          tmp_path/elsewhere/out.otio   <- output (outside proj/ — now allowed)
         """
         proj_dir = tmp_path / "proj"
         proj_dir.mkdir()
@@ -861,17 +868,8 @@ class TestOutputBoundaryCheck:
         output = elsewhere_dir / "out.otio"
         opts = SetSpeedOptions(speed=2.0)
         result = set_speed(str(timeline_path), str(output), opts)
-        assert result["ok"] is False
-        error = result.get("error") or {}
-        assert error.get("code") == "PATH_NOT_ALLOWED", (
-            f"Expected PATH_NOT_ALLOWED for output outside timeline dir, "
-            f"got code={error.get('code')!r}, message={error.get('message')!r}"
-        )
-        assert error.get("hint"), "hint must be non-empty for PATH_NOT_ALLOWED"
-        # message must not leak absolute paths
-        message = error.get("message", "")
-        assert "/" not in message and "\\" not in message, (
-            f"PATH_NOT_ALLOWED message must not contain path separators, got: {message!r}"
+        assert result["ok"] is True, (
+            f"Output outside timeline dir must be allowed; got: {result.get('error')}"
         )
 
     def test_output_within_timeline_dir_allowed(self, tmp_path: Path) -> None:

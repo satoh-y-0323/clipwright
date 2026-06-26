@@ -10,11 +10,11 @@ Verification points:
   B. Output validation order (D1)
      B-1: non-.otio extension -> INVALID_INPUT
      B-2: missing parent directory -> INVALID_INPUT
-     B-3: output == media path -> INVALID_INPUT
-     B-4: output == timeline path -> INVALID_INPUT
+     B-3: output == media path -> PATH_NOT_ALLOWED (via check_output_not_source)
+     B-4: output == timeline path -> PATH_NOT_ALLOWED (via check_output_not_source)
      B-5: timeline path specified but not found -> INVALID_INPUT (not raw FileNotFoundError)
      B-6: timeline path is not a valid .otio -> OTIO_ERROR (wrapped, not raw exception)
-     B-7: output outside media directory -> PATH_NOT_ALLOWED
+     B-7: output outside media directory -> ok=True (now permitted, spec4 #5)
 
   C. Directive annotation (FR-2.1 / AC-06 / D3)
      C-1: metadata['clipwright']['reframe'] written with all D3 keys
@@ -265,7 +265,11 @@ class TestOutputValidation:
         assert result["error"]["code"] == ErrorCode.INVALID_INPUT.value
 
     def test_output_equals_media_rejected(self, tmp_path: Path) -> None:
-        """output == media path must return INVALID_INPUT (B-3)."""
+        """output == media path must return PATH_NOT_ALLOWED (B-3).
+
+        check_output_not_source raises PATH_NOT_ALLOWED when output resolves
+        equal to any source path (replaces former _same_path → INVALID_INPUT).
+        """
         media = tmp_path / "video.otio"
         media.write_bytes(b"dummy")
         opts = ReframeOptions(target_w=1080, target_h=1920)
@@ -276,10 +280,14 @@ class TestOutputValidation:
             timeline=None,
         )
         assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT.value
+        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED.value
 
     def test_output_equals_timeline_rejected(self, tmp_path: Path) -> None:
-        """output == timeline path must return INVALID_INPUT (B-4)."""
+        """output == timeline path must return PATH_NOT_ALLOWED (B-4).
+
+        check_output_not_source raises PATH_NOT_ALLOWED when output resolves
+        equal to any source path (replaces former _same_path → INVALID_INPUT).
+        """
         media = tmp_path / "video.mp4"
         media.write_bytes(b"dummy")
         timeline_file = tmp_path / "existing.otio"
@@ -292,7 +300,7 @@ class TestOutputValidation:
             timeline=str(timeline_file),
         )
         assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT.value
+        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED.value
 
     def test_nonexistent_timeline_returns_invalid_input(self, tmp_path: Path) -> None:
         """Specified timeline path that does not exist must return INVALID_INPUT (B-5).
@@ -347,10 +355,15 @@ class TestOutputValidation:
             ErrorCode.INVALID_INPUT.value,
         ), f"Expected OTIO_ERROR or INVALID_INPUT, got: {result['error']['code']}"
 
-    def test_output_outside_media_dir_rejected(self, tmp_path: Path) -> None:
-        """output outside the media directory must return PATH_NOT_ALLOWED (B-7).
+    def test_output_outside_media_dir_is_now_allowed(self, tmp_path: Path) -> None:
+        """output outside the media directory is now permitted (B-7, updated spec4 #5).
 
-        _check_output_within_media_dir enforces CWE-22 path-traversal prevention.
+        _check_output_within_media_dir is removed in impl-reframe (plan-report wave 6).
+        The output .otio can be placed in any existing directory; the only remaining
+        constraints are: parent dir must exist, and output != any source.
+
+        Red (impl not yet done): _check_output_within_media_dir still raises
+        PATH_NOT_ALLOWED, so ok=False and the assert ok=True fails.
         """
         media_dir = tmp_path / "media"
         media_dir.mkdir()
@@ -360,16 +373,19 @@ class TestOutputValidation:
         media = media_dir / "video.mp4"
         media.write_bytes(b"dummy")
         opts = ReframeOptions(target_w=1080, target_h=1920)
-        result = reframe(
-            media=str(media),
-            output=str(other_dir / "out.otio"),
-            options=opts,
-            timeline=None,
-        )
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED.value, (
-            f"Expected PATH_NOT_ALLOWED for output outside media dir, "
-            f"got: {result['error']['code']}"
+        with patch(
+            "clipwright_reframe.reframe.inspect_media",
+            side_effect=lambda p: _make_media_info(str(p)),
+        ):
+            result = reframe(
+                media=str(media),
+                output=str(other_dir / "out.otio"),
+                options=opts,
+                timeline=None,
+            )
+        assert result["ok"] is True, (
+            f"output outside media dir must now succeed (spec4 #5 path-boundary relaxation). "
+            f"Got ok=False: {result.get('error')}"
         )
 
 

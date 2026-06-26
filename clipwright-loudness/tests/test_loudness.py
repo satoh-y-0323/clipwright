@@ -532,20 +532,27 @@ class TestOutputConflict:
 
         assert result.ok is False
         assert result.error is not None
-        assert result.error.code == ErrorCode.INVALID_INPUT
+        assert result.error.code == ErrorCode.PATH_NOT_ALLOWED
 
 
 # ===========================================================================
-# (f) output in different dir from media -> INVALID_INPUT
+# (f) output in different dir from media -> now allowed (DC-AS-004)
 # ===========================================================================
 
 
 class TestOutputDifferentDir:
-    """INVALID_INPUT must be returned when output is in a different directory from media."""
+    """DC-AS-004: output is allowed in a different directory from media (create type).
 
-    def test_output_in_different_dir_returns_invalid_input(
-        self, tmp_path: Path
-    ) -> None:
+    Updated from old policy (INVALID_INPUT) to new policy (ok=True) after
+    pathpolicy migration.  RED against pre-migration code because the inline
+    same-dir block (loudness.py L121-136) still raises INVALID_INPUT.
+    """
+
+    def test_output_in_different_dir_now_allowed(self, tmp_path: Path) -> None:
+        """Output in a different dir from media must now return ok=True (DC-AS-004).
+
+        RED: pre-migration code returns INVALID_INPUT (same-dir block L121-136).
+        """
         from clipwright_loudness.loudness import detect_loudness
 
         media_dir = tmp_path / "src"
@@ -556,17 +563,31 @@ class TestOutputDifferentDir:
         media = media_dir / "video.mp4"
         media.write_bytes(b"dummy")
         output = out_dir / "out.otio"
+        media_info = _make_media_info(str(media))
 
-        result = detect_loudness(
-            str(media), str(output), DetectLoudnessOptions(), timeline=None
+        with (
+            patch(
+                "clipwright_loudness.loudness.inspect_media", return_value=media_info
+            ),
+            patch(
+                "clipwright_loudness.loudness.measure_loudness",
+                return_value=_FAKE_LOUDNORM_MEASURED,
+            ),
+        ):
+            result = detect_loudness(
+                str(media), str(output), DetectLoudnessOptions(), timeline=None
+            )
+
+        assert result.ok is True, (
+            "DC-AS-004: output in different dir from media must be allowed."
+            f" error={result.error}"
         )
 
-        assert result.ok is False
-        assert result.error is not None
-        assert result.error.code == ErrorCode.INVALID_INPUT
+    def test_output_in_different_dir_creates_otio_file(self, tmp_path: Path) -> None:
+        """When output is allowed in a different dir, the .otio file must be created.
 
-    def test_output_different_dir_hint_no_absolute_path(self, tmp_path: Path) -> None:
-        """The same-dir error hint must not contain an absolute path (CWE-209)."""
+        RED: pre-migration code raises INVALID_INPUT so no .otio is written.
+        """
         from clipwright_loudness.loudness import detect_loudness
 
         media_dir = tmp_path / "media_src_dir"
@@ -577,16 +598,27 @@ class TestOutputDifferentDir:
         media = media_dir / "video.mp4"
         media.write_bytes(b"dummy")
         output = out_dir / "out.otio"
+        media_info = _make_media_info(str(media))
 
-        result = detect_loudness(
-            str(media), str(output), DetectLoudnessOptions(), timeline=None
+        with (
+            patch(
+                "clipwright_loudness.loudness.inspect_media", return_value=media_info
+            ),
+            patch(
+                "clipwright_loudness.loudness.measure_loudness",
+                return_value=_FAKE_LOUDNORM_MEASURED,
+            ),
+        ):
+            result = detect_loudness(
+                str(media), str(output), DetectLoudnessOptions(), timeline=None
+            )
+
+        assert result.ok is True, (
+            "DC-AS-004: output in different dir must succeed. error={result.error}"
         )
-
-        assert result.ok is False
-        assert result.error is not None
-        hint = result.error.hint
-        assert str(media_dir) not in hint
-        assert str(tmp_path) not in hint
+        assert output.exists(), (
+            "DC-AS-004: .otio file must be created in the output directory."
+        )
 
 
 # ===========================================================================
@@ -825,6 +857,7 @@ class TestTimelineValidation:
         assert result.error.code in (
             ErrorCode.UNSUPPORTED_OPERATION,
             ErrorCode.INVALID_INPUT,
+            ErrorCode.PATH_NOT_ALLOWED,
         )
 
     def test_two_video_tracks_returns_invalid_input(self, tmp_path: Path) -> None:
@@ -1092,22 +1125,37 @@ class TestU1MeasuredNone:
 
 
 # ===========================================================================
-# SR L-2: _load_and_validate_timeline boundary check (source outside timeline parent dir)
+# check_media_ref: timeline source outside timeline directory (updated policy)
 # ===========================================================================
 
 
 class TestTimelineSourceBoundaryCheck:
-    """SR L-2: target_url in the timeline must be within the timeline parent directory."""
+    """check_media_ref policy: absolute existing sources outside timeline dir are accepted.
 
-    def test_source_outside_timeline_dir_returns_invalid_input(
+    Updated from old policy (_check_source_within_timeline_dir raised PATH_NOT_ALLOWED)
+    to new policy (check_media_ref accepts absolute existing regular files).
+    When the accepted source does not match the input media, INVALID_INPUT is raised
+    (source mismatch), not PATH_NOT_ALLOWED.
+
+    RED against pre-migration code which raises PATH_NOT_ALLOWED first.
+    """
+
+    def test_source_outside_timeline_dir_mismatching_media_returns_invalid_input(
         self, tmp_path: Path
     ) -> None:
-        """PATH_NOT_ALLOWED must be returned when target_url points outside the timeline parent dir (SR-r2 L-1)."""
+        """Absolute source outside timeline dir accepted; mismatch with media -> INVALID_INPUT.
+
+        Old behavior: PATH_NOT_ALLOWED (rejected by _check_source_within_timeline_dir).
+        New behavior: check_media_ref accepts the absolute existing file; the subsequent
+        source-vs-media comparison fires INVALID_INPUT (different files).
+
+        RED: pre-migration code raises PATH_NOT_ALLOWED before the mismatch check.
+        """
         import opentimelineio as otio
 
         from clipwright_loudness.loudness import detect_loudness
 
-        # timeline is saved in a subdir; source points to a different directory
+        # timeline is saved in subdir; source points to outside_dir (a different file)
         subdir = tmp_path / "project"
         subdir.mkdir()
         outside_dir = tmp_path / "outside"
@@ -1119,10 +1167,12 @@ class TestTimelineSourceBoundaryCheck:
         outside_media = outside_dir / "other.mp4"
         outside_media.write_bytes(b"dummy")
 
-        # Save a timeline in subdir with a clip pointing to outside_media
+        # Save a timeline in subdir with a clip pointing to outside_media (absolute path)
         tl = otio.schema.Timeline(name="test")
         track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
+        audio_track = otio.schema.Track(name="A1", kind=otio.schema.TrackKind.Audio)
         tl.tracks.append(track)
+        tl.tracks.append(audio_track)
         ref = otio.schema.ExternalReference(target_url=str(outside_media.resolve()))
         source_range = otio.opentime.TimeRange(
             start_time=otio.opentime.RationalTime(0.0, 30.0),
@@ -1152,5 +1202,10 @@ class TestTimelineSourceBoundaryCheck:
 
         assert result.ok is False
         assert result.error is not None
-        # Out-of-boundary path: expect PATH_NOT_ALLOWED as in render.py (SR-r2 L-1)
-        assert result.error.code == ErrorCode.PATH_NOT_ALLOWED
+        # New policy: check_media_ref accepts the absolute existing file; the mismatch
+        # with the input media then fires INVALID_INPUT (not PATH_NOT_ALLOWED).
+        assert result.error.code == ErrorCode.INVALID_INPUT, (
+            "New policy: absolute existing source accepted by check_media_ref;"
+            " INVALID_INPUT expected for source-media mismatch (not PATH_NOT_ALLOWED)."
+            f" Got: {result.error.code!r}"
+        )

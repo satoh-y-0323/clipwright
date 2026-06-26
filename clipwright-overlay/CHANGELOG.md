@@ -5,6 +5,34 @@ All notable changes to `clipwright-overlay` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-06-27
+
+### Changed
+
+- **Path policy relaxation (ADR-PP-1)**: The co-location restriction on
+  `image_path` and `output` has been removed.
+  - `output` may now be placed anywhere (not constrained to the input
+    timeline's parent directory); only `output != timeline` is enforced.
+  - `image_path` may reference images inside or outside the output OTIO's
+    parent directory. Storage follows `media_ref_for_otio` from `clipwright`
+    ≥ 0.4.0: relative POSIX path when inside the output OTIO's directory,
+    absolute path when outside. No `../` traversal is stored.
+
+- **`image_path` validation reduced from 4-stage to 3-stage**: The co-location
+  check (stage 2 in v0.1.0) is removed. New order:
+  path safety → existence (`FILE_NOT_FOUND`) → extension allowlist.
+
+- **Idempotency comparison updated**: Uses `media_ref_for_otio` to compute the
+  stored path representation before comparing, covering both relative and
+  absolute stored paths consistently.
+
+- **`clipwright` dependency bumped** to `>=0.4.0` (requires `media_ref_for_otio`
+  and `check_output_not_source` from `clipwright.pathpolicy`).
+
+- **DC-AM-003 round-trip safety**: Existing relative media references in clip
+  `target_url` fields are preserved unchanged across the load→save round-trip
+  when an external image marker is added.
+
 ## [0.1.0] - 2026-06-22
 
 ### Added

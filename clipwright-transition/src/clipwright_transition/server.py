@@ -53,9 +53,9 @@ def clipwright_add_transition(
         str,
         Field(
             description=(
-                "Output OTIO timeline file path (.otio extension required). "
-                "Must differ from the input timeline path. "
-                "The file is created atomically; the input OTIO is not modified."
+                "Output OTIO timeline file path (transform I/O contract: new file, "
+                "input unchanged). May be in any directory whose parent exists. "
+                ".otio extension required; must differ from the input timeline path."
             )
         ),
     ],

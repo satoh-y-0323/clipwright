@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-06-27
+
+### Changed
+
+- **Path policy unified (ADR-PP-1)**: `clipwright_render` now accepts absolute
+  references to existing real files for source media, subtitle, and image overlay
+  inputs regardless of whether they are located inside the OTIO timeline directory.
+  Previously all three input types were required to reside under the same directory
+  as the `.otio` file. The new policy is:
+  - Absolute ref to an existing regular file with no symlink components → allowed
+    (ADR-PP-2: symlink check runs before `resolve()` to prevent CWE-59 bypass).
+  - Relative ref → must still resolve within the timeline directory tree (CWE-22
+    guard unchanged).
+  - Absolute ref to a non-existent path → rejected.
+  - Absolute ref through a symlink component → rejected (PATH_NOT_ALLOWED).
+- Boundary/symlink validation now delegates to
+  `clipwright.pathpolicy.check_media_ref` (requires `clipwright>=0.4.0`), which
+  centralises the policy across all tools.
+- The old per-type boundary helpers (`_check_source_within_timeline_dir`,
+  `_check_subtitle_within_timeline_dir`, `_check_image_overlay_within_timeline_dir`)
+  are retained for backward compatibility with tests that import them directly.
+
 ## [0.11.1] - 2026-06-25
 
 ### Fixed

@@ -1,8 +1,8 @@
 """reframe.py — clipwright-reframe orchestration layer (architecture-report §1.1).
 
 Flow (3-layer: public API → _inner → error boundary):
-  1. Output validation (extension, parent dir, output != media, output != timeline,
-     output within media dir boundary)
+  1. Output validation (extension, parent dir exists,
+     output != media / output != timeline via check_output_not_source)
   2. inspect_media: require video stream
   3. Timeline resolution (None -> create new / path -> load + validate)
   4. Annotate ReframeDirective to timeline metadata["clipwright"]["reframe"]
@@ -14,6 +14,9 @@ Flow (3-layer: public API → _inner → error boundary):
 
 Design decisions:
 - Non-destructive: input media and OTIO are never modified.
+- Output .otio may be placed in any directory with an existing parent (no co-location
+  restriction).  media_ref_for_otio() writes a relative POSIX ref when media is under
+  the output directory tree, and an absolute ref otherwise.
 - Directive dict shape is the only contract between this package and clipwright-render.
   render's reader-side _RenderReframe validates independently (defence-in-depth).
 - 3-layer skeleton (public API / _inner / error boundary) keeps the MCP server
@@ -26,7 +29,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -43,6 +45,7 @@ from clipwright.otio_utils import (
     save_timeline,
     set_clipwright_metadata,
 )
+from clipwright.pathpolicy import check_output_not_source, media_ref_for_otio
 from clipwright.process import safe_subprocess_message
 from clipwright.schemas import ToolResult
 from pydantic import ValidationError
@@ -75,7 +78,8 @@ def reframe(
 
     Args:
         media: Input video file path (video stream required).
-        output: Output OTIO timeline file path (.otio, same directory as media).
+        output: Output OTIO timeline file path (.otio extension; any existing
+            directory).
         options: ReframeOptions (target resolution, mode, anchor, pad_color).
         timeline: Existing timeline path (None = create new).
 
@@ -128,21 +132,12 @@ def _reframe_inner(
             hint="Create the output directory first, then re-run.",
         )
 
-    if _same_path(output_path, media_path):
-        raise ClipwrightError(
-            code=ErrorCode.INVALID_INPUT,
-            message="Output path and input media path are the same.",
-            hint="Change the output file path to differ from the input media.",
-        )
-
-    if timeline is not None and _same_path(output_path, Path(timeline)):
-        raise ClipwrightError(
-            code=ErrorCode.INVALID_INPUT,
-            message="Output path and input timeline path are the same.",
-            hint="Change the output file path to differ from the input timeline.",
-        )
-
-    _check_output_within_media_dir(media_path, output_path)
+    # Reject output that would overwrite any source (media or timeline).
+    # check_output_not_source raises PATH_NOT_ALLOWED when output matches a source.
+    sources: list[str] = [media]
+    if timeline is not None:
+        sources.append(timeline)
+    check_output_not_source(output_path, sources)
 
     # --- 2. inspect_media: video required ---
 
@@ -172,7 +167,14 @@ def _reframe_inner(
 
     if timeline is None:
         tl = new_timeline(media_path.name)
-        _add_full_clip(tl, media_path, duration_sec, media_info.duration, has_audio)
+        _add_full_clip(
+            tl,
+            media_path,
+            output_path.parent,
+            duration_sec,
+            media_info.duration,
+            has_audio,
+        )
     else:
         # D1: timeline existence check before load (B-5).
         # FileNotFoundError from load_timeline must not escape as a raw exception.
@@ -387,64 +389,10 @@ def _make_constant_center_track() -> list[CentreKeyframe]:
     return [CentreKeyframe(t_s=0.0, cx=0.5, cy=0.5)]
 
 
-def _same_path(a: Path, b: Path) -> bool:
-    """Return True if both paths refer to the same entity.
-
-    Falls back to string comparison on OSError.
-    """
-    try:
-        return a.resolve() == b.resolve()
-    except OSError:
-        return str(a) == str(b)
-
-
-def _check_output_within_media_dir(media_path: Path, output_path: Path) -> None:
-    """Verify that output_path resolves within the same directory as media_path.
-
-    Prevents path-traversal when AI-provided output paths contain '..' components
-    (CWE-22 prevention, mirrors frames/_check_within_boundary contract).
-
-    Args:
-        media_path: Input media file path (directory is the allowed base).
-        output_path: Output .otio file path to validate.
-
-    Raises:
-        ClipwrightError: PATH_NOT_ALLOWED when output is outside the media directory.
-    """
-    try:
-        media_dir = media_path.resolve().parent
-        output_dir = output_path.resolve().parent
-        media_dir_str = str(media_dir)
-        output_dir_str = str(output_dir)
-        allowed = (
-            output_dir_str == media_dir_str
-            or output_dir_str.startswith(media_dir_str + "/")
-            or output_dir_str.startswith(media_dir_str + os.sep)
-        )
-    except OSError:
-        media_dir = media_path.absolute().parent
-        output_dir = output_path.absolute().parent
-        media_dir_str = str(media_dir)
-        output_dir_str = str(output_dir)
-        allowed = (
-            output_dir_str == media_dir_str
-            or output_dir_str.startswith(media_dir_str + "/")
-            or output_dir_str.startswith(media_dir_str + os.sep)
-        )
-
-    if not allowed:
-        raise ClipwrightError(
-            code=ErrorCode.PATH_NOT_ALLOWED,
-            message="Output path is outside the media directory.",
-            hint=(
-                "Place the output .otio file in the same directory as the input media."
-            ),
-        )
-
-
 def _add_full_clip(
     tl: otio.schema.Timeline,
     media_path: Path,
+    otio_dir: Path,
     duration_sec: float,
     duration_rt: object | None,
     has_audio: bool,
@@ -455,17 +403,19 @@ def _add_full_clip(
     which would cause clipwright-render to incorrectly treat the timeline as
     having audio (has_audio=True on the render side).
 
+    The OTIO ExternalReference target_url is set via media_ref_for_otio:
+    - Relative POSIX path when media_path is under the otio_dir tree.
+    - Absolute path when media_path is outside the otio_dir tree.
+
     Args:
         tl: Target timeline (new creation; must have V1/A1 tracks per §13.5 DC-AS-001).
         media_path: Source media file path (used for target_url and clip name).
+        otio_dir: Directory where the output OTIO file will be saved.
         duration_sec: Duration in seconds derived from inspect_media.
         duration_rt: RationalTimeModel from clipwright.schemas (provides .rate).
         has_audio: True when the source media has at least one audio stream.
     """
-    try:
-        target_url = str(media_path.resolve())
-    except OSError:
-        target_url = str(media_path.absolute())
+    target_url = media_ref_for_otio(media_path, otio_dir)
 
     # duration_rt is a RationalTimeModel from clipwright.schemas (has .rate attribute)
     rate = getattr(duration_rt, "rate", None) or 1000.0

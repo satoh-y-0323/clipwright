@@ -1,6 +1,6 @@
 [project]
 name = "clipwright-noise"
-version = "0.2.0"
+version = "0.3.0"
 description = "MCP tool for noise detection and OTIO timeline annotation generation. Measures noise floor with ffmpeg astats and writes denoise instructions to timeline.otio."
 readme = "README.md"
 license = { text = "MIT" }
@@ -9,7 +9,7 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "clipwright>=0.2.0",
+    "clipwright>=0.4.0",
     "mcp[cli]>=1.27.2",
     "pydantic>=2",
 ]

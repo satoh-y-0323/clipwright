@@ -4,41 +4,42 @@ All tests in this module verify the contract of add_overlay() as defined in:
   - architecture-report-20260622-013708.md §V2 (AUTHORITY, overrides v1)
   - v1 §1 ADR-OV-1 (module split / 2-layer boundary)
   - v1 §2 ADR-OV-2 (marker schema / validation order / idempotency / ErrorCode)
-  - v1 §3 ADR-OV-3 (image_path 4-stage validation)
   - v1 §7 ADR-OV-7 (envelope)
-  - V2-3 (RELATIVE path storage in marker)
+  - V2-3 (path storage in marker via media_ref_for_otio)
   - V2-5 (x/y allowlist including single-quote prohibition)
   - V2-9 (scale (0,8] manual recheck + _MAX_IMAGE_OVERLAYS=64)
+  - ADR-PP-1 (media_ref_for_otio: relative inside otio_dir, absolute outside)
 
 Covered contracts:
   - 2-layer boundary: add_overlay never raises; _add_overlay_inner raises
     ClipwrightError which add_overlay converts via error_result
   - Happy path: valid co-located image -> ok ToolResult + marker image_0 +
-    metadata["clipwright"] + RELATIVE image_path stored (V2-3 / DC-AS-003)
+    metadata["clipwright"] + RELATIVE image_path stored when inside otio_dir
   - Envelope data: {applied, overlay_count, start_sec, duration_sec};
     summary contains basename + duration + count + out.name;
     NO full path in summary/data (CWE-209); artifacts=[{role:"timeline",...}]
-  - Validation order: value-range -> image_path 4-stage -> x/y control chars
+  - Validation order: value-range -> image_path 3-stage -> x/y control chars
   - Value ranges: start_sec<0, duration_sec<=0, opacity<0/1, fades<0,
     fade_in+fade_out>duration, scale<=0, scale>8.0 (V2-9 manual recheck)
-  - image_path 4-stage: co-location (PATH_NOT_ALLOWED) -> existence
-    (FILE_NOT_FOUND) -> extension allowlist (INVALID_INPUT) -> path safety
-    (INVALID_INPUT). V2-3 defense-in-depth ".." -> PATH_NOT_ALLOWED.
+  - image_path 3-stage (co-location removed — ADR-PP-1 / impl-overlay):
+    path safety (INVALID_INPUT) -> existence (FILE_NOT_FOUND) ->
+    extension allowlist (INVALID_INPUT).
+    Image may be anywhere; media_ref_for_otio stores relative posix when
+    inside the output OTIO's parent dir, absolute when outside.
   - x/y allowlist (V2-5): `:;[],'` or control chars -> INVALID_INPUT;
     "(W-w)/2", "(H-h)/2", "main_w-overlay_w-10" accepted
   - V1 track absence -> UNSUPPORTED_OPERATION
   - input==output -> INVALID_INPUT
   - Idempotency: identical options re-applied -> applied=0 + warning + no dup
-    Comparison: relative image_path string + x + y exact match;
-    start/duration/scale/opacity/fades approx (<=1e-6) (V2-3)
+    Comparison: image_path via media_ref_for_otio + x + y exact match;
+    start/duration/scale/opacity/fades approx (<=1e-6)
   - Accumulate: two different-param calls -> image_0 and image_1
   - V2-9 cap: 65th image_overlay marker -> INVALID_INPUT
   - Rate resolution: first clip source_range.rate -> existing image_overlay
     marker rate -> fallback 1000.0 + warning
 
 Note: This file does NOT import server.py (tested separately). No subprocess —
-overlay.py is subprocess-free. All tests in this file are GREEN (implementation
-complete as of clipwright-overlay v0.1.0).
+overlay.py is subprocess-free.
 """
 
 from __future__ import annotations
@@ -297,10 +298,17 @@ class TestHappyPath:
             assert cw.get("fade_out_sec") == pytest.approx(0.3)
 
     def test_happy_path_image_path_stored_as_relative(self) -> None:
-        """image_path in marker must be RELATIVE posix path (V2-3 / DC-AS-003).
+        """image_path stored as RELATIVE posix when image is inside otio_dir.
 
+        This exercises the 'inside otio_dir -> relative' branch of
+        media_ref_for_otio (the storage rule applied after impl-overlay).
         The stored value must equal os.path.relpath(resolved, output_parent)
         converted to posix format. It must NOT be the absolute path.
+
+        Note: when the image is OUTSIDE the output OTIO's parent directory,
+        media_ref_for_otio returns an absolute path instead of a relative
+        one — see test_pathpolicy_overlay.py::TestImageReferenceStorage for
+        the 'outside -> absolute' branch.
         """
         with tempfile.TemporaryDirectory() as tmpd:
             tmp = Path(tmpd)
@@ -515,30 +523,35 @@ class TestValidationOrder:
                 f"Expected INVALID_INPUT (value-range), got {error.get('code')!r}"
             )
 
-    def test_colocation_checked_before_existence(self) -> None:
-        """co-location check must fire before existence check."""
+    def test_path_safety_checked_before_existence(self) -> None:
+        """Path safety must fire before existence check.
+
+        Co-location restriction removed (ADR-PP-1 / impl-overlay).
+        New order: path safety -> existence -> extension.
+        An image path with a single-quote (path safety violation) that does
+        NOT exist should yield INVALID_INPUT (safety), not FILE_NOT_FOUND.
+        """
         with tempfile.TemporaryDirectory() as tmpd:
             tmp = Path(tmpd)
-            proj = tmp / "proj"
-            elsewhere = tmp / "elsewhere"
-            proj.mkdir()
-            elsewhere.mkdir()
-
             tl = _make_v1_timeline()
-            inp = proj / "in.otio"
-            out = proj / "out.otio"
+            inp = tmp / "in.otio"
+            out = tmp / "out.otio"
             _write_timeline(tl, inp)
-            # Image is outside output parent and does NOT exist
-            outside_img = elsewhere / "ghost.png"
+            # Non-existent path with single-quote (path safety violation)
+            bad_path = str(tmp / "non_existent'.png")
 
-            opts = _default_opts(proj, outside_img)
+            opts = AddOverlayOptions(
+                image_path=bad_path,
+                start_sec=1.0,
+                duration_sec=3.0,
+            )
             result = add_overlay(str(inp), str(out), opts)
 
-            # Must get PATH_NOT_ALLOWED (co-location), not FILE_NOT_FOUND
+            # Must get INVALID_INPUT from path safety, not FILE_NOT_FOUND
             assert result["ok"] is False
             error = result.get("error") or {}
-            assert error.get("code") == "PATH_NOT_ALLOWED", (
-                f"Expected PATH_NOT_ALLOWED (co-location before existence), "
+            assert error.get("code") == "INVALID_INPUT", (
+                f"Expected INVALID_INPUT (path safety before existence), "
                 f"got {error.get('code')!r}"
             )
 
@@ -801,10 +814,18 @@ class TestValueRangeViolations:
 
 
 class TestImagePathValidation:
-    """image_path must pass all 4 stages: co-location, existence, extension, safety."""
+    """image_path must pass all 3 stages: path safety, existence, extension.
 
-    def test_colocation_outside_output_parent_path_not_allowed(self) -> None:
-        """Image outside output parent tree -> PATH_NOT_ALLOWED (fixed msg, no full path)."""
+    Co-location restriction removed (ADR-PP-1 / impl-overlay): images may be
+    placed anywhere relative to the output OTIO directory.
+    """
+
+    def test_image_outside_output_parent_is_accepted(self) -> None:
+        """Image outside output parent tree must now be accepted (ADR-PP-1).
+
+        Co-location restriction removed: image outside the output OTIO's parent
+        directory is allowed and stored as an absolute path via media_ref_for_otio.
+        """
         with tempfile.TemporaryDirectory() as tmpd:
             tmp = Path(tmpd)
             proj = tmp / "proj"
@@ -816,26 +837,16 @@ class TestImagePathValidation:
             inp = proj / "in.otio"
             out = proj / "out.otio"
             _write_timeline(tl, inp)
-            # Image exists but is outside output parent dir
+            # Image exists but is outside output parent dir -> now allowed
             outside_img = elsewhere / "logo.png"
             _write_dummy_png(outside_img)
 
             opts = _default_opts(proj, outside_img)
             result = add_overlay(str(inp), str(out), opts)
 
-            assert result["ok"] is False
-            error = result.get("error") or {}
-            assert error.get("code") == "PATH_NOT_ALLOWED", (
-                f"Expected PATH_NOT_ALLOWED for image outside output parent, "
-                f"got {error.get('code')!r}"
-            )
-            # CWE-209: no full path in message
-            msg = error.get("message") or ""
-            assert str(elsewhere) not in msg, (
-                f"message must not contain full path: {msg!r}"
-            )
-            assert str(outside_img) not in msg, (
-                f"message must not contain full image path: {msg!r}"
+            assert result["ok"] is True, (
+                f"Image outside output parent must now be accepted (ADR-PP-1), "
+                f"got error: {result.get('error')}"
             )
 
     def test_colocation_recursive_subdir_allowed(self) -> None:
@@ -993,9 +1004,13 @@ class TestImagePathValidation:
                 f"got {error.get('code')!r}"
             )
 
-    def test_v2_3_dotdot_relpath_path_not_allowed(self) -> None:
-        """Defense-in-depth (V2-3): if relpath yields '..'-containing result
-        (image on different drive / outside tree), -> PATH_NOT_ALLOWED."""
+    def test_sibling_dir_image_accepted_and_stored_as_absolute(self) -> None:
+        """Image in sibling dir must be accepted and stored as absolute (ADR-PP-1).
+
+        Co-location restriction removed: sibling-dir images that would previously
+        yield a '..' relative path are now allowed. media_ref_for_otio stores the
+        absolute path instead of a '../'-prefixed relative path (no traversal stored).
+        """
         with tempfile.TemporaryDirectory() as tmpd:
             tmp = Path(tmpd)
             proj = tmp / "proj"
@@ -1007,19 +1022,17 @@ class TestImagePathValidation:
             inp = proj / "in.otio"
             out = proj / "out.otio"
             _write_timeline(tl, inp)
-            # Image is in a sibling dir -> relpath will contain '..'
+            # Image is in a sibling dir (outside proj/)
             sibling_img = sibling / "logo.png"
             _write_dummy_png(sibling_img)
 
             opts = _default_opts(proj, sibling_img)
             result = add_overlay(str(inp), str(out), opts)
 
-            # Co-location check (which catches '..' paths) must return PATH_NOT_ALLOWED
-            assert result["ok"] is False
-            error = result.get("error") or {}
-            assert error.get("code") == "PATH_NOT_ALLOWED", (
-                f"Expected PATH_NOT_ALLOWED for '..' path (V2-3), "
-                f"got {error.get('code')!r}"
+            # Sibling dir image must now be accepted (ADR-PP-1)
+            assert result["ok"] is True, (
+                f"Sibling dir image must be accepted (ADR-PP-1), "
+                f"got error: {result.get('error')}"
             )
 
 

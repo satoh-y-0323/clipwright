@@ -24,6 +24,7 @@ import opentimelineio as otio
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.otio_utils import load_timeline, save_timeline
+from clipwright.pathpolicy import check_output_not_source
 from clipwright.schemas import ToolResult
 
 import clipwright_transition
@@ -74,14 +75,17 @@ def _add_transition_inner(
     Flow (fast-fail order):
       1. Output extension .otio check.
       2. Output parent directory existence check.
-      3. output == timeline path comparison (_check_output_not_input).
-      3b. output within timeline directory boundary check.
+      3. output == timeline path check (PATH_NOT_ALLOWED via check_output_not_source).
       4. Load timeline (FILE_NOT_FOUND -> basename re-raise).
       5. count_video_clips (multiple tracks / existing Transition / Clip count).
       6. resolve_transitions (range / duplicate / mode validation in plan.py).
       7. Write transition directive to timeline metadata (in-memory only).
       8. save_timeline (atomic write to output path).
       9. Return ok_result.
+
+    Output may reside in any directory (transform tool: co-location constraint
+    removed).  check_output_not_source raises PATH_NOT_ALLOWED when output and
+    timeline resolve to the same file.
     """
     output_path = Path(output)
 
@@ -106,16 +110,10 @@ def _add_transition_inner(
         )
 
     # ------------------------------------------------------------------
-    # 3. Output must not be the same file as the input timeline
+    # 3. Output must not resolve to the same file as the input timeline
+    #    PATH_NOT_ALLOWED (not INVALID_INPUT) for consistent transform contract.
     # ------------------------------------------------------------------
-    _check_output_not_input(output_path, timeline)
-
-    # ------------------------------------------------------------------
-    # 3b. Output must reside within the same directory tree as the timeline
-    #     (SR L-3: mirrors sequence._resolve_and_check_colocation /
-    #     trim PATH_NOT_ALLOWED pattern; resolve OSError fallback included).
-    # ------------------------------------------------------------------
-    _check_output_within_timeline_dir(output_path, Path(timeline).parent)
+    check_output_not_source(output_path, [timeline])
 
     # ------------------------------------------------------------------
     # 4. Load timeline (raises OTIO_ERROR on parse failure;
@@ -199,107 +197,6 @@ def _add_transition_inner(
         },
         artifacts=[{"role": "timeline", "path": output, "format": "otio"}],
     )
-
-
-def _check_output_not_input(output_path: Path, input_timeline: str) -> None:
-    """Raise INVALID_INPUT if output and input resolve to the same path.
-
-    Mirrors sequence._check_output_not_source (sequence.py 401-426).
-    Both paths are resolved with fallback to absolute() on OSError.
-
-    Args:
-        output_path: Proposed output path.
-        input_timeline: Input timeline path string.
-
-    Raises:
-        ClipwrightError(INVALID_INPUT): when the resolved paths are equal.
-    """
-    try:
-        out_resolved = str(output_path.resolve())
-    except OSError:
-        try:
-            out_resolved = str(output_path.absolute())
-        except OSError:
-            out_resolved = str(output_path)
-
-    try:
-        in_resolved = str(Path(input_timeline).resolve())
-    except OSError:
-        try:
-            in_resolved = str(Path(input_timeline).absolute())
-        except OSError:
-            in_resolved = str(Path(input_timeline))
-
-    if out_resolved == in_resolved:
-        raise ClipwrightError(
-            code=ErrorCode.INVALID_INPUT,
-            message="Output path and input timeline path are the same.",
-            hint=(
-                "Use a different output path "
-                "(tool chaining requires a distinct OTIO file)."
-            ),
-        )
-
-
-def _check_output_within_timeline_dir(output_path: Path, timeline_dir: Path) -> None:
-    """Raise PATH_NOT_ALLOWED if output is outside the timeline directory tree.
-
-    Mirrors sequence._resolve_and_check_colocation (keep in sync).
-    Falls back to absolute()-based comparison when resolve() raises OSError.
-    Error message uses fixed wording without exposing the full path (CWE-209).
-
-    Args:
-        output_path: Proposed output OTIO file path.
-        timeline_dir: Parent directory of the input timeline file.
-
-    Raises:
-        ClipwrightError: PATH_NOT_ALLOWED when output is outside the boundary.
-    """
-    try:
-        base = timeline_dir.resolve()
-        target = output_path.resolve()
-        base_str = str(base)
-        target_str = str(target)
-        if not (
-            target_str == base_str
-            or target_str.startswith(base_str + "/")
-            or target_str.startswith(base_str + "\\")
-        ):
-            raise ClipwrightError(
-                code=ErrorCode.PATH_NOT_ALLOWED,
-                message="Output file points outside the project boundary.",
-                hint=(
-                    "Use an output path located under the same directory"
-                    " as the input OTIO timeline."
-                ),
-            )
-    except ClipwrightError:
-        raise
-    except OSError:
-        # resolve() failure (network paths, extremely long paths, symlink loops):
-        # fall back to absolute()-based best-effort comparison.
-        try:
-            base_abs = str(timeline_dir.absolute())
-            target_abs = str(output_path.absolute())
-            if not (
-                target_abs == base_abs
-                or target_abs.startswith(base_abs + "/")
-                or target_abs.startswith(base_abs + "\\")
-            ):
-                raise ClipwrightError(
-                    code=ErrorCode.PATH_NOT_ALLOWED,
-                    message="Output file points outside the project boundary.",
-                    hint=(
-                        "Use an output path located under the same directory"
-                        " as the input OTIO timeline."
-                    ),
-                )
-        except ClipwrightError:
-            raise
-        except OSError:
-            # Truly unresolvable: skip boundary check (best-effort, same as
-            # sequence._resolve_and_check_colocation SR L-1 / DC-GP-002).
-            pass
 
 
 def count_video_clips(tl: otio.schema.Timeline) -> int:

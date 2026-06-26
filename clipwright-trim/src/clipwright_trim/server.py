@@ -50,7 +50,9 @@ def clipwright_trim(
         Field(
             description=(
                 "Output OTIO timeline file path (.otio extension required). "
-                "Must be in the same directory as the media file. "
+                "May be placed in any directory whose parent already exists; "
+                "the output must not resolve to the same path as the input media. "
+                "I/O contract: create (new OTIO timeline is always generated). "
                 "The file is created or overwritten atomically."
             )
         ),

@@ -176,14 +176,15 @@ def media_ref_for_otio(source: str | Path, otio_dir: Path) -> str:
     except (ValueError, OSError):
         pass
 
-    # Source is outside otio_dir: return absolute path
+    # Source is outside otio_dir: return absolute path with POSIX separators
+    # (OTIO target_url must use forward slashes on all platforms).
     try:
-        return str(src_path.resolve())
+        return src_path.resolve().as_posix()
     except OSError:
         try:
-            return str(src_path.absolute())
+            return src_path.absolute().as_posix()
         except OSError:
-            return str(src_path)
+            return src_path.as_posix()
 
 
 def check_media_ref(ref: str, otio_dir: Path, kind: str) -> None:

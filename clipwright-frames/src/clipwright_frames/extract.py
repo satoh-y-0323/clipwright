@@ -11,9 +11,8 @@ Design decisions:
 - Error messages expose basename only (CWE-209 path disclosure prevention).
 - build_single_frame_command returns list[str]; run() receives the list directly
   without any str() conversion in this module.
-- _check_within_boundary(path, base) raises PATH_NOT_ALLOWED when path.resolve()
-  falls outside base; scene_timeline is a read-only input and is NOT required
-  to be inside output_dir.
+- artifact containment is enforced via clipwright.pathpolicy.check_within_boundary;
+  scene_timeline is a read-only input and is NOT required to be inside output_dir.
 """
 
 from __future__ import annotations
@@ -33,6 +32,7 @@ from clipwright.otio_utils import (
     new_timeline,
     save_timeline,
 )
+from clipwright.pathpolicy import check_within_boundary
 from clipwright.process import resolve_tool, run, safe_subprocess_message
 from clipwright.schemas import RationalTimeModel, TimeRangeModel, ToolResult
 
@@ -51,66 +51,6 @@ from clipwright_frames.schemas import ExtractFramesOptions
 # extreme ffprobe-derived duration values (CWE-400 / SR-V-001).
 # Mirrors clipwright-reframe _MAX_TIMEOUT_DURATION_S (10 years).
 _MAX_TIMEOUT_DURATION_S: float = 315_360_000.0
-
-
-def _check_within_boundary(path: Path, base: Path) -> None:
-    """Verify that path resolves within base directory (CWE-22 prevention).
-
-    Falls back to absolute()-based comparison when resolve() raises OSError
-    (e.g. network paths, extremely long paths). Raises PATH_NOT_ALLOWED when
-    path points outside the allowed base directory.
-
-    scene_timeline (read-only input) is NOT validated here; this function is
-    used only for output artifacts written under output_dir.
-
-    Args:
-        path: The artifact path to validate.
-        base: Resolved base directory that must contain path.
-
-    Raises:
-        ClipwrightError: PATH_NOT_ALLOWED when path resolves outside base.
-    """
-    try:
-        resolved = path.resolve()
-        base_str = str(base)
-        target_str = str(resolved)
-        if not (
-            target_str == base_str
-            or target_str.startswith(base_str + "/")
-            or target_str.startswith(base_str + os.sep)
-        ):
-            raise ClipwrightError(
-                code=ErrorCode.PATH_NOT_ALLOWED,
-                message=f"{path.name} is outside the allowed output boundary.",
-                hint=(
-                    "Ensure the output_dir does not contain symlinks that"
-                    " escape the directory."
-                ),
-            )
-    except ClipwrightError:
-        raise
-    except OSError:
-        # resolve() failure: fall back to absolute()-based best-effort comparison.
-        try:
-            base_abs = str(base.absolute()) if not base.is_absolute() else str(base)
-            target_abs = str(path.absolute())
-            if not (
-                target_abs == base_abs
-                or target_abs.startswith(base_abs + "/")
-                or target_abs.startswith(base_abs + os.sep)
-            ):
-                raise ClipwrightError(
-                    code=ErrorCode.PATH_NOT_ALLOWED,
-                    message=f"{path.name} is outside the allowed output boundary.",
-                    hint=(
-                        "Ensure the output_dir does not contain symlinks that"
-                        " escape the directory."
-                    ),
-                )
-        except ClipwrightError:
-            raise
-        except OSError:
-            pass
 
 
 def _write_frames_otio(
@@ -391,8 +331,8 @@ def _extract_frames_inner(
     out_dir_resolved = out_dir.resolve()
     frames_otio_path = out_dir / "frames.otio"
     frames_json_path = out_dir / "frames.json"
-    _check_within_boundary(frames_otio_path, out_dir_resolved)
-    _check_within_boundary(frames_json_path, out_dir_resolved)
+    check_within_boundary(out_dir_resolved, frames_otio_path, "frame output")
+    check_within_boundary(out_dir_resolved, frames_json_path, "frame output")
 
     # --- 7. Write frames.otio ---
 

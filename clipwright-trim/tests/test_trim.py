@@ -231,8 +231,13 @@ class TestOtioStructure:
             value=3.0 * rate, rate=rate
         )
 
-    def test_target_url_is_absolute_path(self, tmp_path: Path) -> None:
-        """Each clip's target_url must be the absolute path of the media file."""
+    def test_target_url_matches_media_ref_for_otio(self, tmp_path: Path) -> None:
+        """Each clip's target_url must match media_ref_for_otio output.
+
+        When media is under the OTIO directory, media_ref_for_otio returns a
+        relative POSIX path.  When media is outside, it returns an absolute path.
+        This test uses same-directory placement, so a relative path is expected.
+        """
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
         output = str(tmp_path / "out.otio")
@@ -246,10 +251,11 @@ class TestOtioStructure:
         assert result["ok"] is True
         tl = load_timeline(output)
         clips = [it for it in tl.tracks[0] if isinstance(it, otio.schema.Clip)]
-        abs_media = str(Path(media).resolve())
+        # Same-directory placement → relative reference ("video.mp4").
+        expected_url = Path(media).name
         for clip in clips:
             assert isinstance(clip.media_reference, otio.schema.ExternalReference)
-            assert clip.media_reference.target_url == abs_media
+            assert clip.media_reference.target_url == expected_url
 
 
 # ===========================================================================
@@ -482,10 +488,12 @@ class TestErrorMapping:
         assert result["error"]["code"] == ErrorCode.INVALID_INPUT
         assert len(inspect_called) == 0
 
-    def test_output_equals_media_returns_invalid_input(self, tmp_path: Path) -> None:
-        """output == media path -> INVALID_INPUT, inspect_media not called (§5)."""
-        # The output must be .otio so the extension check passes first,
-        # but the path must resolve to the same file as media.
+    def test_output_equals_media_returns_path_not_allowed(self, tmp_path: Path) -> None:
+        """output == media path -> PATH_NOT_ALLOWED, inspect_media not called.
+
+        check_output_not_source runs before the extension check, so the error
+        code is PATH_NOT_ALLOWED regardless of the output extension.
+        """
         media = str(tmp_path / "video.otio")
         Path(media).touch()
         output = media  # same path
@@ -500,7 +508,7 @@ class TestErrorMapping:
             result = trim_media(media, output, _keep_opts((2.0, 5.0)))
 
         assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
         assert len(inspect_called) == 0
 
     # ---- inspect_media error propagation ----
@@ -542,14 +550,19 @@ class TestErrorMapping:
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.PROBE_FAILED
 
-    # ---- Same-directory check (runs AFTER inspect_media) ----
+    # ---- Same-directory check removed (new policy: output anywhere) ----
 
-    def test_output_different_dir_returns_error_after_inspect(
+    def test_output_different_dir_succeeds_after_policy_update(
         self, tmp_path: Path
     ) -> None:
-        """output in a different directory than media -> PATH_NOT_ALLOWED or INVALID_INPUT (§5 / §6).
+        """output in a different directory than media → ok=True (new policy).
 
-        Same-directory check runs after inspect_media (inspect_media IS called).
+        The same-directory co-location constraint has been removed.  After
+        impl-trim, placing the output OTIO in any directory with an existing
+        parent is allowed; only output==media is rejected.
+
+        inspect_media must still be called (path validation runs before probe;
+        the new flow does not skip probe when directories differ).
         """
         media_dir = tmp_path / "src"
         media_dir.mkdir()
@@ -559,7 +572,7 @@ class TestErrorMapping:
         Path(media).touch()
         output = str(other_dir / "out.otio")
 
-        inspect_called = []
+        inspect_called: list[str] = []
 
         def _tracking_inspect(path: str) -> MediaInfo:
             inspect_called.append(path)
@@ -568,18 +581,10 @@ class TestErrorMapping:
         with patch("clipwright_trim.trim.inspect_media", side_effect=_tracking_inspect):
             result = trim_media(media, output, _keep_opts((2.0, 5.0)))
 
-        assert result["ok"] is False
-        assert result["error"]["code"] in (
-            ErrorCode.PATH_NOT_ALLOWED,
-            ErrorCode.INVALID_INPUT,
-        )
-        # inspect_media must have been called (same-dir check is post-probe)
+        # New policy: different directory is allowed → ok=True.
+        assert result["ok"] is True
+        # inspect_media must have been called
         assert len(inspect_called) == 1
-        # Absolute path must not be exposed in error message or hint (CWE-209)
-        error_msg = result["error"]["message"]
-        error_hint = result["error"]["hint"]
-        assert str(media_dir) not in error_msg
-        assert str(media_dir) not in error_hint
 
     # ---- Range validation errors ----
 

@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - Unreleased
+
+### Changed
+
+- **Output placement ergonomics**: removed the same-directory co-location constraint.
+  The output OTIO may now be placed in any directory whose parent already exists,
+  enabling project-oriented layouts where media and timelines live in separate trees.
+- **Output collision detection**: the check that rejects `output == media` now raises
+  `PATH_NOT_ALLOWED` (previously `INVALID_INPUT`) via `clipwright.pathpolicy.check_output_not_source`.
+- **OTIO media reference**: clips now embed a relative path when the media file lives
+  under the OTIO directory, and an absolute path otherwise, via
+  `clipwright.pathpolicy.media_ref_for_otio`.  This makes cross-directory timelines
+  self-consistent regardless of working directory.
+- Bumped `clipwright` core dependency to `>=0.4.0` (requires `pathpolicy.media_ref_for_otio`).
+
 ## [0.1.0] - Unreleased
 
 ### Added

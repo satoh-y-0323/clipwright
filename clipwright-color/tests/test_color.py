@@ -329,7 +329,7 @@ class TestOutputValidation:
         assert result["error"]["code"] == ErrorCode.INVALID_INPUT.value
 
     def test_output_equals_media_rejected(self, tmp_path: Path) -> None:
-        """output == media (same path) must return INVALID_INPUT."""
+        """output == media (same path) must return PATH_NOT_ALLOWED."""
         from clipwright_color.color import (
             detect_color,  # type: ignore[import-not-found]
         )
@@ -343,10 +343,10 @@ class TestOutputValidation:
             media=str(media), output=str(media), options=opts, timeline=None
         )
         assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT.value
+        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED.value
 
     def test_output_equals_timeline_rejected(self, tmp_path: Path) -> None:
-        """output == timeline (same path) must return INVALID_INPUT."""
+        """output == timeline (same path) must return PATH_NOT_ALLOWED."""
         from clipwright_color.color import (
             detect_color,  # type: ignore[import-not-found]
         )
@@ -364,10 +364,14 @@ class TestOutputValidation:
             timeline=str(timeline_file),
         )
         assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT.value
+        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED.value
 
-    def test_output_in_different_directory_rejected(self, tmp_path: Path) -> None:
-        """output not in the same directory as media must return INVALID_INPUT (DC-AS-002)."""
+    def test_output_in_different_directory_now_allowed(self, tmp_path: Path) -> None:
+        """DC-AS-004: output in a different directory from media must now return ok=True.
+
+        Updated from old policy (INVALID_INPUT) to new policy (ok=True).
+        RED: pre-migration code returns INVALID_INPUT (same-dir block L117-131).
+        """
         from clipwright_color.color import (
             detect_color,  # type: ignore[import-not-found]
         )
@@ -381,11 +385,22 @@ class TestOutputValidation:
         output = other_dir / "out.otio"
         opts = DetectColorOptions()
 
-        result = detect_color(
-            media=str(media), output=str(output), options=opts, timeline=None
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(
+                "clipwright_color.color.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_color.color.measure_brightness",
+                lambda media_path, options: _fake_measured(yavg=100.0),
+            )
+            result = detect_color(
+                media=str(media), output=str(output), options=opts, timeline=None
+            )
+        assert result["ok"] is True, (
+            "DC-AS-004: output in different dir from media must be allowed."
+            f" error={result.get('error')}"
         )
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT.value
 
 
 # ===========================================================================

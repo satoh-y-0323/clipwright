@@ -1,6 +1,6 @@
 [project]
 name = "clipwright-render"
-version = "0.13.0"
+version = "0.14.0"
 description = "MCP tool to realize OTIO timelines with FFmpeg. Completes segment extraction, concatenation, and trimming in a single transcode pass."
 readme = "README.md"
 license = { text = "MIT" }
@@ -9,7 +9,7 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "clipwright>=0.2.0",
+    "clipwright>=0.4.0",
     "mcp[cli]>=1.27.2",
     "opentimelineio>=0.18",
     "pydantic>=2",

@@ -5,6 +5,26 @@ All notable changes to `clipwright-sequence` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-06-27
+
+### Changed
+
+- **External-source policy relaxed** (ADR-SEQ-6): source media files may now reside
+  in any readable location — not just under the output `.otio` parent directory.
+  The previous co-location restriction is removed; `output == any source` is still
+  rejected (`PATH_NOT_ALLOWED`).
+
+- **OTIO `target_url` encoding**: co-located sources are now stored as relative POSIX
+  paths (e.g. `"footage/clip.mp4"`) via `pathpolicy.media_ref_for_otio`.  External
+  sources continue to be stored as absolute POSIX paths.  This allows the produced
+  OTIO file to be relocated as a self-contained unit when all sources are co-located.
+
+- **Dependency**: `clipwright>=0.4.0` (requires `pathpolicy.media_ref_for_otio` and
+  `pathpolicy.check_output_not_source`).
+
+- **MCP tool `output` field description** updated to clarify create semantics and
+  multi-location source support.
+
 ## [0.1.0] - 2026-06-22
 
 ### Added

@@ -47,7 +47,7 @@ def clipwright_add_bgm(
                 "BGM file path (audio or video). "
                 "Allowed extensions: mp3, wav, m4a, aac, flac, ogg, opus,"
                 " mp4, mkv, mov, webm. "
-                "Must be placed in the same directory as the timeline file."
+                "May reside in any directory (external files accepted)."
             )
         ),
     ],
@@ -56,7 +56,9 @@ def clipwright_add_bgm(
         Field(
             description=(
                 "Output OTIO timeline file path (.otio extension). "
-                "Must differ from the input timeline path (non-destructive, M5)."
+                "Must differ from both the input timeline and the bgm file "
+                "(non-destructive accumulate contract, M5). "
+                "May reside in any directory whose parent already exists."
             )
         ),
     ],

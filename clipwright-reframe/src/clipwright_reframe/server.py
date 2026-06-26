@@ -45,7 +45,10 @@ def clipwright_reframe(
         Field(
             description=(
                 "Output OTIO timeline file path (.otio extension)."
-                " Must be placed in the same directory as the media file."
+                " The file is created (when timeline is None) or updated"
+                " (when timeline is provided) at this path."
+                " May be placed in any directory with an existing parent;"
+                " no co-location with the media file is required."
             )
         ),
     ],

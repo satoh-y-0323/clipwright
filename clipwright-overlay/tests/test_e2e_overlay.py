@@ -13,8 +13,9 @@ Test scenarios:
   4. xy_placement_center_and_corner      — center formula and corner expression
      place the overlay correctly (V2-6 / DC-AM-002/003).
   5. project_move_round_trip             — annotate in dir A, move to dir B, render
-     from dir B; no PATH_NOT_ALLOWED; also verifies image-only move raises
-     PATH_NOT_ALLOWED (V2-8 / DC-GP-001 / DC-AS-003).
+     from dir B; no PATH_NOT_ALLOWED; also verifies that an absolute image reference
+     to an existing file outside the project directory is accepted (ADR-PP-1 / V2-8 /
+     DC-GP-001 / DC-AS-003).
   6. corrupt_image_subprocess_failed     — garbage-bytes .png causes SUBPROCESS_FAILED
      with basename-only message and a hint mentioning corrupt/unsupported (V2-7 /
      DC-AM-004).
@@ -725,8 +726,12 @@ def test_project_move_round_trip(
     )
     assert out_mp4_b.exists(), "Rendered output not created in dir B"
 
-    # Also assert: image-only-moved-out-of-tree -> PATH_NOT_ALLOWED.
-    # dir C has base video and OTIO but NOT the image -> PATH_NOT_ALLOWED.
+    # Also verify ADR-PP-1 absolute escape hatch: an absolute reference to an
+    # existing image file outside the project directory is accepted by both
+    # add_overlay (stores it as an absolute path via media_ref_for_otio) and
+    # render (check_media_ref allows absolute refs to existing regular files).
+    # dir C has the base video and OTIO; the image lives in dir_a (outside dir_c)
+    # but is still present on disk as a real file -> both operations must succeed.
     dir_c = tmp_path / "proj_c"
     dir_c.mkdir()
 
@@ -738,33 +743,30 @@ def test_project_move_round_trip(
     otio.adapters.write_to_file(tl_c, str(in_otio_c))
 
     opts_c = AddOverlayOptions(
-        image_path=str(logo_a),  # image is still in dir_a (outside dir_c)
+        image_path=str(logo_a),  # image is still in dir_a (outside dir_c); exists
         start_sec=1.0,
         duration_sec=3.0,
         fade_in_sec=0.0,
         fade_out_sec=0.0,
     )
     result_c = add_overlay(str(in_otio_c), str(out_otio_c), opts_c)
-    # add_overlay itself may fail (image is outside the output dir) or succeed
-    # (overlay.py checks that image_path is under the output's parent dir).
-    # If it failed we skip the render test; if it succeeded, render should fail.
-    if not result_c["ok"]:
-        # add_overlay correctly rejected the out-of-tree image path
-        assert "PATH_NOT_ALLOWED" in str(result_c.get("error", {}).get("code", "")), (
-            f"add_overlay should reject out-of-tree image with PATH_NOT_ALLOWED: {result_c}"
-        )
-    else:
-        out_mp4_c = dir_c / "rendered.mp4"
-        render_result_c = render_timeline(
-            str(out_otio_c), str(out_mp4_c), RenderOptions(overwrite=True)
-        )
-        assert not render_result_c.ok, (
-            "Expected render to fail when image is outside the project directory"
-        )
-        assert render_result_c.error is not None
-        assert "PATH_NOT_ALLOWED" in str(render_result_c.error.code), (
-            f"Expected PATH_NOT_ALLOWED error but got: {render_result_c.error}"
-        )
+    # add_overlay stores the image as an absolute path (outside output dir);
+    # no boundary rejection — only existence and extension are validated.
+    assert result_c["ok"], (
+        f"add_overlay should accept an absolute path to an existing image"
+        f" outside the project directory (ADR-PP-1): {result_c}"
+    )
+
+    out_mp4_c = dir_c / "rendered.mp4"
+    render_result_c = render_timeline(
+        str(out_otio_c), str(out_mp4_c), RenderOptions(overwrite=True)
+    )
+    assert render_result_c.ok, (
+        f"Expected render to succeed when image is an absolute path to an"
+        f" existing file outside the project directory (ADR-PP-1):"
+        f" {render_result_c.error}"
+    )
+    assert out_mp4_c.exists(), "Rendered output not created for proj_c"
 
 
 @requires_ffmpeg

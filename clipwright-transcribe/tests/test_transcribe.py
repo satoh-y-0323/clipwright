@@ -145,21 +145,36 @@ class TestOutputValidation:
         assert result.error is not None
         assert result.error.code == ErrorCode.INVALID_INPUT
 
-    def test_output_different_dir_rejected(self, tmp_path: Path) -> None:
+    def test_output_different_dir_allowed(self, tmp_path: Path) -> None:
+        """output in a different directory is now allowed (new policy: TR-AD-08 check removed).
+
+        RED: impl still raises INVALID_INPUT at transcribe.py L548-567; must be True after fix.
+        """
         media = tmp_path / "a" / "video.mp4"
         media.parent.mkdir()
         media.write_bytes(b"x")
         out_dir = tmp_path / "b"
         out_dir.mkdir()
+        model_dir = tmp_path / "models"
+        model_dir.mkdir()
+        model = model_dir / "ggml-base.bin"
+        model.write_bytes(b"fake-model")
         out = out_dir / "out.otio"
-        with patch(
-            "clipwright_transcribe.transcribe.inspect_media",
-            return_value=_make_media_info(str(media)),
+        with (
+            patch(
+                "clipwright_transcribe.transcribe.inspect_media",
+                return_value=_make_media_info(str(media)),
+            ),
+            patch(
+                "clipwright_transcribe.transcribe._run_whisper",
+                return_value=_whisper_run([]),
+            ),
         ):
-            result = transcribe_media(str(media), str(out), _opts())
-        assert result.ok is False
-        assert result.error is not None
-        assert result.error.code == ErrorCode.INVALID_INPUT
+            result = transcribe_media(
+                str(media), str(out), _opts(model_path=str(model))
+            )
+        # RED: currently INVALID_INPUT — must be True after impl removes same-dir check
+        assert result.ok is True
 
 
 # ===========================================================================

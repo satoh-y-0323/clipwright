@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-06-27
+
+### Changed
+
+- **Removed same-directory constraint (silencedetect backend)**: `clipwright_detect_silence`
+  no longer requires the output `.otio` file to reside in the same directory as the input
+  media when using the `silencedetect` backend.  The output may now be placed in any
+  directory whose parent already exists, enabling cross-directory workflow chaining.
+- **VAD backend co-location requirement**: When `backend="vad"`, the output `.otio` must
+  still be placed in the same directory as the input media file.  A new
+  `INVALID_INPUT` error is returned immediately (before VAD invocation) when this
+  constraint is violated.
+- **Always-absolute `target_url`**: Clip `target_url` is now always the resolved absolute
+  path of the media file (DC-AS-001).  Relative references are no longer written to the
+  OTIO so that `render_timeline` can accept the timeline via the ADR-PP-1 absolute escape
+  hatch without a co-location boundary restriction.
+- Bumped dependency `clipwright>=0.2.0` → `clipwright>=0.4.0`.
+
 ## [0.2.0] - 2026-06-14
 
 ### Added

@@ -14,12 +14,13 @@ Design decisions:
 - error messages do not expose full paths: FILE_NOT_FOUND uses basename only.
 - subprocess seam errors are sanitised with safe_subprocess_message() before
   reaching the MCP error envelope.
+- artifact containment is enforced via clipwright.pathpolicy.check_within_boundary
+  (consolidated from the former local _check_within_boundary helper).
 """
 
 from __future__ import annotations
 
 import math
-import os
 import tempfile
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.media import inspect_media
 from clipwright.otio_utils import add_marker, load_timeline, new_timeline, save_timeline
+from clipwright.pathpolicy import check_within_boundary
 from clipwright.process import resolve_tool, run, safe_subprocess_message
 from clipwright.schemas import RationalTimeModel, TimeRangeModel, ToolResult
 
@@ -209,69 +211,6 @@ def _detect_with_pyscenedetect(
         return parse_pyscenedetect_csv(csv_text)
 
 
-def _check_within_boundary(base_dir: Path, target: Path, kind: str) -> None:
-    """Verify that target is within base_dir (path separator-aware prefix check).
-
-    Mirrors the _check_within_timeline_dir pattern from clipwright-render/render.py.
-    Falls back to absolute()-based best-effort comparison when resolve() raises OSError
-    (e.g. network paths, extremely long paths). Raises PATH_NOT_ALLOWED when the
-    target points outside the allowed boundary.
-
-    Args:
-        base_dir: Resolved allowed base directory (e.g. output_path.parent.resolve()).
-        target: Path to validate.
-        kind: Type label for error messages (e.g. "output file", "timeline file").
-
-    Raises:
-        ClipwrightError: PATH_NOT_ALLOWED when target is outside base_dir.
-    """
-    try:
-        target_resolved = target.resolve()
-        base_str = str(base_dir)
-        target_str = str(target_resolved)
-        if not (
-            target_str == base_str
-            or target_str.startswith(base_str + "/")
-            or target_str.startswith(base_str + os.sep)
-        ):
-            raise ClipwrightError(
-                code=ErrorCode.PATH_NOT_ALLOWED,
-                message=f"{kind} points outside the project boundary.",
-                hint=(
-                    f"Place the {kind.lower()} under the same directory"
-                    " as the output file."
-                ),
-            )
-    except ClipwrightError:
-        raise
-    except OSError:
-        # resolve() failure: fall back to absolute()-based best-effort comparison.
-        try:
-            base_abs = (
-                str(base_dir.absolute())
-                if not base_dir.is_absolute()
-                else str(base_dir)
-            )
-            target_abs = str(target.absolute())
-            if not (
-                target_abs == base_abs
-                or target_abs.startswith(base_abs + "/")
-                or target_abs.startswith(base_abs + os.sep)
-            ):
-                raise ClipwrightError(
-                    code=ErrorCode.PATH_NOT_ALLOWED,
-                    message=f"{kind} points outside the project boundary.",
-                    hint=(
-                        f"Place the {kind.lower()} under the same directory"
-                        " as the output file."
-                    ),
-                )
-        except ClipwrightError:
-            raise
-        except OSError:
-            pass
-
-
 def _detect_scenes_inner(
     media: str,
     output: str,
@@ -309,7 +248,7 @@ def _detect_scenes_inner(
         output_base = output_path.parent.resolve()
     except OSError:
         output_base = output_path.parent.absolute()
-    _check_within_boundary(output_base, output_path, "output file")
+    check_within_boundary(output_base, output_path, "output file")
 
     # --- 2. inspect_media -> MediaInfo ---
 
@@ -386,7 +325,7 @@ def _detect_scenes_inner(
                 hint="Specify a valid .otio timeline file path.",
             )
         # Boundary check: timeline must reside within the same directory as output.
-        _check_within_boundary(output_base, timeline_path, "timeline file")
+        check_within_boundary(output_base, timeline_path, "timeline file")
 
         # Augment mode: load existing OTIO and append markers to V1 track.
         timeline_obj = load_timeline(timeline)

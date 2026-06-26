@@ -44,8 +44,9 @@ def clipwright_detect_color(
         str,
         Field(
             description=(
-                "Output OTIO timeline file path (.otio extension)."
-                " Must be placed in the same directory as the media file."
+                "Output OTIO timeline file path (.otio extension, create type)."
+                " Output may be placed in any directory (parent dir must exist);"
+                " must not equal the media or timeline path."
             )
         ),
     ],
