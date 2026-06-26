@@ -586,8 +586,10 @@ class TestInputValidation:
         _write_timeline(tl_path, [_make_clip(str(symlink_source), 0.0, 5.0)])
         output = str(tmp_path / "out.mp4")
 
-        # Pass through real inspect_media (symlink rejection is handled by _validate_existing_file)
-        # Not patching confirms the symlink rejection logic fires in the actual implementation
+        # Not patching confirms the symlink rejection logic fires in the actual
+        # implementation. render validates OTIO media refs via pathpolicy.check_media_ref,
+        # whose symlink rejection raises PATH_NOT_ALLOWED with a generic message that
+        # exposes no path component at all (stronger than the basename-only guarantee).
         result = render_timeline(
             timeline=str(tl_path),
             output=output,
@@ -596,12 +598,12 @@ class TestInputValidation:
 
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
-        # error.message must not expose absolute path (parent dir of real_file etc.)
-        # — only basename (Sec M-1)
+        # error.message must not expose any path component (Sec M-1 / CWE-209).
         error_message: str = result["error"]["message"]
         assert str(tmp_path) not in error_message
         assert str(real_file.parent) not in error_message
-        assert "link.mp4" in error_message
+        assert "link.mp4" not in error_message
+        assert "Symbolic links are not accepted" in error_message
 
 
 # ---------------------------------------------------------------------------
