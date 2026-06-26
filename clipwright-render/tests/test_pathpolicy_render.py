@@ -303,11 +303,11 @@ class TestAbsoluteExternalSubtitleRefAllowed:
                 dry_run=True,
             )
 
-        # ADR-PP-1: absolute external .srt must not be blocked.
+            # ADR-PP-1: absolute external .srt must not be blocked.
             assert result["ok"] is True, (
-            f"Expected ok=True (ADR-PP-1 absolute external subtitle allowed),"
-            f" got: {result.get('error')}"
-        )
+                f"Expected ok=True (ADR-PP-1 absolute external subtitle allowed),"
+                f" got: {result.get('error')}"
+            )
 
 
 # ---------------------------------------------------------------------------

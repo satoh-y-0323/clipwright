@@ -1154,10 +1154,10 @@ class TestNoVideoTrack:
 
 
 class TestInputEqualsOutput:
-    """output path identical to timeline path must return INVALID_INPUT."""
+    """output path identical to timeline path must return PATH_NOT_ALLOWED."""
 
     def test_output_equals_input_returns_invalid_input(self) -> None:
-        """Same path for timeline and output must return INVALID_INPUT."""
+        """Same path for timeline and output must return PATH_NOT_ALLOWED (check_output_not_source)."""
         with tempfile.TemporaryDirectory() as tmpd:
             tmp = Path(tmpd)
             tl = _make_v1_timeline()
@@ -1171,8 +1171,9 @@ class TestInputEqualsOutput:
 
             assert result["ok"] is False
             error = result.get("error") or {}
-            assert error.get("code") == "INVALID_INPUT", (
-                f"Expected INVALID_INPUT when output==timeline, "
+            # check_output_not_source raises PATH_NOT_ALLOWED (CR-M-5 unified code)
+            assert error.get("code") == "PATH_NOT_ALLOWED", (
+                f"Expected PATH_NOT_ALLOWED when output==timeline, "
                 f"got {error.get('code')!r}"
             )
             assert error.get("hint")

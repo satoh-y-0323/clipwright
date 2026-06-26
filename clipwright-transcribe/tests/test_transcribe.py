@@ -143,7 +143,8 @@ class TestOutputValidation:
         result = transcribe_media(str(media), str(media), _opts())
         assert result.ok is False
         assert result.error is not None
-        assert result.error.code == ErrorCode.INVALID_INPUT
+        # check_output_not_source raises PATH_NOT_ALLOWED (CR-M-1 unified code)
+        assert result.error.code == ErrorCode.PATH_NOT_ALLOWED
 
     def test_output_different_dir_allowed(self, tmp_path: Path) -> None:
         """output in a different directory is now allowed (new policy: TR-AD-08 check removed).

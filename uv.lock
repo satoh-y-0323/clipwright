@@ -211,7 +211,7 @@ wheels = [
 
 [[package]]
 name = "clipwright"
-version = "0.3.0"
+version = "0.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "mcp", extra = ["cli"] },
@@ -246,7 +246,7 @@ dev = [
 
 [[package]]
 name = "clipwright-bgm"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "clipwright-bgm" }
 dependencies = [
     { name = "clipwright" },
@@ -281,7 +281,7 @@ dev = [
 
 [[package]]
 name = "clipwright-color"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "clipwright-color" }
 dependencies = [
     { name = "clipwright" },
@@ -316,7 +316,7 @@ dev = [
 
 [[package]]
 name = "clipwright-frames"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "clipwright-frames" }
 dependencies = [
     { name = "clipwright" },
@@ -353,7 +353,7 @@ dev = [
 
 [[package]]
 name = "clipwright-loudness"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "clipwright-loudness" }
 dependencies = [
     { name = "clipwright" },
@@ -388,7 +388,7 @@ dev = [
 
 [[package]]
 name = "clipwright-noise"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "clipwright-noise" }
 dependencies = [
     { name = "clipwright" },
@@ -425,7 +425,7 @@ dev = [
 
 [[package]]
 name = "clipwright-overlay"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "clipwright-overlay" }
 dependencies = [
     { name = "clipwright" },
@@ -462,7 +462,7 @@ dev = [
 
 [[package]]
 name = "clipwright-reframe"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "clipwright-reframe" }
 dependencies = [
     { name = "clipwright" },
@@ -504,7 +504,7 @@ dev = [
 
 [[package]]
 name = "clipwright-render"
-version = "0.13.0"
+version = "0.14.0"
 source = { editable = "clipwright-render" }
 dependencies = [
     { name = "clipwright" },
@@ -541,7 +541,7 @@ dev = [
 
 [[package]]
 name = "clipwright-scene"
-version = "0.2.1"
+version = "0.3.0"
 source = { editable = "clipwright-scene" }
 dependencies = [
     { name = "clipwright" },
@@ -585,7 +585,7 @@ dev = [
 
 [[package]]
 name = "clipwright-sequence"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "clipwright-sequence" }
 dependencies = [
     { name = "clipwright" },
@@ -624,7 +624,7 @@ dev = [
 
 [[package]]
 name = "clipwright-silence"
-version = "0.2.1"
+version = "0.3.0"
 source = { editable = "clipwright-silence" }
 dependencies = [
     { name = "clipwright" },
@@ -672,7 +672,7 @@ dev = [
 
 [[package]]
 name = "clipwright-speed"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "clipwright-speed" }
 dependencies = [
     { name = "clipwright" },
@@ -709,7 +709,7 @@ dev = [
 
 [[package]]
 name = "clipwright-stabilize"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "clipwright-stabilize" }
 dependencies = [
     { name = "clipwright" },
@@ -744,7 +744,7 @@ dev = [
 
 [[package]]
 name = "clipwright-text"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "clipwright-text" }
 dependencies = [
     { name = "clipwright" },
@@ -781,7 +781,7 @@ dev = [
 
 [[package]]
 name = "clipwright-transcribe"
-version = "0.3.1"
+version = "0.4.0"
 source = { editable = "clipwright-transcribe" }
 dependencies = [
     { name = "clipwright" },
@@ -818,7 +818,7 @@ dev = [
 
 [[package]]
 name = "clipwright-transition"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "clipwright-transition" }
 dependencies = [
     { name = "clipwright" },
@@ -857,7 +857,7 @@ dev = [
 
 [[package]]
 name = "clipwright-trim"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "clipwright-trim" }
 dependencies = [
     { name = "clipwright" },

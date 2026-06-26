@@ -33,7 +33,7 @@ import opentimelineio as otio
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.otio_utils import add_marker, get_markers, load_timeline, save_timeline
-from clipwright.pathpolicy import media_ref_for_otio
+from clipwright.pathpolicy import check_output_not_source, media_ref_for_otio
 from clipwright.schemas import RationalTimeModel, TimeRangeModel, ToolResult
 
 from clipwright_overlay import __version__
@@ -423,14 +423,8 @@ def _add_overlay_inner(
         )
 
     # --- Step 3: output != timeline ---
-    if out.resolve() == inp.resolve():
-        raise ClipwrightError(
-            code=ErrorCode.INVALID_INPUT,
-            message="Output path must differ from the input timeline path.",
-            hint=(
-                "Provide a distinct output path (e.g., append '_overlay' before .otio)."
-            ),
-        )
+    # check_output_not_source raises PATH_NOT_ALLOWED when paths resolve equal.
+    check_output_not_source(out, [timeline])
 
     # --- Step 4: field validation (value ranges + image_path 3-stage + x/y) ---
     _validate_overlay_fields(options, output)

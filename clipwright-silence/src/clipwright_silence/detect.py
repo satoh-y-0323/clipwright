@@ -36,7 +36,7 @@ from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.media import inspect_media
 from clipwright.otio_utils import add_clip, new_timeline, save_timeline
-from clipwright.pathpolicy import media_ref_for_otio
+from clipwright.pathpolicy import check_output_not_source, media_ref_for_otio
 from clipwright.process import resolve_tool, run, safe_subprocess_message
 from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel, ToolResult
 
@@ -358,27 +358,9 @@ def _detect_inner(
             hint="Create the output directory first, then re-run.",
         )
 
-    # Prevent output == media (avoid overwriting the same path)
-    try:
-        if output_path.resolve() == media_path.resolve():
-            raise ClipwrightError(
-                code=ErrorCode.INVALID_INPUT,
-                message="The output path and input media path are identical.",
-                hint=(
-                    "Change the output file path to a path"
-                    " different from the input media."
-                ),
-            )
-    except OSError as exc:
-        if str(output_path) == str(media_path):
-            raise ClipwrightError(
-                code=ErrorCode.INVALID_INPUT,
-                message="The output path and input media path are identical.",
-                hint=(
-                    "Change the output file path to a path"
-                    " different from the input media."
-                ),
-            ) from exc
+    # Prevent output == media (avoid overwriting the same path).
+    # check_output_not_source raises PATH_NOT_ALLOWED when paths resolve equal.
+    check_output_not_source(output_path, [media])
 
     # --- 2. inspect_media -> verify streams and duration ---
 

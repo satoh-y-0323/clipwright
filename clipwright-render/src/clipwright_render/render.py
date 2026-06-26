@@ -34,7 +34,7 @@ from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.media import inspect_media
 from clipwright.otio_utils import get_clipwright_metadata, load_timeline
-from clipwright.pathpolicy import check_media_ref
+from clipwright.pathpolicy import check_media_ref, check_output_not_source
 from clipwright.process import resolve_tool, run
 from clipwright.schemas import ToolResult
 from pydantic import ValidationError as PydanticValidationError
@@ -235,53 +235,6 @@ def _check_within_timeline_dir(
             pass
 
 
-def _check_source_within_timeline_dir(timeline_path: Path, source: str) -> None:
-    """Verify that the source path is within the timeline's parent directory
-    (Sec M-2).
-
-    Guards against malicious OTIO files with arbitrary paths embedded as
-    target_url. Assumes a single source is co-located under the same directory
-    as the OTIO file.
-
-    Args:
-        timeline_path: path to the OTIO timeline file.
-        source: media source path obtained from the OTIO target_url.
-
-    Raises:
-        ClipwrightError: PATH_NOT_ALLOWED when source points outside the
-            project boundary.
-    """
-    _check_within_timeline_dir(
-        timeline_path,
-        source,
-        kind="source file",
-        hint_detail="source file",
-    )
-
-
-def _check_subtitle_within_timeline_dir(timeline_path: Path, subtitle: str) -> None:
-    """Verify that the subtitle path is within the timeline's parent directory
-    (ADR-S7).
-
-    Raises PATH_NOT_ALLOWED only when the path points outside the timeline
-    directory tree; subtitle files in subdirectories are allowed.
-
-    Args:
-        timeline_path: path to the OTIO timeline file.
-        subtitle: subtitle file path.
-
-    Raises:
-        ClipwrightError: PATH_NOT_ALLOWED when the subtitle points outside the
-            project boundary.
-    """
-    _check_within_timeline_dir(
-        timeline_path,
-        subtitle,
-        kind="subtitle file",
-        hint_detail="subtitle file",
-    )
-
-
 def _verify_image_magic(image_path: str) -> None:
     """Check the magic bytes of an image file to detect corrupt or non-image files.
 
@@ -322,62 +275,6 @@ def _verify_image_magic(image_path: str) -> None:
             hint=(
                 "The image overlay file does not have a valid PNG / JPEG / WebP header."
                 " Replace it with a valid image file."
-            ),
-        )
-
-
-def _check_image_overlay_within_timeline_dir(
-    timeline_path: Any,
-    image_path: str,
-) -> None:
-    """Verify that the image overlay path is within the timeline's parent directory
-    and that the file exists with an allowed extension (V2-3 / ADR-OV-4).
-
-    Thin wrapper over _check_within_timeline_dir (DRY). Also validates:
-    - File exists (FILE_NOT_FOUND; basename only / CWE-209).
-    - Extension is in _ALLOWED_IMAGE_EXTENSIONS (INVALID_INPUT).
-
-    Args:
-        timeline_path: path to the OTIO timeline file (str or Path).
-        image_path: reconstructed absolute path to the image overlay file.
-
-    Raises:
-        ClipwrightError: PATH_NOT_ALLOWED when image_path is outside the project
-            boundary; FILE_NOT_FOUND when the file does not exist; INVALID_INPUT
-            when the extension is not allowed.
-    """
-    tl_path = (
-        Path(timeline_path) if not isinstance(timeline_path, Path) else timeline_path
-    )
-
-    # Boundary check: image must be inside the timeline directory tree (V2-3).
-    _check_within_timeline_dir(
-        tl_path,
-        image_path,
-        kind="image overlay file",
-        hint_detail="image overlay file",
-    )
-
-    # Existence check: file must already exist (ADR-OV-3 order: existence before
-    # extension; CWE-209: basename only in message).
-    if not Path(image_path).exists():
-        raise ClipwrightError(
-            code=ErrorCode.FILE_NOT_FOUND,
-            message=f"Image overlay file not found: {Path(image_path).name}",
-            hint=(
-                "Place the image overlay file referenced in the OTIO timeline"
-                " in the expected location."
-            ),
-        )
-
-    # Extension allowlist (INVALID_INPUT; after existence check per ADR-OV-3).
-    img_ext = Path(image_path).suffix.lower()
-    if img_ext not in _ALLOWED_IMAGE_EXTENSIONS:
-        raise ClipwrightError(
-            code=ErrorCode.INVALID_INPUT,
-            message=(f"Image overlay file extension is not allowed: {img_ext!r}."),
-            hint=(
-                "Use an image overlay file with extension .png, .jpg, .jpeg, or .webp."
             ),
         )
 
@@ -675,49 +572,6 @@ def _subtitle_skip_warnings(
     return []
 
 
-def _check_path_not_allowed(output_path: Path, source: str) -> None:
-    """Verify that output and source do not point to the same path
-    (DC-AM-002).
-
-    Uses resolve() for comparison that accounts for symbolic links.
-    Falls back to absolute() when resolve() fails (path does not exist etc.),
-    and to string comparison only when absolute() also fails (Sec L-1).
-    """
-    try:
-        if output_path.resolve() == Path(source).resolve():
-            raise ClipwrightError(
-                code=ErrorCode.PATH_NOT_ALLOWED,
-                message="Output path and input source path are the same.",
-                hint=(
-                    "Change the output file path to be different from the"
-                    " input source file."
-                ),
-            )
-    except OSError as exc:
-        # resolve() failure (network paths, extremely long paths, etc.):
-        # try absolute() first, then fall back to string comparison.
-        try:
-            if Path(output_path).absolute() == Path(source).absolute():
-                raise ClipwrightError(
-                    code=ErrorCode.PATH_NOT_ALLOWED,
-                    message="Output path and input source path are the same.",
-                    hint=(
-                        "Change the output file path to be different from the"
-                        " input source file."
-                    ),
-                ) from exc
-        except OSError as exc2:
-            if str(output_path) == source:
-                raise ClipwrightError(
-                    code=ErrorCode.PATH_NOT_ALLOWED,
-                    message="Output path and input source path are the same.",
-                    hint=(
-                        "Change the output file path to be different from the"
-                        " input source file."
-                    ),
-                ) from exc2
-
-
 def render_timeline(
     timeline: str,
     output: str,
@@ -852,7 +706,7 @@ def _render_inner(
     # PATH_NOT_ALLOWED priority). output == BGM source is detected before the
     # extension check (non-destructive guarantee).
     if isinstance(bgm_clip, BgmClip):
-        _check_path_not_allowed(output_path, bgm_clip.source)
+        check_output_not_source(output_path, [bgm_clip.source])
 
     # --- 3. Output input validation ---
 
@@ -887,7 +741,7 @@ def _render_inner(
     #        to all unique sources (ADR-C8 / ADR-PP-1) ---
     for src in unique_sources:
         # output == source check (PATH_NOT_ALLOWED; DC-AM-002)
-        _check_path_not_allowed(output_path, src)
+        check_output_not_source(output_path, [src])
 
         # Existence check first (FILE_NOT_FOUND; DC-GP-005).
         # Must run before check_media_ref because check_media_ref raises
@@ -937,7 +791,7 @@ def _render_inner(
     if isinstance(bgm_clip, BgmClip):
         bgm_src = bgm_clip.source
         # output == bgm_src (defence-in-depth; early check at step 2b already ran)
-        _check_path_not_allowed(output_path, bgm_src)
+        check_output_not_source(output_path, [bgm_src])
         # Existence check before check_media_ref (same rationale as step 4)
         _bgm_p = Path(bgm_src.replace("\\", "/"))
         _bgm_exists_p = (
@@ -1104,6 +958,9 @@ def _render_inner(
         )
         if raw_trf_path is not None:
             # (a) Boundary check: trf_path must be under the timeline directory.
+            # Intentional: trf file is always co-located with the timeline
+            # (generated by detect_shake). ADR-PP-1 absolute escape hatch is
+            # not applicable here.
             _check_within_timeline_dir(
                 timeline_path,
                 raw_trf_path,

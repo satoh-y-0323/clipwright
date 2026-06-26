@@ -34,7 +34,11 @@ from clipwright.otio_utils import (
     save_timeline,
     set_clipwright_metadata,
 )
-from clipwright.pathpolicy import media_ref_for_otio
+from clipwright.pathpolicy import (
+    check_media_ref,
+    check_output_not_source,
+    media_ref_for_otio,
+)
 from clipwright.schemas import RationalTimeModel, ToolResult
 
 import clipwright_noise
@@ -92,21 +96,11 @@ def _detect_noise_inner(
             hint="Create the output directory first, then re-run.",
         )
 
-    # Prohibit output == media (non-destructive; M5)
-    if _same_path(output_path, media_path):
-        raise ClipwrightError(
-            code=ErrorCode.INVALID_INPUT,
-            message="Output path and input media path are identical.",
-            hint="Change the output file path to differ from the input media.",
-        )
-
-    # Prohibit output == timeline (non-destructive)
-    if timeline is not None and _same_path(output_path, Path(timeline)):
-        raise ClipwrightError(
-            code=ErrorCode.INVALID_INPUT,
-            message="Output path and input timeline path are identical.",
-            hint="Change the output file path to differ from the input timeline.",
-        )
+    # Prohibit output == media or output == timeline (non-destructive; M5 / SR-L-4)
+    _sources: list[str] = [media]
+    if timeline is not None:
+        _sources.append(timeline)
+    check_output_not_source(output_path, _sources)
 
     # --- 2. inspect_media: video + audio required (ADR-N8 / DC-AS-003) ---
 
@@ -308,12 +302,22 @@ def _load_and_validate_timeline(
         if isinstance(ref, otio.schema.ExternalReference):
             urls.add(ref.target_url)
 
+    # --- Single-source check (DC-AM-004): must precede check_media_ref so that
+    #     multi-source timelines are rejected with UNSUPPORTED_OPERATION before
+    #     individual URL validation (which may raise PATH_NOT_ALLOWED for missing
+    #     files).  Security is not weakened: multi-source is always rejected. ---
     if len(urls) > 1:
         raise ClipwrightError(
             code=ErrorCode.UNSUPPORTED_OPERATION,
             message="The timeline contains clips from multiple sources.",
             hint="Specify a timeline with a single source (same media file).",
         )
+
+    # --- Boundary check: validate each source reference (DC-AM-004 / CWE-22) ---
+    # check_media_ref accepts absolute existing files and rejects relative traversal.
+    tl_dir = Path(timeline_path).parent
+    for url in urls:
+        check_media_ref(url, tl_dir, "media")
 
     # --- Validate target_url == media_path (B-4: resolve() normalized comparison) ---
     if urls:
@@ -340,14 +344,3 @@ def _load_and_validate_timeline(
             )
 
     return tl
-
-
-def _same_path(a: Path, b: Path) -> bool:
-    """Return True if two paths refer to the same entity.
-
-    Falls back to string comparison on OSError.
-    """
-    try:
-        return a.resolve() == b.resolve()
-    except OSError:
-        return str(a) == str(b)

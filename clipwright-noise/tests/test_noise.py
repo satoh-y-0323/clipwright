@@ -10,7 +10,7 @@ Verification points (v3 design §1.1 / DC-AS-002 / B-4 / B-5 / DC-GP-003 / DC-GP
   (b) timeline specified: load existing + partial update preserving existing annotations
   (c) Extension other than .otio → INVALID_INPUT
   (d) media not found → FILE_NOT_FOUND (basename only; DC-GP-005)
-  (e) output==media → INVALID_INPUT / output==timeline → INVALID_INPUT
+  (e) output==media → PATH_NOT_ALLOWED / output==timeline → PATH_NOT_ALLOWED
   (f) output in different dir from media → INVALID_INPUT (DC-AS-002)
   (g) no video → UNSUPPORTED / no audio → UNSUPPORTED
   (h) timeline specified with media ≠ timeline source → INVALID_INPUT
@@ -496,7 +496,7 @@ class TestMediaNotFound:
 
 
 class TestOutputConflict:
-    """INVALID_INPUT must be returned when output is the same path as media or timeline."""
+    """PATH_NOT_ALLOWED must be returned when output is the same path as media or timeline (SR-L-4)."""
 
     def test_output_equals_media_returns_invalid_input(self, tmp_path: Path) -> None:
         from clipwright_noise.noise import detect_noise
@@ -512,7 +512,7 @@ class TestOutputConflict:
 
         d = _d(result)
         assert d["ok"] is False
-        assert d["error"]["code"] == ErrorCode.INVALID_INPUT
+        assert d["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
 
     def test_output_equals_timeline_returns_invalid_input(self, tmp_path: Path) -> None:
         from clipwright_noise.noise import detect_noise
@@ -533,7 +533,7 @@ class TestOutputConflict:
 
         d = _d(result)
         assert d["ok"] is False
-        assert d["error"]["code"] == ErrorCode.INVALID_INPUT
+        assert d["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
 
 
 # ===========================================================================
