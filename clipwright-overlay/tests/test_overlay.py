@@ -1156,7 +1156,7 @@ class TestNoVideoTrack:
 class TestInputEqualsOutput:
     """output path identical to timeline path must return PATH_NOT_ALLOWED."""
 
-    def test_output_equals_input_returns_invalid_input(self) -> None:
+    def test_output_equals_input_returns_path_not_allowed(self) -> None:
         """Same path for timeline and output must return PATH_NOT_ALLOWED (check_output_not_source)."""
         with tempfile.TemporaryDirectory() as tmpd:
             tmp = Path(tmpd)

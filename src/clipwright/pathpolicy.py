@@ -281,9 +281,8 @@ def check_media_ref(ref: str, otio_dir: Path, kind: str) -> None:
                 # Emit a warning so callers are aware the guard could not run
                 # (CR-L-7 / SR-L-3: silent pass may hide path injection attempts).
                 warnings.warn(
-                    f"check_media_ref: boundary check skipped for {kind!r} reference"
-                    f" {ref!r} — path is unresolvable (both resolve() and absolute()"
-                    " raised OSError).",
+                    "Boundary check skipped: path could not be resolved"
+                    " (resolve() and absolute() both failed).",
                     stacklevel=2,
                 )
 
@@ -338,8 +337,7 @@ def check_within_boundary(base_dir: Path, target: Path, kind: str) -> None:
             # Emit a warning so callers are aware the guard could not run
             # (CR-L-7 / SR-L-3: silent pass may hide path injection attempts).
             warnings.warn(
-                f"check_within_boundary: containment check skipped for {kind!r}"
-                f" target {target!r} — path is unresolvable (both resolve() and"
-                " absolute() raised OSError).",
+                "Containment check skipped: path could not be resolved"
+                " (resolve() and absolute() both failed).",
                 stacklevel=2,
             )

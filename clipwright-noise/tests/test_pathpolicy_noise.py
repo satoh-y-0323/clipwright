@@ -13,8 +13,8 @@ Test ID:
   DP-N-5  test_non_otio_extension_still_rejected        regression guard
   DP-N-6  test_missing_parent_dir_still_rejected        regression guard
   DP-N-8  test_clip_target_url_relative_inside_media    media inside -> rel POSIX target_url
-  DP-N-9  test_output_equals_source_path_not_allowed    SR-L-4: output==source -> PATH_NOT_ALLOWED [Red]
-  DP-N-10 test_relative_traversal_in_timeline_rejected  SR-M-1/CR-M-1/CR-M-6: ../ -> PATH_NOT_ALLOWED [Red]
+  DP-N-9  test_output_equals_source_path_not_allowed    SR-L-4: output==source -> PATH_NOT_ALLOWED
+  DP-N-10 test_relative_traversal_in_timeline_rejected  SR-M-1/CR-M-1/CR-M-6: ../ -> PATH_NOT_ALLOWED
   DP-N-11 test_absolute_external_source_in_timeline_allowed  absolute existing source outside timeline dir -> ok
 """
 
@@ -401,18 +401,14 @@ class TestInsideMediaRef:
 class TestOutputEqualsSourcePathNotAllowed:
     """SR-L-4: output==source rejection must use PATH_NOT_ALLOWED via check_output_not_source.
 
-    Current noise.py uses _same_path + INVALID_INPUT; after migration it must use
-    check_output_not_source which raises PATH_NOT_ALLOWED (consistent with other tools).
-    These tests are RED against the current implementation.
+    noise.py uses check_output_not_source which raises PATH_NOT_ALLOWED (consistent
+    with other tools).
     """
 
     def test_output_equals_source_path_not_allowed(self, tmp_path: Path) -> None:
         """DP-N-9: output identical to media must return PATH_NOT_ALLOWED.
 
-        SR-L-4: _same_path + INVALID_INPUT must be replaced by
-        check_output_not_source + PATH_NOT_ALLOWED.
-
-        Red: current noise.py returns INVALID_INPUT; expect PATH_NOT_ALLOWED.
+        SR-L-4: check_output_not_source raises PATH_NOT_ALLOWED.
         """
         from clipwright_noise.noise import detect_noise
 
@@ -549,9 +545,6 @@ class TestCheckMediaRefNewPolicy:
         check_media_ref for each target_url.  check_media_ref rejects relative
         traversal as PATH_NOT_ALLOWED (CWE-22 guard).
 
-        Red: current noise.py does not call check_media_ref, so the traversal
-        target_url is compared against media_path.resolve() and fails with
-        INVALID_INPUT (source mismatch) instead of PATH_NOT_ALLOWED.
         """
         from clipwright_noise.noise import detect_noise
 

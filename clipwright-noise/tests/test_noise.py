@@ -498,7 +498,7 @@ class TestMediaNotFound:
 class TestOutputConflict:
     """PATH_NOT_ALLOWED must be returned when output is the same path as media or timeline (SR-L-4)."""
 
-    def test_output_equals_media_returns_invalid_input(self, tmp_path: Path) -> None:
+    def test_output_equals_media_returns_path_not_allowed(self, tmp_path: Path) -> None:
         from clipwright_noise.noise import detect_noise
         from clipwright_noise.schemas import DetectNoiseOptions
 
@@ -514,7 +514,7 @@ class TestOutputConflict:
         assert d["ok"] is False
         assert d["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
 
-    def test_output_equals_timeline_returns_invalid_input(self, tmp_path: Path) -> None:
+    def test_output_equals_timeline_returns_path_not_allowed(self, tmp_path: Path) -> None:
         from clipwright_noise.noise import detect_noise
         from clipwright_noise.schemas import DetectNoiseOptions
 
@@ -542,16 +542,10 @@ class TestOutputConflict:
 
 
 class TestOutputDifferentDir:
-    """Output in a different directory from media is now ALLOWED (new policy: DC-AS-002 check removed).
-
-    RED: noise.py L107-122 same-dir check still in place; must succeed after impl-detectcut.
-    """
+    """Output in a different directory from media is now ALLOWED (new policy: DC-AS-002 check removed)."""
 
     def test_output_in_different_dir_allowed(self, tmp_path: Path) -> None:
-        """detect_noise must succeed when output is in a different directory from media.
-
-        RED: impl still raises INVALID_INPUT at noise.py L107-122; must be True after fix.
-        """
+        """detect_noise must succeed when output is in a different directory from media."""
         from clipwright_noise.noise import detect_noise
 
         media_dir = tmp_path / "src"
@@ -576,17 +570,12 @@ class TestOutputDifferentDir:
             )
 
         d = _d(result)
-        # RED: currently INVALID_INPUT — must be True after impl removes same-dir check
         assert d["ok"] is True
 
     def test_output_in_different_dir_allowed_with_separate_dirs(
         self, tmp_path: Path
     ) -> None:
-        """detect_noise must accept media and output in independently named directories.
-
-        RED: same-dir check still in impl; replaces the former CWE-209 hint check
-        that is now obsolete (no error is raised, so no hint to inspect).
-        """
+        """detect_noise must accept media and output in independently named directories."""
         from clipwright_noise.noise import detect_noise
 
         media_dir = tmp_path / "media_src_dir"
@@ -611,7 +600,6 @@ class TestOutputDifferentDir:
             )
 
         d = _d(result)
-        # RED: currently INVALID_INPUT — must be True after impl removes same-dir check
         assert d["ok"] is True
 
 
