@@ -277,7 +277,7 @@ class TestRegressionGuards:
     """Removing the same-dir constraint must not weaken other path safety invariants."""
 
     def test_output_equals_media_still_rejected(self, tmp_path: Path) -> None:
-        """DP-S-3: output path identical to media path must remain INVALID_INPUT."""
+        """DP-S-3: output path identical to media path must return PATH_NOT_ALLOWED."""
         from clipwright_silence.detect import detect_silence
 
         media = str(tmp_path / "same.otio")
@@ -290,7 +290,7 @@ class TestRegressionGuards:
             result = detect_silence(media, media, _opts())
 
         assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
 
     def test_non_otio_extension_still_rejected(self, tmp_path: Path) -> None:
         """DP-S-4: output with non-.otio extension must remain INVALID_INPUT."""

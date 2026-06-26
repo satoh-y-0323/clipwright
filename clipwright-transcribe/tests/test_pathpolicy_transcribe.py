@@ -1,20 +1,16 @@
 """test_pathpolicy_transcribe.py — Path-boundary constraint tests for transcribe_media.
 
-Verifies removal of the same-directory output constraint (TR-AD-08 inline check at
-transcribe.py L548-567) while maintaining all other safety invariants.
+Verifies removal of the same-directory output constraint while maintaining all other
+safety invariants.
 
 All tests are whisper-binary-independent: inspect_media and _run_whisper are mocked.
 
-Test ID -> RED/GREEN:
-  DP-T-1  test_external_dir_output_allowed               RED  (same-dir check still in impl)
-  DP-T-2  test_clip_target_url_absolute_external_media   RED  (follows DP-T-1)
-  DP-T-3  test_output_equals_media_still_rejected        GREEN (regression guard)
-  DP-T-4  test_non_otio_extension_still_rejected         GREEN (regression guard)
-  DP-T-5  test_missing_parent_dir_still_rejected         GREEN (regression guard)
-
-DP-T-1 and DP-T-2 are RED because transcribe.py L548-567 still enforces same-dir
-and returns INVALID_INPUT instead of succeeding.  Will become GREEN after impl-detectcut
-removes that block.
+Test ID:
+  DP-T-1  test_external_dir_output_allowed               external dir -> ok
+  DP-T-2  test_clip_target_url_absolute_external_media   media outside -> abs target_url
+  DP-T-3  test_output_equals_media_still_rejected        regression guard (PATH_NOT_ALLOWED)
+  DP-T-4  test_non_otio_extension_still_rejected         regression guard
+  DP-T-5  test_missing_parent_dir_still_rejected         regression guard
 """
 
 from __future__ import annotations
@@ -87,8 +83,6 @@ class TestExternalDirOutput:
 
         Whisper-independent: inspect_media and _run_whisper are mocked so no real
         whisper binary is required.
-        RED: impl still raises INVALID_INPUT at transcribe.py L548-567 (same-dir check).
-        Will become GREEN after impl-detectcut removes that block.
         """
         from clipwright_transcribe.transcribe import transcribe_media
 
@@ -119,14 +113,12 @@ class TestExternalDirOutput:
                 str(media), str(output), _opts(model_path=str(model))
             )
 
-        # RED: currently INVALID_INPUT — must be True after impl removes same-dir check
         assert result.ok is True
 
     def test_clip_target_url_absolute_external_media(self, tmp_path: Path) -> None:
         """DP-T-2: When media is outside otio_dir, clip target_url must be absolute.
 
         Whisper-independent.
-        RED: follows DP-T-1.  Target_url check runs only when ok=True is reached.
         Verifies media_ref_for_otio rule (media outside otio_dir -> absolute).
         """
         from clipwright_transcribe.transcribe import transcribe_media
@@ -158,7 +150,6 @@ class TestExternalDirOutput:
                 str(media), str(output), _opts(model_path=str(model))
             )
 
-        # RED: currently INVALID_INPUT — assertions below run only after impl is fixed
         assert result.ok is True
 
         tl = load_timeline(str(output))
@@ -191,7 +182,7 @@ class TestRegressionGuards:
     """Removing the same-dir constraint must not weaken other path safety invariants."""
 
     def test_output_equals_media_still_rejected(self, tmp_path: Path) -> None:
-        """DP-T-3: output path identical to media path must remain INVALID_INPUT."""
+        """DP-T-3: output path identical to media path must return PATH_NOT_ALLOWED."""
         from clipwright_transcribe.transcribe import transcribe_media
 
         media = tmp_path / "same.otio"
@@ -201,7 +192,7 @@ class TestRegressionGuards:
 
         assert result.ok is False
         assert result.error is not None
-        assert result.error.code == ErrorCode.INVALID_INPUT
+        assert result.error.code == ErrorCode.PATH_NOT_ALLOWED
 
     def test_non_otio_extension_still_rejected(self, tmp_path: Path) -> None:
         """DP-T-4: output with non-.otio extension must remain INVALID_INPUT."""

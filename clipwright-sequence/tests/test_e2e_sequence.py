@@ -35,8 +35,9 @@ from typing import Any
 
 import opentimelineio as otio
 import pytest
+from clipwright.pathpolicy import check_media_ref
 from clipwright_render.plan import resolve_bgm
-from clipwright_render.render import _check_source_within_timeline_dir, render_timeline
+from clipwright_render.render import render_timeline
 from clipwright_render.schemas import RenderOptions
 
 from clipwright_sequence.schemas import SequenceClip
@@ -209,12 +210,13 @@ class TestBuildSequenceRenderRoundTrip:
         assert otio_path.stat().st_size > 0, "output .otio file is empty"
 
     def test_dc_as_001_round_trip_colocation(self, tmp_path: Path) -> None:
-        """DC-AS-001: every target_url in the produced .otio passes render's co-location check.
+        """DC-AS-001: every target_url in the produced .otio passes check_media_ref.
 
         Loads the produced .otio, iterates over every ExternalReference in V1,
-        and calls render._check_source_within_timeline_dir for each path.
-        None of them should raise PATH_NOT_ALLOWED — all co-located sources
-        that were accepted by build_sequence must also be accepted by render.
+        and calls pathpolicy.check_media_ref(source_url, otio_path.parent, "media")
+        for each path.  None of them should raise PATH_NOT_ALLOWED — all
+        co-located sources accepted by build_sequence must also be accepted by
+        the unified boundary/symlink guard (ADR-PP-1 / CR-L-2).
         """
         assert _FFMPEG is not None
 
@@ -245,8 +247,8 @@ class TestBuildSequenceRenderRoundTrip:
                 if not isinstance(mr, otio.schema.ExternalReference):
                     continue
                 source_url = mr.target_url
-                # This must NOT raise PATH_NOT_ALLOWED (DC-AS-001)
-                _check_source_within_timeline_dir(otio_path, source_url)
+                # This must NOT raise PATH_NOT_ALLOWED (DC-AS-001 / ADR-PP-1)
+                check_media_ref(source_url, otio_path.parent, "media")
                 sources_checked.append(source_url)
 
         assert len(sources_checked) >= 2, (

@@ -1,7 +1,7 @@
-"""test_pathpolicy_render.py — Red/Green tests for ADR-PP-1 path-policy unification.
+"""test_pathpolicy_render.py — Green tests for ADR-PP-1 path-policy unification.
 
-render.py is expected to delegate to clipwright.pathpolicy.check_media_ref for
-boundary validation of media / subtitle / image-overlay references (ADR-PP-1).
+render.py delegates to clipwright.pathpolicy.check_media_ref for boundary
+validation of media / subtitle / image-overlay references (ADR-PP-1).
 
 Decision logic (ADR-PP-1):
   - Absolute ref to existing real file → allowed regardless of timeline dir boundary.
@@ -10,20 +10,15 @@ Decision logic (ADR-PP-1):
   - Absolute ref × non-existent → rejected.
   - output == source → PATH_NOT_ALLOWED (unchanged, DC-AM-002).
 
-Test IDs and Red/Green status:
-  PP-1a  Absolute media ref, existing real file, outside timeline dir → ok=True      [RED]
-  PP-1b  Multi-source: second source absolute + outside, existing → ok=True          [RED]
-  PP-1c  Absolute subtitle ref, existing .srt, outside timeline dir → ok=True        [RED]
-  PP-1d  Absolute image overlay ref, existing .png, outside timeline dir → ok=True   [RED]
+Test IDs and status:
+  PP-1a  Absolute media ref, existing real file, outside timeline dir → ok=True      [GREEN]
+  PP-1b  Multi-source: second source absolute + outside, existing → ok=True          [GREEN]
+  PP-1c  Absolute subtitle ref, existing .srt, outside timeline dir → ok=True        [GREEN]
+  PP-1d  Absolute image overlay ref, existing .png, outside timeline dir → ok=True   [GREEN]
   PP-2a  Relative ref within timeline dir → ok=True (unchanged allow)                [GREEN]
   PP-3a  Relative ../ traversal outside timeline dir → PATH_NOT_ALLOWED              [GREEN]
   PP-4a  Absolute non-existent ref → rejected (not ok=True)                          [GREEN]
   PP-5a  output == absolute external source → PATH_NOT_ALLOWED                       [GREEN]
-
-Red tests are expected to FAIL in the current codebase because render.py still calls
-_check_source_within_timeline_dir / _check_subtitle_within_timeline_dir /
-_check_image_overlay_within_timeline_dir, all of which raise PATH_NOT_ALLOWED for any
-path outside the timeline directory tree regardless of whether the file exists.
 """
 
 from __future__ import annotations
@@ -133,28 +128,24 @@ def _fake_resolve_tool(name: str, env_var: str | None = None) -> str:
 
 # ---------------------------------------------------------------------------
 # PP-1a  Absolute media ref, existing real file, outside timeline dir → ok=True
-# RED: render.py still calls _check_source_within_timeline_dir which raises
-#      PATH_NOT_ALLOWED for any path outside the timeline directory.
+# GREEN: render.py delegates to pathpolicy.check_media_ref (ADR-PP-1).
 # ---------------------------------------------------------------------------
 
 
 class TestAbsoluteExternalMediaRefAllowed:
     """PP-1a/PP-1b: Absolute media references to existing real files outside the
-    timeline directory should be allowed under ADR-PP-1.
+    timeline directory are allowed under ADR-PP-1.
 
-    Currently Red because _check_source_within_timeline_dir enforces within-timeline-dir
-    boundary unconditionally.  When render.py delegates to pathpolicy.check_media_ref,
-    absolute external refs to existing real files will pass and these tests will turn Green.
+    Green because render.py delegates to pathpolicy.check_media_ref which applies
+    the absolute escape hatch: existing real files are accepted regardless of boundary.
     """
 
     def test_absolute_media_outside_timeline_dir_passes(self, tmp_path: Path) -> None:
         """PP-1a: Single absolute external media ref (existing real file) → ok=True.
 
         Setup: timeline in project/, source in outside/ (absolute path, file exists,
-        no symlinks).  Under ADR-PP-1, pathpolicy.check_media_ref passes for this ref.
-
-        Red: current render.py raises PATH_NOT_ALLOWED via
-        _check_source_within_timeline_dir before ever calling pathpolicy.
+        no symlinks).  render.py delegates to pathpolicy.check_media_ref which
+        applies the absolute escape hatch (ADR-PP-1).
         """
         from clipwright_render.render import render_timeline
 
@@ -188,7 +179,6 @@ class TestAbsoluteExternalMediaRefAllowed:
             )
 
         # ADR-PP-1: absolute external ref to existing real file must not be blocked.
-        # Currently FAILS because _check_source_within_timeline_dir raises PATH_NOT_ALLOWED.
         assert result["ok"] is True, (
             f"Expected ok=True (ADR-PP-1 absolute external ref allowed),"
             f" got: {result.get('error')}"
@@ -200,10 +190,8 @@ class TestAbsoluteExternalMediaRefAllowed:
         """PP-1b: Multi-source timeline where second source is absolute + outside → ok=True.
 
         First source is inside the timeline dir (standard case).  Second source is
-        absolute and outside, but exists and has no symlinks.  Under ADR-PP-1, both
-        should be accepted.
-
-        Red: current render.py raises PATH_NOT_ALLOWED for the second source.
+        absolute and outside, but exists and has no symlinks.  Both are accepted
+        because render.py delegates to pathpolicy.check_media_ref (ADR-PP-1).
         """
         from clipwright_render.render import render_timeline
 
@@ -251,16 +239,16 @@ class TestAbsoluteExternalMediaRefAllowed:
 
 # ---------------------------------------------------------------------------
 # PP-1c  Absolute subtitle ref, existing .srt, outside timeline dir → ok=True
-# RED: render.py still calls _check_subtitle_within_timeline_dir which raises
-#      PATH_NOT_ALLOWED for any subtitle path outside the timeline directory.
+# GREEN: render.py delegates to pathpolicy.check_media_ref (ADR-PP-1).
 # ---------------------------------------------------------------------------
 
 
 class TestAbsoluteExternalSubtitleRefAllowed:
     """PP-1c: Absolute subtitle references to existing .srt files outside the timeline
-    directory should be allowed under ADR-PP-1 (unified policy).
+    directory are allowed under ADR-PP-1 (unified policy).
 
-    Red because _check_subtitle_within_timeline_dir enforces within-timeline-dir boundary.
+    Green because render.py delegates to pathpolicy.check_media_ref for subtitle
+    boundary validation.
     """
 
     def test_absolute_subtitle_outside_timeline_dir_passes(
@@ -269,10 +257,8 @@ class TestAbsoluteExternalSubtitleRefAllowed:
         """PP-1c: Absolute .srt subtitle outside timeline dir → ok=True.
 
         Setup: source in project/ (inside), subtitle .srt in outside/ (outside, exists).
-        Under ADR-PP-1, pathpolicy.check_media_ref allows absolute external subtitle.
-
-        Red: current render.py raises PATH_NOT_ALLOWED via
-        _check_subtitle_within_timeline_dir.
+        render.py delegates to pathpolicy.check_media_ref which applies the absolute
+        escape hatch for subtitle references (ADR-PP-1).
         """
         from clipwright_render.render import render_timeline
         from clipwright_render.schemas import (  # type: ignore[attr-defined]
@@ -318,8 +304,7 @@ class TestAbsoluteExternalSubtitleRefAllowed:
             )
 
         # ADR-PP-1: absolute external .srt must not be blocked.
-        # Currently FAILS because _check_subtitle_within_timeline_dir raises PATH_NOT_ALLOWED.
-        assert result["ok"] is True, (
+            assert result["ok"] is True, (
             f"Expected ok=True (ADR-PP-1 absolute external subtitle allowed),"
             f" got: {result.get('error')}"
         )
@@ -327,8 +312,7 @@ class TestAbsoluteExternalSubtitleRefAllowed:
 
 # ---------------------------------------------------------------------------
 # PP-1d  Absolute image overlay ref, existing .png, outside timeline dir → ok=True
-# RED: render.py still calls _check_image_overlay_within_timeline_dir which raises
-#      PATH_NOT_ALLOWED for any image path outside the timeline directory.
+# GREEN: render.py delegates to pathpolicy.check_media_ref (ADR-PP-1).
 # ---------------------------------------------------------------------------
 
 
@@ -378,11 +362,10 @@ def _make_timeline_with_image_overlay(
 
 class TestAbsoluteExternalImageOverlayAllowed:
     """PP-1d: Absolute image overlay references to existing .png files outside the
-    timeline directory should be allowed under ADR-PP-1 (unified policy).
+    timeline directory are allowed under ADR-PP-1 (unified policy).
 
-    Red because _check_image_overlay_within_timeline_dir enforces within-timeline-dir
-    boundary.  After impl, render.py will delegate to pathpolicy.check_media_ref and
-    these tests will turn Green.
+    Green because render.py delegates to pathpolicy.check_media_ref for image
+    overlay boundary validation.
     """
 
     def test_absolute_image_outside_timeline_dir_passes(self, tmp_path: Path) -> None:
@@ -390,11 +373,8 @@ class TestAbsoluteExternalImageOverlayAllowed:
 
         The image_overlay marker stores a relative path "../outside/logo.png"
         (relative to timeline dir).  plan.py reconstructs this to an absolute path
-        under tmp_path/outside/.  Under ADR-PP-1, this absolute external path must
-        pass the boundary check.
-
-        Red: current render.py calls _check_image_overlay_within_timeline_dir which
-        raises PATH_NOT_ALLOWED — this test FAILS.
+        under tmp_path/outside/.  render.py delegates to pathpolicy.check_media_ref
+        which applies the absolute escape hatch (ADR-PP-1).
 
         Note: The image boundary check in render.py fires in the 6b (execute) path,
         so dry_run=False is required.  ffmpeg calls are fully mocked.
@@ -447,40 +427,10 @@ class TestAbsoluteExternalImageOverlayAllowed:
             )
 
         # ADR-PP-1: absolute external image must not be blocked.
-        # Currently FAILS because _check_image_overlay_within_timeline_dir raises PATH_NOT_ALLOWED.
         assert result["ok"] is True, (
             f"Expected ok=True (ADR-PP-1 absolute external image overlay allowed),"
             f" got: {result.get('error')}"
         )
-
-    def test_check_image_overlay_within_timeline_dir_blocks_absolute_external(
-        self, tmp_path: Path
-    ) -> None:
-        """Regression guard: _check_image_overlay_within_timeline_dir raises
-        PATH_NOT_ALLOWED for absolute external images (current old-policy behavior).
-
-        This test documents the OLD behavior that ADR-PP-1 intends to replace.
-        It is expected to remain Green until _check_image_overlay_within_timeline_dir
-        is either removed from render.py or its call is replaced by check_media_ref.
-
-        Contrast with test_absolute_image_outside_timeline_dir_passes (PP-1d Red) above.
-        """
-        from clipwright_render.render import (  # type: ignore[attr-defined]
-            _check_image_overlay_within_timeline_dir,
-        )
-
-        tl_dir = tmp_path / "project"
-        tl_dir.mkdir()
-        outside_dir = tmp_path / "outside"
-        outside_dir.mkdir()
-
-        timeline_path = tl_dir / "tl.otio"
-        image_path = outside_dir / "logo.png"
-        image_path.write_bytes(_PNG_MAGIC)
-
-        with pytest.raises(ClipwrightError) as exc_info:
-            _check_image_overlay_within_timeline_dir(timeline_path, str(image_path))
-        assert exc_info.value.code == ErrorCode.PATH_NOT_ALLOWED
 
 
 # ---------------------------------------------------------------------------

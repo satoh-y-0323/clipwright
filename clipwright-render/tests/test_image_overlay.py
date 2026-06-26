@@ -52,7 +52,6 @@ _RENDER_HAS_IMAGE_CHECK: bool
 try:
     from clipwright_render.render import (  # noqa: F401
         _ALLOWED_IMAGE_EXTENSIONS as _AIE,
-        _check_image_overlay_within_timeline_dir as _CIOVD,
     )
 
     _RENDER_HAS_IMAGE_CHECK = True
@@ -1198,7 +1197,7 @@ class TestRenderInputConstruction:
 
 
 class TestRenderCoLocationValidation:
-    """render.py has _check_image_overlay_within_timeline_dir and _ALLOWED_IMAGE_EXTENSIONS."""
+    """render.py has _ALLOWED_IMAGE_EXTENSIONS; shared check_media_ref handles ref validation."""
 
     def test_allowed_image_extensions_importable(self) -> None:
         """_ALLOWED_IMAGE_EXTENSIONS is importable from clipwright_render.render."""
@@ -1219,106 +1218,88 @@ class TestRenderCoLocationValidation:
         assert ".jpeg" in _ALLOWED_IMAGE_EXTENSIONS
         assert ".webp" in _ALLOWED_IMAGE_EXTENSIONS
 
-    def test_check_image_overlay_within_timeline_dir_importable(self) -> None:
-        """_check_image_overlay_within_timeline_dir is importable from render."""
-        from clipwright_render.render import (  # type: ignore[attr-defined]
-            _check_image_overlay_within_timeline_dir,
-        )
+    def test_check_media_ref_importable_from_pathpolicy(self) -> None:
+        """check_media_ref is importable from clipwright.pathpolicy (ADR-PP-1)."""
+        from clipwright.pathpolicy import check_media_ref
 
-        assert _check_image_overlay_within_timeline_dir is not None
+        assert check_media_ref is not None
 
-    def test_image_outside_timeline_dir_raises_path_not_allowed(
-        self, tmp_path: Path
-    ) -> None:
-        """Image path outside timeline parent dir -> PATH_NOT_ALLOWED (V2-3)."""
-        from clipwright.errors import ClipwrightError, ErrorCode
-        from clipwright_render.render import (  # type: ignore[attr-defined]
-            _check_image_overlay_within_timeline_dir,
-        )
+    def test_absolute_image_outside_timeline_dir_passes(self, tmp_path: Path) -> None:
+        """Absolute image path outside timeline dir -> no error (ADR-PP-1 escape hatch).
+
+        Under ADR-PP-1, check_media_ref allows absolute refs to existing real files
+        regardless of their location relative to the timeline directory.
+        """
+        from clipwright.pathpolicy import check_media_ref
 
         timeline_dir = tmp_path / "project"
         timeline_dir.mkdir()
-        timeline_path = timeline_dir / "timeline.otio"
-        # Image is outside project dir
         outside_dir = tmp_path / "outside"
         outside_dir.mkdir()
         outside_image = outside_dir / "logo.png"
         outside_image.touch()
 
-        with pytest.raises(ClipwrightError) as exc_info:
-            _check_image_overlay_within_timeline_dir(timeline_path, str(outside_image))
-        assert exc_info.value.code == ErrorCode.PATH_NOT_ALLOWED
-        # CWE-209: fixed message must NOT contain any directory path
-        assert str(tmp_path) not in exc_info.value.message
-        assert str(outside_image) not in exc_info.value.message
+        # Must NOT raise: absolute ref to existing real file is always allowed
+        check_media_ref(str(outside_image), timeline_dir, "image")
 
-    def test_image_inside_timeline_dir_passes(self, tmp_path: Path) -> None:
-        """Image path inside timeline parent dir -> no error."""
-        from clipwright_render.render import (  # type: ignore[attr-defined]
-            _check_image_overlay_within_timeline_dir,
-        )
+    def test_absolute_image_inside_timeline_dir_passes(self, tmp_path: Path) -> None:
+        """Absolute image path inside timeline parent dir -> no error."""
+        from clipwright.pathpolicy import check_media_ref
 
         timeline_dir = tmp_path / "project"
         timeline_dir.mkdir()
-        timeline_path = timeline_dir / "timeline.otio"
         image_path = timeline_dir / "logo.png"
         image_path.touch()
 
         # Must NOT raise
-        _check_image_overlay_within_timeline_dir(timeline_path, str(image_path))
+        check_media_ref(str(image_path), timeline_dir, "image")
 
-    def test_image_in_subdir_of_timeline_dir_passes(self, tmp_path: Path) -> None:
-        """Image in recursive subdir of timeline parent -> allowed (recursive permission)."""
-        from clipwright_render.render import (  # type: ignore[attr-defined]
-            _check_image_overlay_within_timeline_dir,
-        )
+    def test_absolute_image_in_subdir_passes(self, tmp_path: Path) -> None:
+        """Absolute image in recursive subdir of timeline parent -> allowed."""
+        from clipwright.pathpolicy import check_media_ref
 
         timeline_dir = tmp_path / "project"
         sub_dir = timeline_dir / "assets" / "logo"
         sub_dir.mkdir(parents=True)
-        timeline_path = timeline_dir / "timeline.otio"
         image_path = sub_dir / "logo.png"
         image_path.touch()
 
         # Must NOT raise
-        _check_image_overlay_within_timeline_dir(timeline_path, str(image_path))
+        check_media_ref(str(image_path), timeline_dir, "image")
 
-    def test_missing_image_raises_file_not_found(self, tmp_path: Path) -> None:
-        """Reconstructed image that does not exist -> FILE_NOT_FOUND (basename only)."""
+    def test_nonexistent_absolute_image_raises_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """Non-existent absolute image path -> PATH_NOT_ALLOWED (ADR-PP-1)."""
         from clipwright.errors import ClipwrightError, ErrorCode
-        from clipwright_render.render import (  # type: ignore[attr-defined]
-            _check_image_overlay_within_timeline_dir,
-        )
+        from clipwright.pathpolicy import check_media_ref
 
         timeline_dir = tmp_path / "project"
         timeline_dir.mkdir()
-        timeline_path = timeline_dir / "timeline.otio"
-        # Image path is inside the dir but does not exist
-        missing_image = timeline_dir / "logo.png"
+        # File does not exist
+        missing_image = str(tmp_path / "outside" / "logo.png")
 
         with pytest.raises(ClipwrightError) as exc_info:
-            _check_image_overlay_within_timeline_dir(timeline_path, str(missing_image))
-        assert exc_info.value.code == ErrorCode.FILE_NOT_FOUND
-        # message must use basename only (CWE-209) — no full path
-        assert "logo.png" in exc_info.value.message
-        assert str(timeline_dir) not in exc_info.value.message
+            check_media_ref(missing_image, timeline_dir, "image")
+        assert exc_info.value.code == ErrorCode.PATH_NOT_ALLOWED
 
-    def test_bad_extension_raises_invalid_input(self, tmp_path: Path) -> None:
-        """Image with extension outside allowlist -> INVALID_INPUT."""
+    def test_relative_traversal_outside_raises_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """Relative image path traversing outside timeline dir -> PATH_NOT_ALLOWED (CWE-22)."""
         from clipwright.errors import ClipwrightError, ErrorCode
-        from clipwright_render.render import (  # type: ignore[attr-defined]
-            _check_image_overlay_within_timeline_dir,
-        )
+        from clipwright.pathpolicy import check_media_ref
 
         timeline_dir = tmp_path / "project"
         timeline_dir.mkdir()
-        timeline_path = timeline_dir / "timeline.otio"
-        bad_image = timeline_dir / "logo.bmp"
-        bad_image.touch()
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+        (outside_dir / "logo.png").touch()
 
+        # Relative path that traverses above timeline_dir -> PATH_NOT_ALLOWED (CWE-22)
         with pytest.raises(ClipwrightError) as exc_info:
-            _check_image_overlay_within_timeline_dir(timeline_path, str(bad_image))
-        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+            check_media_ref("../outside/logo.png", timeline_dir, "image")
+        assert exc_info.value.code == ErrorCode.PATH_NOT_ALLOWED
 
     def test_round_trip_different_dir_same_relative_position(
         self, tmp_path: Path
@@ -1326,54 +1307,30 @@ class TestRenderCoLocationValidation:
         """V2-3 round-trip: moving timeline+image together preserves relative path -> OK.
 
         Simulate: annotate dir and render dir differ, but image stays co-located
-        (relative position preserved). _check_image_overlay_within_timeline_dir should
-        NOT raise PATH_NOT_ALLOWED (DC-GP-001/DC-AS-003).
+        (relative position preserved). check_media_ref should NOT raise
+        (DC-GP-001/DC-AS-003).
         """
-        from clipwright_render.render import (  # type: ignore[attr-defined]
-            _check_image_overlay_within_timeline_dir,
-        )
-
-        # Original project structure in dir A
-        dir_a = tmp_path / "proj_a"
-        dir_a.mkdir()
-        (dir_a / "logo").mkdir()
-        image_a = dir_a / "logo" / "overlay.png"
-        image_a.touch()
+        from clipwright.pathpolicy import check_media_ref
 
         # "Moved" to dir B: both timeline and image move together
         dir_b = tmp_path / "proj_b"
         (dir_b / "logo").mkdir(parents=True)
         image_b = dir_b / "logo" / "overlay.png"
         image_b.touch()
-        timeline_b = dir_b / "timeline.otio"
 
-        # Must NOT raise: image is inside timeline dir B's tree
-        _check_image_overlay_within_timeline_dir(timeline_b, str(image_b))
+        # Must NOT raise: image is inside dir_b's tree (absolute path, exists)
+        check_media_ref(str(image_b), dir_b, "image")
 
-    def test_image_only_moved_outside_tree_raises_path_not_allowed(
-        self, tmp_path: Path
-    ) -> None:
-        """Image moved outside timeline tree (but timeline stays) -> PATH_NOT_ALLOWED."""
-        from clipwright.errors import ClipwrightError, ErrorCode
-        from clipwright_render.render import (  # type: ignore[attr-defined]
-            _check_image_overlay_within_timeline_dir,
-        )
+    def test_relative_image_within_timeline_dir_passes(self, tmp_path: Path) -> None:
+        """Relative image path within timeline dir -> allowed (no CWE-22 violation)."""
+        from clipwright.pathpolicy import check_media_ref
 
         timeline_dir = tmp_path / "project"
-        timeline_dir.mkdir()
-        timeline_path = timeline_dir / "timeline.otio"
+        (timeline_dir / "logo").mkdir(parents=True)
+        (timeline_dir / "logo" / "overlay.png").touch()
 
-        outside_dir = tmp_path / "elsewhere"
-        outside_dir.mkdir()
-        outside_image = outside_dir / "logo.png"
-        outside_image.touch()
-
-        with pytest.raises(ClipwrightError) as exc_info:
-            _check_image_overlay_within_timeline_dir(timeline_path, str(outside_image))
-        assert exc_info.value.code == ErrorCode.PATH_NOT_ALLOWED
-        # CWE-209: fixed message must NOT contain any directory path
-        assert str(tmp_path) not in exc_info.value.message
-        assert str(outside_image) not in exc_info.value.message
+        # Relative path within the boundary -> no error
+        check_media_ref("logo/overlay.png", timeline_dir, "image")
 
 
 # ===========================================================================

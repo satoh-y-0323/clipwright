@@ -8,11 +8,14 @@ Test ID:
   DP-N-1  test_external_dir_output_allowed              external dir -> ok
   DP-N-2  test_clip_target_url_absolute_external_media  media outside -> abs target_url
   DP-N-7  test_timeline_validation_maintained_across_dirs  timeline across dirs -> ok
-  DP-N-3  test_output_equals_media_still_rejected       regression guard
-  DP-N-4  test_output_equals_timeline_still_rejected    regression guard
+  DP-N-3  test_output_equals_media_still_rejected       regression guard (accepts INVALID_INPUT or PATH_NOT_ALLOWED)
+  DP-N-4  test_output_equals_timeline_still_rejected    regression guard (accepts INVALID_INPUT or PATH_NOT_ALLOWED)
   DP-N-5  test_non_otio_extension_still_rejected        regression guard
   DP-N-6  test_missing_parent_dir_still_rejected        regression guard
   DP-N-8  test_clip_target_url_relative_inside_media    media inside -> rel POSIX target_url
+  DP-N-9  test_output_equals_source_path_not_allowed    SR-L-4: output==source -> PATH_NOT_ALLOWED [Red]
+  DP-N-10 test_relative_traversal_in_timeline_rejected  SR-M-1/CR-M-1/CR-M-6: ../ -> PATH_NOT_ALLOWED [Red]
+  DP-N-11 test_absolute_external_source_in_timeline_allowed  absolute existing source outside timeline dir -> ok
 """
 
 from __future__ import annotations
@@ -27,11 +30,16 @@ from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo, ToolRes
 
 from clipwright_noise.schemas import DetectNoiseOptions
 
+# ---------------------------------------------------------------------------
+# Shared constants
+# ---------------------------------------------------------------------------
+
+FPS = 30.0
+
 # ===========================================================================
 # Helpers
 # ===========================================================================
 
-FPS = 30.0
 
 _FAKE_MEASURE_RESULT = {
     "params": {"nr": 12.0, "nf": -50.0, "nt": "w"},
@@ -235,10 +243,19 @@ class TestTimelineAcrossDirs:
 
 
 class TestRegressionGuards:
-    """Removing the same-dir constraint must not weaken other path safety invariants."""
+    """Removing the same-dir constraint must not weaken other path safety invariants.
+
+    DP-N-3 / DP-N-4 accept both INVALID_INPUT and PATH_NOT_ALLOWED so they remain
+    valid regression guards through the SR-L-4 migration (check_output_not_source
+    changes the error code from INVALID_INPUT to PATH_NOT_ALLOWED).
+    """
 
     def test_output_equals_media_still_rejected(self, tmp_path: Path) -> None:
-        """DP-N-3: output path identical to media path must remain INVALID_INPUT."""
+        """DP-N-3: output path identical to media path must remain rejected.
+
+        Accepts either INVALID_INPUT (current) or PATH_NOT_ALLOWED (after SR-L-4
+        migration to check_output_not_source) so this guard survives the migration.
+        """
         from clipwright_noise.noise import detect_noise
 
         media = tmp_path / "video.otio"
@@ -250,10 +267,17 @@ class TestRegressionGuards:
 
         d = _d(result)
         assert d["ok"] is False
-        assert d["error"]["code"] == ErrorCode.INVALID_INPUT
+        assert d["error"]["code"] in (
+            ErrorCode.INVALID_INPUT,
+            ErrorCode.PATH_NOT_ALLOWED,
+        ), f"output==media must be rejected. Got: {d['error']['code']!r}"
 
     def test_output_equals_timeline_still_rejected(self, tmp_path: Path) -> None:
-        """DP-N-4: output path identical to timeline path must remain INVALID_INPUT."""
+        """DP-N-4: output path identical to timeline path must remain rejected.
+
+        Accepts either INVALID_INPUT (current) or PATH_NOT_ALLOWED (after SR-L-4
+        migration) so this guard survives the migration.
+        """
         from clipwright_noise.noise import detect_noise
 
         media = tmp_path / "video.mp4"
@@ -270,7 +294,10 @@ class TestRegressionGuards:
 
         d = _d(result)
         assert d["ok"] is False
-        assert d["error"]["code"] == ErrorCode.INVALID_INPUT
+        assert d["error"]["code"] in (
+            ErrorCode.INVALID_INPUT,
+            ErrorCode.PATH_NOT_ALLOWED,
+        ), f"output==timeline must be rejected. Got: {d['error']['code']!r}"
 
     def test_non_otio_extension_still_rejected(self, tmp_path: Path) -> None:
         """DP-N-5: output with non-.otio extension must remain INVALID_INPUT."""
@@ -364,3 +391,193 @@ class TestInsideMediaRef:
                 f"target_url {ref.target_url!r} resolved to {resolved!r}, "
                 f"expected {media.resolve()!r}"
             )
+
+
+# ===========================================================================
+# DP-N-9: SR-L-4 — output == source must return PATH_NOT_ALLOWED [Red]
+# ===========================================================================
+
+
+class TestOutputEqualsSourcePathNotAllowed:
+    """SR-L-4: output==source rejection must use PATH_NOT_ALLOWED via check_output_not_source.
+
+    Current noise.py uses _same_path + INVALID_INPUT; after migration it must use
+    check_output_not_source which raises PATH_NOT_ALLOWED (consistent with other tools).
+    These tests are RED against the current implementation.
+    """
+
+    def test_output_equals_source_path_not_allowed(self, tmp_path: Path) -> None:
+        """DP-N-9: output identical to media must return PATH_NOT_ALLOWED.
+
+        SR-L-4: _same_path + INVALID_INPUT must be replaced by
+        check_output_not_source + PATH_NOT_ALLOWED.
+
+        Red: current noise.py returns INVALID_INPUT; expect PATH_NOT_ALLOWED.
+        """
+        from clipwright_noise.noise import detect_noise
+
+        # Use .otio extension so the extension check does not fire before the
+        # output==source check.
+        media = tmp_path / "video.otio"
+        media.write_bytes(b"dummy")
+
+        result = detect_noise(
+            str(media), str(media), DetectNoiseOptions(), timeline=None
+        )
+
+        d = _d(result)
+        assert d["ok"] is False
+        assert d["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED, (
+            "SR-L-4: output==media must return PATH_NOT_ALLOWED after migration to"
+            f" check_output_not_source. Got: {d['error']['code']!r}"
+        )
+
+
+# ===========================================================================
+# DP-N-10 / DP-N-11: SR-M-1 / CR-M-1 / CR-M-6
+#   _load_and_validate_timeline must call check_media_ref for each target_url
+# ===========================================================================
+
+
+def _build_timeline_with_traversal_source(
+    timeline_dir: Path,
+    traversal_url: str = "../outside.mp4",
+    *,
+    fps: float = FPS,
+) -> otio.schema.Timeline:
+    """Build a V1-only OTIO timeline whose clip has a relative traversal target_url.
+
+    Used to exercise the CWE-22 guard that check_media_ref must enforce.
+    """
+    tl = otio.schema.Timeline(name="test")
+    v1 = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
+    tl.tracks.append(v1)
+    src_range = otio.opentime.TimeRange(
+        start_time=otio.opentime.RationalTime(0.0, fps),
+        duration=otio.opentime.RationalTime(300.0, fps),
+    )
+    clip = otio.schema.Clip(
+        name="outside.mp4",
+        media_reference=otio.schema.ExternalReference(target_url=traversal_url),
+        source_range=src_range,
+    )
+    v1.append(clip)
+    return tl
+
+
+def _build_timeline_with_absolute_source(
+    media_abs: Path,
+    *,
+    fps: float = FPS,
+) -> otio.schema.Timeline:
+    """Build a V1-only OTIO timeline with an absolute source pointing to *media_abs*."""
+    tl = otio.schema.Timeline(name="test")
+    v1 = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
+    tl.tracks.append(v1)
+    src_range = otio.opentime.TimeRange(
+        start_time=otio.opentime.RationalTime(0.0, fps),
+        duration=otio.opentime.RationalTime(300.0, fps),
+    )
+    clip = otio.schema.Clip(
+        name=media_abs.name,
+        media_reference=otio.schema.ExternalReference(target_url=str(media_abs)),
+        source_range=src_range,
+    )
+    v1.append(clip)
+    return tl
+
+
+class TestCheckMediaRefNewPolicy:
+    """SR-M-1 / CR-M-1 / CR-M-6: _load_and_validate_timeline must validate OTIO target_url
+    via check_media_ref (same pattern as color / loudness / stabilize).
+
+    Absolute paths to existing regular files are accepted;
+    relative path traversal (../) is rejected as PATH_NOT_ALLOWED (CWE-22 guard).
+    """
+
+    def test_absolute_external_source_in_timeline_allowed(self, tmp_path: Path) -> None:
+        """DP-N-11: Timeline with absolute source outside timeline dir must be accepted.
+
+        After SR-M-1 migration, check_media_ref must accept absolute paths to existing
+        regular files regardless of which directory the timeline is stored in.
+        This is a regression guard that must remain Green before and after migration.
+        """
+        from clipwright_noise.noise import detect_noise
+
+        media_dir = tmp_path / "src"
+        media_dir.mkdir()
+        tl_dir = tmp_path / "timeline"
+        tl_dir.mkdir()
+
+        media = media_dir / "video.mp4"
+        media.write_bytes(b"dummy")
+
+        # Timeline in tl_dir; clip source = absolute path to media in media_dir.
+        tl = _build_timeline_with_absolute_source(media.resolve())
+        timeline_path = tl_dir / "base.otio"
+        otio.adapters.write_to_file(tl, str(timeline_path))
+
+        # Output in media_dir (same dir as media) so the output==source check
+        # does not fire and we can isolate the check_media_ref behavior.
+        output = media_dir / "out.otio"
+        media_info = _make_media_info(str(media))
+
+        with (
+            patch("clipwright_noise.noise.inspect_media", return_value=media_info),
+            patch(
+                "clipwright_noise.noise.measure_noise",
+                return_value=_FAKE_MEASURE_RESULT,
+            ),
+        ):
+            result = detect_noise(
+                str(media),
+                str(output),
+                DetectNoiseOptions(),
+                timeline=str(timeline_path),
+            )
+
+        d = _d(result)
+        assert d["ok"] is True, (
+            "SR-M-1/check_media_ref: absolute existing source outside timeline dir"
+            f" must be accepted. error={d.get('error')}"
+        )
+
+    def test_relative_traversal_in_timeline_rejected(self, tmp_path: Path) -> None:
+        """DP-N-10: Relative path traversal (../) in OTIO target_url must return PATH_NOT_ALLOWED.
+
+        SR-M-1 / CR-M-1 / CR-M-6: _load_and_validate_timeline must call
+        check_media_ref for each target_url.  check_media_ref rejects relative
+        traversal as PATH_NOT_ALLOWED (CWE-22 guard).
+
+        Red: current noise.py does not call check_media_ref, so the traversal
+        target_url is compared against media_path.resolve() and fails with
+        INVALID_INPUT (source mismatch) instead of PATH_NOT_ALLOWED.
+        """
+        from clipwright_noise.noise import detect_noise
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+
+        # Build a timeline whose clip has a relative traversal target_url.
+        tl = _build_timeline_with_traversal_source(tmp_path, "../outside.mp4")
+        timeline_path = tmp_path / "bad.otio"
+        otio.adapters.write_to_file(tl, str(timeline_path))
+
+        output = tmp_path / "out.otio"
+        media_info = _make_media_info(str(media))
+
+        with patch("clipwright_noise.noise.inspect_media", return_value=media_info):
+            result = detect_noise(
+                str(media),
+                str(output),
+                DetectNoiseOptions(),
+                timeline=str(timeline_path),
+            )
+
+        d = _d(result)
+        assert d["ok"] is False
+        assert d["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED, (
+            "CWE-22 / SR-M-1: relative traversal in OTIO target_url must return"
+            " PATH_NOT_ALLOWED after adding check_media_ref to"
+            f" _load_and_validate_timeline. Got: {d['error']['code']!r}"
+        )

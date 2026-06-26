@@ -1,22 +1,13 @@
-"""Tests for clipwright-overlay path-policy relaxation (Red phase).
+"""Tests for clipwright-overlay path-policy contract.
 
-Covers the new boundary contract for overlay (accumulate type):
+Covers the boundary contract for overlay (accumulate type):
   P-1  output may be placed outside the input timeline's directory.
   P-2  image_path stored via media_ref_for_otio:
          inside otio_dir  -> relative posix (behaviour-preserving)
          outside otio_dir -> absolute path  (no '../' traversal stored)
-  P-3  output == timeline -> INVALID_INPUT (unchanged; regression guard)
+  P-3  output == timeline -> PATH_NOT_ALLOWED (CR-M-5 unified code)
   P-4  DC-AM-003: existing relative media refs + external absolute image
        survive a load->save round-trip intact.
-
-Red tests (fail until impl-overlay is applied):
-  P-1: output placed outside the timeline's parent dir.
-  P-2: image outside otio_dir -> absolute stored.
-  P-4: DC-AM-003 mixed-ref round-trip.
-
-Green (regression guards; currently pass; must remain green after impl-overlay):
-  P-2: image inside otio_dir -> relative stored.
-  P-3: output == timeline rejected.
 """
 
 from __future__ import annotations
@@ -140,16 +131,11 @@ def _get_image_overlay_markers(tl: otio.schema.Timeline) -> list[otio.schema.Mar
 class TestOutputOutsideTimelineDir:
     """output may be placed in a directory outside the input timeline's directory.
 
-    Current impl enforces _check_output_within_timeline_dir at step 3, which
-    raises PATH_NOT_ALLOWED when output is not under the input timeline's parent.
-    After impl-overlay this restriction is removed; only output != source matters.
+    The co-location restriction was removed (impl-overlay); only output != source matters.
     """
 
     def test_output_in_separate_dir_returns_ok(self) -> None:
-        """output in a dir outside the timeline dir must return ok=True.
-
-        Red: current impl rejects with PATH_NOT_ALLOWED at output boundary check.
-        """
+        """output in a dir outside the timeline dir must return ok=True."""
         with tempfile.TemporaryDirectory() as tmpd:
             tmp = Path(tmpd)
             proj = tmp / "proj"
@@ -177,10 +163,7 @@ class TestOutputOutsideTimelineDir:
             )
 
     def test_output_in_separate_dir_marker_written(self) -> None:
-        """Marker is added to the output timeline even when output is outside proj dir.
-
-        Red: current impl raises PATH_NOT_ALLOWED before reaching the marker step.
-        """
+        """Marker is added to the output timeline even when output is outside proj dir."""
         with tempfile.TemporaryDirectory() as tmpd:
             tmp = Path(tmpd)
             proj = tmp / "proj"
@@ -207,10 +190,7 @@ class TestOutputOutsideTimelineDir:
             )
 
     def test_output_in_separate_dir_artifact_path_correct(self) -> None:
-        """artifacts[role=timeline].path must equal the resolved output path.
-
-        Red: current impl fails before reaching artifact construction.
-        """
+        """artifacts[role=timeline].path must equal the resolved output path."""
         with tempfile.TemporaryDirectory() as tmpd:
             tmp = Path(tmpd)
             proj = tmp / "proj"
@@ -347,12 +327,7 @@ class TestImageReferenceStorage:
     def test_image_outside_otio_dir_stored_as_absolute(self) -> None:
         """Image outside output OTIO dir -> stored as absolute path.
 
-        Current impl: _check_within_image_overlay_dir rejects image outside
-        output dir with PATH_NOT_ALLOWED.
-        After impl-overlay: image outside otio_dir is allowed and
-        media_ref_for_otio stores its resolved absolute path.
-
-        Red: currently fails with PATH_NOT_ALLOWED at image co-location check.
+        media_ref_for_otio rule: image outside otio_dir -> absolute path (no '../' stored).
         """
         with tempfile.TemporaryDirectory() as tmpd:
             tmp = Path(tmpd)
@@ -398,8 +373,6 @@ class TestImageReferenceStorage:
         Relative traversal paths ('../...') must never appear in stored marker
         metadata. When the image is outside otio_dir, media_ref_for_otio returns
         the absolute path instead of computing a '../'-prefixed relative path.
-
-        Red: current impl rejects image outside output dir (PATH_NOT_ALLOWED).
         """
         with tempfile.TemporaryDirectory() as tmpd:
             tmp = Path(tmpd)
@@ -445,15 +418,14 @@ class TestImageReferenceStorage:
 
 
 class TestOutputEqualsSourceRejected:
-    """output == input timeline must return INVALID_INPUT (unchanged behaviour).
+    """output == input timeline must return PATH_NOT_ALLOWED (CR-M-5).
 
-    Included as a regression guard to verify that relaxing the co-location
-    constraint does not accidentally remove the output != source check.
-    GREEN: currently passes; must remain green after impl-overlay.
+    Verifies that the output != source check uses PATH_NOT_ALLOWED (path policy
+    violation) rather than the generic INVALID_INPUT.
     """
 
-    def test_output_equals_timeline_returns_invalid_input(self) -> None:
-        """output path same as input timeline -> INVALID_INPUT (unchanged)."""
+    def test_output_equals_timeline_returns_path_not_allowed(self) -> None:
+        """output path same as input timeline -> PATH_NOT_ALLOWED."""
         with tempfile.TemporaryDirectory() as tmpd:
             tmp = Path(tmpd)
             tl = _make_v1_timeline()
@@ -467,8 +439,8 @@ class TestOutputEqualsSourceRejected:
 
             assert result["ok"] is False
             error = result.get("error") or {}
-            assert error.get("code") == "INVALID_INPUT", (
-                f"output == timeline must return INVALID_INPUT; "
+            assert error.get("code") == "PATH_NOT_ALLOWED", (
+                f"output == timeline must return PATH_NOT_ALLOWED; "
                 f"got {error.get('code')!r}"
             )
             assert error.get("hint")
@@ -488,16 +460,10 @@ class TestMixedRefRoundTrip:
       - succeed (ok=True)
       - preserve the existing relative clip target_url values unchanged
       - store the new image_path as absolute
-
-    Red: currently fails with PATH_NOT_ALLOWED because the external image is
-    rejected by _check_within_image_overlay_dir.
     """
 
     def test_relative_clip_refs_preserved_after_adding_external_image(self) -> None:
-        """Existing relative clip target_urls are preserved in load->save round-trip.
-
-        Red: fails at image co-location check before the save step is reached.
-        """
+        """Existing relative clip target_urls are preserved in load->save round-trip."""
         with tempfile.TemporaryDirectory() as tmpd:
             tmp = Path(tmpd)
             proj = tmp / "proj"
@@ -555,8 +521,6 @@ class TestMixedRefRoundTrip:
 
         After the round-trip: clip.target_url is relative; marker image_path is absolute.
         The two refs must be distinct (no aliasing or corruption).
-
-        Red: fails at image co-location check before any OTIO writing occurs.
         """
         with tempfile.TemporaryDirectory() as tmpd:
             tmp = Path(tmpd)
