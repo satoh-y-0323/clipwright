@@ -523,7 +523,9 @@ class TestOutputConflict:
         assert result.error is not None
         assert result.error.code == ErrorCode.INVALID_INPUT
 
-    def test_output_equals_timeline_returns_path_not_allowed(self, tmp_path: Path) -> None:
+    def test_output_equals_timeline_returns_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
         from clipwright_loudness.loudness import detect_loudness
 
         media = tmp_path / "video.mp4"

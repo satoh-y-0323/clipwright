@@ -514,7 +514,9 @@ class TestOutputConflict:
         assert d["ok"] is False
         assert d["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
 
-    def test_output_equals_timeline_returns_path_not_allowed(self, tmp_path: Path) -> None:
+    def test_output_equals_timeline_returns_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
         from clipwright_noise.noise import detect_noise
         from clipwright_noise.schemas import DetectNoiseOptions
 
