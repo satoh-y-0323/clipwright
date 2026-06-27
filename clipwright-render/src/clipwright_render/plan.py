@@ -3158,7 +3158,7 @@ def _build_filter_complex(
         # None → no insertion (backward compatible).
         vst = (
             f"vidstabtransform=input={stabilize_basename}:smoothing={stabilize_smoothing}"
-            ":crop=black:optzoom=1,unsharp=5:5:0.8:3:3:0.4"
+            ":crop=black:optzoom=1"
             if stabilize_basename is not None
             else None
         )
