@@ -296,6 +296,98 @@ class TestStabilizeInsertionOrderWithWarp:
 
 
 # ===========================================================================
+# ST-9: FR-1/FR-2/FR-3 filter options — crop=black, optzoom=1, unsharp
+#        FR-4 default smoothing=12
+# ===========================================================================
+
+
+class TestStabilizeFilterExtensions:
+    """Extended vidstabtransform options and default smoothing change (FR-1/2/3/4).
+
+    AC-1: filter_complex contains 'crop=black'.
+    AC-2: filter_complex contains 'optzoom=1'.
+    AC-3: filter_complex contains 'unsharp=5:5:0.8:3:3:0.4'.
+    AC-4 ordering: vidstabtransform...,unsharp=... precedes setpts= in filter chain.
+    AC-4 default: omitting smoothing from directive yields :smoothing=12 in filter.
+    """
+
+    def test_crop_black_in_filter_complex(self, tmp_path: Path) -> None:
+        """filter_complex contains 'crop=black' as a vidstabtransform option (AC-1)."""
+        trf_path = str(tmp_path / "video.stabilize.trf")
+        Path(trf_path).touch()
+        stabilize = _make_stabilize_dict(trf_path, smoothing=30)
+        plan = _single_source_plan(stabilize=stabilize)
+        assert "crop=black" in plan.filter_complex
+
+    def test_optzoom_1_in_filter_complex(self, tmp_path: Path) -> None:
+        """filter_complex contains 'optzoom=1' as a vidstabtransform option (AC-2)."""
+        trf_path = str(tmp_path / "video.stabilize.trf")
+        Path(trf_path).touch()
+        stabilize = _make_stabilize_dict(trf_path, smoothing=30)
+        plan = _single_source_plan(stabilize=stabilize)
+        assert "optzoom=1" in plan.filter_complex
+
+    def test_unsharp_in_filter_complex(self, tmp_path: Path) -> None:
+        """filter_complex contains 'unsharp=5:5:0.8:3:3:0.4' appended after vidstabtransform (AC-3)."""
+        trf_path = str(tmp_path / "video.stabilize.trf")
+        Path(trf_path).touch()
+        stabilize = _make_stabilize_dict(trf_path, smoothing=30)
+        plan = _single_source_plan(stabilize=stabilize)
+        assert "unsharp=5:5:0.8:3:3:0.4" in plan.filter_complex
+
+    def test_vidstabtransform_unsharp_concatenated_before_setpts(
+        self, tmp_path: Path
+    ) -> None:
+        """Single-segment filter has vidstabtransform...,unsharp=... before setpts= (AC-4).
+
+        Confirms the full confirmed filter substring and positional ordering:
+        vidstabtransform=input=<basename>:smoothing=<n>:crop=black:optzoom=1,unsharp=5:5:0.8:3:3:0.4
+        must appear as a contiguous fragment followed by setpts=.
+        """
+        trf_path = str(tmp_path / "video.stabilize.trf")
+        Path(trf_path).touch()
+        stabilize = _make_stabilize_dict(trf_path, smoothing=30)
+        plan = _single_source_plan(stabilize=stabilize)
+        fc = plan.filter_complex
+        basename = Path(trf_path).name
+
+        vst_unsharp = (
+            f"vidstabtransform=input={basename}:smoothing=30"
+            ":crop=black:optzoom=1,unsharp=5:5:0.8:3:3:0.4"
+        )
+        assert vst_unsharp in fc, (
+            f"Expected vidstabtransform+unsharp chain not found in filter_complex:\n{fc}"
+        )
+        unsharp_pos = fc.find("unsharp=5:5:0.8:3:3:0.4")
+        setpts_pos = fc.find("setpts=")
+        assert unsharp_pos != -1
+        assert setpts_pos != -1
+        assert unsharp_pos < setpts_pos, (
+            f"Expected unsharp ({unsharp_pos}) < setpts ({setpts_pos})"
+        )
+
+    def test_default_smoothing_12_when_smoothing_not_specified(
+        self, tmp_path: Path
+    ) -> None:
+        """When smoothing is absent from the directive, filter uses :smoothing=12 (AC-4, FR-4).
+
+        _RenderStabilize.smoothing default must be 12 after FR-4 change.
+        Passing a directive without 'smoothing' exercises the model-level default.
+        """
+        trf_path = str(tmp_path / "video.stabilize.trf")
+        Path(trf_path).touch()
+        stabilize_no_smoothing: dict[str, Any] = {
+            "tool": "clipwright-stabilize",
+            "version": "0.1.0",
+            "kind": "stabilize",
+            "trf_path": trf_path,
+            # Intentionally omit 'smoothing' to use _RenderStabilize model default.
+        }
+        plan = _single_source_plan(stabilize=stabilize_no_smoothing)
+        assert ":smoothing=12" in plan.filter_complex
+
+
+# ===========================================================================
 # ST-3: RenderPlan.stabilize_cwd
 # ===========================================================================
 

@@ -4,7 +4,7 @@ Verification points:
   - Tool registered as clipwright_detect_shake.
   - annotations: readOnlyHint=False / destructiveHint=False / idempotentHint=True
     / openWorldHint=False (SR-NEW: .trf + .otio are generated as side-products).
-  - options=None -> DetectShakeOptions() defaults applied (shakiness=5/accuracy=15/smoothing=30).
+  - options=None -> DetectShakeOptions() defaults applied (shakiness=5/accuracy=15/smoothing=12).
   - Delegates to stabilize.detect_shake.
 
 Requirements: FR-1-6 (annotations), architecture-report §5 server.py.
@@ -205,7 +205,7 @@ class TestOptionsDefault:
     """When options=None, DetectShakeOptions() defaults must be used."""
 
     def test_options_none_uses_default_detect_shake_options(self) -> None:
-        """options=None -> shakiness=5 / accuracy=15 / smoothing=30 defaults passed."""
+        """options=None -> shakiness=5 / accuracy=15 / smoothing=12 defaults passed."""
         with patch(
             "clipwright_stabilize.server.detect_shake",
             return_value=_ok_tool_result(),
@@ -224,7 +224,7 @@ class TestOptionsDefault:
         )
         assert passed.shakiness == 5
         assert passed.accuracy == 15
-        assert passed.smoothing == 30
+        assert passed.smoothing == 12
 
     def test_options_explicit_is_forwarded(self) -> None:
         """An explicitly specified options value must be forwarded as-is."""

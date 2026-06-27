@@ -1,7 +1,7 @@
 """test_schemas.py — Tests for clipwright_stabilize.schemas.
 
 Verification points:
-  - DetectShakeOptions: defaults (shakiness=5, accuracy=15, smoothing=30),
+  - DetectShakeOptions: defaults (shakiness=5, accuracy=15, smoothing=12),
     range boundaries (ge/le end values and out-of-range rejection),
     extra forbidden, allow_inf_nan=False.
   - StabilizeDirective: required fields (version/kind/trf_path/shakiness/accuracy/smoothing),
@@ -41,17 +41,17 @@ class TestDetectShakeOptionsDefaults:
         opts = DetectShakeOptions()
         assert opts.accuracy == 15
 
-    def test_default_smoothing_is_30(self) -> None:
-        """smoothing default must be 30."""
+    def test_default_smoothing_is_12(self) -> None:
+        """smoothing default must be 12."""
         opts = DetectShakeOptions()
-        assert opts.smoothing == 30
+        assert opts.smoothing == 12
 
     def test_build_with_no_args(self) -> None:
         """Construction with no arguments must succeed."""
         opts = DetectShakeOptions()
         assert opts.shakiness == 5
         assert opts.accuracy == 15
-        assert opts.smoothing == 30
+        assert opts.smoothing == 12
 
 
 # ===========================================================================
