@@ -34,8 +34,7 @@ class TestBgmOptionsDefaults:
 
     def test_volume_db_default_is_minus6(self) -> None:
         """volume_db default must be -6.0 (ADR-B9)."""
-        # NOTE: schemas.py is expected to define -6.0 as the default for volume_db.
-        # Before implementation, this is expected to fail with ImportError / ValueError.
+        # NOTE: schemas.py must define -6.0 as the default for volume_db (ADR-B9).
         opts = BgmOptions(volume_db=-6.0)
         assert opts.volume_db == pytest.approx(-6.0)
 

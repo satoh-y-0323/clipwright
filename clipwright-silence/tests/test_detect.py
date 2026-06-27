@@ -1390,8 +1390,9 @@ class TestFileNotFoundMessageSafety:
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED
         error_msg = result["error"]["message"]
-        # Directory part must not be present
+        # Directory part must not be present (sanitize check SR F-1)
         assert full_dir not in error_msg
+        assert str(tmp_path) not in error_msg
         # basename must be present
         assert "link.mp4" in error_msg
         # hint must be inherited from inspect_media (N-2)

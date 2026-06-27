@@ -113,7 +113,7 @@ def _opts(
     """Build ExtractFramesOptions for tests.
 
     scene_sample is passed only when explicitly specified; omitting it lets
-    the schema default apply (or keeps pre-implementation tests stable at Red).
+    the schema default apply.
     """
     kwargs: dict[str, Any] = {
         "mode": mode,

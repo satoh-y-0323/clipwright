@@ -734,7 +734,6 @@ class TestMissingOutputParentNoPathLeak:
 
     The message is a fixed sentence with no directory path or path separators.
     The hint may guide but must not embed the absolute parent path either.
-    FAILS until speed.py removes the {out.parent} interpolation.
     """
 
     def test_missing_parent_message_no_path_separator(
@@ -783,10 +782,7 @@ class TestMissingOutputParentNoPathLeak:
 
 
 class TestBadExtensionNoSuffixLeak:
-    """SR L-1: INVALID_INPUT message for a bad extension must not expose the raw suffix.
-
-    FAILS until speed.py removes the {out.suffix!r} interpolation.
-    """
+    """SR L-1: INVALID_INPUT message for a bad extension must not expose the raw suffix."""
 
     def test_bad_extension_message_no_raw_suffix(
         self, simple_timeline_file: Path, tmp_dir: Path
@@ -946,7 +942,6 @@ class TestClipIndexOORMessageNoNumbers:
 
     message must NOT contain the numeric clip_index value or the clip count.
     hint MUST contain the valid range in '0-{max_index}' format.
-    FAILS until speed.py moves the numbers out of message into hint only.
     """
 
     def test_clip_index_oor_message_no_numeric_index(
