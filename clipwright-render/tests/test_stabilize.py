@@ -306,8 +306,8 @@ class TestStabilizeFilterExtensions:
 
     AC-1: filter_complex contains 'crop=black'.
     AC-2: filter_complex contains 'optzoom=1'.
-    AC-3: filter_complex contains 'unsharp=5:5:0.8:3:3:0.4'.
-    AC-4 ordering: vidstabtransform...,unsharp=... precedes setpts= in filter chain.
+    NFR-G: filter_complex must NOT contain 'unsharp' (crash regression guard).
+    AC-4 ordering: trim → vidstabtransform → setpts, no unsharp between them.
     AC-4 default: omitting smoothing from directive yields :smoothing=12 in filter.
     """
 
@@ -327,22 +327,27 @@ class TestStabilizeFilterExtensions:
         plan = _single_source_plan(stabilize=stabilize)
         assert "optzoom=1" in plan.filter_complex
 
-    def test_unsharp_in_filter_complex(self, tmp_path: Path) -> None:
-        """filter_complex contains 'unsharp=5:5:0.8:3:3:0.4' appended after vidstabtransform (AC-3)."""
+    def test_unsharp_not_in_filter_complex(self, tmp_path: Path) -> None:
+        """filter_complex must not contain 'unsharp' (NFR-G: crash regression guard).
+
+        vidstabtransform followed by unsharp caused 0xC0000005 crashes on Windows
+        Gyan ffmpeg 8.1.1 (13/15 runs). unsharp was removed from the filter chain
+        to prevent recurrence.
+        """
         trf_path = str(tmp_path / "video.stabilize.trf")
         Path(trf_path).touch()
         stabilize = _make_stabilize_dict(trf_path, smoothing=30)
         plan = _single_source_plan(stabilize=stabilize)
-        assert "unsharp=5:5:0.8:3:3:0.4" in plan.filter_complex
+        assert "unsharp" not in plan.filter_complex
 
-    def test_vidstabtransform_unsharp_concatenated_before_setpts(
+    def test_vidstabtransform_trim_setpts_order_without_unsharp(
         self, tmp_path: Path
     ) -> None:
-        """Single-segment filter has vidstabtransform...,unsharp=... before setpts= (AC-4).
+        """Single-segment filter order: trim → vidstabtransform → setpts, no unsharp (ADR-ST-1-rev2).
 
-        Confirms the full confirmed filter substring and positional ordering:
-        vidstabtransform=input=<basename>:smoothing=<n>:crop=black:optzoom=1,unsharp=5:5:0.8:3:3:0.4
-        must appear as a contiguous fragment followed by setpts=.
+        After removing unsharp (NFR-G crash fix), the contiguous fragment
+        vidstabtransform=input=<basename>:smoothing=<n>:crop=black:optzoom=1
+        must appear between trim= and setpts=, and 'unsharp' must be absent.
         """
         trf_path = str(tmp_path / "video.stabilize.trf")
         Path(trf_path).touch()
@@ -351,19 +356,22 @@ class TestStabilizeFilterExtensions:
         fc = plan.filter_complex
         basename = Path(trf_path).name
 
-        vst_unsharp = (
-            f"vidstabtransform=input={basename}:smoothing=30"
-            ":crop=black:optzoom=1,unsharp=5:5:0.8:3:3:0.4"
+        vst_fragment = (
+            f"vidstabtransform=input={basename}:smoothing=30:crop=black:optzoom=1"
         )
-        assert vst_unsharp in fc, (
-            f"Expected vidstabtransform+unsharp chain not found in filter_complex:\n{fc}"
+        assert vst_fragment in fc, (
+            f"Expected vidstabtransform chain not found in filter_complex:\n{fc}"
         )
-        unsharp_pos = fc.find("unsharp=5:5:0.8:3:3:0.4")
+        assert "unsharp" not in fc
+
+        trim_pos = fc.find("trim=")
+        vst_pos = fc.find(vst_fragment)
         setpts_pos = fc.find("setpts=")
-        assert unsharp_pos != -1
+        assert trim_pos != -1
+        assert vst_pos != -1
         assert setpts_pos != -1
-        assert unsharp_pos < setpts_pos, (
-            f"Expected unsharp ({unsharp_pos}) < setpts ({setpts_pos})"
+        assert trim_pos < vst_pos < setpts_pos, (
+            f"Expected trim ({trim_pos}) < vidstabtransform ({vst_pos}) < setpts ({setpts_pos})"
         )
 
     def test_default_smoothing_12_when_smoothing_not_specified(
