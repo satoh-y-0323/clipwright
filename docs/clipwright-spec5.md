@@ -207,7 +207,7 @@ that every manifest path exists, for a non-multiple clip length.
 
 ---
 
-### D3. `clipwright-stabilize` severity is `null` on real handheld `.trf` data  *Low*
+### D3. `clipwright-stabilize` severity is `null` on real handheld `.trf` data  *High (AI-usability)* — re-prioritised by D6
 
 **Symptom**
 `detect_shake` on the real handheld clip succeeded and wrote a valid binary
@@ -226,7 +226,11 @@ means the advisory signal is effectively absent in the real case.
 Treat as a follow-up: verify the `.trf` parser against the current libvidstab
 output format and a multi-shot transform file; if the format shifted, update the
 parser; otherwise document that severity can be `null` for certain captures and
-keep it advisory. Low priority — stabilisation itself works.
+keep it advisory. **Re-prioritised from Low to High (AI-usability) by D6**: severity
+is the signal an agent needs to *decide whether to stabilise at all*. Without it the
+agent stabilises footage that does not need it (the D6 over-stabilization judder), so
+fixing severity — and exposing a clear skip recommendation — is now the primary lever
+for making stabilize usable by an AI. See D6.
 
 ---
 
@@ -365,6 +369,67 @@ silence/VAD/wrap seams) to `SUBPROCESS_FAILED` before returning from `render`.
 Because it changes render's global error contract, do it as its own scoped change
 (check render tests that assert on error-message content). Low priority — no code
 depends on the raw message and the leak is path-only.
+
+---
+
+### D6. Stabilize is unusable-by-default on low-motion footage — over-stabilization + no severity gate  *High (AI-usability)*  *(stabilize / next session)*
+
+**Symptom**
+After D4 (Option B) shipped, re-running the *same* real dogfood clip (`clip.mp4`,
+a calm hand-held selfie vlog) through the new code still produced output that "is
+not at a usable level": slight residual ghosting and a choppy / "swimming" judder,
+even though D4 objectively improved sharpness and removed the edge smear. The owner
+correctly flagged that this clip may simply be **the wrong kind of footage** — the
+stabilizer's real use case is fast-action footage with genuine shake at normal
+playback speed, not a slow, near-static vlog.
+
+**Root cause (confirmed by objective measurement) — this is footage-fit, not a tunable bug**
+- **No speed/frame bug.** Source, pre-D4 output, and D4 output are all identical
+  30 fps / 2310 frames / 77 s. The "slow" impression is the *content* (a calm
+  vlog), not a render speed regression.
+- **The judder is over-stabilization of low-motion frames.** `mpdecimate` (drops
+  frames near-identical to the previous one) keeps **1860 / 2310** unique frames in
+  the source — i.e. ~450 frames are essentially static (it is a low-motion clip) —
+  but **2214 / 2310** in the stabilized output. The stabilizer nudges even the
+  static frames by sub-pixel amounts to chase tiny detected motion, so frames that
+  were identical now differ slightly frame-to-frame. That micro-warp reads as
+  "swimming" / judder. This is inherent to stabilising footage that does not need
+  it; it cannot be removed by parameter tuning without also disabling the correction
+  that footage which *does* shake actually needs.
+- **D4 itself is a correct improvement** for footage that needs stabilisation:
+  sharpness (Laplacian variance, 7-frame mean) went original **8.5** → pre-D4 **7.4**
+  (softer than the source — matches the "looks soft" complaint) → D4 **14.0**
+  (restored and beyond), with no crash and `yuv420p` output.
+
+**Decision: do NOT tune to this dogfood clip.** A calm selfie vlog is out of the
+stabiliser's target domain; optimising parameters for it would overfit and degrade
+the real use case (action footage). The bad experience here is "stabilisation was
+applied to footage that did not need it," and the right AI-first fix is to let the
+agent *decide not to stabilise* such footage — i.e. a working severity signal
+(D3), not a parameter change.
+
+**Plan (next session — via the standard C3 workflow, not ad-hoc):**
+1. **Validate D4 on representative footage.** Acquire / synthesise footage in the
+   stabiliser's actual domain: strong, high-frequency translation+rotation shake at
+   normal playback speed (action-cam / running style). Measure that stabilisation
+   *reduces* inter-frame motion on footage that needs it (e.g. residual-motion or
+   inter-frame-difference metric before/after), not just that it runs. Real action
+   footage is preferred over synthetic where available.
+2. **Promote and fix D3 (severity gating) as the primary AI-usability fix.** Make
+   `detect_shake` return a usable `severity` (and ideally a recommendation flag) so
+   the calling agent can skip stabilisation on low-shake footage. A working severity
+   would have prevented this entire bad experience. Re-prioritised from *Low* to
+   *High (AI-usability)* on the strength of this finding. See D3.
+3. Only after (1) confirms D4 on representative footage and (2) gives the agent a
+   skip signal, decide whether the suite stabilize release (currently staged as
+   `v0.24.0`, render 0.15.0 / stabilize 0.3.0) ships as-is or with the severity gate
+   folded in.
+
+**Release status:** the `v0.24.0` tag (render 0.15.0 / stabilize 0.3.0) is **staged
+but NOT pushed** — version bumps + CHANGELOG are committed on `main` (CI green) and
+the §4 real-MCP e2e passes, but the tag push (PyPI publish) is held pending this
+finding. The D4 code already on `main` is a strict improvement and safe to keep; the
+hold is about whether stabilize is *good enough overall* to advertise as fixed.
 
 ---
 
@@ -575,10 +640,12 @@ render      ✓ (NVENC+hwdecode;     overlay     ✗ cascade from D1 (works stan
 silence     ✓ (VAD 8 / energy 5)   reframe     ✓ NEW mode="track" (80 kf, follows subject)
 scene       ✓ (psd 12 / ffmpeg 0)  sequence    ✓
 frames      ✓ scene_sample;        transition  ✓ (4:2:0 confirmed on real footage)
-              ✗ interval manifest (D2)  stabilize ✓ NEW; quality fixed (D4 RESOLVED:
+              ✗ interval manifest (D2)  stabilize ~ apply params fixed (D4 RESOLVED:
                                                     crop=black/optzoom=1/smoothing=12/
                                                     unsharp + -threads 1 for vid.stab
-                                                    #144); severity=null (D3)
+                                                    #144); but unusable-by-default on
+                                                    low-motion footage — needs severity
+                                                    gate (D6/D3, next session)
 transcribe  ✓ (en, CPU 1.37x)      color       ✓ create path; ✗ with timeline (D1)
 wrap        — N/A (CJK/Thai only; English friction)   loudness ✗ (D1)
                                     noise       ✗ (D1 cascade; same latent bug)
@@ -600,25 +667,36 @@ directly for Latin captions).
    `noise` / `stabilize`; regression from the spec4 #5 path-policy unification.
    Contained fix: resolve `target_url` against the OTIO directory (ideally folded
    into `clipwright.pathpolicy`).
-2. **D4 — stabilize apply pass ships degraded output** (High) — **RESOLVED**:
+2. **D6 + D3 — stabilize is unusable-by-default; needs a severity gate** (High,
+   AI-usability) — **NEXT SESSION**: D4 fixed the apply-side *parameters*, but
+   re-running the real dogfood clip showed stabilisation still looks bad *because the
+   clip does not need stabilising* — a calm vlog, not action footage. Objective
+   measurement (`mpdecimate`: 1860→2214 unique frames; same 30 fps/2310 frames)
+   confirms the judder is over-stabilization of low-motion frames, which is footage-fit,
+   not a tunable bug. **Do not tune to this clip.** The fix is D3: make `detect_shake`
+   return a usable `severity` (+ skip recommendation) so the agent declines to
+   stabilise low-shake footage. Plan: (1) validate D4 on representative high-shake
+   footage (measure shake *reduction*), (2) fix D3 severity gating. Run via the
+   standard C3 workflow.
+3. **D4 — stabilize apply pass ships degraded output** (High) — **RESOLVED**:
    shipped `vidstabtransform=...:smoothing=12:crop=black:optzoom=1,unsharp=5:5:0.8:3:3:0.4`
-   plus `-threads 1` on stabilize renders only. Fixes all three complaints
-   (ghosting=`crop=black`, over-smoothing=`smoothing=12`, softness=`unsharp`).
-   Root cause of the original `unsharp` crash confirmed as
+   plus `-threads 1` on stabilize renders only. Fixes all three apply-side complaints
+   (ghosting=`crop=black`, over-smoothing=`smoothing=12`, softness=`unsharp`; sharpness
+   7.4→14.0). Root cause of the original `unsharp` crash confirmed as
    [vid.stab #144](https://github.com/georgmartius/vid.stab/issues/144) (frame-thread
    race corrupting B-frame refs → 0xC0000005); `-threads 1` (0/27, ~+4% cost) is the
    workaround and also clears the residual single-pass crash. Real ffmpeg e2e verifies
-   `ok`/artifact/`yuv420p` + a 15× crash-regression loop. Spun off: vid.stab #144
-   upstream tracking and **D5**.
-3. **D2 — frames interval manifest overcounts vs fps-filter output** (Medium):
+   `ok`/artifact/`yuv420p` + a 15× crash-regression loop. Code on `main`; suite tag
+   `v0.24.0` (render 0.15.0 / stabilize 0.3.0) staged but **held** pending D6. Spun
+   off: vid.stab #144 upstream tracking and **D5**.
+4. **D2 — frames interval manifest overcounts vs fps-filter output** (Medium):
    manifest lists a non-existent final frame; extract interval frames per
    `compute_interval_timestamps` via `-ss` so manifest == disk (as scene mode does).
-4. **Caption wrap for Latin languages** (Medium): `wrap_captions` hard-errors on
+5. **Caption wrap for Latin languages** (Medium): `wrap_captions` hard-errors on
    English; accept space-delimited wrapping or an explicit passthrough.
-5. **Word-level/karaoke captions · color-grading depth · video PiP · NLE
+6. **Word-level/karaoke captions · color-grading depth · video PiP · NLE
    interop · subtitle translation** (Medium): reach/quality features for a general
    editing suite.
-6. **D3 — stabilize severity null** (Low) · **D5 — render raw stderr in
-   `SUBPROCESS_FAILED` (CWE-209)** (Low) · **two-pass `unsharp` pre-pass · residual
-   libvidstab build crash · diarization · Ken Burns · export presets** (Low–Medium):
-   follow-ups.
+7. **D5 — render raw stderr in `SUBPROCESS_FAILED` (CWE-209)** (Low) · **two-pass
+   `unsharp` pre-pass · residual libvidstab build crash · diarization · Ken Burns ·
+   export presets** (Low–Medium): follow-ups.
