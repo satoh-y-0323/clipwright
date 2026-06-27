@@ -504,7 +504,7 @@ dev = [
 
 [[package]]
 name = "clipwright-render"
-version = "0.14.0"
+version = "0.15.0"
 source = { editable = "clipwright-render" }
 dependencies = [
     { name = "clipwright" },
@@ -709,7 +709,7 @@ dev = [
 
 [[package]]
 name = "clipwright-stabilize"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "clipwright-stabilize" }
 dependencies = [
     { name = "clipwright" },

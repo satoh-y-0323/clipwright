@@ -5,6 +5,35 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.24.0] - 2026-06-28
+
+Stabilization apply-pass quality fix (spec5 D4). The stabilize render path previously
+emitted a defaults-only `vidstabtransform` that left ghost-smear borders, over-smoothed
+motion, and looked softer than the source — for an AI-first tool that cannot visually
+QA its output, the apply defaults must be good by construction. The filter is now built
+with `crop=black` (no prev-frame border fill), `optzoom=1` (optimal static zoom hides the
+exposed border), and `unsharp` (restores interpolation softness), and the default
+`smoothing` is re-baselined from 30 to 12.
+
+### Fixed (`clipwright-render` v0.15.0)
+
+- **Stabilize apply pass no longer ships degraded output.** The vidstabtransform filter
+  is now `...:crop=black:optzoom=1,unsharp=5:5:0.8:3:3:0.4`. To keep `unsharp` (which
+  otherwise crashed libvidstab with an access violation on Windows builds), `render` now
+  passes `-threads 1` **only** when a stabilize directive is present. The crash root
+  cause is [vid.stab #144](https://github.com/georgmartius/vid.stab/issues/144):
+  `vsTransformPrepare` corrupts the decoder's reference frames under frame-level codec
+  multithreading. Serializing decode (`-threads 1`) avoids it deterministically (cost
+  ~+4% on this filter-bound workload) and also clears a residual single-pass crash. A
+  real-ffmpeg e2e verifies `ok` + artifact-on-disk + `pix_fmt=yuv420p` and runs a
+  crash-regression loop.
+
+### Changed (`clipwright-stabilize` v0.3.0)
+
+- **Default `smoothing` re-baselined 30 → 12** (`DetectShakeOptions.smoothing` and the
+  MCP server docstring) to stop over-smoothing handheld footage. An explicit `smoothing`
+  value is still honoured unchanged.
+
 ## [0.23.0] - 2026-06-27
 
 Cross-tool path-boundary & I/O-contract unification (spec4 #5). All 17 satellite
