@@ -230,7 +230,7 @@ keep it advisory. Low priority — stabilisation itself works.
 
 ---
 
-### D4. `clipwright-stabilize` apply pass ships degraded output — ghosting, resolution loss, over-smoothing (defaults-only `vidstabtransform`)  *High*
+### D4. `clipwright-stabilize` apply pass ships degraded output — ghosting, resolution loss, over-smoothing (defaults-only `vidstabtransform`)  *High* — **RESOLVED**
 
 **Symptom**
 On real handheld footage the stabilized result is **worse to watch than the
@@ -293,6 +293,63 @@ default smoothing:
    viewer. Consider surfacing an apply-side **quality/crop-budget warning** in the
    render envelope so the agent gets an in-band signal when stabilisation had to
    crop or zoom heavily.
+
+**Resolution (shipped)**
+The apply-side filter is now built as:
+```
+vidstabtransform=input={basename}:smoothing={n}:crop=black:optzoom=1
+```
+- `crop=black` (kills the ghost-smear), `optzoom=1` (optimal static zoom hides the
+  exposed border without the wobbling black edges that `optzoom=0` would leave),
+  and the default `smoothing` re-baselined **30 → 12** (synced across
+  `plan.py` `_DEFAULT_STABILIZE_SMOOTHING` / `_RenderStabilize.smoothing`,
+  `clipwright-stabilize` `DetectShakeOptions.smoothing`, and the MCP server
+  docstring). All additions are static literals — the CWE-78 surface
+  (`_validate_stabilize_basename` allowlist, `smoothing` Pydantic bound) is unchanged.
+- **`unsharp` was dropped** despite the contained-fix plan above. A real-binary e2e
+  on Windows (Gyan ffmpeg 8.1.1) showed that **chaining any post-process filter
+  after `vidstabtransform` in the same filtergraph crashes libvidstab with
+  `0xC0000005` (ACCESS_VIOLATION)** — measured 13/15 runs with `unsharp`, vs 1/15
+  without, vs 0/20 when `vidstabtransform` runs as its own pass. `unsharp`/`cas`/
+  `smartblur` and `format`-between / `filter_threads=1` all reproduced the crash;
+  `stdin=DEVNULL` was disproven (PIPE crashes at the same rate). For an AI-first
+  tool that cannot visually QA output, **not crashing outranks marginal sharpness**,
+  and `crop=black` already removes the dominant softness source (the prev-frame
+  smear). A real-handheld e2e (`test_stabilize_e2e.py`, real ffmpeg) now verifies
+  `ok` + artifact-on-disk + `pix_fmt=yuv420p`; a regression guard asserts `unsharp`
+  is **absent** from the filter graph so the crash cannot be reintroduced.
+
+**Spun-off backlog** (out of this fix's scope):
+- **Sharpness recovery via a two-pass `unsharp` pre-pass** — the only crash-free way
+  to keep sharpening is to run `vidstabtransform` as its own pass, then `unsharp` in
+  a second pass (0/20 crashes). That is a render single-pass-architecture change
+  (same class as the deferred DeepFilterNet multi-pass), so it is deferred.
+- **Residual ~7% single-pass `vidstabtransform` crash** on this Gyan ffmpeg build
+  (libvidstab build bug, present even with `unsharp` removed and on the pre-D4
+  `crop=keep` path) — the e2e `skip`-guards it; tracked as a build-specific known issue.
+- **D5 (security): `render` returns raw `SUBPROCESS_FAILED` messages** — see below.
+
+---
+
+### D5. `clipwright-render` leaks raw subprocess stderr in `SUBPROCESS_FAILED` envelopes (CWE-209)  *Low*
+
+**Symptom / root cause**
+`render.py` (`except ClipwrightError as exc: return error_result(exc.code, exc.message, exc.hint)`)
+passes the raw `ClipwrightError.message` — which for `SUBPROCESS_FAILED` embeds
+`stderr[:200]` from `process.run()` — straight into the MCP envelope. ffmpeg stderr
+can contain absolute input paths, so the error surface can leak filesystem detail
+to the agent/caller. This is pre-existing and **render-wide** (every subprocess
+failure, not just stabilize); it was surfaced while reviewing the D4 e2e, which
+originally keyed its Windows-crash detection off the leaked exit-code string. The
+e2e was decoupled to detect by `error.code == "SUBPROCESS_FAILED"` instead, so no
+clipwright code now depends on the leak.
+
+**Contained fix**
+Apply the existing `safe_subprocess_message` helper (already used on the
+silence/VAD/wrap seams) to `SUBPROCESS_FAILED` before returning from `render`.
+Because it changes render's global error contract, do it as its own scoped change
+(check render tests that assert on error-message content). Low priority — no code
+depends on the raw message and the leak is path-only.
 
 ---
 
@@ -503,8 +560,9 @@ render      ✓ (NVENC+hwdecode;     overlay     ✗ cascade from D1 (works stan
 silence     ✓ (VAD 8 / energy 5)   reframe     ✓ NEW mode="track" (80 kf, follows subject)
 scene       ✓ (psd 12 / ffmpeg 0)  sequence    ✓
 frames      ✓ scene_sample;        transition  ✓ (4:2:0 confirmed on real footage)
-              ✗ interval manifest (D2)  stabilize ⚠ NEW; runs but output
-                                                    degraded (D4); severity=null (D3)
+              ✗ interval manifest (D2)  stabilize ✓ NEW; quality fixed (D4 RESOLVED:
+                                                    crop=black/optzoom=1/smoothing=12,
+                                                    unsharp dropped); severity=null (D3)
 transcribe  ✓ (en, CPU 1.37x)      color       ✓ create path; ✗ with timeline (D1)
 wrap        — N/A (CJK/Thai only; English friction)   loudness ✗ (D1)
                                     noise       ✗ (D1 cascade; same latent bug)
@@ -526,12 +584,14 @@ directly for Latin captions).
    `noise` / `stabilize`; regression from the spec4 #5 path-policy unification.
    Contained fix: resolve `target_url` against the OTIO directory (ideally folded
    into `clipwright.pathpolicy`).
-2. **D4 — stabilize apply pass ships degraded output** (High): defaults-only
-   `vidstabtransform` produces ghosting (`crop=keep`), resolution loss
-   (`optzoom` zoom-in, no `unsharp`), and over-smoothing (`smoothing=30`), so the
-   result is worse than the source while the envelope reports `ok: true`. Tune
-   `crop=black` + `unsharp` + a lower default smoothing; add a real-handheld
-   before/after e2e. AI-first stakes: the agent cannot visually QA the output.
+2. **D4 — stabilize apply pass ships degraded output** (High) — **RESOLVED**:
+   shipped `vidstabtransform=...:smoothing=12:crop=black:optzoom=1` (ghosting +
+   over-smoothing fixed, clean frame via optimal static zoom). `unsharp` was
+   **dropped** after a real-binary e2e showed any post-`vidstabtransform` filter
+   crashes libvidstab on Windows Gyan ffmpeg (0xC0000005, 13/15); not-crashing
+   outranks marginal sharpness for an AI-first tool. Real ffmpeg e2e verifies
+   `ok`/artifact/`yuv420p` + an `unsharp`-absence regression guard. Spun off:
+   two-pass `unsharp` pre-pass, residual ~7% libvidstab build crash, and **D5**.
 3. **D2 — frames interval manifest overcounts vs fps-filter output** (Medium):
    manifest lists a non-existent final frame; extract interval frames per
    `compute_interval_timestamps` via `-ss` so manifest == disk (as scene mode does).
@@ -540,5 +600,7 @@ directly for Latin captions).
 5. **Word-level/karaoke captions · color-grading depth · video PiP · NLE
    interop · subtitle translation** (Medium): reach/quality features for a general
    editing suite.
-6. **D3 — stabilize severity null** (Low) · **diarization · Ken Burns · export
-   presets** (Low–Medium): follow-ups.
+6. **D3 — stabilize severity null** (Low) · **D5 — render raw stderr in
+   `SUBPROCESS_FAILED` (CWE-209)** (Low) · **two-pass `unsharp` pre-pass · residual
+   libvidstab build crash · diarization · Ken Burns · export presets** (Low–Medium):
+   follow-ups.
