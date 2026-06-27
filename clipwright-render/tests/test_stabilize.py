@@ -306,8 +306,8 @@ class TestStabilizeFilterExtensions:
 
     AC-1: filter_complex contains 'crop=black'.
     AC-2: filter_complex contains 'optzoom=1'.
-    NFR-G: filter_complex must NOT contain 'unsharp' (crash regression guard).
-    AC-4 ordering: trim → vidstabtransform → setpts, no unsharp between them.
+    AC-3 (Option B): filter_complex contains 'unsharp=5:5:0.8:3:3:0.4' after vidstabtransform.
+    AC-4 ordering: trim → vidstabtransform → unsharp → setpts.
     AC-4 default: omitting smoothing from directive yields :smoothing=12 in filter.
     """
 
@@ -327,27 +327,26 @@ class TestStabilizeFilterExtensions:
         plan = _single_source_plan(stabilize=stabilize)
         assert "optzoom=1" in plan.filter_complex
 
-    def test_unsharp_not_in_filter_complex(self, tmp_path: Path) -> None:
-        """filter_complex must not contain 'unsharp' (NFR-G: crash regression guard).
+    def test_unsharp_in_filter_complex(self, tmp_path: Path) -> None:
+        """filter_complex contains 'unsharp=5:5:0.8:3:3:0.4' after vidstabtransform (Option B).
 
-        vidstabtransform followed by unsharp caused 0xC0000005 crashes on Windows
-        Gyan ffmpeg 8.1.1 (13/15 runs). unsharp was removed from the filter chain
-        to prevent recurrence.
+        -threads 1 before -i suppresses the vid.stab #144 B-frame reference corruption,
+        allowing unsharp to be safely re-added with its original parameter string.
         """
         trf_path = str(tmp_path / "video.stabilize.trf")
         Path(trf_path).touch()
         stabilize = _make_stabilize_dict(trf_path, smoothing=30)
         plan = _single_source_plan(stabilize=stabilize)
-        assert "unsharp" not in plan.filter_complex
+        assert "unsharp=5:5:0.8:3:3:0.4" in plan.filter_complex
 
-    def test_vidstabtransform_trim_setpts_order_without_unsharp(
+    def test_vidstabtransform_trim_unsharp_setpts_order(
         self, tmp_path: Path
     ) -> None:
-        """Single-segment filter order: trim → vidstabtransform → setpts, no unsharp (ADR-ST-1-rev2).
+        """Single-segment filter order: trim → vidstabtransform → unsharp → setpts (Option B / ADR-ST-1).
 
-        After removing unsharp (NFR-G crash fix), the contiguous fragment
-        vidstabtransform=input=<basename>:smoothing=<n>:crop=black:optzoom=1
-        must appear between trim= and setpts=, and 'unsharp' must be absent.
+        The contiguous fragment
+        vidstabtransform=input=<basename>:smoothing=<n>:crop=black:optzoom=1,unsharp=5:5:0.8:3:3:0.4
+        must appear between trim= and setpts=.
         """
         trf_path = str(tmp_path / "video.stabilize.trf")
         Path(trf_path).touch()
@@ -358,11 +357,11 @@ class TestStabilizeFilterExtensions:
 
         vst_fragment = (
             f"vidstabtransform=input={basename}:smoothing=30:crop=black:optzoom=1"
+            ",unsharp=5:5:0.8:3:3:0.4"
         )
         assert vst_fragment in fc, (
-            f"Expected vidstabtransform chain not found in filter_complex:\n{fc}"
+            f"Expected vidstabtransform+unsharp chain not found in filter_complex:\n{fc}"
         )
-        assert "unsharp" not in fc
 
         trim_pos = fc.find("trim=")
         vst_pos = fc.find(vst_fragment)
@@ -371,7 +370,7 @@ class TestStabilizeFilterExtensions:
         assert vst_pos != -1
         assert setpts_pos != -1
         assert trim_pos < vst_pos < setpts_pos, (
-            f"Expected trim ({trim_pos}) < vidstabtransform ({vst_pos}) < setpts ({setpts_pos})"
+            f"Expected trim ({trim_pos}) < vidstabtransform+unsharp ({vst_pos}) < setpts ({setpts_pos})"
         )
 
     def test_default_smoothing_12_when_smoothing_not_specified(
@@ -938,3 +937,205 @@ class TestRenderStabilizeGuards:
 
         # Should not raise
         _validate_stabilize_basename("my-video_clip.stabilize.trf")
+
+
+# ===========================================================================
+# ST-10: -threads 1 flag in ffmpeg cmd when stabilize is enabled (Option B)
+# ===========================================================================
+
+
+class TestStabilizeThreadsFlag:
+    """ffmpeg cmd contains '-threads 1' before the first '-i' iff stabilize is enabled.
+
+    Option B fix: -threads 1 (decoder frame parallelism=1) before -i suppresses
+    the vid.stab #144 B-frame reference corruption. Both render_plan and
+    _render_inner paths are verified by capturing the cmd passed to run().
+    Non-stabilize paths must not emit -threads 1 (backward compat).
+    """
+
+    def _write_stabilize_timeline(
+        self, tmp_path: Path, trf_path: str
+    ) -> tuple[Path, Path]:
+        """Write an OTIO timeline annotated with a stabilize directive."""
+        source = tmp_path / "src.mp4"
+        source.touch()
+        stabilize = _make_stabilize_dict(trf_path)
+        tl = _make_timeline([_make_clip(str(source), 0.0, 5.0)], stabilize)
+        tl_path = tmp_path / "tl.otio"
+        otio.adapters.write_to_file(tl, str(tl_path))
+        return tl_path, source
+
+    def _write_plain_timeline(self, tmp_path: Path) -> tuple[Path, Path]:
+        """Write an OTIO timeline without a stabilize directive."""
+        source = tmp_path / "src.mp4"
+        source.touch()
+        tl = _make_timeline([_make_clip(str(source), 0.0, 5.0)])
+        tl_path = tmp_path / "tl.otio"
+        otio.adapters.write_to_file(tl, str(tl_path))
+        return tl_path, source
+
+    def _make_media_info(self, path: str) -> Any:
+        from clipwright.schemas import MediaInfo, StreamInfo
+
+        return MediaInfo(
+            path=path,
+            container="mov,mp4,m4a,3gp,3g2,mj2",
+            duration=None,
+            streams=[StreamInfo(index=0, codec_type="video", codec_name="h264")],
+            bit_rate=8_000_000,
+        )
+
+    def test_threads_1_in_cmd_before_i_render_plan(self, tmp_path: Path) -> None:
+        """render_plan: cmd contains '-threads 1' before first '-i' when stabilize present."""
+        from clipwright_render.render import render_plan
+
+        trf_path = str(tmp_path / "clip.stabilize.trf")
+        Path(trf_path).touch()
+        stabilize = _make_stabilize_dict(trf_path)
+        plan = _single_source_plan(stabilize=stabilize)
+
+        captured_cmds: list[list[str]] = []
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:  # type: ignore[type-arg]
+            captured_cmds.append(list(cmd))
+            return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        output = str(tmp_path / "out.mp4")
+        with (
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=lambda name, env_var=None: "/usr/bin/ffmpeg",
+            ),
+            patch("clipwright_render.render.run", side_effect=_fake_run),
+        ):
+            render_plan(plan, output, overwrite=True)
+
+        assert captured_cmds, "run() was not called"
+        cmd = captured_cmds[-1]
+
+        assert "-threads" in cmd, f"'-threads' not found in cmd: {cmd}"
+        threads_idx = cmd.index("-threads")
+        assert cmd[threads_idx + 1] == "1", (
+            f"Expected '-threads 1', got '-threads {cmd[threads_idx + 1]}'"
+        )
+        first_i_idx = cmd.index("-i")
+        assert threads_idx < first_i_idx, (
+            f"'-threads' (idx {threads_idx}) must precede first '-i' (idx {first_i_idx})"
+        )
+
+    def test_threads_1_absent_render_plan_when_stabilize_not_present(
+        self, tmp_path: Path
+    ) -> None:
+        """render_plan: cmd does not contain '-threads 1' when stabilize is absent."""
+        from clipwright_render.render import render_plan
+
+        plan = _single_source_plan(stabilize=None)
+
+        captured_cmds: list[list[str]] = []
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:  # type: ignore[type-arg]
+            captured_cmds.append(list(cmd))
+            return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        output = str(tmp_path / "out.mp4")
+        with (
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=lambda name, env_var=None: "/usr/bin/ffmpeg",
+            ),
+            patch("clipwright_render.render.run", side_effect=_fake_run),
+        ):
+            render_plan(plan, output, overwrite=True)
+
+        assert captured_cmds, "run() was not called"
+        cmd = captured_cmds[-1]
+        assert "-threads" not in cmd, (
+            f"'-threads' must not appear in cmd when stabilize is absent: {cmd}"
+        )
+
+    def test_threads_1_in_cmd_before_i_render_inner(self, tmp_path: Path) -> None:
+        """render_timeline (_render_inner): cmd has '-threads 1' before '-i' when stabilize present."""
+        from clipwright_render.render import render_timeline
+
+        trf_path = str(tmp_path / "clip.stabilize.trf")
+        Path(trf_path).touch()
+        tl_path, _ = self._write_stabilize_timeline(tmp_path, trf_path)
+        output = tmp_path / "out.mp4"
+        output.touch()
+
+        captured_cmds: list[list[str]] = []
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:  # type: ignore[type-arg]
+            captured_cmds.append(list(cmd))
+            return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                side_effect=lambda path: self._make_media_info(path),
+            ),
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
+            patch("clipwright_render.render.run", side_effect=_fake_run),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=str(output),
+                options=RenderOptions(overwrite=True),
+            )
+
+        assert result["ok"] is True, f"render_timeline failed: {result.get('error')}"
+        assert captured_cmds, "run() was not called"
+        cmd = captured_cmds[-1]
+
+        assert "-threads" in cmd, f"'-threads' not found in cmd: {cmd}"
+        threads_idx = cmd.index("-threads")
+        assert cmd[threads_idx + 1] == "1", (
+            f"Expected '-threads 1', got '-threads {cmd[threads_idx + 1]}'"
+        )
+        first_i_idx = cmd.index("-i")
+        assert threads_idx < first_i_idx, (
+            f"'-threads' (idx {threads_idx}) must precede first '-i' (idx {first_i_idx})"
+        )
+
+    def test_threads_1_absent_render_inner_when_stabilize_not_present(
+        self, tmp_path: Path
+    ) -> None:
+        """render_timeline (_render_inner): cmd has no '-threads 1' when stabilize is absent."""
+        from clipwright_render.render import render_timeline
+
+        tl_path, _ = self._write_plain_timeline(tmp_path)
+        output = tmp_path / "out.mp4"
+        output.touch()
+
+        captured_cmds: list[list[str]] = []
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:  # type: ignore[type-arg]
+            captured_cmds.append(list(cmd))
+            return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                side_effect=lambda path: self._make_media_info(path),
+            ),
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=lambda name, env_var=None: f"/usr/bin/{name}",
+            ),
+            patch("clipwright_render.render.run", side_effect=_fake_run),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=str(output),
+                options=RenderOptions(overwrite=True),
+            )
+
+        assert result["ok"] is True, f"render_timeline failed: {result.get('error')}"
+        assert captured_cmds, "run() was not called"
+        cmd = captured_cmds[-1]
+        assert "-threads" not in cmd, (
+            f"'-threads' must not appear in cmd when stabilize is absent: {cmd}"
+        )
