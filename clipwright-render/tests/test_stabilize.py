@@ -93,7 +93,7 @@ def _make_probe(
     )
 
 
-def _make_stabilize_dict(trf_path: str, smoothing: int = 30) -> dict[str, Any]:
+def _make_stabilize_dict(trf_path: str, smoothing: int = 12) -> dict[str, Any]:
     """Return a minimal stabilize directive dict matching StabilizeDirective schema."""
     return {
         "tool": "clipwright-stabilize",
