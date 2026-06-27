@@ -230,6 +230,72 @@ keep it advisory. Low priority — stabilisation itself works.
 
 ---
 
+### D4. `clipwright-stabilize` apply pass ships degraded output — ghosting, resolution loss, over-smoothing (defaults-only `vidstabtransform`)  *High*
+
+**Symptom**
+On real handheld footage the stabilized result is **worse to watch than the
+original**: visible smeared "ghost" trails at the frame edges, softer/lower
+apparent resolution, and a "rubber-band / swimming" feel where deliberate camera
+motion is sucked out. The materialise pass runs and returns `ok: true` — there is
+no signal in the envelope that the output is degraded.
+
+**Root cause**
+The render apply stage builds the `vidstabtransform` filter with **only two
+parameters** and leaves every other knob at the ffmpeg default
+(`clipwright-render/src/clipwright_render/plan.py:3159-3160`):
+
+```python
+vst = f"vidstabtransform=input={stabilize_basename}:smoothing={stabilize_smoothing}"
+```
+
+Each defaulted knob maps directly to one of the three complaints:
+
+- **Ghosting / smear** ← `crop=keep` (the vidstabtransform default). It fills the
+  border area exposed by stabilisation with **content from previous frames**,
+  producing the classic vidstab smear trail. `crop=black` (letterbox the exposed
+  edge) removes it.
+- **Resolution loss / softness** ← `optzoom=1` (default) auto-zooms **in** to hide
+  the exposed borders, i.e. upscales a crop → resolution drop; plus bilinear
+  `interpol` softens, and there is **no `unsharp` recovery pass** (the libvidstab
+  docs explicitly recommend a trailing `unsharp` because the transform softens the
+  image). No `unsharp` appears anywhere in the filter chain.
+- **Over-correction / swimming** ← `smoothing=30` (default;
+  `clipwright-stabilize/.../schemas.py:27` and `plan.py:105`). At 30 fps that is a
+  ±30-frame ≈ 2-second window, aggressive enough to absorb intentional pans and
+  produce the rubber-band rebound.
+
+This is **not an inherent vidstab limitation** — it is a minimal first-cut filter
+string that never tuned the apply-side parameters. (Related but separate: the
+render `yuv420p`/4:4:4 pinning known-issue can compound the perceived quality on
+some edit paths.)
+
+**Blast radius**
+Every `detect_shake → render` materialisation. Because clipwright is an **AI-only**
+tool — the caller is an agent that cannot visually QA the MP4 and only sees the
+`ok: true` envelope — a tool that silently emits output worse than its input is a
+correctness trap: the agent will "stabilise" and ship a degraded clip with full
+confidence. For an AI-first product the apply defaults must be good *by
+construction*, because there is no human in the loop to reject the bad frame.
+
+**Contained fix**
+Tune the apply-side `vidstabtransform` and recover sharpness, and re-baseline the
+default smoothing:
+
+1. Set `crop=black` (kill the ghosting) and `optzoom=1:zoom=0` reviewed against an
+   explicit, bounded crop budget — or expose `crop` as an option defaulting to
+   `black` — so borders are never filled from prior frames.
+2. Append an `unsharp` pass after `vidstabtransform` to restore detail lost to
+   interpolation (libvidstab's documented companion step).
+3. Lower the default `smoothing` (e.g. 10–15) so intentional motion survives; keep
+   it agent-overridable via `DetectShakeOptions.smoothing` (already 0–1000).
+4. Validate with a real-handheld before/after e2e and, ideally, an objective
+   sharpness/crop metric so regressions in apply quality are caught without a human
+   viewer. Consider surfacing an apply-side **quality/crop-budget warning** in the
+   render envelope so the agent gets an in-band signal when stabilisation had to
+   crop or zoom heavily.
+
+---
+
 ## Missing Features / Friction
 
 ### Caption line-wrapping for space-delimited (Latin) languages  *Medium*  *(wrap)*
@@ -437,7 +503,8 @@ render      ✓ (NVENC+hwdecode;     overlay     ✗ cascade from D1 (works stan
 silence     ✓ (VAD 8 / energy 5)   reframe     ✓ NEW mode="track" (80 kf, follows subject)
 scene       ✓ (psd 12 / ffmpeg 0)  sequence    ✓
 frames      ✓ scene_sample;        transition  ✓ (4:2:0 confirmed on real footage)
-              ✗ interval manifest (D2)  stabilize ✓ NEW detect+transform; severity=null (D3)
+              ✗ interval manifest (D2)  stabilize ⚠ NEW; runs but output
+                                                    degraded (D4); severity=null (D3)
 transcribe  ✓ (en, CPU 1.37x)      color       ✓ create path; ✗ with timeline (D1)
 wrap        — N/A (CJK/Thai only; English friction)   loudness ✗ (D1)
                                     noise       ✗ (D1 cascade; same latent bug)
@@ -459,13 +526,19 @@ directly for Latin captions).
    `noise` / `stabilize`; regression from the spec4 #5 path-policy unification.
    Contained fix: resolve `target_url` against the OTIO directory (ideally folded
    into `clipwright.pathpolicy`).
-2. **D2 — frames interval manifest overcounts vs fps-filter output** (Medium):
+2. **D4 — stabilize apply pass ships degraded output** (High): defaults-only
+   `vidstabtransform` produces ghosting (`crop=keep`), resolution loss
+   (`optzoom` zoom-in, no `unsharp`), and over-smoothing (`smoothing=30`), so the
+   result is worse than the source while the envelope reports `ok: true`. Tune
+   `crop=black` + `unsharp` + a lower default smoothing; add a real-handheld
+   before/after e2e. AI-first stakes: the agent cannot visually QA the output.
+3. **D2 — frames interval manifest overcounts vs fps-filter output** (Medium):
    manifest lists a non-existent final frame; extract interval frames per
    `compute_interval_timestamps` via `-ss` so manifest == disk (as scene mode does).
-3. **Caption wrap for Latin languages** (Medium): `wrap_captions` hard-errors on
+4. **Caption wrap for Latin languages** (Medium): `wrap_captions` hard-errors on
    English; accept space-delimited wrapping or an explicit passthrough.
-4. **Word-level/karaoke captions · color-grading depth · video PiP · NLE
+5. **Word-level/karaoke captions · color-grading depth · video PiP · NLE
    interop · subtitle translation** (Medium): reach/quality features for a general
    editing suite.
-5. **D3 — stabilize severity null** (Low) · **diarization · Ken Burns · export
+6. **D3 — stabilize severity null** (Low) · **diarization · Ken Burns · export
    presets** (Low–Medium): follow-ups.
