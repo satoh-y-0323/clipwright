@@ -394,7 +394,7 @@ class TestInsideMediaRef:
 
 
 # ===========================================================================
-# DP-N-9: SR-L-4 — output == source must return PATH_NOT_ALLOWED [Red]
+# DP-N-9: SR-L-4 — output == source must return PATH_NOT_ALLOWED
 # ===========================================================================
 
 
