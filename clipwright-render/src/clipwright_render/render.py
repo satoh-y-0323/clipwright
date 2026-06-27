@@ -358,8 +358,10 @@ def render_plan(
         str(Path(output).resolve()) if plan.stabilize_cwd is not None else str(output)
     )
 
+    # Suppress B-frame reference corruption (vid.stab #144) by forcing single-threaded decode.
+    global_decode_args = ["-threads", "1"] if plan.stabilize_cwd is not None else []
     timeout = max(300, _math.ceil(plan.total_duration_seconds * 10))
-    cmd = [ffmpeg] + overwrite_flag + inputs + plan.ffmpeg_args + [output_arg]
+    cmd = [ffmpeg] + overwrite_flag + global_decode_args + inputs + plan.ffmpeg_args + [output_arg]
     run(cmd, timeout=float(timeout), cwd=plan.stabilize_cwd)
 
 
@@ -1135,7 +1137,9 @@ def _render_inner(
     output_arg = (
         str(Path(output).resolve()) if plan.stabilize_cwd is not None else str(output)
     )
-    cmd = [ffmpeg] + overwrite_flag + inputs + plan.ffmpeg_args + [output_arg]
+    # Suppress B-frame reference corruption (vid.stab #144) by forcing single-threaded decode.
+    global_decode_args = ["-threads", "1"] if plan.stabilize_cwd is not None else []
+    cmd = [ffmpeg] + overwrite_flag + global_decode_args + inputs + plan.ffmpeg_args + [output_arg]
 
     run(cmd, timeout=float(timeout), cwd=plan.stabilize_cwd)  # §6-C
 
