@@ -243,11 +243,10 @@ def _run_stabilize_pipeline(
 
     if _is_windows_vst_crash(render_result):
         pytest.skip(
-            "vidstabtransform crashed with 0xC0000005 (ACCESS_VIOLATION) on Windows "
-            "(Gyan.dev ffmpeg 8.1.1 / libvidstab build bug). "
-            "Removing post-transform filter chains eliminates the primary trigger; "
-            "a residual ~7% single-pass crash rate is a known build-specific event. "
-            "stdin routing is not involved — PIPE reproduces the same crash."
+            "vidstabtransform render failed (SUBPROCESS_FAILED) on Windows — "
+            "typically the libvidstab 0xC0000005 / ACCESS_VIOLATION crash on this "
+            "Gyan ffmpeg build when a filter follows vidstabtransform. "
+            "Skipping (build-specific known issue)."
         )
 
     return render_result, out_mp4
