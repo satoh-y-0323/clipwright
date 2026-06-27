@@ -99,7 +99,9 @@ def _has_vidstab(ffmpeg: str) -> bool:
             timeout=10,
         )
         return any("vidstabdetect" in line for line in result.stdout.splitlines())
-    except Exception:  # ffmpeg launch failure, timeout, or unexpected error → treat as no vidstab
+    except (
+        Exception
+    ):  # ffmpeg launch failure, timeout, or unexpected error → treat as no vidstab
         return False
 
 
