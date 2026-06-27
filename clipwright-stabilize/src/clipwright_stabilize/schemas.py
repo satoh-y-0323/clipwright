@@ -24,7 +24,7 @@ class DetectShakeOptions(BaseModel):
 
     shakiness: Annotated[int, Field(ge=1, le=10)] = 5
     accuracy: Annotated[int, Field(ge=1, le=15)] = 15
-    smoothing: Annotated[int, Field(ge=0, le=1000)] = 30
+    smoothing: Annotated[int, Field(ge=0, le=1000)] = 12
 
 
 class StabilizeDirective(BaseModel):

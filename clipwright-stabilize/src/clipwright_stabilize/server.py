@@ -55,7 +55,7 @@ def clipwright_detect_shake(
         Field(
             description=(
                 "Shake detection options (shakiness / accuracy / smoothing)."
-                " Defaults to shakiness=5 / accuracy=15 / smoothing=30 when omitted."
+                " Defaults to shakiness=5 / accuracy=15 / smoothing=12 when omitted."
             )
         ),
     ] = None,

@@ -100,9 +100,9 @@ _SPEED_MAX: float = 8.0
 _WARP_IDENTITY_THRESHOLD: float = 1e-9
 
 # Default smoothing value for vidstabtransform.
-# Must match DetectShakeOptions.smoothing and _RenderStabilize.smoothing defaults (30).
+# Must match DetectShakeOptions.smoothing and _RenderStabilize.smoothing defaults (12).
 # When changing this value, update all three locations to keep them in sync.
-_DEFAULT_STABILIZE_SMOOTHING: int = 30
+_DEFAULT_STABILIZE_SMOOTHING: int = 12
 
 # Maximum keyframe count for mode='track' render path (DC-AM-003 / AC-09).
 # Value confirmed by spike: av_expr_parse hard limit ~96 tokens; N_max=80 gives
@@ -1815,7 +1815,7 @@ class _RenderStabilize(BaseModel):
     model_config = {"extra": "ignore", "allow_inf_nan": False}
 
     trf_path: str
-    smoothing: Annotated[int, Field(ge=0, le=1000)] = 30
+    smoothing: Annotated[int, Field(ge=0, le=1000)] = 12
 
 
 def _validate_stabilize(stabilize: dict[str, Any]) -> _RenderStabilize | None:
@@ -3158,6 +3158,7 @@ def _build_filter_complex(
         # None → no insertion (backward compatible).
         vst = (
             f"vidstabtransform=input={stabilize_basename}:smoothing={stabilize_smoothing}"
+            ":crop=black:optzoom=1,unsharp=5:5:0.8:3:3:0.4"
             if stabilize_basename is not None
             else None
         )
