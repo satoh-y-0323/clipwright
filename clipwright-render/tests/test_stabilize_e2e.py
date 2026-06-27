@@ -1,7 +1,7 @@
 """test_stabilize_e2e.py — Real e2e smoke tests: detect_shake -> render (stabilize pipeline).
 
 Covers AC-5 (render ok=True + artifact path on disk), AC-6 (pix_fmt=yuv420p), and
-AC-7 (Option B stability: unsharp single-pass does not crash across repeated runs).
+rev3 crash-regression (Option B stability: unsharp single-pass does not crash across repeated runs).
 
 Strategy:
   A synthetic testsrc video is generated via ffmpeg lavfi (640x480, 3 s, no audio).
@@ -170,9 +170,6 @@ def _probe_video_stream(ffprobe: str, media: Path) -> dict[str, Any]:
     return {}
 
 
-_WINDOWS_VST_CRASH_EXIT_CODE = "3221225477"  # 0xC0000005 (STATUS_ACCESS_VIOLATION); recorded for reference, not used in detection logic
-
-
 def _is_windows_vst_crash(result: dict[str, Any]) -> bool:
     """Return True when result is the known Windows vidstabtransform ACCESS_VIOLATION crash.
 
@@ -317,7 +314,7 @@ class TestStabilizeE2E:
         )
 
     def test_unsharp_single_pass_stability_loop(self, tmp_path: Path) -> None:
-        """Repeat stabilize+unsharp render 15 times; all iterations must complete ok=True (AC-7).
+        """Repeat stabilize+unsharp render 15 times; all iterations must complete ok=True (rev3 crash-regression).
 
         Option B fix: -threads 1 before -i eliminates the vid.stab #144 B-frame reference
         corruption that previously caused 0xC0000005 ACCESS_VIOLATION crashes when unsharp
