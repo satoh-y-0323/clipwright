@@ -339,9 +339,7 @@ class TestStabilizeFilterExtensions:
         plan = _single_source_plan(stabilize=stabilize)
         assert "unsharp=5:5:0.8:3:3:0.4" in plan.filter_complex
 
-    def test_vidstabtransform_trim_unsharp_setpts_order(
-        self, tmp_path: Path
-    ) -> None:
+    def test_vidstabtransform_trim_unsharp_setpts_order(self, tmp_path: Path) -> None:
         """Single-segment filter order: trim → vidstabtransform → unsharp → setpts (Option B / ADR-ST-1).
 
         The contiguous fragment
