@@ -287,6 +287,48 @@ def check_media_ref(ref: str, otio_dir: Path, kind: str) -> None:
                 )
 
 
+def check_timeline_source_matches(
+    target_url: str, media_path: Path, otio_dir: Path
+) -> None:
+    """Verify that an OTIO timeline's source reference matches the supplied media.
+
+    Performs equality check only (single responsibility).  The caller is
+    responsible for running check_media_ref() before this function so that
+    security guards (symlink, boundary, existence) have already been applied.
+
+    Relative *target_url* values are joined against *otio_dir* (not CWD) to
+    reproduce the same resolution logic used when the OTIO file was written —
+    this is the root fix for the CWD-based misresolution bug (spec5 timeline
+    match regression).
+
+    Canonical comparison uses _canon() with its three-stage fallback
+    (resolve -> absolute -> str) so that network paths and long paths on
+    Windows do not cause false mismatches.
+
+    Args:
+        target_url: The ``target_url`` string from the OTIO media reference.
+        media_path: The media file Path supplied by the caller for this run.
+        otio_dir: Directory containing the OTIO file; used to resolve relative
+            *target_url* values.
+
+    Raises:
+        ClipwrightError: INVALID_INPUT when *target_url* does not resolve to
+            the same file as *media_path*.
+    """
+    ref_path = _normalize_sep(target_url)
+    if not ref_path.is_absolute():
+        ref_path = otio_dir / ref_path
+    if _canon(ref_path) != _canon(media_path):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message="Timeline source file does not match input media.",
+            hint=(
+                "Pass the same media file that was used to create the timeline,"
+                " or pass the timeline that matches this media."
+            ),
+        )
+
+
 def check_within_boundary(base_dir: Path, target: Path, kind: str) -> None:
     """Containment guard for detect/extract output artifacts.
 
