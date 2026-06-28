@@ -14,7 +14,8 @@ Design decisions:
 - target_url in generated OTIO clips follows the media_ref_for_otio policy:
   relative POSIX when media is under the OTIO directory (enabling project-level
   portability), absolute otherwise (ADR-PP-1 escape hatch for external media).
-- source==media comparison is normalized with Path.resolve() (DC-AS-003 / B-4).
+- source==media comparison delegates to check_timeline_source_matches
+  (B-4: CWD-independent).
 - Timeline validation: exactly one Video-kind track (B-5).
 """
 
@@ -260,7 +261,8 @@ def _load_and_validate_timeline(
     Validation references: DC-AM-003 / DC-AM-004 / B-4 / B-5.
 
     Validation:
-    - V1 clip target_url matches media_path (B-4: normalized path comparison)
+    - The target_url of V1 clips matches media_path
+      (B-4: resolved against the OTIO directory via check_timeline_source_matches)
     - Single source (all clips share the same target_url)
     - Exactly one Video-kind track (B-5)
 
@@ -320,7 +322,7 @@ def _load_and_validate_timeline(
     for url in urls:
         check_media_ref(url, tl_dir, "media")
 
-    # --- Validate target_url == media_path (B-4: CWD-independent via helper) ---
+    # --- Validate target_url == media_path (B-4: CWD-independent via core helper) ---
     if urls:
         check_timeline_source_matches(next(iter(urls)), media_path, tl_dir)
 

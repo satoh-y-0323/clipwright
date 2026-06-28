@@ -624,6 +624,9 @@ class TestCwdIndependentTimelineMatch:
         )
         # SR-R-001: CWE-209 regression guard — input filenames must not leak into error message.
         # G-2: canonical error message must be the fixed sentinel string.
-        assert "Timeline source file does not match input media." in result["error"]["message"]
+        assert (
+            "Timeline source file does not match input media."
+            in result["error"]["message"]
+        )
         assert "video" not in result["error"]["message"]
         assert "other" not in result["error"]["message"]
