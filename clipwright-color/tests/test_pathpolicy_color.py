@@ -491,11 +491,10 @@ class TestCwdIndependentTimelineMatch:
     """Regression guard for spec5 D1: relative target_url must be resolved against
     otio_dir, not CWD.
 
-    The current B-4 block uses Path(target_url).resolve() which is CWD-relative.
-    AC-1 exposes the bug (ok=True expected, but INVALID_INPUT is returned).
-    AC-2 confirms that a genuinely mismatched source is still rejected.
-
-    After the fix (check_timeline_source_matches), both cases must pass.
+    After the fix (check_timeline_source_matches), relative target_url is joined
+    against otio_dir, making the comparison CWD-independent.
+    AC-1 verifies the matching source succeeds regardless of CWD.
+    AC-2 confirms a genuinely mismatched source is still rejected.
     """
 
     def test_ac1_relative_source_colocated_different_cwd_succeeds(
@@ -503,10 +502,8 @@ class TestCwdIndependentTimelineMatch:
     ) -> None:
         """AC-1: media and timeline co-located in otio_dir, CWD elsewhere -> ok=True.
 
-        Regression: current code resolves relative target_url from CWD, so
-        Path("video.mp4").resolve() == CWD/video.mp4 != otio_dir/video.mp4,
-        and INVALID_INPUT is raised. After D1 fix, otio_dir-based resolution
-        must succeed.
+        Verifies spec5 D1 fix (ADR-D1-1): relative target_url is resolved against
+        otio_dir, not CWD, so the match succeeds even when CWD differs from otio_dir.
         """
         from clipwright_color.color import (  # type: ignore[import-not-found]
             detect_color,
@@ -603,3 +600,5 @@ class TestCwdIndependentTimelineMatch:
         assert result["error"]["code"] == ErrorCode.INVALID_INPUT, (
             f"AC-2: expected INVALID_INPUT, got {result['error']['code']!r}"
         )
+        # SR-R-001: CWE-209 regression guard — input media filename must not leak into error message.
+        assert "video" not in result["error"]["message"]

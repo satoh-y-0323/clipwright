@@ -613,15 +613,10 @@ def _make_otio_timeline_relative(
 class TestCwdRegressionNoise:
     """spec5 D1: timeline source match must be CWD-independent.
 
-    The old B-4 block uses Path(target_url).resolve() which resolves a relative
-    target_url against CWD.  When CWD != otio_dir the resolved path diverges from
-    the media path even though the source is correct, causing a spurious
-    INVALID_INPUT (D1 bug).
-
     After fix (check_timeline_source_matches), the relative URL is joined onto
     otio_dir before comparison, making CWD irrelevant.
 
-    AC-1  relative source matches media, CWD != otio_dir -> ok=True   (Red on HEAD)
+    AC-1  relative source matches media, CWD != otio_dir -> ok=True
     AC-2  relative source is a different basename, CWD != otio_dir -> ok=False / INVALID_INPUT
     """
 
@@ -630,13 +625,9 @@ class TestCwdRegressionNoise:
     ) -> None:
         """AC-1: relative target_url matching media must succeed regardless of CWD.
 
-        Regression guard for spec5 D1: Path(relative).resolve() uses CWD, so when
-        CWD != otio_dir the current code raises INVALID_INPUT even though the source
-        is correct.  After check_timeline_source_matches is applied, otio_dir is used
-        as the base for relative URL resolution.
-
-        Expected on HEAD: FAIL (ok=False due to CWD mismatch).
-        Expected after fix: PASS (ok=True).
+        Regression guard for spec5 D1 fix: check_timeline_source_matches resolves
+        relative target_url against otio_dir, so the match succeeds even when
+        CWD differs from otio_dir.
         """
         from clipwright_noise.noise import detect_noise
 
@@ -731,3 +722,5 @@ class TestCwdRegressionNoise:
             "spec5 D1: mismatched relative source must return INVALID_INPUT."
             f" Got: {d['error']['code']!r}"
         )
+        # SR-R-001: CWE-209 regression guard — input media filename must not leak into error message.
+        assert "video" not in d["error"]["message"]

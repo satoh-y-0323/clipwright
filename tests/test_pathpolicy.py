@@ -762,6 +762,8 @@ class TestCheckTimelineSourceMatches:
             check_timeline_source_matches("other.mp4", media, otio_dir)
 
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
+        # SR-R-001: CWE-209 regression guard — input filenames must not leak into error message.
+        assert "clip" not in exc_info.value.message and "other" not in exc_info.value.message
 
     def test_absolute_target_url_equal_to_media_ok(self, tmp_path: Path) -> None:
         """T4: absolute target_url equal to media_path → no exception."""
@@ -785,6 +787,8 @@ class TestCheckTimelineSourceMatches:
             check_timeline_source_matches(str(other), media, otio_dir)
 
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
+        # SR-R-001: CWE-209 regression guard — input filenames must not leak into error message.
+        assert "clip" not in exc_info.value.message and "other" not in exc_info.value.message
 
     def test_resolve_oserror_falls_back_to_absolute_match_ok(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

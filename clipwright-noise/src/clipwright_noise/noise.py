@@ -320,8 +320,7 @@ def _load_and_validate_timeline(
     for url in urls:
         check_media_ref(url, tl_dir, "media")
 
-    # --- Validate target_url == media_path ---
-    # --- B-4: CWD-independent comparison via helper ---
+    # --- Validate target_url == media_path (B-4: CWD-independent via helper) ---
     if urls:
         check_timeline_source_matches(next(iter(urls)), media_path, tl_dir)
 

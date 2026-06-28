@@ -12,15 +12,16 @@ Timeline source matching fix across color, loudness, noise, and stabilize tools.
 ### Fixed (`clipwright` v0.5.0, `clipwright-color` v0.2.1, `clipwright-loudness` v0.3.1, `clipwright-noise` v0.3.1, `clipwright-stabilize` v0.4.1)
 
 - **Relative OTIO media references now resolve against the OTIO directory, not the process CWD.**
-  The `check_timeline_source_matches` helper in `clipwright` core previously resolved relative
-  media reference paths against the current working directory of the MCP server process. When the
-  server was launched from a directory other than the one containing the `.otio` file, the resolved
-  path did not match the actual source file, causing a spurious `INVALID_INPUT` error on every
-  tool that uses the accumulate/transform pipeline (`color`, `loudness`, `noise`, `stabilize`).
-  The helper now resolves relative references against the OTIO file's parent directory, consistent
-  with the OTIO specification and the existing `check_media_ref` read-side contract. This was a
-  latent regression from spec4 fix #5 that resurfaced when the timeline annotation stack was
-  extended in spec5.
+  The per-tool inline B-4 timeline-source match block in `color`, `loudness`, `noise`, and
+  `stabilize` previously resolved relative media reference paths against the current working
+  directory of the MCP server process. When the server was launched from a directory other than
+  the one containing the `.otio` file, the resolved path did not match the actual source file,
+  causing a spurious `INVALID_INPUT` error on every tool that uses the accumulate/transform
+  pipeline. The fix consolidates this into a new shared `check_timeline_source_matches` helper
+  in `clipwright` core that resolves relative references against the OTIO file's parent
+  directory, consistent with the OTIO specification and the existing `check_media_ref`
+  read-side contract. This was a latent regression from spec4 fix #5 that resurfaced when the
+  timeline annotation stack was extended in spec5.
 
 ## [0.25.0] - 2026-06-28
 

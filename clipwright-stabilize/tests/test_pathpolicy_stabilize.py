@@ -500,13 +500,12 @@ def _build_v1_timeline_with_relative_source(
 
 
 class TestCwdIndependentTimelineMatch:
-    """spec5 D1 regression guard: B-4 source match must use otio_dir, not CWD.
+    """spec5 D1 regression guard: source match must use otio_dir, not CWD.
 
     The existing co-location tests (TestOutputInDifferentDirAllowed) use absolute
-    target_url so they do not exercise the CWD-dependency bug.  These tests use a
-    relative target_url (basename) combined with monkeypatch.chdir to expose the
-    bug: Path(target_url).resolve() on the unpatched code resolves relative to CWD,
-    not otio_dir, causing a false INVALID_INPUT when CWD != otio_dir.
+    target_url so they do not exercise this CWD-dependency scenario.  These tests
+    use a relative target_url (basename) with monkeypatch.chdir to verify that
+    check_timeline_source_matches resolves relative URLs against otio_dir.
     """
 
     def test_relative_source_matches_when_cwd_differs_from_otio_dir(
@@ -515,8 +514,7 @@ class TestCwdIndependentTimelineMatch:
         """AC-1: relative target_url resolves via otio_dir, not CWD.
 
         When media and timeline share a directory but CWD is elsewhere, the source
-        match must still succeed (spec5 D1 fix).  This test is Red on the unpatched
-        HEAD and Green after check_timeline_source_matches() is applied.
+        match must still succeed (spec5 D1 fix via check_timeline_source_matches).
         """
         from clipwright_stabilize.schemas import (  # type: ignore[import-not-found]
             DetectShakeOptions,
@@ -624,3 +622,5 @@ class TestCwdIndependentTimelineMatch:
             "AC-2: mismatch error code must be INVALID_INPUT."
             f" Got: {result['error']['code']!r}"
         )
+        # SR-R-001: CWE-209 regression guard — input media filename must not leak into error message.
+        assert "video" not in result["error"]["message"]
