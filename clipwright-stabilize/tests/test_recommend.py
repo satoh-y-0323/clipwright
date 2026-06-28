@@ -1,4 +1,4 @@
-"""testrecommend.py — Tests for clipwright_stabilize.analyze.recommend.
+"""test_recommend.py — Tests for clipwright_stabilize.analyze.recommend.
 
 Verification points:
   (1) recommend(None) -> "apply" (AC-5: safe-default when severity is unknown)
@@ -39,7 +39,7 @@ _CALM_TRF = _FIXTURES_DIR / "calm.stabilize.trf"
 class TestRecommendNone:
     """recommend(None) must return 'apply' as the safe-default (AC-5)."""
 
-    def testrecommend_none_returns_apply(self) -> None:
+    def test_recommend_none_returns_apply(self) -> None:
         """recommend(None) must return 'apply' when severity is unavailable (AC-5).
 
         Severity may be None when the .trf binary cannot be parsed (best-effort
@@ -137,7 +137,7 @@ class TestRecommendReturnType:
         "severity",
         [0.0, 0.01, 0.05, 0.1, 0.5, 0.9, 1.0],
     )
-    def testrecommend_float_returns_valid_literal(self, severity: float) -> None:
+    def test_recommend_float_returns_valid_literal(self, severity: float) -> None:
         """Any float in [0.0, 1.0] must return exactly 'skip' or 'apply'."""
         from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
             recommend,
@@ -148,7 +148,7 @@ class TestRecommendReturnType:
             f"recommend({severity}) must return 'skip' or 'apply', got {result!r}"
         )
 
-    def testrecommend_none_returns_valid_literal(self) -> None:
+    def test_recommend_none_returns_valid_literal(self) -> None:
         """None input must also return a valid Literal ('skip' or 'apply')."""
         from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
             recommend,

@@ -1198,3 +1198,76 @@ class TestRecommendationContract:
         assert "data" in result, "envelope must have 'data'"
         assert "artifacts" in result, "envelope must have 'artifacts'"
         # 'warnings' may be None/absent when empty; ok_result omits it — not checked here.
+
+
+# ===========================================================================
+# (11) except Exception guard: unexpected errors are sanitised (SR-R-001 / CWE-209)
+# ===========================================================================
+
+
+class TestExceptExceptionGuard:
+    """detect_shake must catch unexpected exceptions and return a sanitised INTERNAL error.
+
+    The public detect_shake() wraps _detect_shake_inner() in:
+        except Exception:
+            return error_result(ErrorCode.INTERNAL, <fixed message>, ...)
+
+    This guard prevents raw OTIOError / RuntimeError tracebacks (which may contain
+    absolute paths) from reaching the MCP caller (SR-R-001 / CWE-209).
+    """
+
+    def test_load_timeline_unexpected_exception_returns_internal(
+        self, tmp_path: Path
+    ) -> None:
+        """Unexpected RuntimeError from load_timeline must be caught as INTERNAL.
+
+        Verifies:
+          - ok=False (error path activated)
+          - error.code == ErrorCode.INTERNAL (not the raw exception class)
+          - error.message does NOT contain the absolute path embedded in the exception
+            (CWE-209 sanitisation enforced by the except Exception guard)
+        """
+        from clipwright_stabilize.schemas import (  # type: ignore[import-not-found]
+            DetectShakeOptions,
+        )
+        from clipwright_stabilize.stabilize import (  # type: ignore[import-not-found]
+            detect_shake,
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        # Existing OTIO file so the timeline=path branch triggers load_timeline.
+        timeline_file = tmp_path / "existing.otio"
+        timeline_file.write_bytes(b"not real otio content")
+        output = tmp_path / "out.otio"
+        opts = DetectShakeOptions()
+
+        secret_path = str(tmp_path / "secret" / "abs" / "path.otio")
+
+        def _raise_runtime(*_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeError(f"{secret_path} failed to load")
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(
+                "clipwright_stabilize.stabilize.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_stabilize.stabilize.load_timeline",
+                _raise_runtime,
+            )
+            result = detect_shake(
+                media=str(media),
+                output=str(output),
+                options=opts,
+                timeline=str(timeline_file),
+            )
+
+        assert result["ok"] is False, "Unexpected RuntimeError must cause ok=False"
+        error = result.get("error", {})
+        assert error.get("code") == ErrorCode.INTERNAL.value, (
+            f"error.code must be INTERNAL, got: {error.get('code')!r}"
+        )
+        assert secret_path not in (error.get("message") or ""), (
+            "CWE-209: absolute path from the raw exception must not appear in error.message"
+        )

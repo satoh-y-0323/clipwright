@@ -327,6 +327,32 @@ class TestStabilizeDirectiveSeverity:
         )
         assert d.severity == pytest.approx(1.0)
 
+    def test_severity_negative_rejected(self) -> None:
+        """severity=-0.1 (below ge=0.0) must be rejected with ValidationError."""
+        with pytest.raises(ValidationError):
+            StabilizeDirective(
+                version="0.1.0",
+                kind="stabilize",
+                trf_path="/tmp/video.stabilize.trf",
+                severity=-0.1,
+                shakiness=5,
+                accuracy=15,
+                smoothing=30,
+            )
+
+    def test_severity_above_one_rejected(self) -> None:
+        """severity=1.1 (above le=1.0) must be rejected with ValidationError."""
+        with pytest.raises(ValidationError):
+            StabilizeDirective(
+                version="0.1.0",
+                kind="stabilize",
+                trf_path="/tmp/video.stabilize.trf",
+                severity=1.1,
+                shakiness=5,
+                accuracy=15,
+                smoothing=30,
+            )
+
 
 # ===========================================================================
 # StabilizeDirective — tool default and extra forbidden

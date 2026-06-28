@@ -466,6 +466,10 @@ class TestUnsupportedOperation:
         assert str(tmp_path) not in err.hint, (
             "CWE-209: absolute path must not appear in UNSUPPORTED_OPERATION hint"
         )
+        assert exc_info.value.__cause__ is None, (
+            "CWE-209: re-raised error must use 'from None' to suppress __cause__ "
+            "(prevents raw exc chain from leaking abs paths / stderr to callers)"
+        )
 
     def test_unsupported_hint_contains_libvidstab_guidance(
         self, tmp_path: Path
@@ -547,6 +551,10 @@ class TestOtherRunFailure:
         assert str(tmp_path) not in err.message, (
             "CWE-209: absolute path must not appear in re-raised error message"
         )
+        assert exc_info.value.__cause__ is None, (
+            "CWE-209: re-raised error must use 'from None' to suppress __cause__ "
+            "(prevents raw exc chain from leaking abs paths / stderr to callers)"
+        )
 
     def test_subprocess_failed_no_unsupported_reraises(self, tmp_path: Path) -> None:
         """SUBPROCESS_FAILED without filter keyword re-raises with sanitised message."""
@@ -579,6 +587,10 @@ class TestOtherRunFailure:
 
         err = exc_info.value
         assert str(tmp_path) not in err.message
+        assert exc_info.value.__cause__ is None, (
+            "CWE-209: re-raised error must use 'from None' to suppress __cause__ "
+            "(prevents raw exc chain from leaking abs paths / stderr to callers)"
+        )
 
 
 # ===========================================================================
