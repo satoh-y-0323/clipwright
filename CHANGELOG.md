@@ -5,6 +5,47 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.0] - 2026-06-28
+
+Stabilize severity estimation and skip-gate (spec5 D3/D6). The shake-severity pipeline had
+a structural parsing defect that silently produced `null` on every real `.trf` file; the
+median aggregation was also distorted by multi-shot scene-cut spike frames. A new
+`recommendation` (`"skip"` / `"apply"`) advisory field surfaces the severity gate so the
+calling agent can decide whether stabilisation is worth applying.
+
+### Fixed (`clipwright-stabilize` v0.4.0)
+
+- **Severity estimation now parses real `.trf` files correctly (TRF1 structural fix).**
+  The flat-double overflow in the TRF1 binary parser caused `abs_max` to remain `0.0` on
+  all real vidstabdetect output, returning `severity=null` unconditionally. The parser now
+  correctly reads the packed flat-double fields for each frame entry, yielding a valid
+  severity score from actual footage.
+- **Median aggregation is robust to multi-shot scene-cut outliers.** When a `.trf` file
+  covers footage with hard scene cuts, the inter-frame displacement spikes at each cut
+  inflated the mean severity score. Aggregation now uses the median, making the estimate
+  representative of typical shake across the continuous shot.
+
+### Added (`clipwright-stabilize` v0.4.0)
+
+- **`recommendation` field on `detect_shake` response and `StabilizeDirective` (spec5 D3/D6).**
+  The tool now returns `recommendation: "skip" | "apply"` — an advisory severity gate that
+  indicates whether stabilisation is expected to be beneficial. `"skip"` is returned when
+  `severity` is below the threshold for perceptible improvement (low-motion footage such as
+  screen captures or a static camera), preventing unnecessary quality degradation from
+  `vidstabtransform` overcorrection. `"apply"` is returned when severity suggests the footage
+  would benefit. When `severity=null` (parsing failure fallback), `recommendation` defaults
+  to `"apply"` with a warning. The recommendation is advisory only; the calling agent makes
+  the final decision.
+  - `StabilizeDirective.recommendation: Literal["skip", "apply"] | None` (default `None` for
+    backward compatibility — existing OTIO timelines without this field remain valid, AC-10).
+  - `detect_shake` data envelope gains `recommendation` key alongside `severity`.
+  - `summary` text now includes `recommendation=<value>` for at-a-glance agent readability.
+
+> **Suite version note (ADR-REL-1):** Suite tag `v0.24.0` was prepared but not yet pushed to
+> the remote (render v0.15.0 + stabilize v0.3.0). To avoid version-reuse confusion, this
+> release uses suite tag `v0.25.0`. The `v0.24.0` CHANGELOG section below documents the
+> render quality fixes that ship together with this release.
+
 ## [0.24.0] - 2026-06-28
 
 Stabilization apply-pass quality fix (spec5 D4). The stabilize render path previously
