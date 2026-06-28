@@ -4,8 +4,7 @@ Mock policy (F-1):
   - Patch clipwright_stabilize.analyze.resolve_tool to control the ffmpeg binary path.
   - Patch clipwright_stabilize.analyze.run to control ffmpeg stdout/stderr/returncode.
   - No real ffmpeg binary or real libvidstab is invoked.
-  - Severity integration tests (real .trf + real ffmpeg) are marked @pytest.mark.integration
-    and are NOT included here.
+  - Severity unit tests use real .trf fixture files (offline, no ffmpeg).
 
 Verification points:
   (1) argv contains "vidstabdetect=result=<media_stem>.stabilize.trf:shakiness=<s>:accuracy=<a>"
@@ -18,8 +17,10 @@ Verification points:
          fixed message (no abs path / raw stderr), from None (CWE-209).
   (5) Other run failure (e.g. timeout) -> fixed message, no path exposure.
   (6) rc=0 but .trf not generated -> SUBPROCESS_FAILED (same defense as frames).
-  (7) _estimate_severity unit: TRF1 magic + IEEE-754 little-endian doubles -> 0.0-1.0.
-      Magic mismatch / 0 doubles / all nan/inf / broken bytes -> None.
+  (7) _estimate_severity: real TRF1 fixtures -> non-None float in [0.0, 1.0] (AC-1).
+      Ordering: calm severity < shaky severity (AC-2).
+      Overflow regression: large doubles must not cause inf -> None (old bug fix).
+      Graceful (NF-2): broken/unknown magic / empty body / oversized -> None, no raise.
       severity=None -> warnings has 1 entry in run_vidstabdetect return.
   -vf is a single argv element (CWE-78).
   -i uses absolute input path (cwd-independent).
@@ -40,6 +41,13 @@ import pytest
 from clipwright.errors import ClipwrightError, ErrorCode
 
 _FAKE_FFMPEG = "/usr/local/bin/ffmpeg"
+
+# Real TRF1 fixture files produced by ffmpeg vidstabdetect (offline, no ffmpeg needed).
+# shaky.stabilize.trf — high-shake source, 14 KB.
+# calm.stabilize.trf  — low-motion source,  28 KB.
+_FIXTURES_DIR = Path(__file__).parent / "fixtures"
+_SHAKY_TRF = _FIXTURES_DIR / "shaky.stabilize.trf"
+_CALM_TRF = _FIXTURES_DIR / "calm.stabilize.trf"
 
 
 def _fake_resolve(name: str, env_var: str | None = None) -> str:
@@ -78,13 +86,6 @@ def _make_run_fail(code: ErrorCode, message: str) -> Any:
         )
 
     return _impl
-
-
-def _build_trf_binary(doubles: list[float]) -> bytes:
-    """Build a minimal valid TRF1 binary payload."""
-    header = b"TRF1"
-    body = struct.pack(f"<{len(doubles)}d", *doubles)
-    return header + body
 
 
 # ===========================================================================
@@ -618,105 +619,166 @@ class TestTrfNotGenerated:
 
 
 # ===========================================================================
-# (7) _estimate_severity unit tests
+# (7) _estimate_severity — real fixture-driven tests (AC-1 / AC-2 / regression)
 # ===========================================================================
 
 
-class TestEstimateSeverity:
-    """_estimate_severity: TRF1 binary -> 0.0-1.0, or None on parse failure (§4-C)."""
+class TestEstimateSeverityFixtures:
+    """_estimate_severity with real TRF1 fixture files (offline unit test, no ffmpeg).
 
-    def test_valid_trf_returns_float_in_range(self, tmp_path: Path) -> None:
-        """Valid TRF1 + finite doubles must return a float in [0.0, 1.0]."""
+    Fixture files are committed to tests/fixtures/:
+      shaky.stabilize.trf — high-motion source, 14 KB, real TRF1 output.
+      calm.stabilize.trf  — low-motion source,  28 KB, real TRF1 output.
+
+    These tests exercise the overflow-safe computation path.  The old
+    implementation summed raw IEEE-754 doubles naively; when doubles encoded
+    mis-read int32 values they were astronomically large (≈ 1.7e308) and
+    sum() overflowed to inf → severity = inf/30.0 = inf → not isfinite()
+    guard → None.  The tests below nail that regression.
+    """
+
+    def test_shaky_trf_returns_nonnone_float_in_range(self) -> None:
+        """AC-1: shaky.stabilize.trf must return a non-None float in [0.0, 1.0].
+
+        Fails with the old implementation (sum overflow → inf → None).
+        """
         from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
             _estimate_severity,
         )
 
-        trf = tmp_path / "test.stabilize.trf"
-        # Use doubles around 15.0 (below _NORM_PX=30.0) -> severity ~ 0.5
-        trf.write_bytes(_build_trf_binary([10.0, 15.0, 20.0, 10.0]))
-        result = _estimate_severity(trf)
-        assert result is not None
-        assert 0.0 <= result <= 1.0
+        result = _estimate_severity(_SHAKY_TRF)
+        assert result is not None, (
+            "shaky.stabilize.trf returned None — overflow-to-inf regression detected "
+            "(large doubles: sum() overflows to inf → isfinite guard → None)"
+        )
+        assert 0.0 <= result <= 1.0, f"severity out of range: {result}"
+
+    def test_calm_trf_returns_nonnone_float_in_range(self) -> None:
+        """AC-1: calm.stabilize.trf must return a non-None float in [0.0, 1.0].
+
+        Fails with the old implementation (sum overflow → inf → None).
+        """
+        from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
+            _estimate_severity,
+        )
+
+        result = _estimate_severity(_CALM_TRF)
+        assert result is not None, (
+            "calm.stabilize.trf returned None — overflow-to-inf regression detected "
+            "(large doubles: sum() overflows to inf → isfinite guard → None)"
+        )
+        assert 0.0 <= result <= 1.0, f"severity out of range: {result}"
+
+    def test_calm_severity_less_than_shaky(self) -> None:
+        """AC-2: calm fixture must score strictly lower severity than shaky fixture.
+
+        Ordering property: low-motion source < high-motion source.
+        Fails with the old implementation because both return None.
+        """
+        from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
+            _estimate_severity,
+        )
+
+        calm = _estimate_severity(_CALM_TRF)
+        shaky = _estimate_severity(_SHAKY_TRF)
+        assert calm is not None and shaky is not None, (
+            f"prerequisite failed: calm={calm}, shaky={shaky} — both must be non-None"
+        )
+        assert calm < shaky, (
+            f"expected calm ({calm:.4f}) < shaky ({shaky:.4f}) — ordering violated"
+        )
+
+    def test_real_trf_not_none_overflow_regression(self) -> None:
+        """Regression guard: both real .trf files must return a value, not None.
+
+        Old bug: large int32-reinterpreted doubles (≈ 1.7e308 each) caused
+        sum(finite_abs) to overflow to inf.  severity = inf / 30.0 = inf.
+        Then `if not math.isfinite(severity): return None` returned None even
+        though the file was structurally valid.  This test pins that regression
+        so it is detected immediately if the overflow-safe fix is reverted.
+        """
+        from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
+            _estimate_severity,
+        )
+
+        for trf_path in (_SHAKY_TRF, _CALM_TRF):
+            result = _estimate_severity(trf_path)
+            assert result is not None, (
+                f"{trf_path.name} returned None — "
+                "large-double sum-overflow regression re-introduced"
+            )
+
+
+# ===========================================================================
+# (7b) _estimate_severity — graceful handling of bad / adversarial inputs (NF-2)
+# ===========================================================================
+
+
+class TestEstimateSeverityGraceful:
+    """_estimate_severity must return None (never raise) on corrupt / unknown inputs.
+
+    These tests use synthetic byte sequences — real fixtures are not required
+    because the inputs represent conditions that real vidstabdetect would never
+    produce (wrong magic, truncated body, oversized file).
+    """
 
     def test_magic_mismatch_returns_none(self, tmp_path: Path) -> None:
-        """Wrong magic bytes must return None."""
+        """Wrong magic bytes must return None without raising (unknown format)."""
         from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
             _estimate_severity,
         )
 
-        trf = tmp_path / "bad.stabilize.trf"
-        trf.write_bytes(b"BAAD" + struct.pack("<4d", 1.0, 2.0, 3.0, 4.0))
+        trf = tmp_path / "bad.trf"
+        trf.write_bytes(b"BAAD" + b"\x00" * 8)
         assert _estimate_severity(trf) is None
 
-    def test_zero_doubles_returns_none(self, tmp_path: Path) -> None:
-        """TRF1 magic with no doubles (empty body) must return None."""
+    def test_future_magic_returns_none(self, tmp_path: Path) -> None:
+        """Future / unknown magic (e.g. TRF2) must return None (forward-compat, NF-2)."""
         from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
             _estimate_severity,
         )
 
-        trf = tmp_path / "empty.stabilize.trf"
+        trf = tmp_path / "future.trf"
+        trf.write_bytes(b"TRF2" + b"\x00" * 8)
+        assert _estimate_severity(trf) is None
+
+    def test_truncated_body_returns_none(self, tmp_path: Path) -> None:
+        """TRF1 with body shorter than one double (< 8 bytes) must return None."""
+        from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
+            _estimate_severity,
+        )
+
+        trf = tmp_path / "truncated.trf"
+        trf.write_bytes(b"TRF1" + b"\xde\xad\xbe")  # 3-byte body: n = 3 // 8 = 0
+        assert _estimate_severity(trf) is None
+
+    def test_empty_body_returns_none(self, tmp_path: Path) -> None:
+        """TRF1 magic with no body (zero doubles) must return None."""
+        from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
+            _estimate_severity,
+        )
+
+        trf = tmp_path / "empty.trf"
         trf.write_bytes(b"TRF1")
         assert _estimate_severity(trf) is None
 
-    def test_all_nan_returns_none(self, tmp_path: Path) -> None:
-        """TRF1 with all NaN doubles must return None (no finite values)."""
-        import math
+    def test_oversized_file_returns_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """File exceeding _TRF_MAX_BYTES must return None, not raise (OOM guard, SR-MEM-001).
 
+        _TRF_MAX_BYTES is patched to 4 so a 12-byte file triggers the guard
+        without allocating 100 MB in the test suite.
+        """
+        import clipwright_stabilize.analyze as _analyze_mod
         from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
             _estimate_severity,
         )
 
-        trf = tmp_path / "nan.stabilize.trf"
-        trf.write_bytes(_build_trf_binary([math.nan, math.nan, math.nan]))
+        monkeypatch.setattr(_analyze_mod, "_TRF_MAX_BYTES", 4)
+        trf = tmp_path / "oversized.trf"
+        trf.write_bytes(b"TRF1" + b"\x00" * 8)  # 12 bytes > patched limit of 4
         assert _estimate_severity(trf) is None
-
-    def test_all_inf_returns_none(self, tmp_path: Path) -> None:
-        """TRF1 with all inf doubles must return None (no finite values)."""
-        import math
-
-        from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
-            _estimate_severity,
-        )
-
-        trf = tmp_path / "inf.stabilize.trf"
-        trf.write_bytes(_build_trf_binary([math.inf, -math.inf]))
-        assert _estimate_severity(trf) is None
-
-    def test_broken_bytes_returns_none(self, tmp_path: Path) -> None:
-        """TRF1 with non-alignable body bytes must return None (struct error)."""
-        from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
-            _estimate_severity,
-        )
-
-        trf = tmp_path / "broken.stabilize.trf"
-        # 3 bytes body is not aligned to 8 bytes -> zero doubles -> None
-        trf.write_bytes(b"TRF1" + b"\x01\x02\x03")
-        assert _estimate_severity(trf) is None
-
-    def test_large_doubles_clamp_to_one(self, tmp_path: Path) -> None:
-        """Very large doubles must clamp severity to 1.0 (not exceed 1.0)."""
-        from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
-            _estimate_severity,
-        )
-
-        trf = tmp_path / "large.stabilize.trf"
-        # Very large values -> mean_abs >> _NORM_PX -> severity should clamp to 1.0
-        trf.write_bytes(_build_trf_binary([1e9, 2e9, 3e9]))
-        result = _estimate_severity(trf)
-        assert result is not None
-        assert result == pytest.approx(1.0)
-
-    def test_zero_values_give_near_zero_severity(self, tmp_path: Path) -> None:
-        """All-zero doubles must give severity near 0.0."""
-        from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
-            _estimate_severity,
-        )
-
-        trf = tmp_path / "zero.stabilize.trf"
-        trf.write_bytes(_build_trf_binary([0.0, 0.0, 0.0]))
-        result = _estimate_severity(trf)
-        assert result is not None
-        assert result == pytest.approx(0.0)
 
 
 class TestSeverityNoneWarning:

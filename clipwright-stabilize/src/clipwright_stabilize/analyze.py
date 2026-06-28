@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 import re
+import statistics
 import struct
 from pathlib import Path
 from typing import Any
@@ -53,15 +54,26 @@ _TRF_STEM_SANITIZE_RE = re.compile(r"[^A-Za-z0-9\-_]")
 def _estimate_severity(trf_path: Path) -> float | None:
     """Best-effort severity in 0.0-1.0 from a binary TRF1 file.
 
-    The .trf body contains a TRF1 magic followed by IEEE-754 doubles describing
-    per-frame transforms (translation x/y, rotation, zoom). We scan all
-    little-endian doubles, take the mean absolute value of finite doubles,
-    and normalise by _NORM_PX (heuristic / pinned constant — F-2/F-3).
-    Any parse anomaly (magic mismatch, empty body, all non-finite, struct error,
-    OSError) returns None (render does not use severity).
+    Parses the TRF1 binary format produced by ffmpeg vidstabdetect (ADR-D3-1).
+    Layout (empirically verified against real vidstabdetect output):
+
+    - Global header: TRF1 magic (4 B) + 3×int32 (12 B) + double (8 B) = 24 B
+    - Per-frame records: frame_num (int32) + count (int32) + count × LocalMotion
+    - LocalMotion (26 B, packed — no alignment padding):
+        int16 vx, vy         — Euclidean displacement components in pixels
+        int16 fx, fy, fsize  — measurement field position/size (unused here)
+        double contrast, double match  — quality metrics (unused here)
+
+    Severity = statistics.fmean of per-frame mean Euclidean displacement,
+    normalised by _NORM_PX and clamped to [0.0, 1.0] (ADR-D3-2 / FR-2).
+
+    Replaces the old flat-double scan that misread int32 header/field bytes as
+    IEEE-754 doubles (~1e308 each), causing sum() overflow to inf → None.
+
+    Any parse error or arithmetic anomaly returns None (best-effort, F-2/F-3).
 
     Args:
-        trf_path: Path to the .trf binary file.
+        trf_path: Path to the .trf binary file produced by vidstabdetect.
 
     Returns:
         Severity in [0.0, 1.0], or None when the file cannot be parsed.
@@ -72,33 +84,59 @@ def _estimate_severity(trf_path: Path) -> float | None:
         return None
 
     if len(blob) > _TRF_MAX_BYTES:
-        return None  # best-effort; oversized .trf treated as unparseable
+        return None  # best-effort; oversized .trf treated as unparseable (SR-MEM-001)
 
     if not blob.startswith(_TRF_MAGIC):
         return None
 
-    body = blob[len(_TRF_MAGIC) :]
-    n = len(body) // 8
-    if n == 0:
+    # TRF1 header = 24 bytes (magic + 3×int32 + double).
+    # Per-frame prefix = 8 bytes (frame_num + count, each int32).
+    # LocalMotion = 26 bytes (5×int16 + 2×double, packed).
+    _HDR = 24
+    _PFX_FMT = "<2i"  # frame_num, count_of_lms
+    _PFX_SZ = 8
+    _VEC_FMT = "<2h"  # vx, vy — first 4 bytes of each LocalMotion
+    _LM_SZ = 26
+
+    if len(blob) < _HDR:
         return None
 
     try:
-        unpacked = struct.unpack_from(f"<{n}d", body, 0)
-    except struct.error:
-        return None
+        pos = _HDR
+        frame_disps: list[float] = []
 
-    finite = [abs(v) for v in unpacked if math.isfinite(v)]
-    if not finite:
-        return None
+        while pos + _PFX_SZ <= len(blob):
+            _, count = struct.unpack_from(_PFX_FMT, blob, pos)
+            pos += _PFX_SZ
 
-    mean_abs: float = sum(finite) / len(finite)
-    # Normalise mean pixel displacement to 0..1 (_NORM_PX is a pinned heuristic
-    # constant; see ADR-ST-3). Values above _NORM_PX clamp to 1.0.
-    severity: float = mean_abs / _NORM_PX
-    if not math.isfinite(severity):
-        return None
+            if count < 0:
+                return None  # corrupt: negative LM count
 
-    return max(0.0, min(1.0, severity))
+            lm_disps: list[float] = []
+            for _ in range(count):
+                if pos + _LM_SZ > len(blob):
+                    break  # truncated frame — accept partial
+                vx, vy = struct.unpack_from(_VEC_FMT, blob, pos)
+                lm_disps.append(math.hypot(vx, vy))
+                pos += _LM_SZ
+
+            if lm_disps:
+                frame_disps.append(statistics.fmean(lm_disps))
+
+        if not frame_disps:
+            return None
+
+        mean_disp = statistics.fmean(frame_disps)
+        # Normalise to [0, 1]; values at or above _NORM_PX pixels clamp to 1.0.
+        severity = mean_disp / _NORM_PX
+        if not math.isfinite(severity):
+            return None
+        return max(0.0, min(1.0, severity))
+
+    except Exception:  # broad catch is intentional: corrupt TRF1 must not propagate
+        # struct.error, OverflowError, MemoryError, or arithmetic failures on
+        # adversarial input all return None (best-effort severity, F-2/F-3).
+        return None
 
 
 def run_vidstabdetect(
