@@ -46,7 +46,9 @@ class StabilizeDirective(BaseModel):
     version: Annotated[str, Field(max_length=64)]
     kind: Literal["stabilize"]
     trf_path: str  # absolute path (record only; render splits to dir/basename)
-    severity: float | None = None  # 0.0-1.0 best-effort, None when unparseable
+    # ge/le constraints reject out-of-range values when render model_validates from
+    # external OTIO (SR-NEW).  _estimate_severity always clamps to [0.0, 1.0] itself.
+    severity: Annotated[float, Field(ge=0.0, le=1.0)] | None = None
     recommendation: Literal["skip", "apply"] | None = (
         None  # advisory; None = not computed
     )

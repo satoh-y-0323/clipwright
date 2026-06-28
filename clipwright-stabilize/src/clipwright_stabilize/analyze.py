@@ -46,6 +46,26 @@ _UNSUPPORTED_RE = re.compile(r"Unknown filter|No such filter", re.IGNORECASE)
 # Files larger than this are treated as unparseable (best-effort, return None).
 _TRF_MAX_BYTES: int = 100 * 1024 * 1024  # 100 MB
 
+# TRF1 per-frame header and LocalMotion layout constants (empirically verified).
+# Global header: TRF1 magic (4 B) + 3×int32 (12 B) + double (8 B) = 24 B total.
+# Per-frame prefix: frame_num (int32) + count_of_lms (int32) = 8 B.
+# LocalMotion (26 B, packed — no alignment padding):
+#   int16 vx, vy (Euclidean displacement), int16 fx, fy, fsize (field position/size),
+#   double contrast, double match (quality metrics).
+_HDR: int = 24  # global header size in bytes
+_PFX_FMT: str = "<2i"  # struct format for frame prefix (frame_num, count)
+_PFX_SZ: int = 8  # frame prefix size in bytes
+_VEC_FMT: str = "<2h"  # struct format for vx/vy (first 4 B of LocalMotion)
+_LM_SZ: int = 26  # full LocalMotion size in bytes
+
+# Maximum LocalMotion entries per frame accepted by _estimate_severity (SR-MEM-001).
+# A real vidstabdetect output on a 4K frame with accuracy=15 produces at most a few
+# thousand LMs.  Values above this limit indicate corrupt data and trigger a
+# best-effort return None to avoid MemoryError from range(count) allocation.
+_MAX_LM_PER_FRAME: int = (
+    1_000_000  # 1 million LMs per frame far exceeds any real output
+)
+
 # Sanitise filtergraph-unsafe characters from a trf stem (SR-INJ-002).
 # vid.stab result=/input= cannot be safely escaped with backslash sequences;
 # instead we replace any character that is not alphanumeric, '-', or '_' with '_'.
@@ -102,15 +122,6 @@ def _estimate_severity(trf_path: Path) -> float | None:
     if not blob.startswith(_TRF_MAGIC):
         return None
 
-    # TRF1 header = 24 bytes (magic + 3×int32 + double).
-    # Per-frame prefix = 8 bytes (frame_num + count, each int32).
-    # LocalMotion = 26 bytes (5×int16 + 2×double, packed).
-    _HDR = 24
-    _PFX_FMT = "<2i"  # frame_num, count_of_lms
-    _PFX_SZ = 8
-    _VEC_FMT = "<2h"  # vx, vy — first 4 bytes of each LocalMotion
-    _LM_SZ = 26
-
     if len(blob) < _HDR:
         return None
 
@@ -124,6 +135,8 @@ def _estimate_severity(trf_path: Path) -> float | None:
 
             if count < 0:
                 return None  # corrupt: negative LM count
+            if count > _MAX_LM_PER_FRAME:
+                return None  # best-effort OOM guard: realistic upper bound exceeded
 
             lm_disps: list[float] = []
             for _ in range(count):
@@ -152,7 +165,7 @@ def _estimate_severity(trf_path: Path) -> float | None:
         return None
 
 
-def _recommend(severity: float | None) -> Literal["skip", "apply"]:
+def recommend(severity: float | None) -> Literal["skip", "apply"]:
     """Advisory recommendation for whether to apply shake stabilization.
 
     Uses _SEVERITY_APPLY_THRESHOLD as the decision boundary.  Returns 'apply'
@@ -267,11 +280,13 @@ def run_vidstabdetect(
 
     warnings: list[str] = []
     severity = _estimate_severity(trf_abs)
-    recommendation = _recommend(severity)
+    recommendation = recommend(severity)
     if severity is None:
+        # Consolidated warning: severity null + recommendation defaulted (CR-M-001).
+        # stabilize.py must not add a duplicate warning for this condition.
         warnings.append(
             "Could not estimate shake severity from the .trf file;"
-            " severity recorded as null; recommendation defaulted to apply."
+            " severity recorded as null; recommendation defaulted to 'apply'."
         )
 
     return {

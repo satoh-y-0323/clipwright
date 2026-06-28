@@ -83,12 +83,20 @@ def _fake_analyze_result(
 
 
 def _fake_analyze_none_severity(trf_abs: Path) -> dict[str, Any]:
-    """Fake analyze result with severity=None and a warning."""
+    """Fake analyze result with severity=None and a consolidated warning.
+
+    Mirrors the real run_vidstabdetect output (CR-M-001): severity null and
+    recommendation defaulted to 'apply' are reported in a single warning entry.
+    stabilize.py must not add a duplicate warning for the same condition.
+    """
     trf_abs.write_bytes(b"TRF1dummy")
     return {
         "trf_path": str(trf_abs),
         "severity": None,
-        "warnings": ["Could not estimate shake severity from the .trf file."],
+        "warnings": [
+            "Could not estimate shake severity from the .trf file;"
+            " severity recorded as null; recommendation defaulted to 'apply'."
+        ],
     }
 
 

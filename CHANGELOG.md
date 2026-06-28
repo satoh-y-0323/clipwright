@@ -16,9 +16,10 @@ calling agent can decide whether stabilisation is worth applying.
 ### Fixed (`clipwright-stabilize` v0.4.0)
 
 - **Severity estimation now parses real `.trf` files correctly (TRF1 structural fix).**
-  The flat-double overflow in the TRF1 binary parser caused `abs_max` to remain `0.0` on
-  all real vidstabdetect output, returning `severity=null` unconditionally. The parser now
-  correctly reads the packed flat-double fields for each frame entry, yielding a valid
+  The old flat-double scan misread int32 header and field bytes as IEEE-754 doubles
+  (~1e308 each), so `sum()` overflowed to `inf` and the `isfinite` guard returned `null`
+  unconditionally on all real vidstabdetect output. The parser now correctly reads the
+  packed TRF1 binary layout (per-frame prefix + LocalMotion structs), yielding a valid
   severity score from actual footage.
 - **Median aggregation is robust to multi-shot scene-cut outliers.** When a `.trf` file
   covers footage with hard scene cuts, the inter-frame displacement spikes at each cut

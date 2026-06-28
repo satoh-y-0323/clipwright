@@ -46,7 +46,7 @@ from clipwright.pathpolicy import (
 from clipwright.schemas import RationalTimeModel, ToolResult
 
 import clipwright_stabilize
-from clipwright_stabilize.analyze import _recommend, run_vidstabdetect
+from clipwright_stabilize.analyze import recommend, run_vidstabdetect
 from clipwright_stabilize.schemas import DetectShakeOptions, StabilizeDirective
 
 
@@ -73,6 +73,18 @@ def detect_shake(
         return _detect_shake_inner(media, output, options, timeline)
     except ClipwrightError as exc:
         return error_result(exc.code, exc.message, exc.hint)
+    except Exception:
+        # Catch unexpected exceptions (e.g. OTIOError from load_timeline/save_timeline)
+        # that are not ClipwrightError, to prevent raw tracebacks with absolute paths
+        # from reaching the MCP caller (CWE-209).  Sanitised message only (SR-R-001).
+        return error_result(
+            ErrorCode.INTERNAL,
+            "Shake detection failed due to an internal error.",
+            hint=(
+                "Please report this with reproduction steps: "
+                "media path, output path, and the exact error."
+            ),
+        )
 
 
 def _detect_shake_inner(
@@ -147,20 +159,15 @@ def _detect_shake_inner(
     severity: float | None = analysis["severity"]
 
     # Compute recommendation: use pre-computed value from analysis when available
-    # (real run_vidstabdetect path); fall back to _recommend when mocked/absent.
-    _pre_rec: str | None = analysis.get("recommendation")
+    # (real run_vidstabdetect path); fall back to recommend() when mocked/absent.
+    # run_vidstabdetect already adds a consolidated warning when severity is None
+    # (CR-M-001), so no additional warning is appended here.
+    precomputed_recommendation: str | None = analysis.get("recommendation")
     recommendation: Literal["skip", "apply"] = (
-        _pre_rec  # type: ignore[assignment]
-        if _pre_rec in ("skip", "apply")
-        else _recommend(severity)
+        precomputed_recommendation  # type: ignore[assignment]
+        if precomputed_recommendation in ("skip", "apply")
+        else recommend(severity)
     )
-
-    # severity=None: add warning that recommendation defaulted to 'apply' (AC-5).
-    if severity is None:
-        warnings.append(
-            "Recommendation defaulted to 'apply' since shake severity"
-            " could not be estimated."
-        )
 
     # --- 5. Build StabilizeDirective and annotate timeline metadata ---
     # severity=None is allowed — directive is always written when trf is generated.

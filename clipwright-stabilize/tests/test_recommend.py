@@ -1,10 +1,10 @@
-"""test_recommend.py — Tests for clipwright_stabilize.analyze._recommend.
+"""testrecommend.py — Tests for clipwright_stabilize.analyze.recommend.
 
 Verification points:
-  (1) _recommend(None) -> "apply" (AC-5: safe-default when severity is unknown)
+  (1) recommend(None) -> "apply" (AC-5: safe-default when severity is unknown)
   (2) calm fixture severity (low-motion, ≈0.060) -> "skip" (AC-3)
   (3) shaky fixture severity (high-motion, ≈0.106) -> "apply" (AC-4)
-  (4) _recommend always returns a known Literal: "skip" or "apply"
+  (4) recommend always returns a known Literal: "skip" or "apply"
 
 Threshold design:
   Tests express behaviour by fixture property, not by hardcoding the threshold
@@ -32,15 +32,15 @@ _CALM_TRF = _FIXTURES_DIR / "calm.stabilize.trf"
 
 
 # ===========================================================================
-# (1) _recommend(None) -> "apply" (AC-5: safe-default)
+# (1) recommend(None) -> "apply" (AC-5: safe-default)
 # ===========================================================================
 
 
 class TestRecommendNone:
-    """_recommend(None) must return 'apply' as the safe-default (AC-5)."""
+    """recommend(None) must return 'apply' as the safe-default (AC-5)."""
 
-    def test_recommend_none_returns_apply(self) -> None:
-        """_recommend(None) must return 'apply' when severity is unavailable (AC-5).
+    def testrecommend_none_returns_apply(self) -> None:
+        """recommend(None) must return 'apply' when severity is unavailable (AC-5).
 
         Severity may be None when the .trf binary cannot be parsed (best-effort
         estimation).  The safe-default is to recommend stabilization rather than
@@ -48,12 +48,12 @@ class TestRecommendNone:
         a no-op apply on stable footage.
         """
         from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
-            _recommend,
+            recommend,
         )
 
-        result = _recommend(None)
+        result = recommend(None)
         assert result == "apply", (
-            f"_recommend(None) must return 'apply' as safe-default, got {result!r}"
+            f"recommend(None) must return 'apply' as safe-default, got {result!r}"
         )
 
 
@@ -66,7 +66,7 @@ class TestRecommendCalmFixture:
     """Calm fixture severity (low-motion) must map to 'skip' (AC-3)."""
 
     def test_calm_fixture_severity_gives_skip(self) -> None:
-        """_estimate_severity(calm.trf) then _recommend must return 'skip' (AC-3).
+        """_estimate_severity(calm.trf) then recommend must return 'skip' (AC-3).
 
         The calm fixture was recorded from a low-motion scene (severity ≈ 0.060).
         Its severity must be below _SEVERITY_APPLY_THRESHOLD so that stabilization
@@ -75,7 +75,7 @@ class TestRecommendCalmFixture:
         """
         from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
             _estimate_severity,
-            _recommend,
+            recommend,
         )
 
         calm_severity = _estimate_severity(_CALM_TRF)
@@ -84,7 +84,7 @@ class TestRecommendCalmFixture:
             "(W1 regression guard). Run test_analyze.py::TestEstimateSeverityFixtures first."
         )
 
-        result = _recommend(calm_severity)
+        result = recommend(calm_severity)
         assert result == "skip", (
             f"calm fixture severity={calm_severity:.4f} must map to 'skip', "
             f"got {result!r}.  Verify _SEVERITY_APPLY_THRESHOLD > {calm_severity:.4f}."
@@ -100,7 +100,7 @@ class TestRecommendShakyFixture:
     """Shaky fixture severity (high-motion) must map to 'apply' (AC-4)."""
 
     def test_shaky_fixture_severity_gives_apply(self) -> None:
-        """_estimate_severity(shaky.trf) then _recommend must return 'apply' (AC-4).
+        """_estimate_severity(shaky.trf) then recommend must return 'apply' (AC-4).
 
         The shaky fixture was recorded from a high-motion scene (severity ≈ 0.106).
         Its severity must be at or above _SEVERITY_APPLY_THRESHOLD so that
@@ -109,7 +109,7 @@ class TestRecommendShakyFixture:
         """
         from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
             _estimate_severity,
-            _recommend,
+            recommend,
         )
 
         shaky_severity = _estimate_severity(_SHAKY_TRF)
@@ -118,7 +118,7 @@ class TestRecommendShakyFixture:
             "(W1 regression guard). Run test_analyze.py::TestEstimateSeverityFixtures first."
         )
 
-        result = _recommend(shaky_severity)
+        result = recommend(shaky_severity)
         assert result == "apply", (
             f"shaky fixture severity={shaky_severity:.4f} must map to 'apply', "
             f"got {result!r}.  Verify _SEVERITY_APPLY_THRESHOLD <= {shaky_severity:.4f}."
@@ -126,35 +126,35 @@ class TestRecommendShakyFixture:
 
 
 # ===========================================================================
-# (4) _recommend always returns a known Literal
+# (4) recommend always returns a known Literal
 # ===========================================================================
 
 
 class TestRecommendReturnType:
-    """_recommend must always return exactly 'skip' or 'apply' for any input."""
+    """recommend must always return exactly 'skip' or 'apply' for any input."""
 
     @pytest.mark.parametrize(
         "severity",
         [0.0, 0.01, 0.05, 0.1, 0.5, 0.9, 1.0],
     )
-    def test_recommend_float_returns_valid_literal(self, severity: float) -> None:
+    def testrecommend_float_returns_valid_literal(self, severity: float) -> None:
         """Any float in [0.0, 1.0] must return exactly 'skip' or 'apply'."""
         from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
-            _recommend,
+            recommend,
         )
 
-        result = _recommend(severity)
+        result = recommend(severity)
         assert result in ("skip", "apply"), (
-            f"_recommend({severity}) must return 'skip' or 'apply', got {result!r}"
+            f"recommend({severity}) must return 'skip' or 'apply', got {result!r}"
         )
 
-    def test_recommend_none_returns_valid_literal(self) -> None:
+    def testrecommend_none_returns_valid_literal(self) -> None:
         """None input must also return a valid Literal ('skip' or 'apply')."""
         from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
-            _recommend,
+            recommend,
         )
 
-        result = _recommend(None)
+        result = recommend(None)
         assert result in ("skip", "apply"), (
-            f"_recommend(None) must return 'skip' or 'apply', got {result!r}"
+            f"recommend(None) must return 'skip' or 'apply', got {result!r}"
         )

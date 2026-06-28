@@ -780,6 +780,29 @@ class TestEstimateSeverityGraceful:
         trf.write_bytes(b"TRF1" + b"\x00" * 8)  # 12 bytes > patched limit of 4
         assert _estimate_severity(trf) is None
 
+    def test_excessive_lm_count_per_frame_returns_none(self, tmp_path: Path) -> None:
+        """Frame with count > _MAX_LM_PER_FRAME must return None (OOM guard, SR-MEM-001).
+
+        Synthetic TRF1 with count = 2**31-1 (max signed int32) — far beyond any
+        realistic vidstabdetect output — must trigger the per-frame guard and return
+        None without attempting to allocate memory for range(count) LM entries.
+        """
+        from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
+            _estimate_severity,
+        )
+
+        # Build a minimal TRF1 binary with an absurd LM count in the first frame.
+        # Layout: magic(4) + 3×int32(12) + double(8) = 24 B header,
+        #         then frame_num(int32=0) + count(int32=2**31-1) = 8 B.
+        header = b"TRF1" + struct.pack("<3i", 0, 0, 0) + struct.pack("<d", 0.0)
+        frame_prefix = struct.pack("<2i", 0, 2**31 - 1)
+        trf = tmp_path / "huge_count.trf"
+        trf.write_bytes(header + frame_prefix)
+
+        assert _estimate_severity(trf) is None, (
+            "count=2**31-1 per frame must return None (OOM guard), not raise"
+        )
+
 
 class TestSeverityNoneWarning:
     """When severity=None, run_vidstabdetect must add a warning entry."""

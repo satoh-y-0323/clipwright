@@ -105,7 +105,13 @@ _STATIC_LUMA_EXPR: str = "128+64*sin(X/8+Y/5)+48*cos(X/12-Y/9)"
 
 
 def _has_vidstab(ffmpeg: str) -> bool:
-    """Return True when vidstabdetect is compiled into this ffmpeg build."""
+    """Return True when vidstabdetect is compiled into this ffmpeg build.
+
+    Uses subprocess directly rather than process.run because this function reads
+    stdout to search for filter names, whereas process.run captures only stderr
+    for ClipwrightError diagnosis.  Direct control over encoding= / errors= /
+    timeout= is also needed for cross-platform portability in the test harness.
+    """
     try:
         result = subprocess.run(
             [ffmpeg, "-hide_banner", "-filters"],
@@ -134,6 +140,10 @@ def _make_high_shake_video(ffmpeg: str, output: Path) -> None:
 
     This induces global displacement well above _SEVERITY_APPLY_THRESHOLD,
     so vidstabdetect classifies the footage as requiring stabilisation.
+
+    Uses subprocess directly (not process.run) because the test harness needs
+    explicit control over encoding= / errors= / timeout= parameters and asserts
+    on returncode rather than converting failures to ClipwrightError.
     """
     lavfi = f"color=black:size={_SRC_W}x{_SRC_H}:rate={_SRC_FPS}:duration={_SRC_DUR}"
     crop_x = f"{_CX}+{_JITTER_AMP}*sin(2*PI*{_JITTER_FX}*t)"
@@ -179,6 +189,10 @@ def _make_calm_video(ffmpeg: str, output: Path) -> None:
     crop origin is fixed at (_CX, _CY) — no camera motion is induced.
     Since source content is identical across all frames, vidstabdetect should
     report near-zero displacement -> severity < threshold -> recommendation='skip'.
+
+    Uses subprocess directly (not process.run) — same rationale as
+    _make_high_shake_video: explicit encoding/errors/timeout control and
+    returncode assertion rather than ClipwrightError conversion.
     """
     lavfi = f"color=black:size={_SRC_W}x{_SRC_H}:rate={_SRC_FPS}:duration={_SRC_DUR}"
     vf = (
