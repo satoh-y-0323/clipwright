@@ -1,3 +1,8 @@
 # Keep shell scripts LF so they remain executable under git-bash on Windows
 # (core.autocrlf would otherwise rewrite the shebang to CRLF and break them).
 *.sh text eol=lf
+
+# .trf transform files are real libvidstab output fixtures: binary TRF1 (Windows
+# Gyan ffmpeg) or text VID.STAB (Linux/macOS builds). Never apply EOL conversion
+# so they stay byte-exact to the real tool output across all platforms.
+*.trf -text
