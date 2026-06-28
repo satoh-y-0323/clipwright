@@ -90,7 +90,22 @@ source profile can catch — in-process and mocked tests passed for every path.
 
 ## Defects (found by the round-5 dogfood)
 
-### D1. Timeline-source match resolves a relative OTIO media reference against the **process CWD** (regression from spec4 #5)  *High*
+### D1. Timeline-source match resolves a relative OTIO media reference against the **process CWD** (regression from spec4 #5)  *High* — **RESOLVED**
+
+**Resolution (shipped — suite v0.26.0):** the per-tool B-4 match block (which
+resolved the stored relative `target_url` against the process CWD) was replaced in
+all four tools by a single shared core helper
+`clipwright.pathpolicy.check_timeline_source_matches(target_url, media_path, otio_dir)`
+that resolves a relative reference against the **OTIO file's directory**, not the
+CWD, before comparing (reusing `_normalize_sep` + `_canon`). Boundary/symlink
+checks stay delegated to `check_media_ref` (called first); the new helper does the
+equality check only, and the error message is canonical across all four tools with
+no filename interpolation (CWE-209). Verified by a real-stdio-MCP e2e that runs
+`detect_color → detect_loudness → detect_noise → detect_shake → render` from a CWD
+different from the OTIO directory (14/14 assertions, including a negative control
+that a genuinely different media is still rejected with `INVALID_INPUT`). Ships as
+`clipwright` 0.5.0 / `clipwright-color` 0.2.1 / `clipwright-loudness` 0.3.1 /
+`clipwright-noise` 0.3.1 / `clipwright-stabilize` 0.4.1. CI green on 3 OSes.
 
 **Symptom**
 The canonical "stack detect annotations onto one timeline" workflow —
@@ -717,11 +732,16 @@ directly for Latin captions).
 
 ## Priority summary
 
-1. **D1 — timeline-source match resolves a relative ref against CWD** (High):
-   breaks the multi-annotation timeline workflow across `color` / `loudness` /
-   `noise` / `stabilize`; regression from the spec4 #5 path-policy unification.
-   Contained fix: resolve `target_url` against the OTIO directory (ideally folded
-   into `clipwright.pathpolicy`).
+1. **D1 — timeline-source match resolves a relative ref against CWD** (High) —
+   **RESOLVED** (shipped — suite v0.26.0): broke the multi-annotation timeline
+   workflow across `color` / `loudness` / `noise` / `stabilize` (regression from the
+   spec4 #5 path-policy unification). Fixed by folding the per-tool B-4 match into a
+   shared core helper `clipwright.pathpolicy.check_timeline_source_matches` that
+   resolves the relative `target_url` against the OTIO directory (not the CWD);
+   boundary/symlink stays delegated to `check_media_ref`, error message canonical
+   across all four tools with no filename leak (CWE-209). Verified by a real-MCP e2e
+   running the detect chain → render from a CWD ≠ the OTIO directory (14/14). Ships
+   as core 0.5.0 / color 0.2.1 / loudness 0.3.1 / noise 0.3.1 / stabilize 0.4.1.
 2. **D6 + D3 — stabilize is unusable-by-default; needs a severity gate** (High,
    AI-usability) — **RESOLVED** (shipped — stabilize 0.4.0): D4 had fixed the
    apply-side *parameters*, but the real dogfood clip still looked bad *because it
