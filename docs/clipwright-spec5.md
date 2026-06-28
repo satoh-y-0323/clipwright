@@ -207,7 +207,7 @@ that every manifest path exists, for a non-multiple clip length.
 
 ---
 
-### D3. `clipwright-stabilize` severity is `null` on real handheld `.trf` data  *High (AI-usability)* — re-prioritised by D6
+### D3. `clipwright-stabilize` severity is `null` on real handheld `.trf` data  *High (AI-usability)* — **RESOLVED**
 
 **Symptom**
 `detect_shake` on the real handheld clip succeeded and wrote a valid binary
@@ -231,6 +231,36 @@ is the signal an agent needs to *decide whether to stabilise at all*. Without it
 agent stabilises footage that does not need it (the D6 over-stabilization judder), so
 fixing severity — and exposing a clear skip recommendation — is now the primary lever
 for making stabilize usable by an AI. See D6.
+
+**Resolution (shipped — stabilize 0.4.0)**
+The real root cause was a parser fault, not "certain captures". The estimator read
+the whole `.trf` body as a flat `float64` array; the structured binary records
+(`int32` headers / field values) were misread as ~1e308 doubles, so `sum()`
+overflowed to `inf` and the `isfinite` guard returned `None` — on **every** real
+binary `.trf`, not just multi-shot. The unit tests passed only because they fed a
+fabricated flat-double blob. Two things were fixed:
+
+1. **Correct structural parse + portable formats.** libvidstab serialises the `.trf`
+   in **two formats depending on the build**: a binary `TRF1` layout (the Gyan
+   Windows ffmpeg) and a **text `VID.STAB` format** (`Frame N (List M [(LM vx vy fx
+   fy size contrast match),…])` — Linux apt / macOS brew builds). `_estimate_severity`
+   now dispatches on the magic and parses both, extracting the per–local-motion
+   translation `(vx, vy)`. Real `.trf` fixtures for **both** formats (the binary one
+   from Windows, the text one generated in an Ubuntu 24.04 / libvidstab 1.1.0 Docker
+   container) are committed and pin the parser. This was caught by CI: the binary-only
+   first cut passed Windows/macOS but failed ubuntu (`severity=None`); the fix was
+   validated on real Linux via Docker before re-push.
+2. **Outlier-robust aggregation (median).** Severity is the **median** of per-frame
+   median translation magnitude, normalised by `_NORM_PX`. Median (not mean) is
+   essential because multi-shot footage injects huge apparent motion at scene cuts
+   (the real dogfood vlog peaks at ~109 px/frame, which dragged the *mean* to a
+   spurious 0.246 → "apply"); its *median* is 1.68 px → 0.033 → correctly **skip**.
+
+A `recommendation` field (`"skip"` / `"apply"`, advisory) was added to the
+`detect_shake` response and `StabilizeDirective` (threshold `_SEVERITY_APPLY_THRESHOLD
+= 0.08`, calibrated on real fixtures); `severity=null` still safe-defaults to `apply`
+with a warning, and the directive is always written so the **agent** makes the final
+call (detect/apply separation preserved). See D6.
 
 ---
 
@@ -372,7 +402,7 @@ depends on the raw message and the leak is path-only.
 
 ---
 
-### D6. Stabilize is unusable-by-default on low-motion footage — over-stabilization + no severity gate  *High (AI-usability)*  *(stabilize / next session)*
+### D6. Stabilize is unusable-by-default on low-motion footage — over-stabilization + no severity gate  *High (AI-usability)*  — **RESOLVED**
 
 **Symptom**
 After D4 (Option B) shipped, re-running the *same* real dogfood clip (`clip.mp4`,
@@ -425,11 +455,36 @@ agent *decide not to stabilise* such footage — i.e. a working severity signal
    `v0.24.0`, render 0.15.0 / stabilize 0.3.0) ships as-is or with the severity gate
    folded in.
 
-**Release status:** the `v0.24.0` tag (render 0.15.0 / stabilize 0.3.0) is **staged
-but NOT pushed** — version bumps + CHANGELOG are committed on `main` (CI green) and
-the §4 real-MCP e2e passes, but the tag push (PyPI publish) is held pending this
-finding. The D4 code already on `main` is a strict improvement and safe to keep; the
-hold is about whether stabilize is *good enough overall* to advertise as fixed.
+**Resolution (shipped — stabilize 0.4.0)**
+Both plan steps were executed via the standard C3 workflow. The fix is the one the
+decision called for — a working severity signal so the **agent** declines to
+stabilise footage that does not need it — not a parameter change to this clip:
+
+1. **D3 severity now works (and is the gate).** With the corrected, format-portable
+   parser and the **median** aggregation (see D3), the calm dogfood vlog measures
+   `severity = 0.033` → `recommendation = "skip"`; genuinely shaky footage measures
+   higher → `"apply"`. Crucially, the median makes this clip read as *low motion*
+   despite the scene-cut spikes that fooled the mean — exactly the "this footage does
+   not need stabilising" signal that was missing. The agent can now skip it.
+2. **D4 validated on footage that needs it.** A `@pytest.mark.integration` D6 test
+   stabilises synthetic high-shake footage and confirms stabilisation *reduces*
+   motion by re-running `vidstabdetect` on the **output**: residual severity drops
+   `0.427 → 0.167` (~61 %). (Inter-frame pixel diff is unusable here because `optzoom`
+   zoom-in and `unsharp` perturb every pixel; re-measuring residual shake is
+   zoom/sharpen-invariant.) The calm clip stays in the `skip` domain and is left
+   untouched. D4 is confirmed correct on its target domain; this clip was simply out
+   of domain, as the owner flagged.
+
+The bad experience ("stabilisation applied to footage that did not need it") is now
+prevented by construction: an AI reads `recommendation` and skips. No parameters were
+overfit to the dogfood clip.
+
+**Release status:** shipped as suite **v0.25.0** (stabilize 0.4.0 / render 0.15.0).
+The earlier `v0.24.0` tag was never pushed, so the suite version was rolled forward to
+v0.25.0 to bundle the D4 render fix (render 0.15.0) with the D3/D6 stabilize fix
+(stabilize 0.4.0) in a single PyPI publish. CI is green on all three OSes (the
+binary-only first cut failed ubuntu and was fixed — see D3), reviews are clean, and
+the §4 real-MCP e2e passes.
 
 ---
 
@@ -668,16 +723,22 @@ directly for Latin captions).
    Contained fix: resolve `target_url` against the OTIO directory (ideally folded
    into `clipwright.pathpolicy`).
 2. **D6 + D3 — stabilize is unusable-by-default; needs a severity gate** (High,
-   AI-usability) — **NEXT SESSION**: D4 fixed the apply-side *parameters*, but
-   re-running the real dogfood clip showed stabilisation still looks bad *because the
-   clip does not need stabilising* — a calm vlog, not action footage. Objective
-   measurement (`mpdecimate`: 1860→2214 unique frames; same 30 fps/2310 frames)
-   confirms the judder is over-stabilization of low-motion frames, which is footage-fit,
-   not a tunable bug. **Do not tune to this clip.** The fix is D3: make `detect_shake`
-   return a usable `severity` (+ skip recommendation) so the agent declines to
-   stabilise low-shake footage. Plan: (1) validate D4 on representative high-shake
-   footage (measure shake *reduction*), (2) fix D3 severity gating. Run via the
-   standard C3 workflow.
+   AI-usability) — **RESOLVED** (shipped — stabilize 0.4.0): D4 had fixed the
+   apply-side *parameters*, but the real dogfood clip still looked bad *because it
+   does not need stabilising* — a calm vlog, not action footage (over-stabilization
+   of low-motion frames; footage-fit, not a tunable bug — so we did **not** tune to
+   the clip). The AI-first fix is D3: `detect_shake` now returns a usable `severity`
+   plus a `recommendation` (`"skip"`/`"apply"`) so the agent itself declines to
+   stabilise low-shake footage. Root cause of the old `severity=null` was that
+   `_estimate_severity` read the whole `.trf` body as a flat `float64` array, so the
+   structured fields overflowed `sum()` to `inf` → non-finite → `None`. The parser
+   now dispatches on the `.trf` magic — binary `TRF1` (Windows Gyan ffmpeg) or text
+   `VID.STAB` (Linux/macOS builds) — and aggregates per-frame translation by
+   **median** (scene cuts inject ~109 px spikes that corrupt the mean). The directive
+   is always written (detect/apply separation; advisory only). Verified by re-running
+   `vidstabdetect` on stabilised output (residual severity 0.427→0.167) and real-MCP
+   e2e (severity non-null, recommendation, artifact paths exist); cross-platform
+   validated on real Linux libvidstab via Docker before push. CI green on 3 OSes.
 3. **D4 — stabilize apply pass ships degraded output** (High) — **RESOLVED**:
    shipped `vidstabtransform=...:smoothing=12:crop=black:optzoom=1,unsharp=5:5:0.8:3:3:0.4`
    plus `-threads 1` on stabilize renders only. Fixes all three apply-side complaints
@@ -686,9 +747,9 @@ directly for Latin captions).
    [vid.stab #144](https://github.com/georgmartius/vid.stab/issues/144) (frame-thread
    race corrupting B-frame refs → 0xC0000005); `-threads 1` (0/27, ~+4% cost) is the
    workaround and also clears the residual single-pass crash. Real ffmpeg e2e verifies
-   `ok`/artifact/`yuv420p` + a 15× crash-regression loop. Code on `main`; suite tag
-   `v0.24.0` (render 0.15.0 / stabilize 0.3.0) staged but **held** pending D6. Spun
-   off: vid.stab #144 upstream tracking and **D5**.
+   `ok`/artifact/`yuv420p` + a 15× crash-regression loop. Code on `main`; shipped
+   together with the D3/D6 severity gate as suite **v0.25.0** (render 0.15.0 /
+   stabilize 0.4.0). Spun off: vid.stab #144 upstream tracking and **D5**.
 4. **D2 — frames interval manifest overcounts vs fps-filter output** (Medium):
    manifest lists a non-existent final frame; extract interval frames per
    `compute_interval_timestamps` via `-ss` so manifest == disk (as scene mode does).
