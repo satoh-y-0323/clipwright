@@ -42,6 +42,7 @@ from clipwright.otio_utils import (
 from clipwright.pathpolicy import (
     check_media_ref,
     check_output_not_source,
+    check_timeline_source_matches,
     media_ref_for_otio,
 )
 from clipwright.schemas import RationalTimeModel, ToolResult
@@ -345,25 +346,6 @@ def _load_and_validate_timeline(
 
     # Validate target_url == media_path (B-4: resolve() normalization)
     if urls:
-        target_url = next(iter(urls))
-        try:
-            tl_source = Path(target_url).resolve()
-            media_resolved = media_path.resolve()
-        except OSError:
-            tl_source = Path(target_url).absolute()
-            media_resolved = media_path.absolute()
-
-        if tl_source != media_resolved:
-            raise ClipwrightError(
-                code=ErrorCode.INVALID_INPUT,
-                message=(
-                    f"Timeline source file does not match input media."
-                    f" timeline source: {Path(target_url).name}"
-                    f" / media: {media_path.name}"
-                ),
-                hint=(
-                    "Specify the same media file used when the timeline was created."
-                ),
-            )
+        check_timeline_source_matches(next(iter(urls)), media_path, tl_dir)
 
     return tl
