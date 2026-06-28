@@ -11,6 +11,10 @@ Tests the new behavior after pathpolicy migration (spec4 #5, DC-AS-004 / DC-AM-0
 TestCheckMediaRefNewPolicy.test_relative_traversal_in_timeline_rejected and
 TestOutputConflictPreserved are regression guards (expected to remain passing after
 implementation).
+
+TestCwdIndependentTimelineMatch (spec5 D1 regression):
+  - AC-1: relative source co-located with OTIO; CWD set outside otio_dir → ok=True.
+  - AC-2: relative source with different basename → ok=False / INVALID_INPUT.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import opentimelineio as otio
+import pytest
 from clipwright.errors import ErrorCode
 from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo
 
@@ -89,6 +94,37 @@ def _build_timeline_with_absolute_source(
     clip = otio.schema.Clip(
         name=media_abs.name,
         media_reference=otio.schema.ExternalReference(target_url=str(media_abs)),
+        source_range=src_range,
+    )
+    v1.append(clip)
+    return tl
+
+
+def _build_timeline_with_relative_source(
+    media_name: str,
+    *,
+    fps: float = FPS,
+) -> otio.schema.Timeline:
+    """Build a V1+A1 OTIO timeline with a relative POSIX source (basename only).
+
+    Mirrors the output of media_ref_for_otio() when media is co-located with the
+    OTIO file.  Used to reproduce the CWD-dependent resolve() bug (spec5 D1).
+    """
+    tl = otio.schema.Timeline(name="test")
+    for kind, name in (
+        (otio.schema.TrackKind.Video, "V1"),
+        (otio.schema.TrackKind.Audio, "A1"),
+    ):
+        tl.tracks.append(otio.schema.Track(name=name, kind=kind))
+
+    v1 = next(t for t in tl.tracks if t.kind == otio.schema.TrackKind.Video)
+    src_range = otio.opentime.TimeRange(
+        start_time=otio.opentime.RationalTime(0.0, fps),
+        duration=otio.opentime.RationalTime(300.0, fps),
+    )
+    clip = otio.schema.Clip(
+        name=media_name,
+        media_reference=otio.schema.ExternalReference(target_url=media_name),
         source_range=src_range,
     )
     v1.append(clip)
@@ -437,3 +473,125 @@ class TestOutputConflictPreserved:
             ErrorCode.INVALID_INPUT,
             ErrorCode.PATH_NOT_ALLOWED,
         ), f"output==timeline must be rejected. Got code: {result.error.code!r}"
+
+
+# ===========================================================================
+# spec5 D1: CWD-independent timeline source matching (regression guard)
+# ===========================================================================
+
+
+class TestCwdIndependentTimelineMatch:
+    """Regression guard for spec5 D1: relative source + CWD outside otio_dir.
+
+    Root cause: Path(target_url).resolve() in the B-4 block resolves a relative
+    target_url against CWD instead of the OTIO file's directory (tl_dir).
+    Fix: check_timeline_source_matches() joins relative target_url onto tl_dir
+    before comparison, making the check CWD-independent.
+
+    AC-1 is Red on the current HEAD (INVALID_INPUT is returned when CWD differs
+    from otio_dir).  AC-2 must return INVALID_INPUT both before and after the fix.
+    """
+
+    def test_ac1_relative_source_colocated_outside_cwd_succeeds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-1: relative source co-located with OTIO; CWD outside otio_dir → ok=True.
+
+        Current HEAD fails here because Path("video.mp4").resolve() resolves
+        relative to CWD (elsewhere), not to otio_dir, so the paths diverge and
+        INVALID_INPUT is raised.  After the fix this must return ok=True.
+        """
+        from clipwright_loudness.loudness import detect_loudness
+
+        otio_dir = tmp_path / "proj"
+        otio_dir.mkdir()
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+
+        media = otio_dir / "video.mp4"
+        media.write_bytes(b"dummy")
+
+        # Relative source = basename only, as media_ref_for_otio() would write
+        # when media is co-located with the OTIO file.
+        tl = _build_timeline_with_relative_source("video.mp4")
+        timeline_path = otio_dir / "base.otio"
+        otio.adapters.write_to_file(tl, str(timeline_path))
+
+        output = tmp_path / "out.otio"
+        media_info = _make_media_info(str(media))
+
+        # Change CWD to a directory unrelated to otio_dir — exposes the bug.
+        monkeypatch.chdir(elsewhere)
+
+        with (
+            patch(
+                "clipwright_loudness.loudness.inspect_media", return_value=media_info
+            ),
+            patch(
+                "clipwright_loudness.loudness.measure_loudness",
+                return_value=_FAKE_LOUDNORM_MEASURED,
+            ),
+        ):
+            result = detect_loudness(
+                str(media),
+                str(output),
+                DetectLoudnessOptions(),
+                timeline=str(timeline_path),
+            )
+
+        assert result.ok is True, (
+            "AC-1 (spec5 D1): relative source co-located with OTIO must match media"
+            " regardless of CWD. error="
+            f"{result.error}"
+        )
+
+    def test_ac2_relative_source_mismatch_returns_invalid_input(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-2: timeline with a different relative source basename → INVALID_INPUT.
+
+        The relative source "other.mp4" is within otio_dir (passes CWE-22 boundary
+        check) but does not match the input media "video.mp4".  Must return
+        INVALID_INPUT regardless of CWD.
+        """
+        from clipwright_loudness.loudness import detect_loudness
+
+        otio_dir = tmp_path / "proj"
+        otio_dir.mkdir()
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+
+        media = otio_dir / "video.mp4"
+        media.write_bytes(b"dummy")
+
+        # "other.mp4" != "video.mp4" — should be rejected after the fix.
+        tl = _build_timeline_with_relative_source("other.mp4")
+        timeline_path = otio_dir / "base.otio"
+        otio.adapters.write_to_file(tl, str(timeline_path))
+
+        output = tmp_path / "out.otio"
+        media_info = _make_media_info(str(media))
+
+        monkeypatch.chdir(elsewhere)
+
+        with (
+            patch(
+                "clipwright_loudness.loudness.inspect_media", return_value=media_info
+            ),
+            patch(
+                "clipwright_loudness.loudness.measure_loudness",
+                return_value=_FAKE_LOUDNORM_MEASURED,
+            ),
+        ):
+            result = detect_loudness(
+                str(media),
+                str(output),
+                DetectLoudnessOptions(),
+                timeline=str(timeline_path),
+            )
+
+        assert result.ok is False, "AC-2: mismatched relative source must fail."
+        assert result.error is not None
+        assert result.error.code == ErrorCode.INVALID_INPUT, (
+            f"AC-2: expected INVALID_INPUT, got {result.error.code!r}"
+        )

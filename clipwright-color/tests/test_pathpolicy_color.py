@@ -72,6 +72,37 @@ def _fake_measured(yavg: float = 96.4) -> dict[str, Any]:
     }
 
 
+def _build_v1a1_timeline_with_relative_source(
+    target_url: str,
+    *,
+    fps: float = FPS,
+) -> otio.schema.Timeline:
+    """Build a V1+A1 OTIO timeline with a relative POSIX target_url.
+
+    Simulates output of media_ref_for_otio() when media is co-located with
+    the OTIO file (e.g., target_url="video.mp4" — basename only, no separators).
+    """
+    tl = otio.schema.Timeline(name="test")
+    for kind, name in (
+        (otio.schema.TrackKind.Video, "V1"),
+        (otio.schema.TrackKind.Audio, "A1"),
+    ):
+        tl.tracks.append(otio.schema.Track(name=name, kind=kind))
+
+    v1 = next(t for t in tl.tracks if t.kind == otio.schema.TrackKind.Video)
+    src_range = otio.opentime.TimeRange(
+        start_time=otio.opentime.RationalTime(0.0, fps),
+        duration=otio.opentime.RationalTime(300.0, fps),
+    )
+    clip = otio.schema.Clip(
+        name=target_url,
+        media_reference=otio.schema.ExternalReference(target_url=target_url),
+        source_range=src_range,
+    )
+    v1.append(clip)
+    return tl
+
+
 def _build_v1a1_timeline_with_absolute_source(
     media_abs: Path,
     *,
@@ -449,3 +480,126 @@ class TestOutputConflictPreserved:
             ErrorCode.INVALID_INPUT,
             ErrorCode.PATH_NOT_ALLOWED,
         ), f"output==timeline must be rejected. Got: {result['error']['code']!r}"
+
+
+# ===========================================================================
+# spec5 D1 regression: CWD-independent timeline source matching
+# ===========================================================================
+
+
+class TestCwdIndependentTimelineMatch:
+    """Regression guard for spec5 D1: relative target_url must be resolved against
+    otio_dir, not CWD.
+
+    The current B-4 block uses Path(target_url).resolve() which is CWD-relative.
+    AC-1 exposes the bug (ok=True expected, but INVALID_INPUT is returned).
+    AC-2 confirms that a genuinely mismatched source is still rejected.
+
+    After the fix (check_timeline_source_matches), both cases must pass.
+    """
+
+    def test_ac1_relative_source_colocated_different_cwd_succeeds(
+        self, tmp_path: Path
+    ) -> None:
+        """AC-1: media and timeline co-located in otio_dir, CWD elsewhere -> ok=True.
+
+        Regression: current code resolves relative target_url from CWD, so
+        Path("video.mp4").resolve() == CWD/video.mp4 != otio_dir/video.mp4,
+        and INVALID_INPUT is raised. After D1 fix, otio_dir-based resolution
+        must succeed.
+        """
+        from clipwright_color.color import (  # type: ignore[import-not-found]
+            detect_color,
+        )
+
+        otio_dir = tmp_path / "project"
+        otio_dir.mkdir()
+        other_cwd = tmp_path / "elsewhere"
+        other_cwd.mkdir()
+
+        media = otio_dir / "video.mp4"
+        media.write_bytes(b"dummy")
+
+        # target_url is just the basename — same as media_ref_for_otio() output
+        # when media is inside the OTIO output directory.
+        tl = _build_v1a1_timeline_with_relative_source("video.mp4")
+        timeline_path = otio_dir / "base.otio"
+        otio.adapters.write_to_file(tl, str(timeline_path))
+
+        output = otio_dir / "out.otio"
+        opts = DetectColorOptions()
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.chdir(other_cwd)
+            mp.setattr(
+                "clipwright_color.color.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_color.color.measure_brightness",
+                lambda media_path, options: _fake_measured(yavg=100.0),
+            )
+            result = detect_color(
+                media=str(media),
+                output=str(output),
+                options=opts,
+                timeline=str(timeline_path),
+            )
+
+        assert result["ok"] is True, (
+            "spec5 D1: relative target_url must be resolved against otio_dir, not CWD."
+            " With CWD != otio_dir, the current code raises INVALID_INPUT."
+            f" error={result.get('error')}"
+        )
+
+    def test_ac2_relative_source_mismatch_different_cwd_fails(
+        self, tmp_path: Path
+    ) -> None:
+        """AC-2: timeline has a different relative source basename -> ok=False, INVALID_INPUT.
+
+        Even after the D1 fix, a genuinely mismatched source must still be rejected
+        with INVALID_INPUT.
+        """
+        from clipwright_color.color import (  # type: ignore[import-not-found]
+            detect_color,
+        )
+
+        otio_dir = tmp_path / "project"
+        otio_dir.mkdir()
+        other_cwd = tmp_path / "elsewhere"
+        other_cwd.mkdir()
+
+        media = otio_dir / "video.mp4"
+        media.write_bytes(b"dummy")
+
+        # timeline references a *different* file — this must always be rejected.
+        tl = _build_v1a1_timeline_with_relative_source("other_clip.mp4")
+        timeline_path = otio_dir / "base.otio"
+        otio.adapters.write_to_file(tl, str(timeline_path))
+
+        output = otio_dir / "out.otio"
+        opts = DetectColorOptions()
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.chdir(other_cwd)
+            mp.setattr(
+                "clipwright_color.color.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_color.color.measure_brightness",
+                lambda media_path, options: _fake_measured(yavg=100.0),
+            )
+            result = detect_color(
+                media=str(media),
+                output=str(output),
+                options=opts,
+                timeline=str(timeline_path),
+            )
+
+        assert result["ok"] is False, (
+            "AC-2: mismatched relative source must be rejected even after D1 fix."
+        )
+        assert result["error"]["code"] == ErrorCode.INVALID_INPUT, (
+            f"AC-2: expected INVALID_INPUT, got {result['error']['code']!r}"
+        )

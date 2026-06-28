@@ -466,3 +466,161 @@ class TestOutputConflictPreserved:
             ErrorCode.INVALID_INPUT,
             ErrorCode.PATH_NOT_ALLOWED,
         ), f"output==timeline must be rejected. Got: {result['error']['code']!r}"
+
+
+# ===========================================================================
+# spec5 D1 regression: CWD-independent OTIO source matching
+# ===========================================================================
+
+
+def _build_v1_timeline_with_relative_source(
+    source_basename: str,
+    *,
+    fps: float = FPS,
+) -> otio.schema.Timeline:
+    """Build a V1-only OTIO timeline with a relative POSIX target_url (basename only).
+
+    Simulates the output of media_ref_for_otio() when media is co-located
+    with the OTIO file (spec4 DC-AM-004: relative POSIX when inside otio_dir).
+    """
+    tl = otio.schema.Timeline(name="test")
+    v1 = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
+    tl.tracks.append(v1)
+    src_range = otio.opentime.TimeRange(
+        start_time=otio.opentime.RationalTime(0.0, fps),
+        duration=otio.opentime.RationalTime(300.0, fps),
+    )
+    clip = otio.schema.Clip(
+        name=source_basename,
+        media_reference=otio.schema.ExternalReference(target_url=source_basename),
+        source_range=src_range,
+    )
+    v1.append(clip)
+    return tl
+
+
+class TestCwdIndependentTimelineMatch:
+    """spec5 D1 regression guard: B-4 source match must use otio_dir, not CWD.
+
+    The existing co-location tests (TestOutputInDifferentDirAllowed) use absolute
+    target_url so they do not exercise the CWD-dependency bug.  These tests use a
+    relative target_url (basename) combined with monkeypatch.chdir to expose the
+    bug: Path(target_url).resolve() on the unpatched code resolves relative to CWD,
+    not otio_dir, causing a false INVALID_INPUT when CWD != otio_dir.
+    """
+
+    def test_relative_source_matches_when_cwd_differs_from_otio_dir(
+        self, tmp_path: Path
+    ) -> None:
+        """AC-1: relative target_url resolves via otio_dir, not CWD.
+
+        When media and timeline share a directory but CWD is elsewhere, the source
+        match must still succeed (spec5 D1 fix).  This test is Red on the unpatched
+        HEAD and Green after check_timeline_source_matches() is applied.
+        """
+        from clipwright_stabilize.schemas import (  # type: ignore[import-not-found]
+            DetectShakeOptions,
+        )
+        from clipwright_stabilize.stabilize import (  # type: ignore[import-not-found]
+            detect_shake,
+        )
+
+        otio_dir = tmp_path / "otio"
+        otio_dir.mkdir()
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        other_dir = tmp_path / "other"
+        other_dir.mkdir()
+
+        # media co-located with timeline so media_ref_for_otio() would write basename
+        media = otio_dir / "video.mp4"
+        media.write_bytes(b"dummy")
+
+        # Relative target_url = just the basename (DC-AM-004 co-location case)
+        tl = _build_v1_timeline_with_relative_source("video.mp4")
+        timeline_path = otio_dir / "timeline.otio"
+        otio.adapters.write_to_file(tl, str(timeline_path))
+
+        output = work_dir / "out.otio"
+        trf_abs = work_dir / "video.stabilize.trf"
+        opts = DetectShakeOptions()
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.chdir(other_dir)  # CWD is NOT otio_dir — exposes the bug
+            mp.setattr(
+                "clipwright_stabilize.stabilize.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_stabilize.stabilize.run_vidstabdetect",
+                lambda media_path, output_path, options: _fake_analyze_result(trf_abs),
+            )
+            result = detect_shake(
+                media=str(media),
+                output=str(output),
+                options=opts,
+                timeline=str(timeline_path),
+            )
+
+        assert result["ok"] is True, (
+            "spec5 D1: relative target_url must be resolved via otio_dir, not CWD."
+            " Unpatched HEAD resolves against CWD and raises INVALID_INPUT."
+            f" error={result.get('error')}"
+        )
+
+    def test_relative_source_mismatch_raises_invalid_input(
+        self, tmp_path: Path
+    ) -> None:
+        """AC-2: relative target_url pointing to a different file → INVALID_INPUT.
+
+        Complementary negative case: when the timeline's relative source basename
+        differs from the input media filename, INVALID_INPUT must be returned
+        regardless of CWD.  Passes both before and after the fix (correct for
+        different reasons: bug resolves against CWD; fix resolves against otio_dir).
+        """
+        from clipwright_stabilize.schemas import (  # type: ignore[import-not-found]
+            DetectShakeOptions,
+        )
+        from clipwright_stabilize.stabilize import (  # type: ignore[import-not-found]
+            detect_shake,
+        )
+
+        otio_dir = tmp_path / "otio"
+        otio_dir.mkdir()
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        other_dir = tmp_path / "other"
+        other_dir.mkdir()
+
+        media = otio_dir / "video.mp4"
+        media.write_bytes(b"dummy")
+
+        # Timeline refers to "other.mp4" but the actual media is "video.mp4"
+        tl = _build_v1_timeline_with_relative_source("other.mp4")
+        timeline_path = otio_dir / "timeline.otio"
+        otio.adapters.write_to_file(tl, str(timeline_path))
+
+        output = work_dir / "out.otio"
+        opts = DetectShakeOptions()
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.chdir(other_dir)  # CWD != otio_dir
+            mp.setattr(
+                "clipwright_stabilize.stabilize.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            result = detect_shake(
+                media=str(media),
+                output=str(output),
+                options=opts,
+                timeline=str(timeline_path),
+            )
+
+        assert result["ok"] is False, (
+            "AC-2: mismatched relative source must be rejected."
+            " Got ok=True unexpectedly."
+        )
+        assert result["error"]["code"] == ErrorCode.INVALID_INPUT, (
+            "AC-2: mismatch error code must be INVALID_INPUT."
+            f" Got: {result['error']['code']!r}"
+        )

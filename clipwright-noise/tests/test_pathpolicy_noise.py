@@ -24,6 +24,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import opentimelineio as otio
+import pytest
 from clipwright.errors import ErrorCode
 from clipwright.otio_utils import load_timeline
 from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo, ToolResult
@@ -573,4 +574,160 @@ class TestCheckMediaRefNewPolicy:
             "CWE-22 / SR-M-1: relative traversal in OTIO target_url must return"
             " PATH_NOT_ALLOWED after adding check_media_ref to"
             f" _load_and_validate_timeline. Got: {d['error']['code']!r}"
+        )
+
+
+# ===========================================================================
+# AC-1 / AC-2: CWD-independent timeline source validation (spec5 D1 regression)
+# ===========================================================================
+
+
+def _make_otio_timeline_relative(
+    relative_url: str,
+    *,
+    duration_sec: float = 10.0,
+    rate: float = FPS,
+) -> otio.schema.Timeline:
+    """Build a V1-only OTIO timeline whose clip has a relative POSIX target_url.
+
+    Used to exercise the CWD-independence fix (spec5 D1): the B-4 comparison
+    must resolve the relative URL against the OTIO directory, not CWD.
+    """
+    tl = otio.schema.Timeline(name="test")
+    track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
+    tl.tracks.append(track)
+    source_range = otio.opentime.TimeRange(
+        start_time=otio.opentime.RationalTime(0.0, rate),
+        duration=otio.opentime.RationalTime(duration_sec * rate, rate),
+    )
+    ref = otio.schema.ExternalReference(target_url=relative_url)
+    clip = otio.schema.Clip(
+        name=relative_url,
+        media_reference=ref,
+        source_range=source_range,
+    )
+    track.append(clip)
+    return tl
+
+
+class TestCwdRegressionNoise:
+    """spec5 D1: timeline source match must be CWD-independent.
+
+    The old B-4 block uses Path(target_url).resolve() which resolves a relative
+    target_url against CWD.  When CWD != otio_dir the resolved path diverges from
+    the media path even though the source is correct, causing a spurious
+    INVALID_INPUT (D1 bug).
+
+    After fix (check_timeline_source_matches), the relative URL is joined onto
+    otio_dir before comparison, making CWD irrelevant.
+
+    AC-1  relative source matches media, CWD != otio_dir -> ok=True   (Red on HEAD)
+    AC-2  relative source is a different basename, CWD != otio_dir -> ok=False / INVALID_INPUT
+    """
+
+    def test_ac1_relative_source_match_cwd_independent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-1: relative target_url matching media must succeed regardless of CWD.
+
+        Regression guard for spec5 D1: Path(relative).resolve() uses CWD, so when
+        CWD != otio_dir the current code raises INVALID_INPUT even though the source
+        is correct.  After check_timeline_source_matches is applied, otio_dir is used
+        as the base for relative URL resolution.
+
+        Expected on HEAD: FAIL (ok=False due to CWD mismatch).
+        Expected after fix: PASS (ok=True).
+        """
+        from clipwright_noise.noise import detect_noise
+
+        otio_dir = tmp_path / "otio"
+        otio_dir.mkdir()
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+
+        # Media and timeline co-located in otio_dir
+        media = otio_dir / "video.mp4"
+        media.write_bytes(b"dummy")
+
+        # Timeline with relative POSIX target_url = basename only (media_ref_for_otio style)
+        tl = _make_otio_timeline_relative("video.mp4")
+        timeline_file = otio_dir / "noise.otio"
+        otio.adapters.write_to_file(tl, str(timeline_file))
+
+        output = out_dir / "out.otio"
+        media_info = _make_media_info(str(media))
+
+        # Change CWD to a directory other than otio_dir to trigger D1 bug
+        monkeypatch.chdir(tmp_path)
+
+        with (
+            patch("clipwright_noise.noise.inspect_media", return_value=media_info),
+            patch(
+                "clipwright_noise.noise.measure_noise",
+                return_value=_FAKE_MEASURE_RESULT,
+            ),
+        ):
+            result = detect_noise(
+                str(media),
+                str(output),
+                DetectNoiseOptions(),
+                timeline=str(timeline_file),
+            )
+
+        d = _d(result)
+        assert d["ok"] is True, (
+            "spec5 D1: relative target_url matching media must succeed when CWD != otio_dir."
+            f" error={d.get('error')}"
+        )
+
+    def test_ac2_relative_source_mismatch_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-2: relative target_url with mismatched basename must return INVALID_INPUT.
+
+        Even after the D1 fix, a timeline whose relative source points to a different
+        media file must be rejected with INVALID_INPUT.  Verifies the equivalence check
+        is preserved post-fix.  Error code only is asserted; canonical message text is
+        validated after impl-noise applies check_timeline_source_matches.
+        """
+        from clipwright_noise.noise import detect_noise
+
+        otio_dir = tmp_path / "otio"
+        otio_dir.mkdir()
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+
+        media = otio_dir / "video.mp4"
+        media.write_bytes(b"dummy")
+
+        # Timeline with relative target_url pointing to a DIFFERENT file
+        tl = _make_otio_timeline_relative("other.mp4")
+        timeline_file = otio_dir / "noise.otio"
+        otio.adapters.write_to_file(tl, str(timeline_file))
+
+        output = out_dir / "out.otio"
+        media_info = _make_media_info(str(media))
+
+        # Change CWD to a directory other than otio_dir
+        monkeypatch.chdir(tmp_path)
+
+        with (
+            patch("clipwright_noise.noise.inspect_media", return_value=media_info),
+            patch(
+                "clipwright_noise.noise.measure_noise",
+                return_value=_FAKE_MEASURE_RESULT,
+            ),
+        ):
+            result = detect_noise(
+                str(media),
+                str(output),
+                DetectNoiseOptions(),
+                timeline=str(timeline_file),
+            )
+
+        d = _d(result)
+        assert d["ok"] is False, "Mismatched relative source must be rejected."
+        assert d["error"]["code"] == ErrorCode.INVALID_INPUT, (
+            "spec5 D1: mismatched relative source must return INVALID_INPUT."
+            f" Got: {d['error']['code']!r}"
         )

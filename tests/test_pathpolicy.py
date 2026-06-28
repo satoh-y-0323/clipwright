@@ -30,6 +30,7 @@ from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.pathpolicy import (
     check_media_ref,
     check_output_not_source,
+    check_timeline_source_matches,
     check_within_boundary,
     media_ref_for_otio,
     validate_source_file,
@@ -697,3 +698,112 @@ class TestCheckMediaRefRelativeSymlink:
             check_media_ref("sym_media/clip.mp4", otio_dir, kind="media")
 
         assert exc_info.value.code == ErrorCode.PATH_NOT_ALLOWED
+
+
+# ===========================================================================
+# H. check_timeline_source_matches
+# ===========================================================================
+
+
+class TestCheckTimelineSourceMatches:
+    """check_timeline_source_matches(target_url, media_path, otio_dir) -> None
+
+    Verifies that an OTIO ExternalReference.target_url and the tool's input
+    media_path resolve to the same file.  Relative target_url is joined onto
+    otio_dir (NOT the CWD) — spec5 D1 fix (ADR-D1-1).
+    """
+
+    def test_relative_target_url_matching_media_in_otio_dir_ok(
+        self, tmp_path: Path
+    ) -> None:
+        """T1: relative target_url (basename) + media co-located in otio_dir → no exception.
+
+        Basic match: OTIO stores a relative reference to the media file in the
+        same directory as the timeline.
+        """
+        otio_dir = tmp_path / "project"
+        otio_dir.mkdir()
+        media = _write_file(otio_dir / "clip.mp4")
+
+        # Should not raise
+        check_timeline_source_matches("clip.mp4", media, otio_dir)
+
+    def test_relative_target_url_matching_cwd_independent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """T2: same as T1 but CWD changed to an unrelated dir → no exception.
+
+        Core regression guard for spec5 D1 fix (ADR-D1-1): relative target_url
+        must be resolved against otio_dir, NOT the current working directory.
+        A timeline stored outside CWD must still match its own media.
+        """
+        otio_dir = tmp_path / "project"
+        otio_dir.mkdir()
+        media = _write_file(otio_dir / "clip.mp4")
+
+        # Change CWD to a completely different directory
+        other_dir = tmp_path / "other"
+        other_dir.mkdir()
+        monkeypatch.chdir(other_dir)
+
+        # Must not raise even though CWD != otio_dir
+        check_timeline_source_matches("clip.mp4", media, otio_dir)
+
+    def test_relative_target_url_different_basename_raises(
+        self, tmp_path: Path
+    ) -> None:
+        """T3: relative target_url resolving to a different file raises INVALID_INPUT."""
+        otio_dir = tmp_path / "project"
+        otio_dir.mkdir()
+        media = _write_file(otio_dir / "clip.mp4")
+        _write_file(otio_dir / "other.mp4")
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            check_timeline_source_matches("other.mp4", media, otio_dir)
+
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_absolute_target_url_equal_to_media_ok(self, tmp_path: Path) -> None:
+        """T4: absolute target_url equal to media_path → no exception."""
+        otio_dir = tmp_path / "project"
+        otio_dir.mkdir()
+        media = _write_file(tmp_path / "footage" / "clip.mp4")
+
+        # Absolute target_url string of the same media file
+        check_timeline_source_matches(str(media), media, otio_dir)
+
+    def test_absolute_target_url_different_from_media_raises(
+        self, tmp_path: Path
+    ) -> None:
+        """T5: absolute target_url pointing to a different file raises INVALID_INPUT."""
+        otio_dir = tmp_path / "project"
+        otio_dir.mkdir()
+        media = _write_file(tmp_path / "footage" / "clip.mp4")
+        other = _write_file(tmp_path / "footage" / "other.mp4")
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            check_timeline_source_matches(str(other), media, otio_dir)
+
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_resolve_oserror_falls_back_to_absolute_match_ok(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """T6: Path.resolve raises OSError → _canon falls back to absolute() → match succeeds.
+
+        Exercises the resolve→absolute fallback in _canon().  When resolve()
+        raises OSError for both the target_url path and media_path, _canon
+        uses absolute() instead.  With an absolute target_url equal to
+        media_path, both calls return the same string and no exception is raised.
+        """
+        otio_dir = tmp_path / "project"
+        otio_dir.mkdir()
+        media = _write_file(otio_dir / "clip.mp4")
+
+        def _raise_os(self: object, *args: object, **kwargs: object) -> object:
+            raise OSError("mocked unresolvable path")
+
+        monkeypatch.setattr(Path, "resolve", _raise_os)
+
+        # absolute target_url equal to media_path → absolute() fallback gives same string
+        check_timeline_source_matches(str(media), media, otio_dir)
