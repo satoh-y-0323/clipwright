@@ -329,7 +329,7 @@ def _load_and_validate_timeline(
     - OTIO source references via check_media_ref (absolute existing files
       allowed; relative traversal rejected, CWE-22).
     - The target_url of V1 clips matches media_path
-      (B-4: path normalization comparison)
+      (B-4: CWD-independent via check_timeline_source_matches)
     - Single source (all clips share the same target_url)
     - Exactly one Video-kind track (B-5)
 
@@ -386,7 +386,7 @@ def _load_and_validate_timeline(
             hint="Specify a timeline with a single source (same media file).",
         )
 
-    # --- Validate target_url == media_path (B-4: resolve() normalization) ---
+    # --- Validate target_url == media_path (B-4: CWD-independent via helper) ---
     if urls:
         check_timeline_source_matches(next(iter(urls)), media_path, tl_dir)
 

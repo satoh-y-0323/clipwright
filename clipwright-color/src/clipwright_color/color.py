@@ -344,7 +344,7 @@ def _load_and_validate_timeline(
             hint="Specify a timeline with a single source (same media file).",
         )
 
-    # Validate target_url == media_path (B-4: resolve() normalization)
+    # Validate target_url == media_path (B-4: CWD-independent via helper).
     if urls:
         check_timeline_source_matches(next(iter(urls)), media_path, tl_dir)
 
