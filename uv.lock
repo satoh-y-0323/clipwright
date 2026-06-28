@@ -211,7 +211,7 @@ wheels = [
 
 [[package]]
 name = "clipwright"
-version = "0.4.0"
+version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "mcp", extra = ["cli"] },
@@ -281,7 +281,7 @@ dev = [
 
 [[package]]
 name = "clipwright-color"
-version = "0.2.0"
+version = "0.2.1"
 source = { editable = "clipwright-color" }
 dependencies = [
     { name = "clipwright" },
@@ -353,7 +353,7 @@ dev = [
 
 [[package]]
 name = "clipwright-loudness"
-version = "0.3.0"
+version = "0.3.1"
 source = { editable = "clipwright-loudness" }
 dependencies = [
     { name = "clipwright" },
@@ -388,7 +388,7 @@ dev = [
 
 [[package]]
 name = "clipwright-noise"
-version = "0.3.0"
+version = "0.3.1"
 source = { editable = "clipwright-noise" }
 dependencies = [
     { name = "clipwright" },
@@ -709,7 +709,7 @@ dev = [
 
 [[package]]
 name = "clipwright-stabilize"
-version = "0.4.0"
+version = "0.4.1"
 source = { editable = "clipwright-stabilize" }
 dependencies = [
     { name = "clipwright" },
