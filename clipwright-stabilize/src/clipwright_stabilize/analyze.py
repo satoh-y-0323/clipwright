@@ -1,7 +1,7 @@
 """analyze.py — ffmpeg vidstabdetect execution for clipwright-stabilize.
 
 Runs ffmpeg with the vidstabdetect filter to generate a .trf transform file,
-then estimates shake severity from the binary TRF1 file contents.
+then estimates shake severity from the .trf file contents.
 
 Key design decisions:
 - cwd + relative basename is the only Windows-safe approach for vid.stab
@@ -11,6 +11,9 @@ Key design decisions:
 - _estimate_severity is heuristic/best-effort; parse failure returns None (F-2/F-3).
 - _estimate_severity uses median aggregation for robustness to scene-cut outliers
   in multi-shot footage; apparent motion at cuts can reach 100+ px (F-4).
+- libvidstab writes text ("VID.STAB") on Linux/most apt/brew builds and binary
+  ("TRF1") on the Gyan Windows build; both carry per-LM (vx, vy) translation
+  vectors. _estimate_severity dispatches on the magic header (D3-crossplat).
 """
 
 from __future__ import annotations
@@ -31,8 +34,11 @@ from clipwright_stabilize.schemas import DetectShakeOptions
 # it takes longer than a measurement-only pass. Pinned for initial release (F-5).
 _TIMEOUT_SECONDS: float = 300.0
 
-# TRF1 binary file magic header.
+# TRF1 binary file magic header (Gyan Windows ffmpeg builds).
 _TRF_MAGIC = b"TRF1"
+
+# VID.STAB text file magic header (Linux apt / macOS brew libvidstab builds).
+_TRF_TEXT_MAGIC = b"VID.STAB"
 
 # Normalisation constant for severity estimation (heuristic / pinned — F-2/F-3).
 # Mean absolute pixel displacement at or above this value maps to severity=1.0.
@@ -66,6 +72,11 @@ _MAX_LM_PER_FRAME: int = (
     1_000_000  # 1 million LMs per frame far exceeds any real output
 )
 
+# Regex to extract (vx, vy) from a single LocalMotion entry in the text TRF format.
+# Format per entry: (LM vx vy fx fy size contrast match)
+# Only the first two integers (vx, vy) are needed for displacement estimation.
+_LM_TEXT_RE = re.compile(r"\(LM\s+(-?\d+)\s+(-?\d+)\s")
+
 # Sanitise filtergraph-unsafe characters from a trf stem (SR-INJ-002).
 # vid.stab result=/input= cannot be safely escaped with backslash sequences;
 # instead we replace any character that is not alphanumeric, '-', or '_' with '_'.
@@ -81,10 +92,31 @@ _TRF_STEM_SANITIZE_RE = re.compile(r"[^A-Za-z0-9\-_]")
 _SEVERITY_APPLY_THRESHOLD: float = 0.08
 
 
-def _estimate_severity(trf_path: Path) -> float | None:
-    """Best-effort severity in 0.0-1.0 from a binary TRF1 file.
+def _severity_from_frame_disps(frame_disps: list[float]) -> float | None:
+    """Compute final severity from per-frame median displacement values.
 
-    Parses the TRF1 binary format produced by ffmpeg vidstabdetect (ADR-D3-1).
+    Common aggregation step used by both binary and text TRF parsers (DRY).
+    Severity = median(frame_disps) / _NORM_PX, clamped to [0.0, 1.0].
+
+    Args:
+        frame_disps: Per-frame median Euclidean displacement (pixels).
+
+    Returns:
+        Severity in [0.0, 1.0], or None when frame_disps is empty or result
+        is non-finite.
+    """
+    if not frame_disps:
+        return None
+    median_disp = statistics.median(frame_disps)
+    severity = median_disp / _NORM_PX
+    if not math.isfinite(severity):
+        return None
+    return max(0.0, min(1.0, severity))
+
+
+def _severity_from_binary_trf(blob: bytes) -> float | None:
+    """Parse a TRF1 binary blob and return severity, or None on failure.
+
     Layout (empirically verified against real vidstabdetect output):
 
     - Global header: TRF1 magic (4 B) + 3×int32 (12 B) + double (8 B) = 24 B
@@ -94,34 +126,15 @@ def _estimate_severity(trf_path: Path) -> float | None:
         int16 fx, fy, fsize  — measurement field position/size (unused here)
         double contrast, double match  — quality metrics (unused here)
 
-    Severity = statistics.median of per-frame median Euclidean displacement,
-    normalised by _NORM_PX and clamped to [0.0, 1.0] (ADR-D3-2 / FR-2).
-    Median is used for robustness to scene-cut outliers in multi-shot footage;
-    per-frame apparent motion at cuts can reach 100+ px and would dominate a mean.
-
-    Replaces the old flat-double scan that misread int32 header/field bytes as
-    IEEE-754 doubles (~1e308 each), causing sum() overflow to inf → None.
-
-    Any parse error or arithmetic anomaly returns None (best-effort, F-2/F-3).
+    Any parse error returns None (best-effort, F-2/F-3).
     Broad exception catch is intentional: corrupt TRF1 input must not propagate.
 
     Args:
-        trf_path: Path to the .trf binary file produced by vidstabdetect.
+        blob: Raw bytes of the TRF1 file (already size-checked, magic-confirmed).
 
     Returns:
-        Severity in [0.0, 1.0], or None when the file cannot be parsed.
+        Severity in [0.0, 1.0], or None when parsing fails.
     """
-    try:
-        blob = trf_path.read_bytes()
-    except OSError:
-        return None
-
-    if len(blob) > _TRF_MAX_BYTES:
-        return None  # best-effort; oversized .trf treated as unparseable (SR-MEM-001)
-
-    if not blob.startswith(_TRF_MAGIC):
-        return None
-
     if len(blob) < _HDR:
         return None
 
@@ -149,20 +162,105 @@ def _estimate_severity(trf_path: Path) -> float | None:
             if lm_disps:
                 frame_disps.append(statistics.median(lm_disps))
 
-        if not frame_disps:
-            return None
-
-        median_disp = statistics.median(frame_disps)
-        # Normalise to [0, 1]; values at or above _NORM_PX pixels clamp to 1.0.
-        severity = median_disp / _NORM_PX
-        if not math.isfinite(severity):
-            return None
-        return max(0.0, min(1.0, severity))
+        return _severity_from_frame_disps(frame_disps)
 
     except Exception:  # broad catch is intentional: corrupt TRF1 must not propagate
         # struct.error, OverflowError, MemoryError, or arithmetic failures on
         # adversarial input all return None (best-effort severity, F-2/F-3).
         return None
+
+
+def _severity_from_text_trf(blob: bytes) -> float | None:
+    """Parse a VID.STAB text blob and return severity, or None on failure.
+
+    libvidstab writes text ("VID.STAB") on Linux/most apt/brew builds and
+    binary ("TRF1") on the Gyan Windows build; both carry per-LM (vx, vy)
+    translation vectors that represent frame-to-frame Euclidean displacement.
+
+    Text format (lines):
+      VID.STAB 1
+      # comment lines ...
+      Frame N (List count [(LM vx vy fx fy size contrast match), ...])
+
+    Only "Frame ..." lines are parsed.  Per-frame displacement = median(hypot(vx, vy))
+    over all LM entries in that frame.  Empty frames (count=0 / no LM matches) are
+    skipped.  Any frame whose LM count exceeds _MAX_LM_PER_FRAME is also skipped
+    (OOM guard, SR-MEM-001).
+
+    Any parse error or arithmetic anomaly returns None (best-effort, F-2/F-3).
+    Broad exception catch is intentional: corrupt text input must not propagate.
+
+    Args:
+        blob: Raw bytes of the VID.STAB text file (already size-checked,
+              magic-confirmed).
+
+    Returns:
+        Severity in [0.0, 1.0], or None when parsing fails.
+    """
+    try:
+        text = blob.decode("utf-8", errors="replace")
+        frame_disps: list[float] = []
+
+        for line in text.splitlines():
+            if not line.startswith("Frame "):
+                continue
+
+            # Extract all (LM vx vy ...) matches from this frame line.
+            lm_matches = _LM_TEXT_RE.findall(line)
+            if not lm_matches:
+                continue  # Frame N (List 0 []) — no LM entries, skip
+
+            if len(lm_matches) > _MAX_LM_PER_FRAME:
+                continue  # OOM guard: skip this frame rather than returning None
+
+            lm_disps = [math.hypot(int(vx), int(vy)) for vx, vy in lm_matches]
+            frame_disps.append(statistics.median(lm_disps))
+
+        return _severity_from_frame_disps(frame_disps)
+
+    except Exception:  # broad catch is intentional: corrupt text must not propagate
+        # UnicodeDecodeError, ValueError, OverflowError, or arithmetic failures
+        # on adversarial input all return None (best-effort severity, F-2/F-3).
+        return None
+
+
+def _estimate_severity(trf_path: Path) -> float | None:
+    """Best-effort severity in 0.0-1.0 from a .trf file (binary or text format).
+
+    Dispatches on the file magic header:
+    - b"TRF1"     → binary format produced by Gyan Windows ffmpeg builds
+    - b"VID.STAB" → text format produced by Linux apt / macOS brew libvidstab builds
+
+    Both formats carry per-LM (vx, vy) translation vectors.  Severity is the
+    median of per-frame median Euclidean displacement, normalised by _NORM_PX
+    and clamped to [0.0, 1.0] (ADR-D3-2 / FR-2).  Median is used for robustness
+    to scene-cut outliers in multi-shot footage; per-frame apparent motion at cuts
+    can reach 100+ px and would dominate a mean.
+
+    Unknown magic bytes return None without raising (forward-compat, NF-2).
+    Any parse error or arithmetic anomaly also returns None (F-2/F-3).
+
+    Args:
+        trf_path: Path to the .trf file produced by vidstabdetect.
+
+    Returns:
+        Severity in [0.0, 1.0], or None when the file cannot be parsed.
+    """
+    try:
+        blob = trf_path.read_bytes()
+    except OSError:
+        return None
+
+    if len(blob) > _TRF_MAX_BYTES:
+        return None  # best-effort; oversized .trf treated as unparseable (SR-MEM-001)
+
+    if blob.startswith(_TRF_MAGIC):
+        return _severity_from_binary_trf(blob)
+
+    if blob.startswith(_TRF_TEXT_MAGIC):
+        return _severity_from_text_trf(blob)
+
+    return None  # unknown magic — forward-compat (NF-2)
 
 
 def recommend(severity: float | None) -> Literal["skip", "apply"]:

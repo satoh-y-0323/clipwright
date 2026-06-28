@@ -953,3 +953,153 @@ class TestArgvDiscipline:
             run_vidstabdetect(media, output, opts)
 
         assert captured_cmds[0][0] == _FAKE_FFMPEG
+
+
+# ===========================================================================
+# Text TRF (VID.STAB) format — Linux/apt/brew libvidstab cross-platform tests
+# ===========================================================================
+
+# Real VID.STAB text fixture files produced by Docker ubuntu24.04/libvidstab1.1.
+_TXT_SHAKY_TRF = _FIXTURES_DIR / "linux_text_shaky.stabilize.trf"
+_TXT_CALM_TRF = _FIXTURES_DIR / "linux_text_calm.stabilize.trf"
+
+
+class TestEstimateSeverityTextTrf:
+    """_estimate_severity with real VID.STAB text fixture files (offline unit tests).
+
+    Fixture files produced by docker ubuntu24.04/libvidstab1.1 vidstabdetect:
+      linux_text_shaky.stabilize.trf — high-motion source.
+      linux_text_calm.stabilize.trf  — low-motion source.
+
+    These tests verify cross-platform severity estimation; the text format
+    is produced by Linux apt and macOS brew libvidstab builds, while the
+    binary TRF1 format is produced by Gyan Windows ffmpeg builds.
+    """
+
+    def test_text_shaky_trf_returns_nonnone_float_in_range(self) -> None:
+        """AC-1 (text): linux_text_shaky.stabilize.trf must return non-None float in [0.0, 1.0]."""
+        from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
+            _estimate_severity,
+        )
+
+        result = _estimate_severity(_TXT_SHAKY_TRF)
+        assert result is not None, (
+            "linux_text_shaky.stabilize.trf returned None — text TRF parser failed"
+        )
+        assert 0.0 <= result <= 1.0, f"severity out of range: {result}"
+
+    def test_text_calm_trf_returns_nonnone_float_in_range(self) -> None:
+        """AC-1 (text): linux_text_calm.stabilize.trf must return non-None float in [0.0, 1.0]."""
+        from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
+            _estimate_severity,
+        )
+
+        result = _estimate_severity(_TXT_CALM_TRF)
+        assert result is not None, (
+            "linux_text_calm.stabilize.trf returned None — text TRF parser failed"
+        )
+        assert 0.0 <= result <= 1.0, f"severity out of range: {result}"
+
+    def test_text_calm_severity_less_than_shaky(self) -> None:
+        """AC-2 (text): calm fixture must score strictly lower severity than shaky fixture."""
+        from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
+            _estimate_severity,
+        )
+
+        calm = _estimate_severity(_TXT_CALM_TRF)
+        shaky = _estimate_severity(_TXT_SHAKY_TRF)
+        assert calm is not None and shaky is not None, (
+            f"prerequisite failed: calm={calm}, shaky={shaky} — both must be non-None"
+        )
+        assert calm < shaky, (
+            f"expected text calm ({calm:.4f}) < text shaky ({shaky:.4f}) — ordering violated"
+        )
+
+    def test_text_calm_recommends_skip(self) -> None:
+        """Integration: text calm fixture must recommend 'skip' via recommend()."""
+        from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
+            _estimate_severity,
+            recommend,
+        )
+
+        severity = _estimate_severity(_TXT_CALM_TRF)
+        assert recommend(severity) == "skip", (
+            f"expected 'skip' for calm text fixture (severity={severity})"
+        )
+
+    def test_text_shaky_recommends_apply(self) -> None:
+        """Integration: text shaky fixture must recommend 'apply' via recommend()."""
+        from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
+            _estimate_severity,
+            recommend,
+        )
+
+        severity = _estimate_severity(_TXT_SHAKY_TRF)
+        assert recommend(severity) == "apply", (
+            f"expected 'apply' for shaky text fixture (severity={severity})"
+        )
+
+
+class TestEstimateSeverityTextTrfGraceful:
+    """_estimate_severity graceful handling for text TRF edge cases (NF-2)."""
+
+    def test_vidstab_header_no_frames_returns_none(self, tmp_path: Path) -> None:
+        """VID.STAB header with no Frame lines must return None (no displacement data)."""
+        from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
+            _estimate_severity,
+        )
+
+        trf = tmp_path / "no_frames.trf"
+        trf.write_bytes(b"VID.STAB 1\n# accuracy = 15\n# shakiness = 5\n")
+        assert _estimate_severity(trf) is None
+
+    def test_vidstab_header_only_empty_frames_returns_none(
+        self, tmp_path: Path
+    ) -> None:
+        """VID.STAB with all empty Frame entries (List 0 []) must return None."""
+        from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
+            _estimate_severity,
+        )
+
+        trf = tmp_path / "empty_frames.trf"
+        content = b"VID.STAB 1\nFrame 1 (List 0 [])\nFrame 2 (List 0 [])\n"
+        trf.write_bytes(content)
+        assert _estimate_severity(trf) is None
+
+    def test_vidstab_excessive_lm_per_frame_skips_frame(self, tmp_path: Path) -> None:
+        """Frame with LM count > _MAX_LM_PER_FRAME in text format is skipped (not None).
+
+        A frame with fewer LMs in other frames must still yield a severity value.
+        """
+        from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
+            _MAX_LM_PER_FRAME,
+            _estimate_severity,
+        )
+
+        # Build a text TRF where frame 1 has an absurd number of LM entries
+        # (by generating a line that tricks _LM_TEXT_RE into matching > limit).
+        # We simulate this by patching the constant rather than generating
+        # millions of LM entries.
+        import clipwright_stabilize.analyze as _mod
+
+        original = _MAX_LM_PER_FRAME
+        try:
+            # Patch limit to 2 so a frame with 3 LM entries triggers the guard.
+            _mod._MAX_LM_PER_FRAME = 2
+            # Frame 1: 3 LMs (exceeds patched limit=2) — skipped.
+            # Frame 2: 1 LM  (within limit)             — included.
+            content = (
+                b"VID.STAB 1\n"
+                b"Frame 1 (List 3 [(LM 10 10 0 0 32 0.5 1.0),(LM 5 5 0 0 32 0.5 1.0),(LM 3 3 0 0 32 0.5 1.0)])\n"
+                b"Frame 2 (List 1 [(LM 2 2 0 0 32 0.5 1.0)])\n"
+            )
+            trf = tmp_path / "guard.trf"
+            trf.write_bytes(content)
+            result = _estimate_severity(trf)
+            # Frame 2 has 1 LM with hypot(2,2)≈2.83, severity=2.83/30≈0.094 > 0
+            assert result is not None, (
+                "should return non-None from frame 2 when frame 1 is skipped by OOM guard"
+            )
+            assert 0.0 <= result <= 1.0
+        finally:
+            _mod._MAX_LM_PER_FRAME = original
