@@ -19,7 +19,7 @@ Design decisions:
   media is inside the output directory, absolute otherwise (DC-AM-004).
 - Timeline source validation uses check_media_ref(): accepts absolute existing
   files regardless of directory; relative traversal rejected (CWE-22).
-- output==media comparison uses check_output_not_source() (B-4).
+- output==media comparison uses check_output_not_source().
 - timeline validation: exactly one Video-kind track (B-5).
 - measured=None: skip loudness directive and return warning (U-1, DC-AM-003).
 - Mirrors _add_full_clip / _load_and_validate_timeline structure from noise.py.
