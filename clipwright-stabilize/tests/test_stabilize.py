@@ -19,6 +19,7 @@ Verification points:
       format="trf"); both paths must exist on disk.
   (8) summary contains severity / shakiness / smoothing / trf basename.
   (9) ClipwrightError path -> error_result({ok:false, error:{code, message, hint}}).
+  (10) recommendation field exposed in data / summary / warnings (AC-3/AC-4/AC-5, NF-5).
 
 Requirements: FR-1-3, FR-1-4, FR-1-5, architecture-report §5.
 """
@@ -930,3 +931,262 @@ class TestErrorResult:
         assert result["error"]["code"] == ErrorCode.UNSUPPORTED_OPERATION.value
         assert result["error"].get("message") is not None
         assert result["error"].get("hint") is not None
+
+
+# ===========================================================================
+# (10) recommendation field in data, summary, and warnings (AC-3/AC-4/AC-5, NF-5)
+# ===========================================================================
+
+
+class TestRecommendationContract:
+    """detect_shake must expose recommendation in data, summary, and warnings.
+
+    Mock policy matches the rest of this module (F-1): inspect_media and
+    run_vidstabdetect are patched; no real ffmpeg or libvidstab is invoked.
+
+    AC-3/AC-4: recommendation reflects severity (skip for low / apply for high).
+    AC-5:      recommendation defaults to 'apply' when severity=None.
+    NF-5:      envelope contract {ok, summary, data, artifacts, warnings} is
+               maintained; no existing key is removed.
+    """
+
+    def test_data_recommendation_field_present(self, tmp_path: Path) -> None:
+        """data must expose 'recommendation' key with value 'skip' or 'apply' (NF-5)."""
+        from clipwright_stabilize.schemas import (  # type: ignore[import-not-found]
+            DetectShakeOptions,
+        )
+        from clipwright_stabilize.stabilize import (  # type: ignore[import-not-found]
+            detect_shake,
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "out.otio"
+        trf_abs = tmp_path / "video.stabilize.trf"
+        opts = DetectShakeOptions()
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(
+                "clipwright_stabilize.stabilize.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_stabilize.stabilize.run_vidstabdetect",
+                lambda media_path, output_path, options: _fake_analyze_result(
+                    trf_abs, severity=0.35
+                ),
+            )
+            result = detect_shake(
+                media=str(media), output=str(output), options=opts, timeline=None
+            )
+
+        assert result["ok"] is True
+        data = result.get("data", {})
+        assert "recommendation" in data, (
+            f"data must expose 'recommendation' key, got keys: {sorted(data.keys())}"
+        )
+        assert data["recommendation"] in ("skip", "apply"), (
+            f"data['recommendation'] must be 'skip' or 'apply', "
+            f"got {data['recommendation']!r}"
+        )
+
+    def test_summary_contains_recommendation_keyword(self, tmp_path: Path) -> None:
+        """summary must contain the word 'recommendation' (not merely 'apply' by accident).
+
+        The current summary already contains 'apply' in 'apply with clipwright-render';
+        this test checks that the implementation explicitly surfaces 'recommendation'
+        as a named concept in the summary text.
+        """
+        from clipwright_stabilize.schemas import (  # type: ignore[import-not-found]
+            DetectShakeOptions,
+        )
+        from clipwright_stabilize.stabilize import (  # type: ignore[import-not-found]
+            detect_shake,
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "out.otio"
+        trf_abs = tmp_path / "video.stabilize.trf"
+        opts = DetectShakeOptions()
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(
+                "clipwright_stabilize.stabilize.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_stabilize.stabilize.run_vidstabdetect",
+                lambda media_path, output_path, options: _fake_analyze_result(
+                    trf_abs, severity=0.35
+                ),
+            )
+            result = detect_shake(
+                media=str(media), output=str(output), options=opts, timeline=None
+            )
+
+        summary = result.get("summary", "").lower()
+        assert "recommendation" in summary, (
+            "summary must explicitly include the word 'recommendation'. "
+            f"Got: {result.get('summary', '')}"
+        )
+
+    def test_summary_mentions_agent_final_decision(self, tmp_path: Path) -> None:
+        """summary must state that the calling agent makes the final decision."""
+        from clipwright_stabilize.schemas import (  # type: ignore[import-not-found]
+            DetectShakeOptions,
+        )
+        from clipwright_stabilize.stabilize import (  # type: ignore[import-not-found]
+            detect_shake,
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "out.otio"
+        trf_abs = tmp_path / "video.stabilize.trf"
+        opts = DetectShakeOptions()
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(
+                "clipwright_stabilize.stabilize.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_stabilize.stabilize.run_vidstabdetect",
+                lambda media_path, output_path, options: _fake_analyze_result(
+                    trf_abs, severity=0.35
+                ),
+            )
+            result = detect_shake(
+                media=str(media), output=str(output), options=opts, timeline=None
+            )
+
+        # summary must communicate that the AI caller owns the final decision.
+        # Accept any of the natural English phrasings the implementation may choose.
+        summary_lower = result.get("summary", "").lower()
+        ai_decision_keywords = [
+            "agent",
+            "caller",
+            "override",
+            "final decision",
+            "you may",
+            "discretion",
+            "advisory",
+        ]
+        assert any(kw in summary_lower for kw in ai_decision_keywords), (
+            "summary must mention that the calling agent makes the final decision "
+            f"(checked for: {ai_decision_keywords}). "
+            f"Got: {result.get('summary', '')}"
+        )
+
+    def test_severity_none_warning_mentions_recommendation_defaulted(
+        self, tmp_path: Path
+    ) -> None:
+        """When severity=None, warnings must explain that recommendation defaulted to 'apply' (AC-5)."""
+        from clipwright_stabilize.schemas import (  # type: ignore[import-not-found]
+            DetectShakeOptions,
+        )
+        from clipwright_stabilize.stabilize import (  # type: ignore[import-not-found]
+            detect_shake,
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "out.otio"
+        trf_abs = tmp_path / "video.stabilize.trf"
+        opts = DetectShakeOptions()
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(
+                "clipwright_stabilize.stabilize.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_stabilize.stabilize.run_vidstabdetect",
+                lambda media_path, output_path, options: _fake_analyze_none_severity(
+                    trf_abs
+                ),
+            )
+            result = detect_shake(
+                media=str(media), output=str(output), options=opts, timeline=None
+            )
+
+        assert result["ok"] is True
+        warnings: list[str] = result.get("warnings") or []
+        warning_text = " ".join(warnings).lower()
+        assert "recommendation" in warning_text or "apply" in warning_text, (
+            "When severity=None, warnings must mention that recommendation defaulted "
+            f"to 'apply' (AC-5). Got warnings: {warnings}"
+        )
+
+    def test_severity_known_no_extra_warning(self, tmp_path: Path) -> None:
+        """When severity is known, no extra recommendation warning must appear (NF-5)."""
+        from clipwright_stabilize.schemas import (  # type: ignore[import-not-found]
+            DetectShakeOptions,
+        )
+        from clipwright_stabilize.stabilize import (  # type: ignore[import-not-found]
+            detect_shake,
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "out.otio"
+        trf_abs = tmp_path / "video.stabilize.trf"
+        opts = DetectShakeOptions()
+
+        # run_vidstabdetect returns zero warnings when severity is available.
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(
+                "clipwright_stabilize.stabilize.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_stabilize.stabilize.run_vidstabdetect",
+                lambda media_path, output_path, options: _fake_analyze_result(
+                    trf_abs, severity=0.35, warnings=[]
+                ),
+            )
+            result = detect_shake(
+                media=str(media), output=str(output), options=opts, timeline=None
+            )
+
+        assert result["ok"] is True
+        warnings = result.get("warnings") or []
+        assert len(warnings) == 0, (
+            "When severity is known, detect_shake must not append extra warnings. "
+            f"Got: {warnings}"
+        )
+
+    def test_envelope_contract_maintained(self, tmp_path: Path) -> None:
+        """detect_shake must still return {ok, summary, data, artifacts, warnings} (NF-5)."""
+        from clipwright_stabilize.schemas import (  # type: ignore[import-not-found]
+            DetectShakeOptions,
+        )
+        from clipwright_stabilize.stabilize import (  # type: ignore[import-not-found]
+            detect_shake,
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "out.otio"
+        trf_abs = tmp_path / "video.stabilize.trf"
+        opts = DetectShakeOptions()
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(
+                "clipwright_stabilize.stabilize.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_stabilize.stabilize.run_vidstabdetect",
+                lambda media_path, output_path, options: _fake_analyze_result(trf_abs),
+            )
+            result = detect_shake(
+                media=str(media), output=str(output), options=opts, timeline=None
+            )
+
+        assert "ok" in result, "envelope must have 'ok'"
+        assert "summary" in result, "envelope must have 'summary'"
+        assert "data" in result, "envelope must have 'data'"
+        assert "artifacts" in result, "envelope must have 'artifacts'"
+        # 'warnings' may be None/absent when empty; ok_result omits it — not checked here.

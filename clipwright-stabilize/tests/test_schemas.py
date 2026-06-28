@@ -7,6 +7,9 @@ Verification points:
   - StabilizeDirective: required fields (version/kind/trf_path/shakiness/accuracy/smoothing),
     kind Literal["stabilize"], severity=None accepted, severity as float accepted,
     tool default "clipwright-stabilize", extra forbidden.
+  - StabilizeDirective.recommendation: Literal["skip","apply"] | None,
+    defaults to None, round-trip, extra="forbid" / allow_inf_nan=False maintained,
+    backward compat — existing construction without recommendation still works (AC-10).
 
 Requirements: FR-1-2 (DetectShakeOptions), FR-1-5 (StabilizeDirective),
 architecture-report §3.
@@ -357,3 +360,143 @@ class TestStabilizeDirectiveConstraints:
                 smoothing=30,
                 unknown_field="x",  # type: ignore[call-arg]
             )
+
+
+# ===========================================================================
+# StabilizeDirective — recommendation field (AC-3/AC-4/AC-5, AC-10)
+# ===========================================================================
+
+
+class TestStabilizeDirectiveRecommendation:
+    """StabilizeDirective.recommendation: Literal['skip','apply'] | None.
+
+    Red phase: recommendation field does not exist yet in the schema.
+    Tests access d.recommendation which raises AttributeError, or construct
+    StabilizeDirective(recommendation=...) which raises ValidationError
+    (extra='forbid') because the field is unknown.
+
+    After implementation (developer adds recommendation field with default=None):
+    all tests in this class must pass.
+    """
+
+    def _base_kwargs(self) -> dict[str, object]:
+        """Return minimal valid kwargs excluding recommendation."""
+        return {
+            "version": "0.1.0",
+            "kind": "stabilize",
+            "trf_path": "/tmp/video.stabilize.trf",
+            "shakiness": 5,
+            "accuracy": 15,
+            "smoothing": 30,
+        }
+
+    def test_recommendation_defaults_to_none(self) -> None:
+        """recommendation must default to None when not provided (AC-10 backward compat).
+
+        Red: accessing d.recommendation raises AttributeError because the field
+        does not exist in the current schema.
+        """
+        d = StabilizeDirective(**self._base_kwargs())  # type: ignore[arg-type]
+        # After implementation: d.recommendation is None by default.
+        assert d.recommendation is None  # type: ignore[attr-defined]
+
+    def test_recommendation_skip_accepted(self) -> None:
+        """recommendation='skip' must be accepted as a valid Literal value.
+
+        Red: current schema has extra='forbid'; 'recommendation' is an unknown
+        field so ValidationError is raised instead of the expected success.
+        """
+        kwargs = {**self._base_kwargs(), "recommendation": "skip"}
+        d = StabilizeDirective(**kwargs)  # type: ignore[arg-type]
+        assert d.recommendation == "skip"  # type: ignore[attr-defined]
+
+    def test_recommendation_apply_accepted(self) -> None:
+        """recommendation='apply' must be accepted as a valid Literal value.
+
+        Red: same reason as test_recommendation_skip_accepted.
+        """
+        kwargs = {**self._base_kwargs(), "recommendation": "apply"}
+        d = StabilizeDirective(**kwargs)  # type: ignore[arg-type]
+        assert d.recommendation == "apply"  # type: ignore[attr-defined]
+
+    def test_recommendation_none_explicitly_accepted(self) -> None:
+        """recommendation=None must be accepted explicitly (no coercion needed).
+
+        Red: current schema treats recommendation as extra field -> ValidationError.
+        """
+        kwargs = {**self._base_kwargs(), "recommendation": None}
+        d = StabilizeDirective(**kwargs)  # type: ignore[arg-type]
+        assert d.recommendation is None  # type: ignore[attr-defined]
+
+    def test_recommendation_invalid_literal_rejected(self) -> None:
+        """recommendation='stabilize' (not a valid Literal) must raise ValidationError.
+
+        Note: currently passes (extra='forbid' rejects any unknown field), but for
+        a different reason than after implementation (wrong Literal value).
+        Included as a regression guard for the correct error path.
+        """
+        kwargs = {**self._base_kwargs(), "recommendation": "stabilize"}
+        with pytest.raises(ValidationError):
+            StabilizeDirective(**kwargs)  # type: ignore[arg-type]
+
+    def test_recommendation_round_trip_via_model_dump(self) -> None:
+        """recommendation must survive model_dump() -> model_validate() round-trip.
+
+        Red: StabilizeDirective(recommendation='apply') currently raises
+        ValidationError (extra='forbid'), so the round-trip cannot be exercised.
+        """
+        kwargs = {**self._base_kwargs(), "recommendation": "apply"}
+        d = StabilizeDirective(**kwargs)  # type: ignore[arg-type]
+        dumped = d.model_dump()
+        assert "recommendation" in dumped, (
+            "model_dump() must include 'recommendation' key"
+        )
+        restored = StabilizeDirective.model_validate(dumped)
+        assert restored.recommendation == "apply"  # type: ignore[attr-defined]
+
+    def test_round_trip_recommendation_none(self) -> None:
+        """recommendation=None must survive model_dump() -> model_validate().
+
+        Red: d.recommendation raises AttributeError in current implementation.
+        """
+        d = StabilizeDirective(**self._base_kwargs())  # type: ignore[arg-type]
+        dumped = d.model_dump()
+        restored = StabilizeDirective.model_validate(dumped)
+        assert restored.recommendation is None  # type: ignore[attr-defined]
+
+    def test_extra_forbid_maintained_with_recommendation(self) -> None:
+        """extra='forbid' must still reject truly unknown fields alongside recommendation.
+
+        After implementation recommendation='apply' is valid, but adding an extra
+        unknown_field alongside it must still raise ValidationError.
+        """
+        kwargs = {
+            **self._base_kwargs(),
+            "recommendation": "apply",
+            "unknown_field": "x",
+        }
+        with pytest.raises(ValidationError):
+            StabilizeDirective(**kwargs)  # type: ignore[arg-type]
+
+    def test_backward_compat_existing_directive_unchanged(self) -> None:
+        """Existing StabilizeDirective construction without recommendation must still work (AC-10).
+
+        This mirrors the pattern used in TestStabilizeDirectiveRequired; it must
+        not break after the recommendation field is added.
+
+        Red: accessing d.recommendation raises AttributeError in current schema.
+        """
+        d = StabilizeDirective(
+            version="0.2.0",
+            kind="stabilize",
+            trf_path="/tmp/clip.stabilize.trf",
+            severity=0.42,
+            shakiness=7,
+            accuracy=12,
+            smoothing=50,
+        )
+        assert d.kind == "stabilize"
+        assert d.tool == "clipwright-stabilize"
+        assert d.severity == pytest.approx(0.42)
+        # recommendation must default to None and be accessible (AC-10).
+        assert d.recommendation is None  # type: ignore[attr-defined]

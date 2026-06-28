@@ -25,7 +25,7 @@ Design decisions:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import opentimelineio as otio
 from clipwright.envelope import error_result, ok_result
@@ -46,7 +46,7 @@ from clipwright.pathpolicy import (
 from clipwright.schemas import RationalTimeModel, ToolResult
 
 import clipwright_stabilize
-from clipwright_stabilize.analyze import run_vidstabdetect
+from clipwright_stabilize.analyze import _recommend, run_vidstabdetect
 from clipwright_stabilize.schemas import DetectShakeOptions, StabilizeDirective
 
 
@@ -144,6 +144,24 @@ def _detect_shake_inner(
     analysis: dict[str, Any] = run_vidstabdetect(media_path, output_path, options)
     warnings: list[str] = list(analysis["warnings"])
 
+    severity: float | None = analysis["severity"]
+
+    # Compute recommendation: use pre-computed value from analysis when available
+    # (real run_vidstabdetect path); fall back to _recommend when mocked/absent.
+    _pre_rec: str | None = analysis.get("recommendation")
+    recommendation: Literal["skip", "apply"] = (
+        _pre_rec  # type: ignore[assignment]
+        if _pre_rec in ("skip", "apply")
+        else _recommend(severity)
+    )
+
+    # severity=None: add warning that recommendation defaulted to 'apply' (AC-5).
+    if severity is None:
+        warnings.append(
+            "Recommendation defaulted to 'apply' since shake severity"
+            " could not be estimated."
+        )
+
     # --- 5. Build StabilizeDirective and annotate timeline metadata ---
     # severity=None is allowed — directive is always written when trf is generated.
 
@@ -152,7 +170,8 @@ def _detect_shake_inner(
         version=clipwright_stabilize.__version__,
         kind="stabilize",
         trf_path=str(Path(analysis["trf_path"]).resolve()),
-        severity=analysis["severity"],
+        severity=severity,
+        recommendation=recommendation,
         shakiness=options.shakiness,
         accuracy=options.accuracy,
         smoothing=options.smoothing,
@@ -185,22 +204,24 @@ def _detect_shake_inner(
         )
 
     trf_basename = trf_abs.name
-    sev = analysis["severity"]
-    sev_str = f"{sev:.3f}" if sev is not None else "unavailable"
+    sev_str = f"{severity:.3f}" if severity is not None else "unavailable"
 
     summary = (
         f"Shake analysis of {media_path.name} complete."
         f" severity={sev_str},"
+        f" recommendation={recommendation},"
         f" shakiness={options.shakiness},"
         f" smoothing={options.smoothing}."
-        f" Stabilize directive and {trf_basename} written;"
-        f" apply with clipwright-render."
+        f" Stabilize directive and {trf_basename} written."
+        f" The calling agent makes the final decision on whether to apply"
+        f" stabilization; this recommendation is advisory only."
     )
 
     return ok_result(
         summary,
         data={
-            "severity": analysis["severity"],
+            "severity": severity,
+            "recommendation": recommendation,
             "shakiness": options.shakiness,
             "accuracy": options.accuracy,
             "smoothing": options.smoothing,

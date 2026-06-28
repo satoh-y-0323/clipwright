@@ -79,6 +79,16 @@ def clipwright_detect_shake(
     Returns paths of the resulting timeline.otio and analysis.trf in artifacts.
     The .trf is consumed by clipwright-render (vidstabtransform) to apply stabilization.
 
+    Output contract (data keys):
+      severity        — float in [0.0, 1.0] (best-effort; None when .trf unparseable).
+      recommendation  — "skip" | "apply" (advisory; "apply" when severity is None).
+                        The calling agent makes the final decision on whether to
+                        apply stabilization; recommendation is advisory only.
+      shakiness       — int (1-10): vidstabdetect shakiness used for detection.
+      accuracy        — int (1-15): vidstabdetect accuracy used for detection.
+      smoothing       — int (0-1000): vidstabtransform smoothing consumed by render.
+      trf_basename    — str: basename of the generated .trf analysis file.
+
     Delegates business logic to stabilize.detect_shake.
     Uses default DetectShakeOptions() when options is None.
     """

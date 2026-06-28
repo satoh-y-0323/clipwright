@@ -9,6 +9,8 @@ Key design decisions:
   the filtergraph parser used by libvidstab).
 - _TIMEOUT_SECONDS is pinned at 300.0 for the initial release (F-5).
 - _estimate_severity is heuristic/best-effort; parse failure returns None (F-2/F-3).
+- _estimate_severity uses median aggregation for robustness to scene-cut outliers
+  in multi-shot footage; apparent motion at cuts can reach 100+ px (F-4).
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ import re
 import statistics
 import struct
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.process import resolve_tool, run
@@ -50,6 +52,14 @@ _TRF_MAX_BYTES: int = 100 * 1024 * 1024  # 100 MB
 # An empty result falls back to "media" to guarantee a non-empty basename.
 _TRF_STEM_SANITIZE_RE = re.compile(r"[^A-Za-z0-9\-_]")
 
+# Severity threshold above which stabilization is recommended (calibrated
+# against real fixtures; advisory only — final decision belongs to the caller).
+# Median per-frame displacement values against committed fixtures:
+#   calm fixture  ≈ 1.70 px → severity ≈ 0.057  (below threshold → skip)
+#   shaky fixture ≈ 2.89 px → severity ≈ 0.096  (above threshold → apply)
+#   conservative midpoint ≈ 2.4 px → severity ≈ 0.08
+_SEVERITY_APPLY_THRESHOLD: float = 0.08
+
 
 def _estimate_severity(trf_path: Path) -> float | None:
     """Best-effort severity in 0.0-1.0 from a binary TRF1 file.
@@ -64,13 +74,16 @@ def _estimate_severity(trf_path: Path) -> float | None:
         int16 fx, fy, fsize  — measurement field position/size (unused here)
         double contrast, double match  — quality metrics (unused here)
 
-    Severity = statistics.fmean of per-frame mean Euclidean displacement,
+    Severity = statistics.median of per-frame median Euclidean displacement,
     normalised by _NORM_PX and clamped to [0.0, 1.0] (ADR-D3-2 / FR-2).
+    Median is used for robustness to scene-cut outliers in multi-shot footage;
+    per-frame apparent motion at cuts can reach 100+ px and would dominate a mean.
 
     Replaces the old flat-double scan that misread int32 header/field bytes as
     IEEE-754 doubles (~1e308 each), causing sum() overflow to inf → None.
 
     Any parse error or arithmetic anomaly returns None (best-effort, F-2/F-3).
+    Broad exception catch is intentional: corrupt TRF1 input must not propagate.
 
     Args:
         trf_path: Path to the .trf binary file produced by vidstabdetect.
@@ -121,14 +134,14 @@ def _estimate_severity(trf_path: Path) -> float | None:
                 pos += _LM_SZ
 
             if lm_disps:
-                frame_disps.append(statistics.fmean(lm_disps))
+                frame_disps.append(statistics.median(lm_disps))
 
         if not frame_disps:
             return None
 
-        mean_disp = statistics.fmean(frame_disps)
+        median_disp = statistics.median(frame_disps)
         # Normalise to [0, 1]; values at or above _NORM_PX pixels clamp to 1.0.
-        severity = mean_disp / _NORM_PX
+        severity = median_disp / _NORM_PX
         if not math.isfinite(severity):
             return None
         return max(0.0, min(1.0, severity))
@@ -137,6 +150,27 @@ def _estimate_severity(trf_path: Path) -> float | None:
         # struct.error, OverflowError, MemoryError, or arithmetic failures on
         # adversarial input all return None (best-effort severity, F-2/F-3).
         return None
+
+
+def _recommend(severity: float | None) -> Literal["skip", "apply"]:
+    """Advisory recommendation for whether to apply shake stabilization.
+
+    Uses _SEVERITY_APPLY_THRESHOLD as the decision boundary.  Returns 'apply'
+    as the safe-default when severity is None (unparseable .trf), because a
+    missed stabilization is more harmful than a no-op apply on stable footage.
+
+    Calibrated against real fixtures; advisory only — the calling agent makes
+    the final decision on whether to apply stabilization.
+
+    Args:
+        severity: Shake severity in [0.0, 1.0], or None when estimation failed.
+
+    Returns:
+        'apply' when severity is None or >= _SEVERITY_APPLY_THRESHOLD, else 'skip'.
+    """
+    if severity is None or severity >= _SEVERITY_APPLY_THRESHOLD:
+        return "apply"
+    return "skip"
 
 
 def run_vidstabdetect(
@@ -157,7 +191,8 @@ def run_vidstabdetect(
     Returns:
         {
             "trf_path": str,           # absolute path of the generated .trf file
-            "severity": float | None,  # 0.0-1.0 best-effort, None when unparseable
+            "severity": float | None,  # 0.0-1.0 best-effort; None when unparseable
+            "recommendation": str,     # "skip"|"apply" advisory; "apply" when None
             "warnings": list[str],
         }
 
@@ -232,14 +267,16 @@ def run_vidstabdetect(
 
     warnings: list[str] = []
     severity = _estimate_severity(trf_abs)
+    recommendation = _recommend(severity)
     if severity is None:
         warnings.append(
             "Could not estimate shake severity from the .trf file;"
-            " severity recorded as null."
+            " severity recorded as null; recommendation defaulted to apply."
         )
 
     return {
         "trf_path": str(trf_abs.resolve()),
         "severity": severity,
+        "recommendation": recommendation,
         "warnings": warnings,
     }
