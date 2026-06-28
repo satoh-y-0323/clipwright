@@ -849,6 +849,70 @@ class TestSeverityNoneWarning:
             "warnings must have >= 1 entry when severity cannot be estimated"
         )
 
+    def test_severity_none_warning_contains_fixed_phrase(self, tmp_path: Path) -> None:
+        """severity=None warning must contain the fixed phrase (positive lock, CWE-209)."""
+        from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
+            run_vidstabdetect,
+        )
+        from clipwright_stabilize.schemas import (  # type: ignore[import-not-found]
+            DetectShakeOptions,
+        )
+
+        media = tmp_path / "v.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "v.otio"
+        opts = DetectShakeOptions()
+        trf = tmp_path / "v.stabilize.trf"
+
+        def _ok_text_no_frames(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            # VID.STAB header only (no Frame lines) -> text path returns None.
+            trf.write_bytes(b"VID.STAB 1\n# accuracy = 15\n")
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr("clipwright_stabilize.analyze.resolve_tool", _fake_resolve)
+            mp.setattr("clipwright_stabilize.analyze.run", _ok_text_no_frames)
+            result = run_vidstabdetect(media, output, opts)
+
+        assert result["severity"] is None
+        warnings = result["warnings"]
+        assert any("Could not estimate shake severity" in w for w in warnings), (
+            f"warning must contain fixed phrase 'Could not estimate shake severity'; "
+            f"got: {warnings}"
+        )
+
+    def test_severity_none_warning_no_absolute_path(self, tmp_path: Path) -> None:
+        """severity=None warning must not expose absolute path (negative lock, CWE-209)."""
+        from clipwright_stabilize.analyze import (  # type: ignore[import-not-found]
+            run_vidstabdetect,
+        )
+        from clipwright_stabilize.schemas import (  # type: ignore[import-not-found]
+            DetectShakeOptions,
+        )
+
+        media = tmp_path / "v.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "v.otio"
+        opts = DetectShakeOptions()
+        trf = tmp_path / "v.stabilize.trf"
+
+        def _ok_text_no_frames(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            # VID.STAB header only (no Frame lines) -> text path returns None.
+            trf.write_bytes(b"VID.STAB 1\n# accuracy = 15\n")
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr("clipwright_stabilize.analyze.resolve_tool", _fake_resolve)
+            mp.setattr("clipwright_stabilize.analyze.run", _ok_text_no_frames)
+            result = run_vidstabdetect(media, output, opts)
+
+        assert result["severity"] is None
+        path_str = str(tmp_path)
+        for w in result["warnings"]:
+            assert path_str not in w, (
+                f"CWE-209: absolute path must not appear in severity=None warning: {w!r}"
+            )
+
 
 # ===========================================================================
 # argv discipline: single -vf element, list[str], starts with ffmpeg binary

@@ -205,13 +205,18 @@ def _severity_from_text_trf(blob: bytes) -> float | None:
             if not line.startswith("Frame "):
                 continue
 
-            # Extract all (LM vx vy ...) matches from this frame line.
-            lm_matches = _LM_TEXT_RE.findall(line)
+            # Use finditer instead of findall to bound allocation even for adversarial
+            # single-line blobs: stop collecting after _MAX_LM_PER_FRAME matches so
+            # that the list is at most _MAX_LM_PER_FRAME+1 entries long (SR-MEM-001).
+            lm_matches: list[tuple[str, str]] = []
+            for m in _LM_TEXT_RE.finditer(line):
+                lm_matches.append((m.group(1), m.group(2)))
+                if len(lm_matches) > _MAX_LM_PER_FRAME:
+                    break  # OOM guard limit reached — this frame will be skipped
             if not lm_matches:
                 continue  # Frame N (List 0 []) — no LM entries, skip
-
             if len(lm_matches) > _MAX_LM_PER_FRAME:
-                continue  # OOM guard: skip this frame rather than returning None
+                continue  # OOM guard: skip this frame (SR-MEM-001)
 
             lm_disps = [math.hypot(int(vx), int(vy)) for vx, vy in lm_matches]
             frame_disps.append(statistics.median(lm_disps))
