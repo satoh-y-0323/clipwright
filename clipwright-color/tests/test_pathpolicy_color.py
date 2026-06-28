@@ -545,7 +545,7 @@ class TestCwdIndependentTimelineMatch:
 
         assert result["ok"] is True, (
             "spec5 D1: relative target_url must be resolved against otio_dir, not CWD."
-            " With CWD != otio_dir, the current code raises INVALID_INPUT."
+            " With CWD != otio_dir, the relative source must still resolve against otio_dir and succeed."
             f" error={result.get('error')}"
         )
 
@@ -600,5 +600,8 @@ class TestCwdIndependentTimelineMatch:
         assert result["error"]["code"] == ErrorCode.INVALID_INPUT, (
             f"AC-2: expected INVALID_INPUT, got {result['error']['code']!r}"
         )
-        # SR-R-001: CWE-209 regression guard — input media filename must not leak into error message.
+        # SR-R-001: CWE-209 regression guard — input filenames must not leak into error message.
+        # G-2: canonical error message must be the fixed sentinel string.
+        assert "Timeline source file does not match input media." in result["error"]["message"]
         assert "video" not in result["error"]["message"]
+        assert "other_clip" not in result["error"]["message"]

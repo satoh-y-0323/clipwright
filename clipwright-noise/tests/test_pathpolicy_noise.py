@@ -678,8 +678,7 @@ class TestCwdRegressionNoise:
 
         Even after the D1 fix, a timeline whose relative source points to a different
         media file must be rejected with INVALID_INPUT.  Verifies the equivalence check
-        is preserved post-fix.  Error code only is asserted; canonical message text is
-        validated after impl-noise applies check_timeline_source_matches.
+        is preserved post-fix.
         """
         from clipwright_noise.noise import detect_noise
 
@@ -722,5 +721,8 @@ class TestCwdRegressionNoise:
             "spec5 D1: mismatched relative source must return INVALID_INPUT."
             f" Got: {d['error']['code']!r}"
         )
-        # SR-R-001: CWE-209 regression guard — input media filename must not leak into error message.
+        # SR-R-001: CWE-209 regression guard — input filenames must not leak into error message.
+        # G-2: canonical error message must be the fixed sentinel string.
+        assert "Timeline source file does not match input media." in d["error"]["message"]
         assert "video" not in d["error"]["message"]
+        assert "other" not in d["error"]["message"]
