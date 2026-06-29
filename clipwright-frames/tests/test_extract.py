@@ -2346,29 +2346,37 @@ class TestInspectMediaSubprocessFailureSanitised:
 
 
 class TestIntervalFrameCountLimit:
-    """F-1 (SR-NEW / CWE-400): interval mode rejects requests exceeding _MAX_INTERVAL_FRAMES.
+    """F-1/F-3 (SR-NEW / CWE-400): interval mode rejects requests exceeding _MAX_INTERVAL_FRAMES.
 
-    The guard fires after compute_interval_timestamps() so that legitimate
-    short-duration x small-interval combinations remain accepted; only
-    long-duration x small-interval combinations that exceed the ceiling are
-    rejected without spawning any ffmpeg processes.
+    CR-T-004: monkeypatch sets _MAX_INTERVAL_FRAMES to a small cap (_SMALL_MAX=5)
+    so that boundary tests avoid materialising thousands of timestamps in a loop.
+    The pre-estimate guard (F-3, O(1)) and the exact post-count guard (F-1) are
+    both exercised through this small cap.
 
-    Boundary values tested:
-      - exactly _MAX_INTERVAL_FRAMES -> ok=True
-      - _MAX_INTERVAL_FRAMES + 1     -> ok=False / INVALID_INPUT
+    Boundary values tested (with cap=5):
+      - exactly 5 timestamps -> ok=True  (at the limit: accepted)
+      - 6 timestamps         -> ok=False / INVALID_INPUT (over the limit: rejected)
     """
 
-    def test_frame_count_at_limit_is_accepted(self, tmp_path: Path) -> None:
-        """Exactly _MAX_INTERVAL_FRAMES timestamps -> ok=True (boundary: limit OK)."""
-        from clipwright_frames.extract import _MAX_INTERVAL_FRAMES, extract_frames
+    _SMALL_MAX: int = 5  # monkeypatched cap; keeps boundary tests O(small)
+
+    def test_frame_count_at_limit_is_accepted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Exactly _SMALL_MAX timestamps -> ok=True (boundary: at limit is accepted)."""
+        from clipwright_frames.extract import extract_frames
         from clipwright_frames.plan import compute_interval_timestamps
 
-        # interval_sec=1.0, duration_sec=_MAX_INTERVAL_FRAMES -> exactly N timestamps.
+        monkeypatch.setattr(
+            "clipwright_frames.extract._MAX_INTERVAL_FRAMES", self._SMALL_MAX
+        )
+
         interval_sec = 1.0
-        duration_sec = float(_MAX_INTERVAL_FRAMES)
+        duration_sec = float(self._SMALL_MAX)
+        # Verify compute_interval_timestamps yields exactly _SMALL_MAX timestamps.
         assert (
             len(compute_interval_timestamps(duration_sec, interval_sec))
-            == _MAX_INTERVAL_FRAMES
+            == self._SMALL_MAX
         )
 
         media = str(tmp_path / "video.mp4")
@@ -2392,18 +2400,27 @@ class TestIntervalFrameCountLimit:
         assert result.ok is True
 
     def test_frame_count_one_above_limit_returns_invalid_input(
-        self, tmp_path: Path
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """_MAX_INTERVAL_FRAMES + 1 timestamps -> ok=False / INVALID_INPUT (boundary+1)."""
-        from clipwright_frames.extract import _MAX_INTERVAL_FRAMES, extract_frames
+        """_SMALL_MAX + 1 timestamps -> ok=False / INVALID_INPUT (boundary+1).
+
+        F-3: the pre-estimate check fires before compute_interval_timestamps() is
+        called (estimated = 6.0 > 5), so run() is never invoked and no list is
+        materialised.
+        """
+        from clipwright_frames.extract import extract_frames
         from clipwright_frames.plan import compute_interval_timestamps
 
-        # interval_sec=1.0, duration_sec=N+1 -> exactly N+1 timestamps.
+        monkeypatch.setattr(
+            "clipwright_frames.extract._MAX_INTERVAL_FRAMES", self._SMALL_MAX
+        )
+
         interval_sec = 1.0
-        duration_sec = float(_MAX_INTERVAL_FRAMES + 1)
+        duration_sec = float(self._SMALL_MAX + 1)
+        # Sanity: without the cap, this input yields _SMALL_MAX + 1 timestamps.
         assert (
             len(compute_interval_timestamps(duration_sec, interval_sec))
-            == _MAX_INTERVAL_FRAMES + 1
+            == self._SMALL_MAX + 1
         )
 
         media = str(tmp_path / "video.mp4")
@@ -2435,12 +2452,18 @@ class TestIntervalFrameCountLimit:
             "run() must not be called when the frame count limit is exceeded"
         )
 
-    def test_error_message_contains_frame_count_and_limit(self, tmp_path: Path) -> None:
+    def test_error_message_contains_frame_count_and_limit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """INVALID_INPUT message must state the computed frame count and the limit."""
-        from clipwright_frames.extract import _MAX_INTERVAL_FRAMES, extract_frames
+        from clipwright_frames.extract import extract_frames
+
+        monkeypatch.setattr(
+            "clipwright_frames.extract._MAX_INTERVAL_FRAMES", self._SMALL_MAX
+        )
 
         interval_sec = 1.0
-        duration_sec = float(_MAX_INTERVAL_FRAMES + 1)
+        duration_sec = float(self._SMALL_MAX + 1)
 
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
@@ -2461,20 +2484,26 @@ class TestIntervalFrameCountLimit:
         assert result.error is not None
         msg = result.error.message
         # message must state the computed frame count and the ceiling.
-        assert str(_MAX_INTERVAL_FRAMES + 1) in msg, (
-            f"message must state computed frame count {_MAX_INTERVAL_FRAMES + 1}; "
+        assert str(self._SMALL_MAX + 1) in msg, (
+            f"message must state computed frame count {self._SMALL_MAX + 1}; "
             f"got: {msg!r}"
         )
-        assert str(_MAX_INTERVAL_FRAMES) in msg, (
-            f"message must state the limit {_MAX_INTERVAL_FRAMES}; got: {msg!r}"
+        assert str(self._SMALL_MAX) in msg, (
+            f"message must state the limit {self._SMALL_MAX}; got: {msg!r}"
         )
 
-    def test_error_hint_mentions_interval_sec(self, tmp_path: Path) -> None:
+    def test_error_hint_mentions_interval_sec(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """INVALID_INPUT hint must guide the caller to increase interval_sec."""
-        from clipwright_frames.extract import _MAX_INTERVAL_FRAMES, extract_frames
+        from clipwright_frames.extract import extract_frames
+
+        monkeypatch.setattr(
+            "clipwright_frames.extract._MAX_INTERVAL_FRAMES", self._SMALL_MAX
+        )
 
         interval_sec = 1.0
-        duration_sec = float(_MAX_INTERVAL_FRAMES + 1)
+        duration_sec = float(self._SMALL_MAX + 1)
 
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
@@ -2498,12 +2527,18 @@ class TestIntervalFrameCountLimit:
             f"hint must mention 'interval_sec' to guide the caller; got: {hint!r}"
         )
 
-    def test_error_message_does_not_contain_file_paths(self, tmp_path: Path) -> None:
+    def test_error_message_does_not_contain_file_paths(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """INVALID_INPUT error message must not expose file paths (CWE-209)."""
-        from clipwright_frames.extract import _MAX_INTERVAL_FRAMES, extract_frames
+        from clipwright_frames.extract import extract_frames
+
+        monkeypatch.setattr(
+            "clipwright_frames.extract._MAX_INTERVAL_FRAMES", self._SMALL_MAX
+        )
 
         interval_sec = 1.0
-        duration_sec = float(_MAX_INTERVAL_FRAMES + 1)
+        duration_sec = float(self._SMALL_MAX + 1)
 
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
@@ -2529,4 +2564,51 @@ class TestIntervalFrameCountLimit:
         )
         assert "video.mp4" not in msg, (
             f"error message must not contain filename; got: {msg!r}"
+        )
+
+    def test_pre_estimate_prevents_oom_on_tiny_interval(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F-3: pre-estimate guard rejects pathological input before list materialisation.
+
+        A tiny interval_sec with a long clip would produce far more than _SMALL_MAX
+        timestamps. The O(1) pre-estimate catches this before compute_interval_timestamps()
+        builds the list, preventing OOM (CWE-400).
+        """
+        from clipwright_frames.extract import extract_frames
+
+        monkeypatch.setattr(
+            "clipwright_frames.extract._MAX_INTERVAL_FRAMES", self._SMALL_MAX
+        )
+
+        interval_sec = 0.001  # tiny interval
+        duration_sec = 100.0  # long clip: estimated = 100_000 >> _SMALL_MAX
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        media_info = _make_media_info(path=media, duration_sec=duration_sec)
+
+        out_dir = tmp_path / "frames_out"
+        out_dir.mkdir()
+
+        run_call_count = [0]
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            run_call_count[0] += 1
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with (
+            patch("clipwright_frames.extract.inspect_media", return_value=media_info),
+            patch("clipwright_frames.extract.run", side_effect=_fake_run),
+        ):
+            result = extract_frames(
+                media, str(out_dir), _opts(mode="interval", interval_sec=interval_sec)
+            )
+
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.INVALID_INPUT
+        # run() must never be called: the pre-estimate fires before any ffmpeg launch.
+        assert run_call_count[0] == 0, (
+            "run() must not be called when the pre-estimate exceeds the limit"
         )

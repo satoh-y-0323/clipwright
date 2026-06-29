@@ -53,10 +53,11 @@ _MAX_TIMEOUT_DURATION_S: float = 315_360_000.0
 
 # Maximum number of frames allowed in interval mode to prevent resource exhaustion.
 # A small interval_sec combined with a long duration_sec can produce thousands of
-# ffmpeg processes and output files. This guard fires after
-# compute_interval_timestamps() so that short-duration x small-interval cases are
-# accepted; only long-duration combinations exceeding the ceiling are rejected
-# (CWE-400 / SR-NEW).
+# ffmpeg processes and output files.
+# Two guards apply in sequence (CWE-400 / SR-NEW / F-3):
+#   1. Pre-estimate (O(1)): duration_sec / interval_sec > limit -> reject immediately
+#      before compute_interval_timestamps() materialises the list (OOM prevention).
+#   2. Exact post-count: len(timestamps) > limit -> reject with the precise count.
 _MAX_INTERVAL_FRAMES: int = 10_000
 
 
@@ -246,14 +247,33 @@ def _extract_frames_inner(
                 "Use a smaller interval_sec value."
             )
         else:
-            timestamps = compute_interval_timestamps(duration_sec, interval_sec)
-            n = len(timestamps)
-            if n > _MAX_INTERVAL_FRAMES:
+            # Pre-estimate the frame count without materialising the list to avoid
+            # OOM on pathological inputs (e.g. tiny interval over a long clip) before
+            # the exact post-count guard below can fire (CWE-400 / F-3).
+            # interval_sec is gt=0.0 and <= duration_sec here, so no ZeroDivisionError.
+            estimated = duration_sec / interval_sec
+            if estimated > _MAX_INTERVAL_FRAMES:
                 raise ClipwrightError(
                     code=ErrorCode.INVALID_INPUT,
                     message=(
-                        f"interval_sec={interval_sec} would extract {n} frames, "
-                        f"exceeding the limit of {_MAX_INTERVAL_FRAMES}."
+                        f"interval_sec={interval_sec} would extract"
+                        f" {int(estimated)} frames,"
+                        f" exceeding the limit of {_MAX_INTERVAL_FRAMES}."
+                    ),
+                    hint=(
+                        f"Increase interval_sec so the number of extracted frames "
+                        f"stays within {_MAX_INTERVAL_FRAMES}."
+                    ),
+                )
+            timestamps = compute_interval_timestamps(duration_sec, interval_sec)
+            frame_count = len(timestamps)
+            if frame_count > _MAX_INTERVAL_FRAMES:  # exact boundary guard (keep)
+                raise ClipwrightError(
+                    code=ErrorCode.INVALID_INPUT,
+                    message=(
+                        f"interval_sec={interval_sec} would extract"
+                        f" {frame_count} frames,"
+                        f" exceeding the limit of {_MAX_INTERVAL_FRAMES}."
                     ),
                     hint=(
                         f"Increase interval_sec so the number of extracted frames "
