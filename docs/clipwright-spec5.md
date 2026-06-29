@@ -519,7 +519,15 @@ the §4 real-MCP e2e passes.
 
 ## Missing Features / Friction
 
-### Caption line-wrapping for space-delimited (Latin) languages  *Medium*  *(wrap)*
+### Caption line-wrapping for space-delimited (Latin) languages  *Medium*  *(wrap)* — **RESOLVED**
+
+**Resolution (shipped — clipwright-wrap v0.3.0 / suite v0.28.0):** `clipwright_wrap_captions`
+now accepts space-delimited Latin-script languages (`en`, `es`, `fr`, `de`, `it`, `pt`, `nl`)
+in addition to CJK/Thai. Latin cues are wrapped on whitespace word boundaries using the
+existing `max_chars`/`max_lines` shaping; CJK/Thai (budoux) segmentation and output are
+byte-for-byte unchanged. The `transcribe → wrap → render` chain is unblocked for English
+subtitles. Latin word-wrap runs in-process (whitespace split); the budoux subprocess is only
+invoked on CJK/Thai.
 
 **What it does**
 Lets `clipwright_wrap_captions` wrap captions for languages that break on spaces
@@ -732,7 +740,7 @@ frames      ✓ scene_sample;        transition  ✓ (4:2:0 confirmed on real fo
                                                     low-motion footage — needs severity
                                                     gate (D6/D3, next session)
 transcribe  ✓ (en, CPU 1.37x)      color       ✓ create path; ✗ with timeline (D1)
-wrap        — N/A (CJK/Thai only; English friction)   loudness ✗ (D1)
+wrap        ✓ (Latin en/es/fr/de/it/pt/nl RESOLVED v0.28.0)   loudness ✗ (D1)
                                     noise       ✗ (D1 cascade; same latent bug)
 ```
 
@@ -793,8 +801,11 @@ directly for Latin captions).
    path existing. The unused `build_fps_command` was removed. Hardened against per-`-ss`
    process blow-up with a frame-count guard (pre-estimate + exact, CWE-400). Verified by a
    non-multiple-length integration e2e (9 s / 4 s) and a real stdio-MCP e2e.
-5. **Caption wrap for Latin languages** (Medium): `wrap_captions` hard-errors on
-   English; accept space-delimited wrapping or an explicit passthrough.
+5. **Caption wrap for Latin languages** (Medium) — **RESOLVED** (shipped —
+   clipwright-wrap v0.3.0 / suite v0.28.0): `clipwright_wrap_captions` now accepts
+   space-delimited Latin-script languages (`en`, `es`, `fr`, `de`, `it`, `pt`, `nl`);
+   Latin cues are wrapped on whitespace word boundaries using the existing
+   `max_chars`/`max_lines` shaping. CJK/Thai (budoux) unchanged.
 6. **Word-level/karaoke captions · color-grading depth · video PiP · NLE
    interop · subtitle translation** (Medium): reach/quality features for a general
    editing suite.

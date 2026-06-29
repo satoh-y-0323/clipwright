@@ -5,6 +5,20 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.28.0] - 2026-06-29
+
+Latin-script (space-delimited) caption word-wrap support (spec5).
+
+### Added (`clipwright-wrap` v0.3.0)
+
+- **Latin (space-delimited) language word-wrap**: `clipwright_wrap_captions` now accepts
+  space-delimited Latin-script languages (`en`, `es`, `fr`, `de`, `it`, `pt`, `nl`) in
+  addition to CJK/Thai. Latin cues are wrapped on word boundaries using whitespace
+  segmentation; CJK/Thai segmentation (budoux) and output are byte-for-byte unchanged
+  (fully backward-compatible). This unblocks the `transcribe → wrap → render` chain for
+  English subtitles, which previously hard-errored with a `VALIDATION_ERROR` on the
+  `language` parameter.
+
 ## [0.27.0] - 2026-06-29
 
 Frame-extraction interval-mode manifest fix (spec5 D2).
