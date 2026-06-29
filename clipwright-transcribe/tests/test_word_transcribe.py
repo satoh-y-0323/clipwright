@@ -154,7 +154,7 @@ class TestWordTimestampsSchema:
         F-T-01: word_timestamps is an additive optional field defaulting to False.
         """
         opts = TranscribeOptions()
-        # AttributeError until word_timestamps is added to TranscribeOptions
+        # word_timestamps defaults to False (F-T-01)
         assert opts.word_timestamps is False
 
     def test_word_timestamps_explicit_false(self) -> None:
