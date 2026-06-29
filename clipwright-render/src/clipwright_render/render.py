@@ -26,6 +26,7 @@ Design decisions:
 
 from __future__ import annotations
 
+import contextlib
 import math
 import tempfile
 from pathlib import Path
@@ -1022,237 +1023,258 @@ def _render_inner(
     # _append_subtitle_filter detects is_ass=True (suppresses charenc and
     # force_style per DC-AS-002 / ADR-K4).
     #
-    # The TemporaryDirectory object is held as _karaoke_scratch so it remains
-    # alive through the entire _render_inner call—covering both build_plan
-    # (filter_complex generation) and any subsequent ffmpeg execution (actual
-    # file read).  When _render_inner returns (normally or via exception) the
-    # object goes out of scope and Python cleans up the directory automatically.
+    # SR-L-2: ExitStack provides RAII cleanup of the TemporaryDirectory.
+    # The tmpdir remains alive through the entire with-block scope, covering
+    # both build_plan (filter_complex generation) and any subsequent ffmpeg
+    # execution (actual .ass file read).  The ExitStack __exit__ always runs,
+    # whether _render_inner returns normally or raises an exception.
     #
-    # When karaoke=False (default), _karaoke_scratch stays None and this block
-    # is completely bypassed; existing subtitle paths flow unmodified to
+    # When karaoke=False (default), ExitStack exits immediately with no
+    # cleanup to perform; existing subtitle paths flow unmodified to
     # build_plan (F-R-07 / AC-7 regression guarantee).
-    _karaoke_scratch: tempfile.TemporaryDirectory[str] | None = None
-    if options.subtitle is not None and options.subtitle.karaoke:
-        # Frame dimensions for PlayResX/Y in the ASS [Script Info] section.
-        # Use the explicit render resolution when specified; fall back to the
-        # probe dimensions from the first source; last resort 1920×1080 (should
-        # not occur in practice: no-video sources raise UNSUPPORTED upstream).
-        _kara_w: int = (
-            options.width if options.width is not None else (probe_info.width or 1920)
-        )
-        _kara_h: int = (
-            options.height
-            if options.height is not None
-            else (probe_info.height or 1080)
-        )
-        _karaoke_scratch = tempfile.TemporaryDirectory()
-        _ass_cues = _parse_word_vtt(
-            options.subtitle.path, max_words=MAX_WORDS, max_cues=MAX_CUES
-        )
-        _ass_content = _build_karaoke_ass(_ass_cues, options.subtitle, _kara_w, _kara_h)
-        _ass_path = Path(_karaoke_scratch.name) / "karaoke.ass"
-        _ass_path.write_text(_ass_content, encoding="utf-8")
-        # Replace subtitle.path with the generated .ass.  model_copy is used
-        # (bypasses Pydantic validators; see SR-M-3 note in step 4c).
-        # The karaoke field is preserved in the copied object but is not
-        # re-evaluated downstream.
-        options = options.model_copy(
-            update={
-                "subtitle": options.subtitle.model_copy(update={"path": str(_ass_path)})
-            }
+    with contextlib.ExitStack() as _karaoke_cleanup:
+        if options.subtitle is not None and options.subtitle.karaoke:
+            # Frame dimensions for PlayResX/Y in the ASS [Script Info] section.
+            # Use the explicit render resolution when specified; fall back to the
+            # probe dimensions from the first source; last resort 1920×1080 (should
+            # not occur in practice: no-video sources raise UNSUPPORTED upstream).
+            _kara_w: int = (
+                options.width
+                if options.width is not None
+                else (probe_info.width or 1920)
+            )
+            _kara_h: int = (
+                options.height
+                if options.height is not None
+                else (probe_info.height or 1080)
+            )
+            _tmpdir_name = _karaoke_cleanup.enter_context(tempfile.TemporaryDirectory())
+            _ass_cues = _parse_word_vtt(
+                options.subtitle.path, max_words=MAX_WORDS, max_cues=MAX_CUES
+            )
+            _ass_content = _build_karaoke_ass(
+                _ass_cues, options.subtitle, _kara_w, _kara_h
+            )
+            _ass_path = Path(_tmpdir_name) / "karaoke.ass"
+            # SR-L-3: OS temp paths never contain single quotes in practice, but
+            # assert defensively before embedding the path in the filtergraph.
+            # _escape_filtergraph handles backslash and colon; single-quote is
+            # not escaped there, so a path containing "'" would break the
+            # filename='...' ffmpeg filtergraph syntax (CR-E-001).
+            assert "'" not in str(_ass_path), (  # noqa: S101
+                "SR-L-3: generated karaoke.ass temp path unexpectedly contains a"
+                " single quote; filtergraph injection possible."
+            )
+            _ass_path.write_text(_ass_content, encoding="utf-8")
+            # Replace subtitle.path with the generated .ass.  model_copy is used
+            # (bypasses Pydantic validators; see SR-M-3 note in step 4c).
+            # The karaoke field is preserved in the copied object but is not
+            # re-evaluated downstream.
+            options = options.model_copy(
+                update={
+                    "subtitle": options.subtitle.model_copy(
+                        update={"path": str(_ass_path)}
+                    )
+                }
+            )
+
+        # --- 5b. build_plan ---
+        # Pass source_probes to enable multi-source path (ADR-C2-r2 / ADR-C9-r2).
+        # Pass bgm_clip for BGM audio chain integration (ADR-B5-r2; bgm=None for
+        # backward compat).
+        #
+        # L-4 / S-I-2: text_overlays is not passed here; build_plan auto-collects
+        # text_overlay markers from KeptRangeList._timeline when text_overlays=None
+        # (the default).  ranges is a KeptRangeList with _timeline set by
+        # resolve_kept_ranges, so marker lookup happens automatically inside build_plan.
+        # Callers that pass a plain list[KeptRange] (e.g. in unit tests) will receive
+        # no overlays (getattr returns None; _collect_text_overlays is not called).
+        # IMPORTANT: if build_plan is ever called with a plain list[KeptRange] instead
+        # of a KeptRangeList here, text_overlay markers will be silently ignored.
+        # This is the designed fallback; however, any refactor that switches from
+        # resolve_kept_ranges to manual KeptRange construction must pass text_overlays
+        # explicitly to preserve overlay functionality.
+        plan = build_plan(
+            ranges,
+            probe_info,
+            options,
+            denoise=raw_denoise,
+            loudness=raw_loudness,
+            color=raw_color,
+            stabilize=raw_stabilize,  # §6-B
+            source_probes=source_probes,
+            bgm=bgm_clip,
+            resolved_encoder=resolved,
+            reframe=raw_reframe,  # §7.2
+            transition=raw_transition,  # ADR-RT-2
         )
 
-    # --- 5b. build_plan ---
-    # Pass source_probes to enable multi-source path (ADR-C2-r2 / ADR-C9-r2).
-    # Pass bgm_clip for BGM audio chain integration (ADR-B5-r2; bgm=None for
-    # backward compat).
-    #
-    # L-4 / S-I-2: text_overlays is not passed here; build_plan auto-collects
-    # text_overlay markers from KeptRangeList._timeline when text_overlays=None
-    # (the default).  ranges is a KeptRangeList with _timeline set by
-    # resolve_kept_ranges, so marker lookup happens automatically inside build_plan.
-    # Callers that pass a plain list[KeptRange] (e.g. in unit tests) will receive
-    # no overlays (getattr returns None; _collect_text_overlays is not called).
-    # IMPORTANT: if build_plan is ever called with a plain list[KeptRange] instead
-    # of a KeptRangeList here, text_overlay markers will be silently ignored.
-    # This is the designed fallback; however, any refactor that switches from
-    # resolve_kept_ranges to manual KeptRange construction must pass text_overlays
-    # explicitly to preserve overlay functionality.
-    plan = build_plan(
-        ranges,
-        probe_info,
-        options,
-        denoise=raw_denoise,
-        loudness=raw_loudness,
-        color=raw_color,
-        stabilize=raw_stabilize,  # §6-B
-        source_probes=source_probes,
-        bgm=bgm_clip,
-        resolved_encoder=resolved,
-        reframe=raw_reframe,  # §7.2
-        transition=raw_transition,  # ADR-RT-2
-    )
+        # --- 6a. dry_run ---
+        if dry_run:
+            size_info = (
+                f", estimated size {plan.estimated_size_bytes / 1024 / 1024:.1f} MB"
+                if plan.estimated_size_bytes is not None
+                else ", estimated size unavailable"
+            )
+            summary = (
+                f"[dry_run] {plan.segment_count} segment(s),"
+                f" total duration {plan.total_duration_seconds:.2f}s{size_info}."
+                f" Running ffmpeg would generate {output_path.name}."
+            )
+            hw_warnings: list[str] = resolved.warnings if resolved is not None else []
+            return ok_result(
+                summary,
+                data={
+                    "ffmpeg_args": plan.ffmpeg_args,
+                    "filter_complex": plan.filter_complex,
+                    "segment_count": plan.segment_count,
+                    "total_duration_seconds": plan.total_duration_seconds,
+                    "estimated_size_bytes": plan.estimated_size_bytes,
+                },
+                warnings=plan.warnings + subtitle_warnings + hw_warnings,
+            )
 
-    # --- 6a. dry_run ---
-    if dry_run:
-        size_info = (
-            f", estimated size {plan.estimated_size_bytes / 1024 / 1024:.1f} MB"
-            if plan.estimated_size_bytes is not None
-            else ", estimated size unavailable"
+        # --- 6b. Execute ---
+        ffmpeg = resolve_tool("ffmpeg", "CLIPWRIGHT_FFMPEG")
+        timeout = max(300, math.ceil(plan.total_duration_seconds * 10))
+
+        # Overwrite flag (-y / -n)
+        overwrite_flag = ["-y"] if options.overwrite else ["-n"]
+
+        # Determine -hwaccel value for decode acceleration (ADR-6 / AC-7).
+        # Only emitted when hwaccel_decode=True; BGM input is excluded (ADR-6).
+        # Vendor mapping:
+        #   explicit vendor → hwaccel_value(vendor) (amf yields None → skip)
+        #   auto            → resolved.hwaccel_value or "auto" (libx264 fallback)
+        #   none            → "auto" (parent confirmed Q1)
+        _hw_decode_value: str | None = None
+        if options.hwaccel_decode:
+            _vendor = options.hw_encoder
+            if _vendor in ("nvenc", "amf", "qsv", "vaapi", "videotoolbox"):
+                _hw_decode_value = hwaccel_value(_vendor)
+            elif _vendor == "auto":
+                _hw_decode_value = (
+                    resolved.hwaccel_value if resolved is not None else None
+                ) or "auto"
+            else:
+                # hw_encoder == "none"
+                _hw_decode_value = "auto"
+
+        # -i list taken directly from plan.input_sources (ADR-C9-r2).
+        # Order is not recalculated in render.py (eliminates duplicate logic).
+        # When _hw_decode_value is set, prepend -hwaccel <value> before each -i (ADR-6).
+        inputs: list[str] = []
+        for src in plan.input_sources:
+            if _hw_decode_value is not None:
+                inputs += ["-hwaccel", _hw_decode_value]
+            inputs += ["-i", src]
+
+        # When BGM is present, prepend -stream_loop -1 and append BGM as the last
+        # -i (ADR-B6-r2/DC-AS-005). -stream_loop is an input option; it must
+        # immediately precede -i. The invariant BGM index == len(plan.input_sources)
+        # is maintained (DC-AS-005).
+        if plan.bgm_source is not None:
+            inputs += ["-stream_loop", "-1", "-i", plan.bgm_source]
+
+        # Image overlay inputs: appended AFTER bgm (ADR-OV-5/G4).
+        # -loop 1 -t {total_duration} is prepended so the single-frame PNG's internal
+        # timestamps advance with the output clock; without this, fade=t=in:st=N fires
+        # at timestamp 0 only and the alpha channel is 0 for the entire clip (V2-1 fix).
+        # NO -hwaccel on image inputs.
+        # Boundary, extension, and existence checks are applied here (defence-in-depth;
+        # OTIO is untrusted; V2-7/DC-AM-004).
+        _img_dur: str | None = (
+            f"{plan.total_duration_seconds:g}" if plan.image_sources else None
         )
+        for img in plan.image_sources:
+            _img_p = Path(img.replace("\\", "/"))
+            _img_exists_p = (
+                (timeline_path.parent / _img_p) if not _img_p.is_absolute() else _img_p
+            )
+            # Existence check (FILE_NOT_FOUND; basename only; CWE-209)
+            if not _img_exists_p.exists():
+                raise ClipwrightError(
+                    code=ErrorCode.FILE_NOT_FOUND,
+                    message=f"Image overlay file not found: {_img_p.name}",
+                    hint=(
+                        "Place the image overlay file referenced in the OTIO timeline"
+                        " in the expected location."
+                    ),
+                )
+            # Extension allowlist (INVALID_INPUT; after existence check per ADR-OV-3)
+            _img_ext = _img_p.suffix.lower()
+            if _img_ext not in _ALLOWED_IMAGE_EXTENSIONS:
+                raise ClipwrightError(
+                    code=ErrorCode.INVALID_INPUT,
+                    message=(
+                        f"Image overlay file extension is not allowed: {_img_ext!r}."
+                    ),
+                    hint=(
+                        "Use an image overlay file with extension .png, .jpg, .jpeg,"
+                        " or .webp."
+                    ),
+                )
+            # Unified boundary/symlink check (ADR-PP-1): external absolute paths allowed
+            check_media_ref(img, timeline_path.parent, "image")
+            _verify_image_magic(img)  # fast corrupt-check before -loop 1 can hang
+            if _img_dur is not None:
+                inputs += ["-loop", "1", "-t", _img_dur]
+            inputs += ["-i", img]
+
+        # F-4: When stabilize is enabled, output must be absolutised so that
+        # changing cwd to the trf parent directory does not redirect the output
+        # file into the wrong directory. -i (input_sources) is already absolute;
+        # subtitles/drawtext are absolutised by _escape_filtergraph; the only
+        # remaining relative path risk is the output argument. §6-C.
+        output_arg = (
+            str(Path(output).resolve())
+            if plan.stabilize_cwd is not None
+            else str(output)
+        )
+        # vid.stab #144: decoder frame-threading corrupts B-frame refs; serialize.
+        global_decode_args = ["-threads", "1"] if plan.stabilize_cwd is not None else []
+        cmd = (
+            [ffmpeg]
+            + overwrite_flag
+            + global_decode_args
+            + inputs
+            + plan.ffmpeg_args
+            + [output_arg]
+        )
+
+        run(cmd, timeout=float(timeout), cwd=plan.stabilize_cwd)  # §6-C
+
+        # Verify output file exists
+        if not output_path.exists():
+            raise ClipwrightError(
+                code=ErrorCode.SUBPROCESS_FAILED,
+                message=(
+                    "ffmpeg exited successfully but the output file was not generated."
+                ),
+                hint="Check the ffmpeg command arguments and output path.",
+            )
+
+        output_size = output_path.stat().st_size
         summary = (
-            f"[dry_run] {plan.segment_count} segment(s),"
-            f" total duration {plan.total_duration_seconds:.2f}s{size_info}."
-            f" Running ffmpeg would generate {output_path.name}."
+            f"Concatenated {plan.segment_count} clip(s) and generated a video of"
+            f" {plan.total_duration_seconds:.2f}s"
+            f" ({output_size / 1024 / 1024:.1f} MB)."
         )
-        hw_warnings: list[str] = resolved.warnings if resolved is not None else []
         return ok_result(
             summary,
             data={
-                "ffmpeg_args": plan.ffmpeg_args,
-                "filter_complex": plan.filter_complex,
                 "segment_count": plan.segment_count,
                 "total_duration_seconds": plan.total_duration_seconds,
-                "estimated_size_bytes": plan.estimated_size_bytes,
+                "output_size_bytes": output_size,
             },
-            warnings=plan.warnings + subtitle_warnings + hw_warnings,
+            artifacts=[
+                {
+                    "role": "output",
+                    "path": str(output_path),
+                    "format": Path(output_path).suffix.lstrip("."),
+                }
+            ],
+            warnings=plan.warnings
+            + subtitle_warnings
+            + (resolved.warnings if resolved is not None else []),
         )
-
-    # --- 6b. Execute ---
-    ffmpeg = resolve_tool("ffmpeg", "CLIPWRIGHT_FFMPEG")
-    timeout = max(300, math.ceil(plan.total_duration_seconds * 10))
-
-    # Overwrite flag (-y / -n)
-    overwrite_flag = ["-y"] if options.overwrite else ["-n"]
-
-    # Determine -hwaccel value for decode acceleration (ADR-6 / AC-7).
-    # Only emitted when hwaccel_decode=True; BGM input is excluded (ADR-6).
-    # Vendor mapping:
-    #   explicit vendor → hwaccel_value(vendor) (amf yields None → skip)
-    #   auto            → resolved.hwaccel_value or "auto" (libx264 fallback → "auto")
-    #   none            → "auto" (parent confirmed Q1)
-    _hw_decode_value: str | None = None
-    if options.hwaccel_decode:
-        _vendor = options.hw_encoder
-        if _vendor in ("nvenc", "amf", "qsv", "vaapi", "videotoolbox"):
-            _hw_decode_value = hwaccel_value(_vendor)
-        elif _vendor == "auto":
-            _hw_decode_value = (
-                resolved.hwaccel_value if resolved is not None else None
-            ) or "auto"
-        else:
-            # hw_encoder == "none"
-            _hw_decode_value = "auto"
-
-    # -i list taken directly from plan.input_sources (ADR-C9-r2).
-    # Order is not recalculated in render.py (eliminates duplicate logic).
-    # When _hw_decode_value is set, prepend -hwaccel <value> before each -i (ADR-6).
-    inputs: list[str] = []
-    for src in plan.input_sources:
-        if _hw_decode_value is not None:
-            inputs += ["-hwaccel", _hw_decode_value]
-        inputs += ["-i", src]
-
-    # When BGM is present, prepend -stream_loop -1 and append BGM as the last
-    # -i (ADR-B6-r2/DC-AS-005). -stream_loop is an input option; it must
-    # immediately precede -i. The invariant BGM index == len(plan.input_sources)
-    # is maintained (DC-AS-005).
-    if plan.bgm_source is not None:
-        inputs += ["-stream_loop", "-1", "-i", plan.bgm_source]
-
-    # Image overlay inputs: appended AFTER bgm (ADR-OV-5/G4).
-    # -loop 1 -t {total_duration} is prepended so the single-frame PNG's internal
-    # timestamps advance with the output clock; without this, fade=t=in:st=N fires
-    # at timestamp 0 only and the alpha channel is 0 for the entire clip (V2-1 fix).
-    # NO -hwaccel on image inputs.
-    # Boundary, extension, and existence checks are applied here (defence-in-depth;
-    # OTIO is untrusted; V2-7/DC-AM-004).
-    _img_dur: str | None = (
-        f"{plan.total_duration_seconds:g}" if plan.image_sources else None
-    )
-    for img in plan.image_sources:
-        _img_p = Path(img.replace("\\", "/"))
-        _img_exists_p = (
-            (timeline_path.parent / _img_p) if not _img_p.is_absolute() else _img_p
-        )
-        # Existence check (FILE_NOT_FOUND; basename only; CWE-209)
-        if not _img_exists_p.exists():
-            raise ClipwrightError(
-                code=ErrorCode.FILE_NOT_FOUND,
-                message=f"Image overlay file not found: {_img_p.name}",
-                hint=(
-                    "Place the image overlay file referenced in the OTIO timeline"
-                    " in the expected location."
-                ),
-            )
-        # Extension allowlist (INVALID_INPUT; after existence check per ADR-OV-3)
-        _img_ext = _img_p.suffix.lower()
-        if _img_ext not in _ALLOWED_IMAGE_EXTENSIONS:
-            raise ClipwrightError(
-                code=ErrorCode.INVALID_INPUT,
-                message=f"Image overlay file extension is not allowed: {_img_ext!r}.",
-                hint=(
-                    "Use an image overlay file with extension .png, .jpg, .jpeg,"
-                    " or .webp."
-                ),
-            )
-        # Unified boundary/symlink check (ADR-PP-1): absolute external images allowed
-        check_media_ref(img, timeline_path.parent, "image")
-        _verify_image_magic(img)  # fast corrupt-check before -loop 1 can hang
-        if _img_dur is not None:
-            inputs += ["-loop", "1", "-t", _img_dur]
-        inputs += ["-i", img]
-
-    # F-4: When stabilize is enabled, output must be absolutised so that
-    # changing cwd to the trf parent directory does not redirect the output
-    # file into the wrong directory. -i (input_sources) is already absolute;
-    # subtitles/drawtext are absolutised by _escape_filtergraph; the only
-    # remaining relative path risk is the output argument. §6-C.
-    output_arg = (
-        str(Path(output).resolve()) if plan.stabilize_cwd is not None else str(output)
-    )
-    # vid.stab #144: decoder frame-threading corrupts B-frame refs; serialize.
-    global_decode_args = ["-threads", "1"] if plan.stabilize_cwd is not None else []
-    cmd = (
-        [ffmpeg]
-        + overwrite_flag
-        + global_decode_args
-        + inputs
-        + plan.ffmpeg_args
-        + [output_arg]
-    )
-
-    run(cmd, timeout=float(timeout), cwd=plan.stabilize_cwd)  # §6-C
-
-    # Verify output file exists
-    if not output_path.exists():
-        raise ClipwrightError(
-            code=ErrorCode.SUBPROCESS_FAILED,
-            message="ffmpeg exited successfully but the output file was not generated.",
-            hint="Check the ffmpeg command arguments and output path.",
-        )
-
-    output_size = output_path.stat().st_size
-    summary = (
-        f"Concatenated {plan.segment_count} clip(s) and generated a video of"
-        f" {plan.total_duration_seconds:.2f}s"
-        f" ({output_size / 1024 / 1024:.1f} MB)."
-    )
-    return ok_result(
-        summary,
-        data={
-            "segment_count": plan.segment_count,
-            "total_duration_seconds": plan.total_duration_seconds,
-            "output_size_bytes": output_size,
-        },
-        artifacts=[
-            {
-                "role": "output",
-                "path": str(output_path),
-                "format": Path(output_path).suffix.lstrip("."),
-            }
-        ],
-        warnings=plan.warnings
-        + subtitle_warnings
-        + (resolved.warnings if resolved is not None else []),
-    )

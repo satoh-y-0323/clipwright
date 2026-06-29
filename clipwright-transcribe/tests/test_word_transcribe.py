@@ -384,6 +384,25 @@ class TestWordTimestampsTrueIntegration:
             f"  Clip clipwright metadata: {cw!r}"
         )
 
+    def test_otio_clip_words_metadata_version(self, tmp_path: Path) -> None:
+        """metadata['clipwright']['version'] must be '0.5.0' in OTIO (drift guard REL-01).
+
+        ADR-K8: version field in clipwright OTIO metadata must match the released
+        package version. This drift guard catches a version bump in pyproject.toml
+        that is not reflected in __version__ (and thus not propagated to OTIO output).
+        """
+        result, output_path = self._run_with_words(tmp_path)
+        assert result.ok is True, f"transcribe_media failed: {result.error}"
+        timeline = otio.adapters.read_from_file(str(output_path))
+        v1 = timeline.tracks[0]
+        clips = [c for c in v1 if isinstance(c, otio.schema.Clip)]
+        assert len(clips) == 1, "Expected exactly one clip on V1 track"
+        cw = clips[0].metadata.get("clipwright", {})
+        assert cw.get("version") == "0.5.0", (
+            f"metadata['clipwright']['version'] must be '0.5.0' (drift guard REL-01), "
+            f"got {cw.get('version')!r}"
+        )
+
 
 # ===========================================================================
 # 5. AC-2 regression: word_timestamps=False leaves SRT/VTT/OTIO unchanged

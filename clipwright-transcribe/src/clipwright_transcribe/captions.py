@@ -197,29 +197,159 @@ class WordSegment(TypedDict):
     words: list[WordTiming]
 
 
+class OtioWordEntry(TypedDict):
+    """A single word entry in OTIO metadata (ADR-K1 schema).
+
+    Keys use 'start'/'end' (not 'start_sec'/'end_sec') to match the OTIO convention
+    established in ADR-K1.
+    """
+
+    text: str
+    start: float
+    end: float
+
+
 # ---------------------------------------------------------------------------
 # Word-level functions (s1-captions-impl)
 # ---------------------------------------------------------------------------
 
 
+def _check_word_limit(total_words: int) -> None:
+    """Raise INVALID_INPUT when total_words exceeds MAX_WORDS_TRANSCRIBE (CWE-400).
+
+    Must be called before the word is appended to memory, so that no more than
+    MAX_WORDS_TRANSCRIBE words are ever stored (off-by-one guard / SR L-1).
+
+    Args:
+        total_words: Cumulative word count including the word about to be appended.
+    """
+    if total_words > MAX_WORDS_TRANSCRIBE:
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=f"Word count exceeds {MAX_WORDS_TRANSCRIBE}.",
+            hint=(
+                f"Split the audio into shorter segments "
+                f"(limit: {MAX_WORDS_TRANSCRIBE} words)."
+            ),
+        )
+
+
+def _extract_words_from_tokens(
+    tokens: list[Any], total_words_before: int
+) -> list[WordTiming]:
+    """Reconstruct per-word timing from a single segment's BPE token list.
+
+    Applies word-reconstruction rules confirmed in spike-whisper-word.md (ADR-K2):
+    - Special tokens (text starting with ``[_`` or ``<|``) are excluded.
+    - Tokens with degenerate intervals (offsets.from >= offsets.to) are excluded.
+    - A token whose text starts with U+0020 (leading space) begins a new word; a
+      token without a leading space is appended to the current word (BPE sub-word
+      merge).
+    - word.start_sec = first token's offsets.from / 1000.
+    - word.end_sec   = last  token's offsets.to   / 1000.
+
+    The cumulative word count is incremented and checked before each word is appended
+    (CWE-400 / ADR-K8): increment → _check_word_limit → append.  This ensures that
+    MAX_WORDS_TRANSCRIBE + 1 words are never held in memory simultaneously (SR L-1).
+
+    Raises:
+        ClipwrightError(INVALID_INPUT): total_words_before + words extracted here
+            exceeds MAX_WORDS_TRANSCRIBE.
+
+    Args:
+        tokens: transcription[].tokens[] list from a whisper ``-ojf`` JSON entry.
+        total_words_before: Cumulative word count from all preceding segments.
+
+    Returns:
+        List of WordTiming entries for this segment (may be empty).
+    """
+    words: list[WordTiming] = []
+    running_total = total_words_before
+    current_text: str | None = None
+    current_start: float = 0.0
+    current_end: float = 0.0
+
+    for token in tokens:
+        if not isinstance(token, dict):
+            continue
+
+        tok_text = str(token.get("text", ""))
+
+        # Exclude special tokens before any other check.
+        if tok_text.startswith("[_") or tok_text.startswith("<|"):
+            continue
+
+        tok_offsets = token.get("offsets")
+        if not isinstance(tok_offsets, dict):
+            continue
+
+        try:
+            from_ms = float(tok_offsets["from"])
+            to_ms = float(tok_offsets["to"])
+        except (KeyError, TypeError, ValueError):
+            continue
+
+        # Exclude degenerate intervals.
+        if from_ms >= to_ms:
+            continue
+
+        if tok_text.startswith(" "):
+            # Leading space = new word boundary.
+            if current_text is not None:
+                stripped = current_text.strip()
+                if stripped:
+                    running_total += 1
+                    _check_word_limit(running_total)
+                    words.append(
+                        {
+                            "text": stripped,
+                            "start_sec": current_start,
+                            "end_sec": current_end,
+                        }
+                    )
+            current_text = tok_text
+            current_start = from_ms / 1000.0
+            current_end = to_ms / 1000.0
+        else:
+            # BPE sub-word: append to current word.
+            if current_text is not None:
+                current_text += tok_text
+                current_end = to_ms / 1000.0
+            else:
+                # First valid token in the segment has no leading space (rare).
+                current_text = tok_text
+                current_start = from_ms / 1000.0
+                current_end = to_ms / 1000.0
+
+    # Finalise the last word in the segment.
+    if current_text is not None:
+        stripped = current_text.strip()
+        if stripped:
+            running_total += 1
+            _check_word_limit(running_total)
+            words.append(
+                {
+                    "text": stripped,
+                    "start_sec": current_start,
+                    "end_sec": current_end,
+                }
+            )
+
+    return words
+
+
 def extract_word_segments(whisper_json: dict[str, Any]) -> list[WordSegment]:
     """Create word-level segments from a whisper.cpp ``-ojf`` (full JSON) dict.
 
-    Reconstructs words from BPE tokens in transcription[].tokens[] using the rules
-    confirmed in spike-whisper-word.md (ADR-K2 first candidate):
-
-    - Special tokens excluded: text starting with ``[_`` or ``<|``.
-    - Degenerate intervals excluded: offsets.from >= offsets.to.
-    - BPE word boundary: a token whose text starts with U+0020 (leading space) begins
-      a new word; a token without a leading space is appended to the current word.
-    - word.start_sec = first token's offsets.from / 1000.
-    - word.end_sec   = last  token's offsets.to   / 1000.
-    - WordSegment.start_sec / end_sec come from segment-level offsets.
+    Delegates per-segment token processing to ``_extract_words_from_tokens``, which
+    applies the BPE word-reconstruction rules (ADR-K2 / spike-whisper-word.md).
+    The total word count is accumulated across segments; ``_check_word_limit`` is
+    called incrementally inside the helper so the limit is enforced before any
+    word that would breach it is stored in memory (CWE-400 / ADR-K8).
 
     Raises:
         ClipwrightError(INVALID_INPUT): total word count across all segments exceeds
-            MAX_WORDS_TRANSCRIBE (CWE-400 / ADR-K8).  Raised incrementally so that
-            very large inputs fail before any output is materialised.
+            MAX_WORDS_TRANSCRIBE.
 
     Args:
         whisper_json: dict loaded from a whisper.cpp ``-ojf`` JSON file.
@@ -258,92 +388,8 @@ def extract_word_segments(whisper_json: dict[str, Any]) -> list[WordSegment]:
         if not isinstance(tokens, list):
             continue
 
-        words: list[WordTiming] = []
-        current_text: str | None = None
-        current_start: float = 0.0
-        current_end: float = 0.0
-
-        for token in tokens:
-            if not isinstance(token, dict):
-                continue
-
-            tok_text = str(token.get("text", ""))
-
-            # Exclude special tokens before any other check.
-            if tok_text.startswith("[_") or tok_text.startswith("<|"):
-                continue
-
-            tok_offsets = token.get("offsets")
-            if not isinstance(tok_offsets, dict):
-                continue
-
-            try:
-                from_ms = float(tok_offsets["from"])
-                to_ms = float(tok_offsets["to"])
-            except (KeyError, TypeError, ValueError):
-                continue
-
-            # Exclude degenerate intervals.
-            if from_ms >= to_ms:
-                continue
-
-            if tok_text.startswith(" "):
-                # Leading space = new word boundary.
-                if current_text is not None:
-                    stripped = current_text.strip()
-                    if stripped:
-                        words.append(
-                            {
-                                "text": stripped,
-                                "start_sec": current_start,
-                                "end_sec": current_end,
-                            }
-                        )
-                        total_words += 1
-                        if total_words > MAX_WORDS_TRANSCRIBE:
-                            raise ClipwrightError(
-                                code=ErrorCode.INVALID_INPUT,
-                                message=(f"Word count exceeds {MAX_WORDS_TRANSCRIBE}."),
-                                hint=(
-                                    f"Word count exceeds {MAX_WORDS_TRANSCRIBE}. "
-                                    "Split the audio into shorter segments."
-                                ),
-                            )
-                current_text = tok_text
-                current_start = from_ms / 1000.0
-                current_end = to_ms / 1000.0
-            else:
-                # BPE sub-word: append to current word.
-                if current_text is not None:
-                    current_text += tok_text
-                    current_end = to_ms / 1000.0
-                else:
-                    # First valid token in the segment has no leading space (rare).
-                    current_text = tok_text
-                    current_start = from_ms / 1000.0
-                    current_end = to_ms / 1000.0
-
-        # Finalise the last word in the segment.
-        if current_text is not None:
-            stripped = current_text.strip()
-            if stripped:
-                words.append(
-                    {
-                        "text": stripped,
-                        "start_sec": current_start,
-                        "end_sec": current_end,
-                    }
-                )
-                total_words += 1
-                if total_words > MAX_WORDS_TRANSCRIBE:
-                    raise ClipwrightError(
-                        code=ErrorCode.INVALID_INPUT,
-                        message=(f"Word count exceeds {MAX_WORDS_TRANSCRIBE}."),
-                        hint=(
-                            f"Word count exceeds {MAX_WORDS_TRANSCRIBE}. "
-                            "Split the audio into shorter segments."
-                        ),
-                    )
+        words = _extract_words_from_tokens(tokens, total_words)
+        total_words += len(words)
 
         result.append(
             {
@@ -395,7 +441,7 @@ def to_word_vtt(word_segments: list[WordSegment]) -> str:
     return "\n".join(blocks)
 
 
-def words_for_otio(word_segments: list[WordSegment]) -> list[dict[str, Any]]:
+def words_for_otio(word_segments: list[WordSegment]) -> list[OtioWordEntry]:
     """Flatten word segments into the OTIO metadata words schema.
 
     Produces a single list of ``{text, start, end}`` dicts suitable for storage in
@@ -406,10 +452,10 @@ def words_for_otio(word_segments: list[WordSegment]) -> list[dict[str, Any]]:
         word_segments: List of WordSegment objects.
 
     Returns:
-        Flat list of dicts with keys ``text`` (str), ``start`` (float seconds),
-        ``end`` (float seconds).
+        Flat list of OtioWordEntry dicts with keys ``text`` (str), ``start`` (float
+        seconds), ``end`` (float seconds).
     """
-    result: list[dict[str, Any]] = []
+    result: list[OtioWordEntry] = []
     for seg in word_segments:
         for word in seg["words"]:
             result.append(

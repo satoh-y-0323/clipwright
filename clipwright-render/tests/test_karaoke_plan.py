@@ -20,7 +20,9 @@ Drift guards (must stay in sync with plan.py / schemas.py):
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 from clipwright.errors import ClipwrightError, ErrorCode
@@ -31,6 +33,9 @@ from pydantic import ValidationError
 # ImportError, which is the expected Red failure.
 # ---------------------------------------------------------------------------
 from clipwright_render.plan import (
+    MAX_CUES,
+    MAX_WORD_VTT_BYTES,
+    MAX_WORDS,
     _KaraokeWord,  # type: ignore[attr-defined]
     _WordCue,  # type: ignore[attr-defined]
     _build_karaoke_ass,  # type: ignore[attr-defined]
@@ -598,3 +603,185 @@ class TestBuildKaraokeAss:
         ass = _build_karaoke_ass(_canonical_cues(), _default_subtitle(), 1920, 1080)
         dialogue_lines = [ln for ln in ass.splitlines() if ln.startswith("Dialogue:")]
         assert len(dialogue_lines) >= 2
+
+
+# ===========================================================================
+# Section 7 — Drift guards for MAX_WORDS / MAX_CUES (CR-M-2)
+# ===========================================================================
+
+
+class TestConstantDriftGuards:
+    """Explicit constant-value assertions to detect silent drift (CR-M-2)."""
+
+    def test_max_words_constant_value(self) -> None:
+        """MAX_WORDS must equal 50_000 (CWE-400 guard; ADR-K8)."""
+        assert MAX_WORDS == 50_000
+
+    def test_max_cues_constant_value(self) -> None:
+        """MAX_CUES must equal 10_000 (CWE-400 guard; ADR-K8)."""
+        assert MAX_CUES == 10_000
+
+    def test_max_word_vtt_bytes_constant_value(self) -> None:
+        """MAX_WORD_VTT_BYTES must equal 10 MB (OOM guard; SR-M-2)."""
+        assert MAX_WORD_VTT_BYTES == 10 * 1024 * 1024
+
+
+# ===========================================================================
+# Section 8 — Non-monotonic inline timestamp handling (CR-H-1 / SR-M-3)
+# ===========================================================================
+
+
+_NON_MONOTONIC_VTT = (
+    "WEBVTT\n\n"
+    "00:00:01.000 --> 00:00:03.500\n"
+    # Inline timestamps: 1.0 → 0.5 (non-monotonic!) → 2.0
+    "<00:00:01.000>Hello <00:00:00.500>world <00:00:02.000>test\n"
+)
+
+
+class TestNonMonotonicVtt:
+    """Non-monotonic inline timestamps must be clamped with a UserWarning (CR-H-1)."""
+
+    def test_non_monotonic_emits_user_warning(
+        self, tmp_path: Path, recwarn: pytest.WarningsChecker
+    ) -> None:
+        """Non-monotonic inline timestamps emit a UserWarning (CR-H-1 / architecture §5)."""
+        vtt = tmp_path / "non_mono.vtt"
+        vtt.write_text(_NON_MONOTONIC_VTT, encoding="utf-8")
+
+        _parse_word_vtt(str(vtt), max_words=_MAX_WORDS, max_cues=_MAX_CUES)
+
+        # At least one UserWarning must have been emitted
+        user_warnings = [w for w in recwarn.list if issubclass(w.category, UserWarning)]
+        assert len(user_warnings) >= 1
+
+    def test_non_monotonic_no_negative_k_in_ass(self, tmp_path: Path) -> None:
+        r"""Non-monotonic VTT must produce no negative \k tags (libass undefined behaviour)."""
+        vtt = tmp_path / "non_mono.vtt"
+        vtt.write_text(_NON_MONOTONIC_VTT, encoding="utf-8")
+
+        cues = _parse_word_vtt(str(vtt), max_words=_MAX_WORDS, max_cues=_MAX_CUES)
+        ass = _build_karaoke_ass(cues, _default_subtitle(), 1920, 1080)
+
+        # No negative \k value must appear (\\k followed by an optional minus sign)
+        negative_k = re.findall(r"\\k-\d+", ass)
+        assert not negative_k, (
+            f"Generated ASS contains negative \\k tags: {negative_k!r}\n"
+            f"  ASS content snippet: {ass[:500]!r}"
+        )
+
+
+# ===========================================================================
+# Section 9 — font_name ASS injection guard (SR-M-1)
+# ===========================================================================
+
+
+class TestFontNameInjectionGuard:
+    """font_name with newline / CR must be rejected (SR-M-1 / SEC-04)."""
+
+    def test_font_name_with_lf_rejected(self) -> None:
+        r"""font_name containing \n is rejected with ValidationError (SR-M-1)."""
+        with pytest.raises(ValidationError):
+            SubtitleOptions(
+                path="/tmp/sub.vtt",
+                font_name="Arial\n[Events]\nDialogue: 0,0:00:01.00,0:00:10.00,Default,,0,0,0,,INJECTED",
+            )
+
+    def test_font_name_with_cr_rejected(self) -> None:
+        r"""font_name containing \r is rejected with ValidationError (SR-M-1)."""
+        with pytest.raises(ValidationError):
+            SubtitleOptions(path="/tmp/sub.vtt", font_name="Arial\r[Events]\r")
+
+    def test_font_name_with_crlf_rejected(self) -> None:
+        r"""font_name containing \r\n is rejected with ValidationError (SR-M-1)."""
+        with pytest.raises(ValidationError):
+            SubtitleOptions(path="/tmp/sub.vtt", font_name="Arial\r\n[Events]")
+
+    def test_font_name_without_newlines_accepted(self) -> None:
+        """font_name without newlines / control chars is still accepted (regression guard)."""
+        opts = SubtitleOptions(path="/tmp/sub.vtt", font_name="Arial")
+        assert opts.font_name == "Arial"
+
+    def test_font_name_cjk_without_newlines_accepted(self) -> None:
+        """CJK font names (no newlines) must continue to be accepted (regression guard)."""
+        opts = SubtitleOptions(path="/tmp/sub.vtt", font_name="ヒラギノ角ゴ ProN")
+        assert opts.font_name == "ヒラギノ角ゴ ProN"
+
+
+# ===========================================================================
+# Section 10 — OOM guard: file size limit (SR-M-2)
+# ===========================================================================
+
+
+class TestOversizedVttGuard:
+    """word-VTT files exceeding MAX_WORD_VTT_BYTES are rejected before reading (SR-M-2)."""
+
+    def test_oversized_vtt_raises_invalid_input(self, tmp_path: Path) -> None:
+        """Mocked stat reporting size > MAX_WORD_VTT_BYTES → INVALID_INPUT before read."""
+        vtt = tmp_path / "big.vtt"
+        vtt.write_text("WEBVTT\n\n", encoding="utf-8")
+
+        mock_stat_result = MagicMock()
+        mock_stat_result.st_size = MAX_WORD_VTT_BYTES + 1
+
+        with patch("pathlib.Path.stat", return_value=mock_stat_result):
+            with pytest.raises(ClipwrightError) as exc_info:
+                _parse_word_vtt(str(vtt), max_words=_MAX_WORDS, max_cues=_MAX_CUES)
+
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_oversized_vtt_hint_mentions_size(self, tmp_path: Path) -> None:
+        """Hint for oversized VTT must mention the size limit in MB."""
+        vtt = tmp_path / "big.vtt"
+        vtt.write_text("WEBVTT\n\n", encoding="utf-8")
+
+        mock_stat_result = MagicMock()
+        mock_stat_result.st_size = MAX_WORD_VTT_BYTES + 1
+
+        with patch("pathlib.Path.stat", return_value=mock_stat_result):
+            with pytest.raises(ClipwrightError) as exc_info:
+                _parse_word_vtt(str(vtt), max_words=_MAX_WORDS, max_cues=_MAX_CUES)
+
+        assert "10" in exc_info.value.hint  # "10 MB" in hint
+
+
+# ===========================================================================
+# Section 11 — CWE-209: OSError / UnicodeDecodeError conversion (SR-M-4)
+# ===========================================================================
+
+
+class TestVttReadErrorHandling:
+    """OSError / UnicodeDecodeError from read_text must be converted to ClipwrightError
+    with basename only to prevent path disclosure (SR-M-4 / CWE-209)."""
+
+    def test_missing_file_raises_clipwright_error(self, tmp_path: Path) -> None:
+        """Non-existent VTT path → ClipwrightError(INVALID_INPUT) not raw OSError."""
+        missing = str(tmp_path / "subdir" / "missing.vtt")
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            _parse_word_vtt(missing, max_words=_MAX_WORDS, max_cues=_MAX_CUES)
+
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_missing_file_message_basename_only(self, tmp_path: Path) -> None:
+        """Error message for missing VTT must contain basename only (CWE-209)."""
+        missing = str(tmp_path / "subdir" / "missing.vtt")
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            _parse_word_vtt(missing, max_words=_MAX_WORDS, max_cues=_MAX_CUES)
+
+        # Absolute path must NOT appear in the message
+        assert missing not in exc_info.value.message
+        # Basename must appear so caller can identify the file
+        assert "missing.vtt" in exc_info.value.message
+
+    def test_unicode_error_raises_clipwright_error(self, tmp_path: Path) -> None:
+        """Non-UTF-8 VTT file → ClipwrightError(INVALID_INPUT) not raw UnicodeDecodeError."""
+        bad_encoding = tmp_path / "latin1.vtt"
+        # Write a file with latin-1 bytes that are invalid UTF-8
+        bad_encoding.write_bytes(b"WEBVTT\n\n\x80\x81\x82\n")
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            _parse_word_vtt(str(bad_encoding), max_words=_MAX_WORDS, max_cues=_MAX_CUES)
+
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT

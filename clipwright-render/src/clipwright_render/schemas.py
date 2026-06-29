@@ -13,10 +13,12 @@ from typing import Annotated, Literal, Self
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 # Characters forbidden in filtergraph/force_style separators and libass
-# FontName interpretation risks: , : ' [ ] ; \ = # (ADR-S2-r2/DC-AM-004)
+# FontName interpretation risks: , : ' [ ] ; \ = # \r \n (ADR-S2-r2/DC-AM-004)
 # # added: some libass versions misinterpret # in FontName as a colour code
 # (SR-NEW).
-_FONT_NAME_FORBIDDEN_CHARS_RE = re.compile(r"[,:'\\[\];=#]")
+# \r\n added: newlines in FontName allow ASS section injection into the
+# generated karaoke.ass (SR-M-1 / SEC-04).
+_FONT_NAME_FORBIDDEN_CHARS_RE = re.compile(r"[,:'\\[\];=#\r\n]")
 
 # Practical upper limit for font_size (set to a value libass does not reject;
 # effectively unlimited)
@@ -225,19 +227,21 @@ class SubtitleOptions(BaseModel):
     @classmethod
     def _validate_font_name_no_forbidden_chars(cls, v: str | None) -> str | None:
         """Validate that font_name contains no filtergraph/force_style separator
-        characters.
+        characters or newlines.
 
-        Forbidden characters: , : ' [ ] ; \\ = # (ADR-S2-r2/DC-AM-004/SR-NEW).
+        Forbidden characters: , : ' [ ] ; \\ = # \\r \\n
+        (ADR-S2-r2/DC-AM-004/SR-NEW/SR-M-1).
         Japanese font names (CJK and other Unicode) are allowed. # is forbidden
         because some libass versions misinterpret # in FontName as a colour code,
-        so it is blocked defensively (SR-NEW).
+        so it is blocked defensively (SR-NEW). \\r and \\n are forbidden to
+        prevent ASS section injection through the karaoke Style line (SR-M-1).
         """
         if v is None:
             return v
         if _FONT_NAME_FORBIDDEN_CHARS_RE.search(v):
             raise ValueError(
                 "font_name must not contain filtergraph/force_style separator"
-                " characters (, : ' [ ] ; \\ = #) (DC-AM-004/SR-NEW)."
+                r" characters (, : ' [ ] ; \ = # \r \n) (DC-AM-004/SR-NEW/SR-M-1)."
             )
         return v
 

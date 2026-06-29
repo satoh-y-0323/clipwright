@@ -46,6 +46,8 @@ import math
 import os
 import re
 import sys
+
+# Alias avoids shadowing local var `warnings: list[str]` in build_plan.
 import warnings as _warnings_mod
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -4341,6 +4343,10 @@ MAX_WORDS: int = 50_000
 #: CWE-400 guard: maximum cues in a word-VTT (ADR-K8).
 MAX_CUES: int = 10_000
 
+#: OOM guard: maximum file size for word-VTT files read into memory (SR-M-2).
+#: Checked via stat() before read_text() to reject oversized inputs early.
+MAX_WORD_VTT_BYTES: int = 10 * 1024 * 1024  # 10 MB
+
 # Inline timestamp pattern: matches <HH:MM:SS.mmm> only (ADR-K7).
 # Other HTML-like tags are NOT matched and are left as literal text.
 _INLINE_TS_RE: re.Pattern[str] = re.compile(r"<(\d{2}:\d{2}:\d{2}\.\d{3})>")
@@ -4405,14 +4411,43 @@ def _parse_word_vtt(path: str, *, max_words: int, max_cues: int) -> list[_WordCu
     word.end   = the next inline timestamp, or cue end for the last word.
 
     Raises ClipwrightError(INVALID_INPUT) when:
+    - file size exceeds MAX_WORD_VTT_BYTES (checked via stat before read; SR-M-2).
+    - file cannot be read or decoded as UTF-8 (SR-M-4 / CWE-209; basename only).
     - total word count exceeds max_words (hint includes the limit; CWE-400).
     - total cue count exceeds max_cues  (hint includes the limit; CWE-400).
     - NO cue in the file carries any inline timestamp (not a word-level VTT).
 
     When only some cues lack inline timestamps, emits a Python UserWarning and
     treats that cue as a single static word spanning its time range (ADR-K7).
+
+    When inline timestamps within a cue are non-monotonic (next < current),
+    emits a UserWarning and clamps the offending timestamp to the previous
+    value to guarantee non-negative cs values in _karaoke_event_text (CR-H-1).
     """
-    content = Path(path).read_text(encoding="utf-8")
+    # SR-M-2: reject oversized VTT before reading to prevent OOM.
+    # SR-M-4: wrap stat() + read_text() in try/except to convert OSError /
+    # UnicodeDecodeError to ClipwrightError with basename only (CWE-209).
+    try:
+        _vtt_size = Path(path).stat().st_size
+        if _vtt_size > MAX_WORD_VTT_BYTES:
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message="Word-VTT file exceeds the maximum allowed size.",
+                hint=(
+                    f"The file is larger than {MAX_WORD_VTT_BYTES // 1024 // 1024} MB."
+                    " Split the input into smaller segments."
+                ),
+            )
+        content = Path(path).read_text(encoding="utf-8")
+    except ClipwrightError:
+        raise
+    except (OSError, UnicodeDecodeError):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=f"Failed to read word-VTT: {Path(path).name}",
+            hint="Ensure the file exists, is readable, and is encoded in UTF-8.",
+        ) from None
+
     blocks = content.strip().split("\n\n")
 
     cues: list[_WordCue] = []
@@ -4446,10 +4481,12 @@ def _parse_word_vtt(path: str, *, max_words: int, max_cues: int) -> list[_WordCu
         # CWE-400: check cue limit before processing
         if len(cues) >= max_cues:
             raise ClipwrightError(
-                ErrorCode.INVALID_INPUT,
-                "Word-VTT exceeds the maximum cue count.",
-                f"The file contains more than {max_cues} cues. "
-                "Split the input into smaller segments.",
+                code=ErrorCode.INVALID_INPUT,
+                message="Word-VTT exceeds the maximum cue count.",
+                hint=(
+                    f"The file contains more than {max_cues} cues. "
+                    "Split the input into smaller segments."
+                ),
             )
 
         # Join body lines (all lines after the timing header)
@@ -4469,10 +4506,12 @@ def _parse_word_vtt(path: str, *, max_words: int, max_cues: int) -> list[_WordCu
             total_words += 1
             if total_words > max_words:
                 raise ClipwrightError(
-                    ErrorCode.INVALID_INPUT,
-                    "Word-VTT exceeds the maximum word count.",
-                    f"The file contains more than {max_words} words. "
-                    "Split the input into smaller segments.",
+                    code=ErrorCode.INVALID_INPUT,
+                    message="Word-VTT exceeds the maximum word count.",
+                    hint=(
+                        f"The file contains more than {max_words} words. "
+                        "Split the input into smaller segments."
+                    ),
                 )
             cues.append(
                 _WordCue(
@@ -4499,17 +4538,38 @@ def _parse_word_vtt(path: str, *, max_words: int, max_cues: int) -> list[_WordCu
                 word_starts.append(_parse_vtt_time(ts_str))
                 word_texts.append(text)
 
-        # Build _KaraokeWord list: word.end = next word's start or cue end
+        # CR-H-1 / architecture §5: enforce monotonic inline timestamps.
+        # Non-monotonic timestamps (next < current) would produce negative cs
+        # values in _karaoke_event_text, which is undefined behaviour in libass.
+        # Clamp the offending timestamp to the previous value and emit a warning.
+        for _mi in range(len(word_starts) - 1):
+            if word_starts[_mi + 1] < word_starts[_mi]:
+                _warnings_mod.warn(
+                    f"Non-monotonic inline timestamp in cue"
+                    f" {cue_start:.3f}–{cue_end:.3f}s:"
+                    f" {word_starts[_mi + 1]:.3f}s < {word_starts[_mi]:.3f}s;"
+                    " clamping to maintain monotonic order.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                word_starts[_mi + 1] = word_starts[_mi]
+
+        # Build _KaraokeWord list: word.end = next word's start or cue end.
+        # Check before append: total_words is incremented and checked before the
+        # word is added to the list, so at most max_words words are held in memory
+        # when the limit is reached (SR-L-1 / CWE-400).
         words: list[_KaraokeWord] = []
         for j, (wstart, wtext) in enumerate(zip(word_starts, word_texts, strict=False)):
             wend = word_starts[j + 1] if j + 1 < len(word_starts) else cue_end
             total_words += 1
             if total_words > max_words:
                 raise ClipwrightError(
-                    ErrorCode.INVALID_INPUT,
-                    "Word-VTT exceeds the maximum word count.",
-                    f"The file contains more than {max_words} words. "
-                    "Split the input into smaller segments.",
+                    code=ErrorCode.INVALID_INPUT,
+                    message="Word-VTT exceeds the maximum word count.",
+                    hint=(
+                        f"The file contains more than {max_words} words. "
+                        "Split the input into smaller segments."
+                    ),
                 )
             words.append(_KaraokeWord(text=wtext, start=wstart, end=wend))
 
@@ -4518,10 +4578,12 @@ def _parse_word_vtt(path: str, *, max_words: int, max_cues: int) -> list[_WordCu
     # ADR-K7: reject files where NO cue has inline timestamps
     if cues and cues_with_tags == 0:
         raise ClipwrightError(
-            ErrorCode.INVALID_INPUT,
-            "Word-VTT contains no inline timestamps in any cue.",
-            "Ensure the file uses word-level inline timestamps (<HH:MM:SS.mmm>) "
-            "in at least one cue. Re-run transcription with word_timestamps=true.",
+            code=ErrorCode.INVALID_INPUT,
+            message="Word-VTT contains no inline timestamps in any cue.",
+            hint=(
+                "Ensure the file uses word-level inline timestamps (<HH:MM:SS.mmm>) "
+                "in at least one cue. Re-run transcription with word_timestamps=true."
+            ),
         )
 
     return cues
@@ -4616,8 +4678,14 @@ def _karaoke_event_text(
     for line in line_groups:
         word_parts: list[str] = []
         for word in line:
-            cs = round((word.end - event_start) * 100) - round(
-                (word.start - event_start) * 100
+            # CR-L-5 / SR-M-3 second-layer defence: clamp cs to >= 0.
+            # The primary defence is the monotonic clamp in _parse_word_vtt (CR-H-1).
+            # This clamp handles any residual floating-point edge cases and
+            # future callers that bypass _parse_word_vtt's monotonic check.
+            cs = max(
+                0,
+                round((word.end - event_start) * 100)
+                - round((word.start - event_start) * 100),
             )
             escaped = _escape_ass_text(word.text)
             word_parts.append(f"{{\\k{cs}}}{escaped}")
