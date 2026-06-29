@@ -1,6 +1,6 @@
 [project]
 name = "clipwright-frames"
-version = "0.3.0"
+version = "0.3.1"
 description = "MCP tool for still-frame extraction from video into images, OTIO markers, and a JSON manifest."
 readme = "README.md"
 license = { text = "MIT" }

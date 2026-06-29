@@ -4,7 +4,6 @@ Target functions (all pure, no IO, no mocks needed):
   - compute_interval_timestamps(duration_sec, interval_sec) -> list[float]
   - compute_timestamps_mode(timestamps, duration_sec) -> (kept: list[float], skipped: list[float])
   - scene_marker_seconds(markers) -> list[float]
-  - build_fps_command(ffmpeg, media, out_pattern, options) -> list[str]
   - build_single_frame_command(ffmpeg, media, ts, out_path, options) -> list[str]
   - frame_filename(index, fmt) -> str
 
@@ -27,16 +26,7 @@ Verification aspects:
       (C-2) Multiple markers -> sorted list of floats
       (C-3) Empty marker list -> empty list
       (C-4) Seconds = marked_range.start_time.value / rate
-  (D) build_fps_command — interval mode, ffmpeg argument locked
-      (D-1) -vf contains fps=1/{interval_sec} with no metacharacters
-      (D-2) format=jpeg: -q:v {quality} is present in command
-      (D-3) format=png: -q:v is NOT present in command
-      (D-4) max_width=None: no scale in -vf
-      (D-5) max_width set: -vf is "fps=1/{interval},scale='min({W},iw)':-2" (single -vf)
-      (D-6) -i <media> present; out_pattern in command
-      (D-7) ffmpeg path is first element
-      (D-8) Numeric values (interval/quality/max_width) contain no shell metacharacters
-  (E) build_single_frame_command — scene/timestamps mode, ffmpeg argument locked
+  (E) build_single_frame_command — all modes, ffmpeg argument locked
       (E-1) -ss {ts} appears BEFORE -i in the command (input seeking)
       (E-2) -frames:v 1 is present
       (E-3) format=jpeg: -q:v {quality} is present
@@ -64,7 +54,6 @@ if TYPE_CHECKING:
     from clipwright_frames.schemas import ExtractFramesOptions
 
 from clipwright_frames.plan import (
-    build_fps_command,
     build_single_frame_command,
     compute_interval_timestamps,
     compute_timestamps_mode,
@@ -78,7 +67,6 @@ from clipwright_frames.plan import (
 
 FFMPEG = "/usr/bin/ffmpeg"
 MEDIA = "/fake/video.mp4"
-OUT_PATTERN = "/tmp/frames/frame_%05d.jpg"
 OUT_PATH = "/tmp/frames/frame_00001.jpg"
 FPS = 30.0
 
@@ -278,161 +266,7 @@ class TestSceneMarkerSeconds:
 
 
 # ===========================================================================
-# (D) build_fps_command — interval mode
-# ===========================================================================
-
-
-class TestBuildFpsCommand:
-    """Tests for build_fps_command(ffmpeg, media, out_pattern, options) -> list[str]."""
-
-    def _cmd(
-        self,
-        interval_sec: float = 10.0,
-        format: str = "jpeg",
-        quality: int = 2,
-        max_width: int | None = None,
-    ) -> list[str]:
-        opts = _opts(
-            mode="interval",
-            interval_sec=interval_sec,
-            format=format,
-            quality=quality,
-            max_width=max_width,
-        )
-        return build_fps_command(FFMPEG, MEDIA, OUT_PATTERN, opts)
-
-    def test_d1_vf_contains_fps_filter(self) -> None:
-        """-vf value must contain fps=1/{interval_sec} as a numeric expression."""
-        cmd = self._cmd(interval_sec=10.0)
-        vf_idx = cmd.index("-vf")
-        vf_val = cmd[vf_idx + 1]
-        # Must start with fps=1/ followed by a decimal number
-        assert re.search(r"fps=1/\d+(?:\.\d+)?", vf_val), (
-            f"-vf value {vf_val!r} does not contain fps filter"
-        )
-
-    def test_d2_jpeg_has_quality_flag(self) -> None:
-        """-q:v {quality} must be in the command when format=jpeg."""
-        cmd = self._cmd(format="jpeg", quality=3)
-        assert "-q:v" in cmd
-        qv_idx = cmd.index("-q:v")
-        assert cmd[qv_idx + 1] == "3"
-
-    def test_d3_png_has_no_quality_flag(self) -> None:
-        """-q:v must NOT be in the command when format=png."""
-        cmd = self._cmd(format="png")
-        assert "-q:v" not in cmd
-
-    def test_d4_no_max_width_no_scale(self) -> None:
-        """Without max_width, -vf value must not contain 'scale'."""
-        cmd = self._cmd(max_width=None)
-        vf_idx = cmd.index("-vf")
-        vf_val = cmd[vf_idx + 1]
-        assert "scale" not in vf_val
-
-    def test_d5_max_width_combined_in_single_vf(self) -> None:
-        """With max_width, -vf = "fps=1/{interval},scale='min({W},iw)':-2" (single -vf)."""
-        cmd = self._cmd(interval_sec=10.0, max_width=640)
-        # Only one -vf flag
-        assert cmd.count("-vf") == 1
-        vf_idx = cmd.index("-vf")
-        vf_val = cmd[vf_idx + 1]
-        assert "fps=1/" in vf_val
-        assert "scale=" in vf_val
-        assert "640" in vf_val
-        assert ":-2" in vf_val
-
-    def test_d6_media_and_out_pattern_present(self) -> None:
-        """-i <media> and out_pattern must both appear in the command."""
-        cmd = self._cmd()
-        assert MEDIA in cmd
-        assert OUT_PATTERN in cmd
-        i_idx = cmd.index("-i")
-        assert cmd[i_idx + 1] == MEDIA
-
-    def test_d7_ffmpeg_is_first_element(self) -> None:
-        """The first element of the command must be the ffmpeg path."""
-        cmd = self._cmd()
-        assert cmd[0] == FFMPEG
-
-    def test_d8_no_metacharacters_in_numeric_values(self) -> None:
-        """Numeric values embedded in -vf must not contain shell metacharacters."""
-        cmd = self._cmd(interval_sec=10.0, quality=5, max_width=640)
-        vf_idx = cmd.index("-vf")
-        vf_val = cmd[vf_idx + 1]
-        # Shell metacharacters that would enable injection
-        metacharacters = set(";|&$`!><\\\"'")
-        embedded_metachar = set(vf_val) & metacharacters
-        # Single quotes are valid in scale='min(...)' — allow only those in the
-        # expected pattern; full injection chars like ; | & $ ` etc. must be absent
-        forbidden = embedded_metachar - {"'"}
-        assert not forbidden, (
-            f"Shell metacharacters found in -vf value: {forbidden!r} in {vf_val!r}"
-        )
-
-    def test_d9_vf_locked_by_regex_no_max_width(self) -> None:
-        """-vf value must fully match expected pattern when max_width is None."""
-        cmd = self._cmd(interval_sec=5.0, max_width=None)
-        vf_idx = cmd.index("-vf")
-        vf_val = cmd[vf_idx + 1]
-        pattern = re.compile(r"^fps=1/\d+(?:\.\d+)?$")
-        assert pattern.fullmatch(vf_val), (
-            f"-vf value {vf_val!r} does not match expected 'fps=1/{{N}}' pattern"
-        )
-
-    def test_d10_vf_locked_by_regex_with_max_width(self) -> None:
-        """-vf value must fully match expected pattern when max_width is set."""
-        cmd = self._cmd(interval_sec=10.0, max_width=320)
-        vf_idx = cmd.index("-vf")
-        vf_val = cmd[vf_idx + 1]
-        pattern = re.compile(r"^fps=1/\d+(?:\.\d+)?,scale='min\(\d+,iw\)':-2$")
-        assert pattern.fullmatch(vf_val), (
-            f"-vf value {vf_val!r} does not match expected combined fps+scale pattern"
-        )
-
-    def test_d11_start_number_zero_present_before_out_pattern(self) -> None:
-        """-start_number 0 must appear in the command, before the output pattern.
-
-        ffmpeg fps filter uses 1-based frame numbering by default (frame_00001.jpg...),
-        but frame_filename(index) generates 0-based names (frame_00000.jpg...).
-        -start_number 0 aligns ffmpeg output numbering to 0-based to prevent
-        path mismatch between frames.json entries and actual files on disk.
-        """
-        cmd = self._cmd(interval_sec=10.0)
-        assert "-start_number" in cmd, "-start_number flag must be present in command"
-        sn_idx = cmd.index("-start_number")
-        assert cmd[sn_idx + 1] == "0", (
-            f"-start_number value must be '0', got {cmd[sn_idx + 1]!r}"
-        )
-        # -start_number 0 must appear before the output pattern
-        out_idx = cmd.index(OUT_PATTERN)
-        assert sn_idx < out_idx, (
-            "-start_number must appear before the output pattern argument"
-        )
-
-    def test_d12_start_number_zero_present_with_max_width(self) -> None:
-        """-start_number 0 must be present when max_width is also specified."""
-        cmd = self._cmd(interval_sec=5.0, max_width=640)
-        assert "-start_number" in cmd, (
-            "-start_number flag must be present even when max_width is set"
-        )
-        sn_idx = cmd.index("-start_number")
-        assert cmd[sn_idx + 1] == "0", (
-            f"-start_number value must be '0', got {cmd[sn_idx + 1]!r}"
-        )
-
-    def test_d13_start_number_zero_present_png_format(self) -> None:
-        """-start_number 0 must be present for PNG format output."""
-        cmd = self._cmd(interval_sec=10.0, format="png")
-        assert "-start_number" in cmd, (
-            "-start_number flag must be present for PNG format"
-        )
-        sn_idx = cmd.index("-start_number")
-        assert cmd[sn_idx + 1] == "0"
-
-
-# ===========================================================================
-# (E) build_single_frame_command — scene/timestamps mode
+# (E) build_single_frame_command — all modes (interval/scene/timestamps)
 # ===========================================================================
 
 

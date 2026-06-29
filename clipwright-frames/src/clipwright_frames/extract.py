@@ -37,7 +37,6 @@ from clipwright.process import resolve_tool, run, safe_subprocess_message
 from clipwright.schemas import RationalTimeModel, TimeRangeModel, ToolResult
 
 from clipwright_frames.plan import (
-    build_fps_command,
     build_single_frame_command,
     compute_interval_timestamps,
     compute_scene_segment_timestamps,
@@ -229,7 +228,6 @@ def _extract_frames_inner(
 
     ffmpeg = resolve_tool("ffmpeg", env_var="CLIPWRIGHT_FFMPEG")
     abs_media = str(media_path.resolve())
-    ext = "jpg" if options.format == "jpeg" else "png"
 
     if options.mode == "interval":
         interval_sec = options.interval_sec
@@ -240,14 +238,13 @@ def _extract_frames_inner(
                 "Use a smaller interval_sec value."
             )
         else:
-            # Build fps-filter command; output pattern uses frame_%05d.<ext>
-            out_pattern = str(out_dir / f"frame_%05d.{ext}")
-            cmd = build_fps_command(ffmpeg, abs_media, out_pattern, options)
-            _run_with_safe_error(cmd, timeout)
-
-            # Compute frame count from timestamps (CR M-1: no glob dependency).
             timestamps = compute_interval_timestamps(duration_sec, interval_sec)
             for idx, ts in enumerate(timestamps):
+                out_path = str(out_dir / frame_filename(idx, options.format))
+                cmd = build_single_frame_command(
+                    ffmpeg, abs_media, ts, out_path, options
+                )
+                _run_with_safe_error(cmd, timeout)
                 extracted_frames.append((idx, ts))
 
     elif options.mode == "scene":

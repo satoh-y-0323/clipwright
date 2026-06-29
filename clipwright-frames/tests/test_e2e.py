@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -285,14 +286,12 @@ class TestIntervalMode:
     ) -> None:
         """Regression: frames.json path entries must point to real files on disk.
 
-        Bug: interval mode uses fps filter which defaults to 1-based numbering
-        (frame_00001.jpg, frame_00002.jpg...), but frame_filename(index) generates
-        0-based names (frame_00000.jpg...). This causes path mismatch where the
-        first frame listed in frames.json does not exist and subsequent frames are
-        off by one.
+        interval mode uses a per-ss single-frame loop (same as scene/timestamps):
+        each grid position is extracted by a separate ffmpeg -ss invocation, so the
+        file written to disk is exactly the path recorded in frames.json.
 
-        Fix: build_fps_command must include -start_number 0 so ffmpeg writes
-        frame_00000.jpg, frame_00001.jpg... matching frame_filename output.
+        This guards against the previous fps-filter approach where 1-based ffmpeg
+        numbering caused a manifest/disk mismatch for non-integer-multiple durations.
         """
         video_path = str(tmp_path / "video.mp4")
         out_dir = tmp_path / "frames"
@@ -360,9 +359,9 @@ class TestIntervalMode:
           - Every path in frames.json must exist on disk (no phantom entries).
           - Every .jpg file on disk must appear in frames.json (no orphan files).
 
-        A 1-based ffmpeg output would produce frame_00001.jpg through frame_00003.jpg
-        on disk, but frames.json would list frame_00000.jpg through frame_00002.jpg,
-        causing the sets to differ in both directions.
+        interval mode uses per-ss extraction: each grid timestamp is extracted
+        independently, so frames.json and disk files share the same source of truth
+        (extracted_frames list). Both sets must be identical.
         """
         video_path = str(tmp_path / "video.mp4")
         out_dir = tmp_path / "frames"
@@ -415,6 +414,84 @@ class TestIntervalMode:
         assert not orphan, "Files on disk not listed in frames.json: " + ", ".join(
             str(p) for p in sorted(orphan)
         )
+
+    @pytest.mark.integration
+    def test_interval_non_integer_multiple_manifest_matches_disk(
+        self, tmp_path: Path, require_ffmpeg: str
+    ) -> None:
+        """Regression: non-integer-multiple duration must produce manifest == disk.
+
+        Grid: compute_interval_timestamps(9, 4) = [0.0, 4.0, 8.0] => 3 points.
+        The old fps-filter path uses period-midpoint sampling internally: for a 9s
+        clip with a 4s period, midpoints are 2s and 6s (only 2 fall within [0, 9)),
+        so only 2 frames are written to disk while the manifest lists 3 entries;
+        frame_00002.jpg is absent on disk. This manifests whenever frac(D / N) < 0.5
+        (here 9/4 = 2.25, fractional part 0.25 < 0.5).
+        The per-ss loop fix extracts at each grid point directly, making the manifest
+        count and disk file count agree at 3.
+
+        This test is expected to FAIL against the unfixed fps-filter implementation:
+        manifest count=3, disk files=2, frame_00002.jpg missing.
+        """
+        video_path = str(tmp_path / "video.mp4")
+        out_dir = tmp_path / "frames"
+        out_dir.mkdir()
+
+        # 9s clip; interval=4s => grid [0, 4, 8] => 3 frames expected
+        _generate_solid_color_video(require_ffmpeg, video_path, duration=9.0, rate=10)
+
+        content, structured = asyncio.run(
+            mcp.call_tool(
+                "clipwright_extract_frames",
+                {
+                    "media": video_path,
+                    "output_dir": str(out_dir),
+                    "options": {
+                        "mode": "interval",
+                        "interval_sec": 4.0,
+                        "format": "jpeg",
+                    },
+                },
+            )
+        )
+
+        assert structured["ok"] is True, (
+            f"Expected ok=True but got: {structured.get('error')}"
+        )
+
+        # Locate frames.json among artifacts
+        artifacts = structured.get("artifacts", [])
+        manifest_path: str | None = None
+        for artifact in artifacts:
+            if artifact.get("role") == "manifest":
+                manifest_path = artifact.get("path")
+                break
+
+        assert manifest_path is not None, "No manifest artifact in response"
+        assert Path(manifest_path).exists(), f"frames.json not found: {manifest_path}"
+
+        with open(manifest_path, encoding="utf-8") as f:
+            manifest = json.load(f)
+
+        # Disk file count must equal manifest count (the core invariant).
+        # Against unfixed code: manifest count=3, disk files=2 => FAILS here.
+        disk_files = sorted(out_dir.glob("frame_*.jpg"))
+        assert manifest["count"] == len(disk_files), (
+            f"manifest count={manifest['count']} != disk file count={len(disk_files)}; "
+            f"disk files: {[p.name for p in disk_files]}"
+        )
+
+        # Exact frame count: compute_interval_timestamps(9, 4) = [0, 4, 8] => 3
+        assert manifest["count"] == 3, (
+            f"Expected 3 frames for 9s/4s interval, got {manifest['count']}"
+        )
+
+        # Every path listed in frames.json must exist on disk.
+        # Against unfixed code: frame_00002.jpg is listed but absent => FAILS here.
+        for entry in manifest["frames"]:
+            assert os.path.exists(entry["path"]), (
+                f"Frame path in manifest does not exist on disk: {entry['path']}"
+            )
 
 
 # ---------------------------------------------------------------------------

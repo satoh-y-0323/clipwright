@@ -64,44 +64,6 @@ def scene_marker_seconds(markers: list[otio.schema.Marker]) -> list[float]:
     return sorted(seconds)
 
 
-def build_fps_command(
-    ffmpeg: str,
-    media: str,
-    out_pattern: str,
-    options: ExtractFramesOptions,
-) -> list[str]:
-    """Build ffmpeg command for interval mode (fps filter).
-
-    When max_width is set, fps and scale filters are combined into a single -vf
-    to avoid the ffmpeg "multiple -vf" error.
-    JPEG output appends -q:v {quality}; PNG does not use -q:v.
-    """
-    interval_sec = options.interval_sec
-    # strip trailing .0 so the ffmpeg fps filter reads e.g. '1/10' not '1/10.0'
-    if interval_sec == int(interval_sec):
-        interval_str = str(int(interval_sec))
-    else:
-        interval_str = str(interval_sec)
-
-    fps_filter = f"fps=1/{interval_str}"
-
-    if options.max_width is not None:
-        vf = f"{fps_filter},scale='min({options.max_width},iw)':-2"
-    else:
-        vf = fps_filter
-
-    cmd: list[str] = [ffmpeg, "-i", media, "-vf", vf]
-
-    if options.format == "jpeg":
-        cmd += ["-q:v", str(options.quality)]
-
-    # -start_number 0 aligns ffmpeg's 1-based default frame numbering to 0-based,
-    # so frame_00000.jpg matches frame_filename(0) and avoids path mismatch.
-    cmd += ["-start_number", "0"]
-    cmd.append(out_pattern)
-    return cmd
-
-
 def build_single_frame_command(
     ffmpeg: str,
     media: str,
