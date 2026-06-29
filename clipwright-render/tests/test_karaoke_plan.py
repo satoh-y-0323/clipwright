@@ -1,12 +1,5 @@
-"""test_karaoke_plan.py — Red-phase tests for karaoke ASS generation (plan.py)
+"""test_karaoke_plan.py — Tests for karaoke ASS generation (plan.py)
 and SubtitleOptions schema extensions.
-
-ALL tests fail before implementation because:
-  - plan.py does not yet export _KaraokeWord / _WordCue / _parse_word_vtt /
-    _escape_ass_text / _group_words_into_lines / _karaoke_event_text /
-    _build_karaoke_ass  →  ImportError at collection (correct Red failure).
-  - SubtitleOptions does not yet have karaoke / highlight_color /
-    chars_per_line / max_lines  →  AttributeError / ValidationError at runtime.
 
 Coverage: F-R-01..06 / SEC-03/04 / AC-5/6 / ADR-K3/K5/K6/K7/K8.
 
@@ -29,8 +22,7 @@ from clipwright.errors import ClipwrightError, ErrorCode
 from pydantic import ValidationError
 
 # ---------------------------------------------------------------------------
-# Plan functions — these do NOT yet exist; import causes collection-level
-# ImportError, which is the expected Red failure.
+# Plan functions (karaoke ASS generation)
 # ---------------------------------------------------------------------------
 from clipwright_render.plan import (
     MAX_CUES,
@@ -762,6 +754,10 @@ class TestVttReadErrorHandling:
             _parse_word_vtt(missing, max_words=_MAX_WORDS, max_cues=_MAX_CUES)
 
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
+        # SR-M-4: raise ... from None must suppress the OSError cause (CWE-209).
+        # If this fails, the original exception (with potential path details) is
+        # exposed via __cause__, breaking the information-leakage guard.
+        assert exc_info.value.__cause__ is None
 
     def test_missing_file_message_basename_only(self, tmp_path: Path) -> None:
         """Error message for missing VTT must contain basename only (CWE-209)."""
@@ -785,3 +781,7 @@ class TestVttReadErrorHandling:
             _parse_word_vtt(str(bad_encoding), max_words=_MAX_WORDS, max_cues=_MAX_CUES)
 
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
+        # SR-M-4: raise ... from None must suppress the UnicodeDecodeError cause (CWE-209).
+        # If this fails, the original exception (with potential path/content details) is
+        # exposed via __cause__, breaking the information-leakage guard.
+        assert exc_info.value.__cause__ is None

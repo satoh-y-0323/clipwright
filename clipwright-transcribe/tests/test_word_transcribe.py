@@ -1,14 +1,11 @@
-"""test_word_transcribe.py — Red-phase tests: transcribe.py wiring + schema (s1-transcribe-test).
+"""test_word_transcribe.py — Tests for transcribe.py wiring + schema (s1-transcribe).
 
-Tests for the NOT-YET-IMPLEMENTED word_timestamps feature in transcribe.py / schemas.py.
-These tests will fail (Red) because:
-  - TranscribeOptions.word_timestamps is not yet a defined field
-    -> pydantic ValidationError when supplied; AttributeError on attribute access
-  - _build_whisper_cmd uses '-oj' (bare) not '-ojf' (full JSON)
-    -> command content assertions fail
-  - WhisperRun._fields does not include 'words' -> AssertionError
-  - _transcribe_inner does not write <stem>.words.vtt, populate OTIO words metadata,
-    or mention word count in summary -> multiple assertion failures
+Verifies the word_timestamps feature in transcribe.py / schemas.py:
+  - TranscribeOptions.word_timestamps: bool = False (F-T-01 / extra='forbid' maintained)
+  - _build_whisper_cmd emits '-ojf' (full JSON with tokens[]) not bare '-oj' (ADR-K2)
+  - WhisperRun._fields includes 'words' (architecture §2-1)
+  - _transcribe_inner writes <stem>.words.vtt, populates OTIO words metadata,
+    and mentions word count in summary when word_timestamps=True (F-T-05 / F-T-06)
 
 Existing tests (test_transcribe.py / test_captions.py / test_word_captions.py) are not
 affected — this module is purely additive.  No production source files are edited here.
@@ -114,10 +111,10 @@ def _mock_run_with_words(
     segments: list[Segment] | None = None,
     words: list[dict[str, Any]] | None = None,
 ) -> Any:
-    """Build a SimpleNamespace mimicking a future WhisperRun that includes .words.
+    """Build a SimpleNamespace mimicking WhisperRun with word segments for testing.
 
-    The real WhisperRun (NamedTuple) does not yet have a .words field.
-    SimpleNamespace lets us set arbitrary attributes without modifying the source.
+    SimpleNamespace lets us set arbitrary word data without relying on the real
+    WhisperRun constructor for mocking purposes.
     """
     return SimpleNamespace(
         segments=segments if segments is not None else _FAKE_SEGMENTS,
@@ -154,7 +151,7 @@ class TestWordTimestampsSchema:
     def test_word_timestamps_default_is_false(self) -> None:
         """TranscribeOptions() default must expose word_timestamps == False.
 
-        Red: AttributeError because word_timestamps is not yet a field.
+        F-T-01: word_timestamps is an additive optional field defaulting to False.
         """
         opts = TranscribeOptions()
         # AttributeError until word_timestamps is added to TranscribeOptions
@@ -163,7 +160,7 @@ class TestWordTimestampsSchema:
     def test_word_timestamps_explicit_false(self) -> None:
         """TranscribeOptions(word_timestamps=False) must be accepted by the model.
 
-        Red: pydantic ValidationError — extra='forbid' rejects undeclared fields.
+        F-T-01: explicit False is accepted and round-trips correctly.
         """
         opts = _opts(word_timestamps=False)
         assert opts.word_timestamps is False
@@ -171,7 +168,7 @@ class TestWordTimestampsSchema:
     def test_word_timestamps_explicit_true(self) -> None:
         """TranscribeOptions(word_timestamps=True) must be accepted by the model.
 
-        Red: pydantic ValidationError — extra='forbid' rejects undeclared fields.
+        F-T-01: explicit True is accepted and round-trips correctly.
         """
         opts = _opts(word_timestamps=True)
         assert opts.word_timestamps is True
@@ -205,7 +202,7 @@ class TestBuildWhisperCmdOjf:
     def test_ojf_flag_in_default_command(self) -> None:
         """-ojf must appear as a command-list element with default TranscribeOptions.
 
-        Red: _build_whisper_cmd currently emits '-oj' (bare), so '-ojf' is absent.
+        ADR-K2: '-ojf' (full JSON) replaces bare '-oj' to include tokens[].
         """
         opts = TranscribeOptions()
         cmd = _build_whisper_cmd("whisper", "m.bin", "audio.wav", "/tmp/p", opts)
@@ -214,8 +211,7 @@ class TestBuildWhisperCmdOjf:
     def test_bare_oj_not_in_command(self) -> None:
         """Bare '-oj' (without 'f') must NOT appear as a command-list element.
 
-        Red: '-oj' IS currently an element; must be replaced by '-ojf'.
-        After implementation '-ojf' is the sole JSON flag (exact-element match).
+        ADR-K2: '-ojf' is the sole JSON flag; bare '-oj' must not be present.
         """
         opts = TranscribeOptions()
         cmd = _build_whisper_cmd("whisper", "m.bin", "audio.wav", "/tmp/p", opts)
@@ -228,10 +224,6 @@ class TestBuildWhisperCmdOjf:
 
         ADR-K2 first-candidate structural guarantee: tokens[] are extracted from the
         single -ojf JSON; no extra whisper run is needed for word output.
-
-        Red: first fails with ValidationError (word_timestamps not in schema).
-        After schema is added: still fails until -ojf is used (both produce same -oj).
-        After implementation: both produce same -ojf command -> passes.
         """
         opts_false = _opts(word_timestamps=False)
         opts_true = _opts(word_timestamps=True)
@@ -250,16 +242,15 @@ class TestBuildWhisperCmdOjf:
 
 
 class TestWhisperRunWordsField:
-    """WhisperRun (NamedTuple) must gain a .words field in s1-transcribe-impl.
+    """WhisperRun (NamedTuple) must have a .words field (architecture §2-1).
 
     architecture §2-1: words: list[WordSegment] added additively to WhisperRun.
     """
 
     def test_whisper_run_has_words_field(self) -> None:
-        """'words' must be in WhisperRun._fields after implementation.
+        """'words' must be in WhisperRun._fields (architecture §2-1).
 
-        Red: WhisperRun._fields currently = ('segments', 'language', 'backend',
-        'wall_seconds') — 'words' is absent.
+        words: list[WordSegment] is added additively to the NamedTuple.
         """
         assert "words" in WhisperRun._fields, (
             f"WhisperRun._fields={WhisperRun._fields!r} — 'words' not yet added"
@@ -277,10 +268,6 @@ class TestWordTimestampsTrueIntegration:
 
     F-T-05 / F-T-06 / AC-3 (partial).
     _run_whisper is mocked (no real whisper binary required).
-
-    Red: all tests fail at options construction (ValidationError) because
-    word_timestamps is not yet in the schema.  After schema is added they will
-    fail because _transcribe_inner does not yet write words.vtt or populate OTIO.
     """
 
     def _run_with_words(
@@ -307,10 +294,7 @@ class TestWordTimestampsTrueIntegration:
         return result, Path(output)
 
     def test_words_vtt_file_written(self, tmp_path: Path) -> None:
-        """<stem>.words.vtt must be written to output_path.parent (F-T-05).
-
-        Red: ValidationError at options construction (word_timestamps absent in schema).
-        """
+        """<stem>.words.vtt must be written to output_path.parent (F-T-05)."""
         result, output_path = self._run_with_words(tmp_path)
         assert result.ok is True, f"transcribe_media failed: {result.error}"
         words_vtt = output_path.parent / (output_path.stem + ".words.vtt")
@@ -319,10 +303,7 @@ class TestWordTimestampsTrueIntegration:
         )
 
     def test_words_vtt_in_artifacts(self, tmp_path: Path) -> None:
-        """Artifacts list must include words.vtt when word_timestamps=True (F-T-05).
-
-        Red: ValidationError at options construction.
-        """
+        """Artifacts list must include words.vtt when word_timestamps=True (F-T-05)."""
         result, output_path = self._run_with_words(tmp_path)
         assert result.ok is True, f"transcribe_media failed: {result.error}"
         artifact_paths = [a.path for a in result.artifacts]
@@ -337,7 +318,6 @@ class TestWordTimestampsTrueIntegration:
         """Exactly 4 artifacts must be present when word_timestamps=True.
 
         Expected: timeline (otio) + captions (srt) + captions (vtt) + words-captions (vtt).
-        Red: ValidationError at options construction.
         """
         result, _ = self._run_with_words(tmp_path)
         assert result.ok is True, f"transcribe_media failed: {result.error}"
@@ -350,7 +330,6 @@ class TestWordTimestampsTrueIntegration:
         """Summary must mention word count when word_timestamps=True (F-T-05).
 
         _FAKE_WORD_SEGMENTS contains 2 words total.
-        Red: ValidationError at options construction.
         """
         result, _ = self._run_with_words(tmp_path)
         assert result.ok is True, f"transcribe_media failed: {result.error}"
@@ -365,7 +344,6 @@ class TestWordTimestampsTrueIntegration:
 
         architecture §2-1: words stored under metadata['clipwright']['words'] on the
         source clip (or as a dedicated marker — check clip first, then markers).
-        Red: ValidationError at options construction.
         """
         result, output_path = self._run_with_words(tmp_path)
         assert result.ok is True, f"transcribe_media failed: {result.error}"
@@ -414,10 +392,6 @@ class TestWordTimestampsFalseRegression:
 
     AC-2 / architecture §2-1: "既定 false 時は上記ブロック非到達 -> SRT/VTT/OTIO・artifacts
     いずれも従来どおり".  The False path must be byte-identical to pre-feature behaviour.
-
-    Red: all tests fail at _opts(word_timestamps=False) with ValidationError because
-    word_timestamps is not yet in the schema.  After schema is added they may already
-    pass (words.vtt is simply never written in the False path).
     """
 
     def _run_false(self, tmp_path: Path) -> tuple[Any, Path]:
@@ -440,10 +414,7 @@ class TestWordTimestampsFalseRegression:
         return result, Path(output)
 
     def test_no_words_vtt_artifact_when_false(self, tmp_path: Path) -> None:
-        """words.vtt must NOT be in artifacts when word_timestamps=False (AC-2).
-
-        Red: ValidationError at options construction.
-        """
+        """words.vtt must NOT be in artifacts when word_timestamps=False (AC-2)."""
         result, output_path = self._run_false(tmp_path)
         assert result.ok is True, f"transcribe_media failed: {result.error}"
         artifact_paths = [a.path for a in result.artifacts]
@@ -453,10 +424,7 @@ class TestWordTimestampsFalseRegression:
         )
 
     def test_words_vtt_file_not_written_when_false(self, tmp_path: Path) -> None:
-        """<stem>.words.vtt file must NOT exist on disk when word_timestamps=False.
-
-        Red: ValidationError at options construction.
-        """
+        """<stem>.words.vtt file must NOT exist on disk when word_timestamps=False."""
         result, output_path = self._run_false(tmp_path)
         assert result.ok is True, f"transcribe_media failed: {result.error}"
         words_vtt = output_path.parent / (output_path.stem + ".words.vtt")
@@ -465,10 +433,7 @@ class TestWordTimestampsFalseRegression:
         )
 
     def test_exactly_three_artifacts_when_false(self, tmp_path: Path) -> None:
-        """Artifacts must be exactly [timeline, srt, vtt] (3 total) when False (AC-2).
-
-        Red: ValidationError at options construction.
-        """
+        """Artifacts must be exactly [timeline, srt, vtt] (3 total) when False (AC-2)."""
         result, _ = self._run_false(tmp_path)
         assert result.ok is True, f"transcribe_media failed: {result.error}"
         assert len(result.artifacts) == 3, (
@@ -481,9 +446,6 @@ class TestWordTimestampsFalseRegression:
 
         Core ADR-K2 first-candidate guarantee: segment JSON (-ojf) is shared;
         word extraction is post-run; the whisper invocation itself is invariant.
-
-        Red: ValidationError at both _opts calls (word_timestamps not in schema).
-        After schema added + -ojf implemented: both produce same command -> passes.
         """
         opts_false = _opts(word_timestamps=False)
         opts_true = _opts(word_timestamps=True)
@@ -509,8 +471,8 @@ class TestNormalizeSegmentsOjfRegressionGuard:
     does NOT alter the SRT/VTT output consumed by render (AC-2 structural guarantee).
 
     Fixture: whisper_word_sample.json (spike §7, -ojf format, 3 known segments).
-    These tests use only captions.normalize_segments / to_srt / to_vtt — all currently
-    implemented — so they may PASS in the Red phase (pure regression guards).
+    These tests use only captions.normalize_segments / to_srt / to_vtt — all
+    implemented — serving as regression guards.
     """
 
     @pytest.fixture(scope="class")
@@ -595,18 +557,13 @@ class TestWordErrorSanitization:
     stderr fragments.  The exception chain must use 'from None' to suppress context.
 
     These tests inject failures in the word-output path and verify the error envelope.
-    Red: all fail with ValidationError at options construction (word_timestamps absent).
-    After schema + impl are added, the injection-based assertions will be evaluated.
     """
 
     def test_word_error_message_no_absolute_path_leak(self, tmp_path: Path) -> None:
         """An error in the word-VTT write step must not expose the absolute path.
 
         Injects OSError on Path.write_text to simulate a word-VTT write failure and
-        verifies that the resulting error message contains only the basename.
-
-        Red: ValidationError at _opts(word_timestamps=True) — schema absent.
-        After impl: OSError must be caught and re-raised with basename-only message.
+        verifies that the resulting error message contains only the basename (SEC-02).
         """
         media, output, model = _make_paths(tmp_path)
         absolute_path = str(tmp_path / "out.words.vtt")

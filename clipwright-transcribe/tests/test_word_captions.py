@@ -1,12 +1,8 @@
-"""test_word_captions.py — Red-phase tests for word-level captions logic (s1-captions-test).
+"""test_word_captions.py — Tests for word-level captions logic (s1-captions).
 
-Tests for the not-yet-implemented word-level functions in captions.py:
+Tests for word-level functions in captions.py:
   extract_word_segments, to_word_vtt, words_for_otio, WordSegment, WordTiming,
   MAX_WORDS_TRANSCRIBE
-
-All tests in this module FAIL on collection (ImportError / Red phase) because
-captions.py does not yet export these symbols.  This is the intended Red state:
-the import error indicates missing implementation, not a broken test.
 
 Existing Segment / normalize_segments / to_srt / to_vtt tests in test_captions.py
 are unaffected — this file is purely additive.

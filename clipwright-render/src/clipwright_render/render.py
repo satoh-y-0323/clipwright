@@ -1057,14 +1057,16 @@ def _render_inner(
             )
             _ass_path = Path(_tmpdir_name) / "karaoke.ass"
             # SR-L-3: OS temp paths never contain single quotes in practice, but
-            # assert defensively before embedding the path in the filtergraph.
+            # guard before embedding the path in the filtergraph.
             # _escape_filtergraph handles backslash and colon; single-quote is
             # not escaped there, so a path containing "'" would break the
             # filename='...' ffmpeg filtergraph syntax (CR-E-001).
-            assert "'" not in str(_ass_path), (  # noqa: S101
-                "SR-L-3: generated karaoke.ass temp path unexpectedly contains a"
-                " single quote; filtergraph injection possible."
-            )
+            if "'" in str(_ass_path):
+                raise ClipwrightError(
+                    code=ErrorCode.INTERNAL,
+                    message="Internal error: temporary karaoke file path is unusable.",
+                    hint="Report this error with reproduction steps.",
+                )
             _ass_path.write_text(_ass_content, encoding="utf-8")
             # Replace subtitle.path with the generated .ass.  model_copy is used
             # (bypasses Pydantic validators; see SR-M-3 note in step 4c).
