@@ -40,7 +40,16 @@ from clipwright.process import resolve_tool, run, safe_subprocess_message
 from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel, ToolResult
 
 import clipwright_transcribe
-from clipwright_transcribe.captions import Segment, normalize_segments, to_srt, to_vtt
+from clipwright_transcribe.captions import (
+    Segment,
+    WordSegment,
+    extract_word_segments,
+    normalize_segments,
+    to_srt,
+    to_vtt,
+    to_word_vtt,
+    words_for_otio,
+)
 from clipwright_transcribe.schemas import TranscribeOptions
 
 # whisper.cpp executable name (spike-whisper confirmed; latest = whisper-cli,
@@ -125,12 +134,15 @@ class WhisperRun(NamedTuple):
     wall_seconds: Monotonic-clock duration of the whisper subprocess only
         (ffmpeg WAV extraction and JSON parse are excluded). Used to derive
         realtime_factor in _transcribe_inner.
+    words: Per-word timing segments extracted from -ojf tokens[]. Empty list
+        when word_timestamps=False (word extraction not requested; AC-2).
     """
 
     segments: list[Segment]
     language: str | None
     backend: BackendInfo
     wall_seconds: float
+    words: list[WordSegment] = []
 
 
 # ---------------------------------------------------------------------------
@@ -360,11 +372,13 @@ def _build_whisper_cmd(
 ) -> list[str]:
     """Build the whisper-cli argument list (TR-AD-01, DC-AM-002/003).
 
-    `-oj` writes JSON to `<prefix>.json`. Language None uses auto-detection
-    (LANG_AUTO_FLAG); an explicit code uses `-l <code>`. initial_prompt is passed
-    via `--prompt`.
+    `-ojf` (--output-json-full) writes JSON to `<prefix>.json` including tokens[].
+    The command is identical for word_timestamps=False and True (ADR-K2 / AC-2):
+    tokens[] are always present in -ojf output and extracted only when requested.
+    Language None uses auto-detection (LANG_AUTO_FLAG); an explicit code uses
+    `-l <code>`. initial_prompt is passed via `--prompt`.
     """
-    cmd = [whisper, "-m", model_path, "-f", wav_path, "-oj", "-of", prefix]
+    cmd = [whisper, "-m", model_path, "-f", wav_path, "-ojf", "-of", prefix]
     if options.language is None:
         cmd.extend(LANG_AUTO_FLAG)
     else:
@@ -458,7 +472,13 @@ def _run_whisper(
         # Backend detection uses whisper stderr (stderr-only; ADR-1' v2 AUTHORITY).
         backend = _detect_backend(whisper_json, whisper_result.stderr)
 
-    return WhisperRun(segments, language, backend, wall_seconds)
+        # Word extraction from -ojf tokens[] inside TemporaryDirectory (CR M-2).
+        # Only performed when requested; false path leaves words=[] (AC-2).
+        words: list[WordSegment] = (
+            extract_word_segments(whisper_json) if options.word_timestamps else []
+        )
+
+    return WhisperRun(segments, language, backend, wall_seconds, words)
 
 
 def transcribe_media(
@@ -592,16 +612,21 @@ def _transcribe_inner(
         start_time=RationalTimeModel(value=0.0, rate=rate),
         duration=RationalTimeModel(value=media_info.duration.value, rate=rate),
     )
+    clip_metadata: dict[str, Any] = {
+        "tool": "clipwright-transcribe",
+        "version": clipwright_transcribe.__version__,
+        "kind": "transcript-source",
+    }
+    # Store per-word timing in clip metadata when requested (F-T-06 / ADR-K1).
+    if options.word_timestamps:
+        clip_metadata["words"] = words_for_otio(whisper_run.words)
+
     add_clip(
         v1,
         MediaRef(target_url=media_ref_for_otio(media_path, output_path.parent)),
         full_source_range,
         name=media_path.name,
-        metadata={
-            "tool": "clipwright-transcribe",
-            "version": clipwright_transcribe.__version__,
-            "kind": "transcript-source",
-        },
+        metadata=clip_metadata,
     )
 
     # Attach each segment as a marker on the V1 track (DC-AM-101).
@@ -649,6 +674,31 @@ def _transcribe_inner(
     else:
         summary += f" Backend: {device}."
 
+    artifacts: list[dict[str, Any]] = [
+        {"role": "timeline", "path": str(output_path), "format": "otio"},
+        {"role": "captions", "path": str(srt_path), "format": "srt"},
+        {"role": "captions", "path": str(vtt_path), "format": "vtt"},
+    ]
+
+    # Word-level VTT output (additive; word_timestamps=False leaves this block
+    # unreached so the False path is byte-identical to the pre-feature behaviour
+    # — no extra artifact, no words.vtt file, summary unchanged; AC-2).
+    if options.word_timestamps:
+        word_vtt_path = output_path.parent / (output_path.stem + ".words.vtt")
+        try:
+            word_vtt_path.write_text(to_word_vtt(whisper_run.words), encoding="utf-8")
+        except OSError:
+            raise ClipwrightError(
+                code=ErrorCode.SUBPROCESS_FAILED,
+                message=f"Failed to write word captions: {word_vtt_path.name}",
+                hint="Check that the output directory is writable.",
+            ) from None
+        artifacts.append(
+            {"role": "captions", "path": str(word_vtt_path), "format": "vtt"}
+        )
+        word_count = sum(len(ws["words"]) for ws in whisper_run.words)
+        summary += f" {word_count} word(s)."
+
     warnings: list[str] = []
     if segment_count == 0:
         warnings.append(
@@ -672,10 +722,6 @@ def _transcribe_inner(
             "whisper_wall_seconds": round(whisper_run.wall_seconds, 3),
             "realtime_factor": realtime_factor,
         },
-        artifacts=[
-            {"role": "timeline", "path": str(output_path), "format": "otio"},
-            {"role": "captions", "path": str(srt_path), "format": "srt"},
-            {"role": "captions", "path": str(vtt_path), "format": "vtt"},
-        ],
+        artifacts=artifacts,
         warnings=warnings,
     )

@@ -1,0 +1,351 @@
+{
+	"systeminfo": "WHISPER : COREML = 0 | OPENVINO = 0 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | OPENMP = 1 | REPACK = 1 | ",
+	"model": {
+		"type": "large",
+		"multilingual": true,
+		"vocab": 51866,
+		"audio": {
+			"ctx": 1500,
+			"state": 1280,
+			"head": 20,
+			"layer": 32
+		},
+		"text": {
+			"ctx": 448,
+			"state": 1280,
+			"head": 20,
+			"layer": 4
+		},
+		"mels": 128,
+		"ftype": 1
+	},
+	"params": {
+		"model": "<ggml-large-v3-turbo.bin>",
+		"language": "auto",
+		"translate": false
+	},
+	"result": {
+		"language": "en"
+	},
+	"transcription": [
+		{
+			"timestamps": {
+				"from": "00:00:00,000",
+				"to": "00:00:01,000"
+			},
+			"offsets": {
+				"from": 0,
+				"to": 1000
+			},
+			"text": " Okay.",
+			"tokens": [
+				{
+					"text": "[_BEG_]",
+					"timestamps": {
+						"from": "00:00:00,000",
+						"to": "00:00:00,000"
+					},
+					"offsets": {
+						"from": 0,
+						"to": 0
+					},
+					"id": 50365,
+					"p": 0.407065,
+					"t_dtw": -1
+				},
+				{
+					"text": " Okay",
+					"timestamps": {
+						"from": "00:00:00,000",
+						"to": "00:00:00,570"
+					},
+					"offsets": {
+						"from": 0,
+						"to": 570
+					},
+					"id": 1033,
+					"p": 0.0343065,
+					"t_dtw": -1
+				},
+				{
+					"text": ".",
+					"timestamps": {
+						"from": "00:00:00,570",
+						"to": "00:00:00,990"
+					},
+					"offsets": {
+						"from": 570,
+						"to": 990
+					},
+					"id": 13,
+					"p": 0.7543,
+					"t_dtw": -1
+				},
+				{
+					"text": "[_TT_50]",
+					"timestamps": {
+						"from": "00:00:01,000",
+						"to": "00:00:01,000"
+					},
+					"offsets": {
+						"from": 1000,
+						"to": 1000
+					},
+					"id": 50415,
+					"p": 0.140387,
+					"t_dtw": -1
+				}
+			]
+		},
+		{
+			"timestamps": {
+				"from": "00:00:01,000",
+				"to": "00:00:02,000"
+			},
+			"offsets": {
+				"from": 1000,
+				"to": 2000
+			},
+			"text": " I'm going to go.",
+			"tokens": [
+				{
+					"text": " I",
+					"timestamps": {
+						"from": "00:00:01,000",
+						"to": "00:00:01,060"
+					},
+					"offsets": {
+						"from": 1000,
+						"to": 1060
+					},
+					"id": 286,
+					"p": 0.0793981,
+					"t_dtw": -1
+				},
+				{
+					"text": "'m",
+					"timestamps": {
+						"from": "00:00:01,060",
+						"to": "00:00:01,190"
+					},
+					"offsets": {
+						"from": 1060,
+						"to": 1190
+					},
+					"id": 478,
+					"p": 0.27507,
+					"t_dtw": -1
+				},
+				{
+					"text": " going",
+					"timestamps": {
+						"from": "00:00:01,190",
+						"to": "00:00:01,520"
+					},
+					"offsets": {
+						"from": 1190,
+						"to": 1520
+					},
+					"id": 516,
+					"p": 0.146336,
+					"t_dtw": -1
+				},
+				{
+					"text": " to",
+					"timestamps": {
+						"from": "00:00:01,520",
+						"to": "00:00:01,650"
+					},
+					"offsets": {
+						"from": 1520,
+						"to": 1650
+					},
+					"id": 281,
+					"p": 0.819772,
+					"t_dtw": -1
+				},
+				{
+					"text": " go",
+					"timestamps": {
+						"from": "00:00:01,650",
+						"to": "00:00:01,770"
+					},
+					"offsets": {
+						"from": 1650,
+						"to": 1770
+					},
+					"id": 352,
+					"p": 0.151859,
+					"t_dtw": -1
+				},
+				{
+					"text": ".",
+					"timestamps": {
+						"from": "00:00:01,770",
+						"to": "00:00:02,000"
+					},
+					"offsets": {
+						"from": 1770,
+						"to": 2000
+					},
+					"id": 13,
+					"p": 0.299142,
+					"t_dtw": -1
+				},
+				{
+					"text": "[_TT_100]",
+					"timestamps": {
+						"from": "00:00:02,000",
+						"to": "00:00:02,000"
+					},
+					"offsets": {
+						"from": 2000,
+						"to": 2000
+					},
+					"id": 50465,
+					"p": 0.361807,
+					"t_dtw": -1
+				}
+			]
+		},
+		{
+			"timestamps": {
+				"from": "00:00:03,000",
+				"to": "00:00:04,000"
+			},
+			"offsets": {
+				"from": 3000,
+				"to": 4000
+			},
+			"text": " Oh, I'm going to come.",
+			"tokens": [
+				{
+					"text": " Oh",
+					"timestamps": {
+						"from": "00:00:03,000",
+						"to": "00:00:03,500"
+					},
+					"offsets": {
+						"from": 3000,
+						"to": 3500
+					},
+					"id": 876,
+					"p": 0.0192852,
+					"t_dtw": -1
+				},
+				{
+					"text": ",",
+					"timestamps": {
+						"from": "00:00:03,500",
+						"to": "00:00:03,990"
+					},
+					"offsets": {
+						"from": 3500,
+						"to": 3990
+					},
+					"id": 11,
+					"p": 0.502199,
+					"t_dtw": -1
+				},
+				{
+					"text": " I",
+					"timestamps": {
+						"from": "00:00:03,990",
+						"to": "00:00:04,000"
+					},
+					"offsets": {
+						"from": 3990,
+						"to": 4000
+					},
+					"id": 286,
+					"p": 0.0868597,
+					"t_dtw": -1
+				},
+				{
+					"text": "'m",
+					"timestamps": {
+						"from": "00:00:04,000",
+						"to": "00:00:04,000"
+					},
+					"offsets": {
+						"from": 4000,
+						"to": 4000
+					},
+					"id": 478,
+					"p": 0.499679,
+					"t_dtw": -1
+				},
+				{
+					"text": " going",
+					"timestamps": {
+						"from": "00:00:04,000",
+						"to": "00:00:04,000"
+					},
+					"offsets": {
+						"from": 4000,
+						"to": 4000
+					},
+					"id": 516,
+					"p": 0.604092,
+					"t_dtw": -1
+				},
+				{
+					"text": " to",
+					"timestamps": {
+						"from": "00:00:04,000",
+						"to": "00:00:04,000"
+					},
+					"offsets": {
+						"from": 4000,
+						"to": 4000
+					},
+					"id": 281,
+					"p": 0.742131,
+					"t_dtw": -1
+				},
+				{
+					"text": " come",
+					"timestamps": {
+						"from": "00:00:04,000",
+						"to": "00:00:04,000"
+					},
+					"offsets": {
+						"from": 4000,
+						"to": 4000
+					},
+					"id": 808,
+					"p": 0.092484,
+					"t_dtw": -1
+				},
+				{
+					"text": ".",
+					"timestamps": {
+						"from": "00:00:04,000",
+						"to": "00:00:04,000"
+					},
+					"offsets": {
+						"from": 4000,
+						"to": 4000
+					},
+					"id": 13,
+					"p": 0.840207,
+					"t_dtw": -1
+				},
+				{
+					"text": "[_TT_200]",
+					"timestamps": {
+						"from": "00:00:04,000",
+						"to": "00:00:04,000"
+					},
+					"offsets": {
+						"from": 4000,
+						"to": 4000
+					},
+					"id": 50815,
+					"p": 0.492509,
+					"t_dtw": -1
+				}
+			]
+		}
+	]
+}

@@ -66,3 +66,17 @@ class TranscribeOptions(BaseModel):
             ),
         ),
     ] = None
+
+    word_timestamps: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "When True, extract per-word timing from whisper -ojf tokens[] and emit"
+                " a <stem>.words.vtt artifact with inline WebVTT timestamps (ADR-K2 /"
+                " F-T-01). Default False preserves the existing segment output exactly"
+                " (AC-2). The whisper command is identical for False and True;"
+                " -ojf is used unconditionally so the segment JSON is unchanged."
+            ),
+        ),
+    ] = False
