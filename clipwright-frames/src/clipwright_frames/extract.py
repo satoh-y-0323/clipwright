@@ -55,8 +55,9 @@ _MAX_TIMEOUT_DURATION_S: float = 315_360_000.0
 # A small interval_sec combined with a long duration_sec can produce thousands of
 # ffmpeg processes and output files.
 # Two guards apply in sequence (CWE-400 / SR-NEW / F-3):
-#   1. Pre-estimate (O(1)): duration_sec / interval_sec > limit -> reject immediately
+#   1. Pre-estimate (O(1)): int(duration_sec / interval_sec) > limit -> reject
 #      before compute_interval_timestamps() materialises the list (OOM prevention).
+#      int() (floor) avoids contradictory messages at fractional boundaries (CR-NEW).
 #   2. Exact post-count: len(timestamps) > limit -> reject with the precise count.
 _MAX_INTERVAL_FRAMES: int = 10_000
 
@@ -251,13 +252,17 @@ def _extract_frames_inner(
             # OOM on pathological inputs (e.g. tiny interval over a long clip) before
             # the exact post-count guard below can fire (CWE-400 / F-3).
             # interval_sec is gt=0.0 and <= duration_sec here, so no ZeroDivisionError.
-            estimated = duration_sec / interval_sec
-            if estimated > _MAX_INTERVAL_FRAMES:
+            # int() (floor) ensures the count in the error message matches the
+            # comparison operand, avoiding contradictory messages at fractional
+            # boundaries (CR-NEW). Boundary-near inputs (limit < ratio < limit+1)
+            # pass through to the exact post-count guard below.
+            estimated_count = int(duration_sec / interval_sec)
+            if estimated_count > _MAX_INTERVAL_FRAMES:
                 raise ClipwrightError(
                     code=ErrorCode.INVALID_INPUT,
                     message=(
                         f"interval_sec={interval_sec} would extract"
-                        f" {int(estimated)} frames,"
+                        f" {estimated_count} frames,"
                         f" exceeding the limit of {_MAX_INTERVAL_FRAMES}."
                     ),
                     hint=(

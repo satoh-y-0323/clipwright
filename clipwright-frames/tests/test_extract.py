@@ -2569,11 +2569,16 @@ class TestIntervalFrameCountLimit:
     def test_pre_estimate_prevents_oom_on_tiny_interval(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """F-3: pre-estimate guard rejects pathological input before list materialisation.
+        """F-3/F-4: pre-estimate guard rejects pathological input before list materialisation.
 
         A tiny interval_sec with a long clip would produce far more than _SMALL_MAX
         timestamps. The O(1) pre-estimate catches this before compute_interval_timestamps()
         builds the list, preventing OOM (CWE-400).
+
+        F-4: compute_interval_timestamps is replaced with a mock that raises
+        AssertionError. This directly verifies that the pre-estimate fires before
+        the list is materialised. Without this mock, deleting the pre-estimate
+        would still PASS because the real post-count guard would fire instead.
         """
         from clipwright_frames.extract import extract_frames
 
@@ -2581,8 +2586,9 @@ class TestIntervalFrameCountLimit:
             "clipwright_frames.extract._MAX_INTERVAL_FRAMES", self._SMALL_MAX
         )
 
-        interval_sec = 0.001  # tiny interval
-        duration_sec = 100.0  # long clip: estimated = 100_000 >> _SMALL_MAX
+        # int(100.0 / 0.001) = 100_000 >> _SMALL_MAX=5; pre-estimate must fire.
+        interval_sec = 0.001
+        duration_sec = 100.0
 
         media = str(tmp_path / "video.mp4")
         Path(media).touch()
@@ -2600,6 +2606,12 @@ class TestIntervalFrameCountLimit:
         with (
             patch("clipwright_frames.extract.inspect_media", return_value=media_info),
             patch("clipwright_frames.extract.run", side_effect=_fake_run),
+            patch(
+                "clipwright_frames.extract.compute_interval_timestamps",
+                side_effect=AssertionError(
+                    "compute_interval_timestamps must not be called when pre-estimate rejects"
+                ),
+            ),
         ):
             result = extract_frames(
                 media, str(out_dir), _opts(mode="interval", interval_sec=interval_sec)
