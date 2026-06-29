@@ -1418,23 +1418,14 @@ class TestUncoveredBranches:
 
 
 # ===========================================================================
-# T-5: Latin (English) word-wrap end-to-end (Red phase)
-#
-# All tests in this class FAIL at current HEAD with:
-#   pydantic.ValidationError: language='en' does not match pattern ^(ja|zh-hans|zh-hant|th)$
-# This is the expected Red evidence: 'en' is not yet in the language allowlist.
-# No subprocess mock is needed because the Latin path (after Green) is fully in-process.
+# T-5: Latin (English) word-wrap end-to-end
 # ===========================================================================
 
 
 class TestLatinWordWrap:
     """T-5: End-to-end wrap_captions with language='en' on an English .srt file.
 
-    At current HEAD, WrapCaptionsOptions(language='en') raises ValidationError because
-    'en' does not match the pattern ^(ja|zh-hans|zh-hant|th)$. All tests in this class
-    fail with ValidationError (Red evidence: language class not yet implemented).
-
-    After Green (impl-wrap-latin):
+    Verifies the Latin in-process path:
       - language='en' is accepted by the updated LANGUAGE_PATTERN
       - wrap_captions returns ok=True using in-process whitespace split (no subprocess)
       - Each output line respects max_chars with word-boundary wrapping
@@ -1456,23 +1447,16 @@ class TestLatinWordWrap:
         return str(p)
 
     def test_english_srt_wrap_ok_true(self, tmp_path: Path) -> None:
-        """wrap_captions with language='en' returns ok=True (T-5, AC-1).
-
-        Red: WrapCaptionsOptions(language='en') raises ValidationError at current HEAD.
-        """
+        """wrap_captions with language='en' returns ok=True (T-5, AC-1)."""
         wrap_captions = _import_wrap_captions()
         inp = self._make_input_en(tmp_path, "input_en_ok.srt")
         out = str(tmp_path / "output_en_ok.srt")
-        # ValidationError raised here at current HEAD (Red evidence)
         opts = WrapCaptionsOptions(language="en", max_chars=20, max_lines=2)
         result: dict[str, Any] = wrap_captions(inp, out, opts)
         assert result["ok"] is True
 
     def test_english_srt_data_language_preserved(self, tmp_path: Path) -> None:
-        """data.language is 'en' in the result envelope (T-5, AC-1).
-
-        Red: WrapCaptionsOptions(language='en') raises ValidationError at current HEAD.
-        """
+        """data.language is 'en' in the result envelope (T-5, AC-1)."""
         wrap_captions = _import_wrap_captions()
         inp = self._make_input_en(tmp_path, "input_en_lang.srt")
         out = str(tmp_path / "output_en_lang.srt")
@@ -1484,7 +1468,6 @@ class TestLatinWordWrap:
     def test_english_srt_lines_within_max_chars(self, tmp_path: Path) -> None:
         """Each text line in the output is at most max_chars characters (T-5, AC-1 line-length).
 
-        Red: WrapCaptionsOptions(language='en') raises ValidationError at current HEAD.
         With max_chars=15, 'The quick brown fox...' must be split across multiple lines.
         """
         wrap_captions = _import_wrap_captions()
@@ -1507,7 +1490,6 @@ class TestLatinWordWrap:
     def test_english_srt_word_boundaries_no_concatenation(self, tmp_path: Path) -> None:
         """Adjacent words in the output are never concatenated without a space (T-5, AC-1 word-boundary).
 
-        Red: WrapCaptionsOptions(language='en') raises ValidationError at current HEAD.
         If joiner is omitted or set to '' for Latin, adjacent words would be written
         as 'quickbrown' etc. — this test guards against that regression.
         """
@@ -1538,7 +1520,6 @@ class TestLatinWordWrap:
     def test_english_srt_no_text_truncation(self, tmp_path: Path) -> None:
         """All nine words from the input fixture appear in the output (no text truncation; T-5, AC-1).
 
-        Red: WrapCaptionsOptions(language='en') raises ValidationError at current HEAD.
         wrap_captions must not drop any word regardless of max_chars / max_lines settings.
         """
         wrap_captions = _import_wrap_captions()

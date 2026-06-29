@@ -1208,11 +1208,7 @@ class TestWrAd12TranscribeCompatibility:
 
 
 # ===========================================================================
-# T-3: wrap_cue_lines joiner parameter (Latin word-wrap — Red phase)
-#
-# All tests in this class FAIL at current HEAD with:
-#   TypeError: wrap_cue_lines() got an unexpected keyword argument 'joiner'
-# This is the expected Red evidence: the joiner feature is not yet implemented.
+# T-3: wrap_cue_lines joiner parameter (Latin word-wrap)
 # ===========================================================================
 
 
@@ -1224,16 +1220,10 @@ class TestWrapCueLinesJoiner:
       - Budget: len(current_line) + len(joiner) + len(seg) <= max_chars
       - Concat:  current_line += joiner + seg
       - Default joiner='' preserves CJK byte-equivalence (WR-AD-14).
-
-    Red evidence: TypeError at current HEAD (joiner kwarg not yet accepted).
     """
 
     def test_joiner_space_kwarg_accepted(self) -> None:
-        """wrap_cue_lines(segs, max_chars, joiner=' ') does not raise TypeError (T-3 Red marker).
-
-        At current HEAD this raises TypeError; passes only after the joiner parameter
-        is added to wrap_cue_lines in captions.py.
-        """
+        """wrap_cue_lines(segs, max_chars, joiner=' ') accepts the joiner keyword argument (T-3)."""
         result = wrap_cue_lines(["Hello", "world"], max_chars=20, joiner=" ")
         assert isinstance(result, list)
 
@@ -1285,11 +1275,7 @@ class TestWrapCueLinesJoiner:
 
 
 # ===========================================================================
-# T-4: _merge_to_max_lines joiner parameter (Latin word-wrap — Red phase)
-#
-# All tests in this class FAIL at current HEAD with:
-#   TypeError: _merge_to_max_lines() got an unexpected keyword argument 'joiner'
-# This is the expected Red evidence: the joiner feature is not yet implemented.
+# T-4: _merge_to_max_lines joiner parameter (Latin word-wrap)
 # ===========================================================================
 
 
@@ -1300,16 +1286,10 @@ class TestMergeToMaxLinesJoiner:
       _merge_to_max_lines(lines, max_lines, joiner='') -> tuple[list[str], bool]
       - front-merge: result[0] = result[0] + joiner + result[1]
       - Default joiner='' preserves CJK byte-equivalence (WR-AD-14).
-
-    Red evidence: TypeError at current HEAD (joiner kwarg not yet accepted).
     """
 
     def test_joiner_space_kwarg_accepted(self) -> None:
-        """_merge_to_max_lines(lines, max_lines, joiner=' ') does not raise TypeError (T-4 Red marker).
-
-        At current HEAD this raises TypeError; passes only after the joiner parameter
-        is added to _merge_to_max_lines in captions.py.
-        """
+        """_merge_to_max_lines(lines, max_lines, joiner=' ') accepts the joiner keyword argument (T-4)."""
         from clipwright_wrap.captions import _merge_to_max_lines
 
         result, merged = _merge_to_max_lines(

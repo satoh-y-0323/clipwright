@@ -1,7 +1,7 @@
 [project]
 name = "clipwright-wrap"
 version = "0.3.0"
-description = "MCP tool to format subtitle file (SRT/VTT) text at phrase boundaries with line wrapping using BudouX."
+description = "MCP tool to insert subtitle (SRT/VTT) line breaks: phrase-boundary wrapping for CJK/Thai (BudouX) and word wrapping for space-delimited (Latin) languages."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
