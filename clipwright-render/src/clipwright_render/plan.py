@@ -46,6 +46,7 @@ import math
 import os
 import re
 import sys
+import warnings as _warnings_mod
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -4328,3 +4329,381 @@ def build_plan(
         stabilize_cwd=stabilize_cwd,
         image_sources=[o.image_path for o in _image_overlays],
     )
+
+
+# ===========================================================================
+# Karaoke ASS generation (F-R-01..06 / ADR-K3/K5/K6/K7/K8)
+# ===========================================================================
+
+#: CWE-400 guard: maximum words across all cues in a word-VTT (ADR-K8).
+MAX_WORDS: int = 50_000
+
+#: CWE-400 guard: maximum cues in a word-VTT (ADR-K8).
+MAX_CUES: int = 10_000
+
+# Inline timestamp pattern: matches <HH:MM:SS.mmm> only (ADR-K7).
+# Other HTML-like tags are NOT matched and are left as literal text.
+_INLINE_TS_RE: re.Pattern[str] = re.compile(r"<(\d{2}:\d{2}:\d{2}\.\d{3})>")
+
+# VTT cue timing header: HH:MM:SS.mmm --> HH:MM:SS.mmm
+_VTT_TIMING_RE: re.Pattern[str] = re.compile(
+    r"(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})"
+)
+
+
+@dataclass
+class _KaraokeWord:
+    """Single word with timing extracted from a word-level WebVTT cue."""
+
+    text: str
+    start: float  # seconds from file start
+    end: float  # seconds from file start
+
+
+@dataclass
+class _WordCue:
+    """One WebVTT cue segment carrying an ordered list of karaoke words."""
+
+    start: float  # cue start in seconds
+    end: float  # cue end in seconds
+    words: list[_KaraokeWord]
+
+
+def _parse_vtt_time(ts: str) -> float:
+    """Parse 'HH:MM:SS.mmm' into seconds as a float.
+
+    Uses integer millisecond arithmetic to avoid floating-point accumulation.
+    """
+    colon_parts = ts.split(":")
+    s_str, ms_str = colon_parts[-1].split(".")
+    ms = int(ms_str)
+    s = int(s_str)
+    m = int(colon_parts[-2]) if len(colon_parts) >= 2 else 0
+    h = int(colon_parts[-3]) if len(colon_parts) >= 3 else 0
+    return (h * 3_600_000 + m * 60_000 + s * 1_000 + ms) / 1_000.0
+
+
+def _format_ass_time(seconds: float) -> str:
+    """Format seconds as an ASS time string 'H:MM:SS.cs'."""
+    cs_total = round(seconds * 100)
+    cs = cs_total % 100
+    s_total = cs_total // 100
+    s = s_total % 60
+    m_total = s_total // 60
+    m = m_total % 60
+    h = m_total // 60
+    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
+
+def _parse_word_vtt(path: str, *, max_words: int, max_cues: int) -> list[_WordCue]:
+    """Parse a word-level WebVTT file into a list of _WordCue objects.
+
+    Recognises ONLY inline timestamp tags matching <HH:MM:SS.mmm>; other
+    HTML-like tags in the cue body are treated as literal text (ADR-K7).
+
+    word.start = its inline timestamp.
+    word.end   = the next inline timestamp, or cue end for the last word.
+
+    Raises ClipwrightError(INVALID_INPUT) when:
+    - total word count exceeds max_words (hint includes the limit; CWE-400).
+    - total cue count exceeds max_cues  (hint includes the limit; CWE-400).
+    - NO cue in the file carries any inline timestamp (not a word-level VTT).
+
+    When only some cues lack inline timestamps, emits a Python UserWarning and
+    treats that cue as a single static word spanning its time range (ADR-K7).
+    """
+    content = Path(path).read_text(encoding="utf-8")
+    blocks = content.strip().split("\n\n")
+
+    cues: list[_WordCue] = []
+    total_words = 0
+    cues_with_tags = 0
+
+    for block in blocks:
+        lines = block.strip().splitlines()
+        if not lines:
+            continue
+        # Skip the WEBVTT header block
+        if lines[0].startswith("WEBVTT"):
+            continue
+
+        # Locate the timing header line
+        timing_match: re.Match[str] | None = None
+        timing_idx = 0
+        for i, line in enumerate(lines):
+            m = _VTT_TIMING_RE.search(line)
+            if m:
+                timing_match = m
+                timing_idx = i
+                break
+
+        if timing_match is None:
+            continue  # NOTE or other non-cue block
+
+        cue_start = _parse_vtt_time(timing_match.group(1))
+        cue_end = _parse_vtt_time(timing_match.group(2))
+
+        # CWE-400: check cue limit before processing
+        if len(cues) >= max_cues:
+            raise ClipwrightError(
+                ErrorCode.INVALID_INPUT,
+                "Word-VTT exceeds the maximum cue count.",
+                f"The file contains more than {max_cues} cues. "
+                "Split the input into smaller segments.",
+            )
+
+        # Join body lines (all lines after the timing header)
+        body = " ".join(lines[timing_idx + 1 :]).strip()
+
+        # Locate all inline timestamps via finditer (type-safe; no re.split Any)
+        match_list = list(_INLINE_TS_RE.finditer(body))
+        has_tags = bool(match_list)
+
+        if not has_tags:
+            # No inline timestamps → static line (ADR-K7)
+            _warnings_mod.warn(
+                f"Cue {cue_start:.3f}–{cue_end:.3f}s has no inline timestamps;"
+                " treating as a static line without karaoke timing.",
+                stacklevel=2,
+            )
+            total_words += 1
+            if total_words > max_words:
+                raise ClipwrightError(
+                    ErrorCode.INVALID_INPUT,
+                    "Word-VTT exceeds the maximum word count.",
+                    f"The file contains more than {max_words} words. "
+                    "Split the input into smaller segments.",
+                )
+            cues.append(
+                _WordCue(
+                    start=cue_start,
+                    end=cue_end,
+                    words=[_KaraokeWord(text=body, start=cue_start, end=cue_end)],
+                )
+            )
+            continue
+
+        cues_with_tags += 1
+
+        # Extract (timestamp_str, text) pairs from match positions
+        word_starts: list[float] = []
+        word_texts: list[str] = []
+        for idx, mt in enumerate(match_list):
+            ts_str: str = mt.group(1)
+            text_start = mt.end()
+            text_end = (
+                match_list[idx + 1].start() if idx + 1 < len(match_list) else len(body)
+            )
+            text = body[text_start:text_end].strip()
+            if text:
+                word_starts.append(_parse_vtt_time(ts_str))
+                word_texts.append(text)
+
+        # Build _KaraokeWord list: word.end = next word's start or cue end
+        words: list[_KaraokeWord] = []
+        for j, (wstart, wtext) in enumerate(zip(word_starts, word_texts, strict=False)):
+            wend = word_starts[j + 1] if j + 1 < len(word_starts) else cue_end
+            total_words += 1
+            if total_words > max_words:
+                raise ClipwrightError(
+                    ErrorCode.INVALID_INPUT,
+                    "Word-VTT exceeds the maximum word count.",
+                    f"The file contains more than {max_words} words. "
+                    "Split the input into smaller segments.",
+                )
+            words.append(_KaraokeWord(text=wtext, start=wstart, end=wend))
+
+        cues.append(_WordCue(start=cue_start, end=cue_end, words=words))
+
+    # ADR-K7: reject files where NO cue has inline timestamps
+    if cues and cues_with_tags == 0:
+        raise ClipwrightError(
+            ErrorCode.INVALID_INPUT,
+            "Word-VTT contains no inline timestamps in any cue.",
+            "Ensure the file uses word-level inline timestamps (<HH:MM:SS.mmm>) "
+            "in at least one cue. Re-run transcription with word_timestamps=true.",
+        )
+
+    return cues
+
+
+def _escape_ass_text(text: str) -> str:
+    r"""Escape ASS dialogue text before wrapping with \k tags (SEC-04 / AC-5).
+
+    Must be applied BEFORE \k tag generation so that user-supplied braces and
+    backslashes cannot inject ASS override tags.
+
+    Transformations (order matters — backslash first):
+        \   →  \\
+        {   →  \{
+        }   →  \}
+        CR/LF removed (ASS dialogue text must be single-line)
+    """
+    text = text.replace("\\", "\\\\")
+    text = text.replace("{", "\\{")
+    text = text.replace("}", "\\}")
+    text = text.replace("\r\n", "").replace("\r", "").replace("\n", "")
+    return text
+
+
+def _group_words_into_lines(
+    words: list[_KaraokeWord],
+    chars_per_line: int,
+    max_lines: int,
+) -> list[list[list[_KaraokeWord]]]:
+    """Group words into screen events using greedy char-budget line packing.
+
+    Returns a list of screen events.  Each event is a list of lines; each line
+    is a list of _KaraokeWord objects.  When adding a word would exceed
+    chars_per_line (counting one space between consecutive words on the same
+    line), a new line begins.  When lines overflow max_lines, a new screen
+    event starts.  A single word that exceeds chars_per_line is always placed
+    alone on a new line (words are not split).
+    """
+    events: list[list[list[_KaraokeWord]]] = []
+    current_event: list[list[_KaraokeWord]] = []
+    current_line: list[_KaraokeWord] = []
+    current_line_len = 0
+
+    for word in words:
+        word_len = len(word.text)
+        new_len = current_line_len + 1 + word_len if current_line else word_len
+
+        if current_line and new_len > chars_per_line:
+            # Word does not fit → flush the current line
+            current_event.append(current_line)
+            current_line = []
+            current_line_len = 0
+
+            if len(current_event) >= max_lines:
+                # Event is full → flush it, start a new one
+                events.append(current_event)
+                current_event = []
+
+            # Begin new line with the overflow word
+            current_line = [word]
+            current_line_len = word_len
+        else:
+            current_line.append(word)
+            current_line_len = new_len
+
+    # Flush any remaining words
+    if current_line:
+        current_event.append(current_line)
+    if current_event:
+        events.append(current_event)
+
+    return events
+
+
+def _karaoke_event_text(
+    line_groups: list[list[_KaraokeWord]], event_start: float
+) -> str:
+    r"""Build one ASS Dialogue body string with \k<cs> tags (ADR-K5).
+
+    cs uses cumulative boundary differencing measured from event_start:
+
+        cs_i = round((word.end   - event_start) * 100)
+             - round((word.start - event_start) * 100)
+
+    This guarantees that sum(cs_i over all words) equals the event duration
+    in centiseconds exactly (drift-zero; ADR-K5).
+
+    Multiple lines are joined with \N (ASS hard line break).  Each word text
+    is escaped by _escape_ass_text before wrapping (SEC-04 / AC-5).
+    """
+    line_parts: list[str] = []
+    for line in line_groups:
+        word_parts: list[str] = []
+        for word in line:
+            cs = round((word.end - event_start) * 100) - round(
+                (word.start - event_start) * 100
+            )
+            escaped = _escape_ass_text(word.text)
+            word_parts.append(f"{{\\k{cs}}}{escaped}")
+        line_parts.append("".join(word_parts))
+    return "\\N".join(line_parts)
+
+
+def _build_karaoke_ass(
+    cues: list[_WordCue], subtitle: SubtitleOptions, frame_w: int, frame_h: int
+) -> str:
+    """Assemble a complete ASS document for karaoke word-highlighting (ADR-K3/K4/K6).
+
+    PlayResX/PlayResY = frame_w/frame_h so the libass scale ratio is exactly 1
+    and FontSize/MarginV/Outline values are written in output pixels directly.
+    _counter_scale is NOT used (ADR-K3).
+
+    PrimaryColour  = highlight_color (default #FFFF00) — the active/sung word.
+    SecondaryColour = font_color     (default #FFFFFF) — inactive words.
+
+    ASS \\k karaoke sweeps Secondary → Primary as each word is sung (ADR-K6).
+
+    One Dialogue event is emitted per screen event returned by
+    _group_words_into_lines; Start = first word.start, End = last word.end.
+    """
+    # Resolve colours (None → sensible defaults)
+    highlight_hex = (
+        subtitle.highlight_color if subtitle.highlight_color is not None else "#FFFF00"
+    )
+    inactive_hex = subtitle.font_color if subtitle.font_color is not None else "#FFFFFF"
+    primary_colour = _rgb_to_ass_colour(highlight_hex)
+    secondary_colour = _rgb_to_ass_colour(inactive_hex)
+
+    outline_colour = "&H00000000"  # opaque black border
+    back_colour = "&H00000000"  # opaque black shadow/background
+
+    # Style parameters — output-pixel direct values; no counter-scale (ADR-K3)
+    font_name = subtitle.font_name if subtitle.font_name is not None else "Arial"
+    font_size = subtitle.font_size if subtitle.font_size is not None else 40
+    alignment = subtitle.alignment if subtitle.alignment is not None else 2
+    margin_v = subtitle.margin_v if subtitle.margin_v is not None else 20
+    outline_w = subtitle.outline if subtitle.outline is not None else 2.0
+
+    # --- [Script Info] ---
+    script_info = (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        f"PlayResX: {frame_w}\n"
+        f"PlayResY: {frame_h}\n"
+        "Collisions: Normal\n"
+    )
+
+    # --- [V4+ Styles] ---
+    style_format = (
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour,"
+        " OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut,"
+        " ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow,"
+        " Alignment, MarginL, MarginR, MarginV, Encoding"
+    )
+    style_line = (
+        f"Style: Default,{font_name},{font_size},{primary_colour},"
+        f"{secondary_colour},{outline_colour},{back_colour},"
+        f"0,0,0,0,100,100,0,0,1,{outline_w},0,{alignment},0,0,{margin_v},1"
+    )
+    styles_section = f"[V4+ Styles]\n{style_format}\n{style_line}\n"
+
+    # --- [Events] ---
+    event_format = (
+        "Format: Layer, Start, End, Style, Name,"
+        " MarginL, MarginR, MarginV, Effect, Text"
+    )
+    dialogue_lines: list[str] = []
+    for cue in cues:
+        screen_events = _group_words_into_lines(
+            cue.words, subtitle.chars_per_line, subtitle.max_lines
+        )
+        for event in screen_events:
+            all_words = [w for line in event for w in line]
+            event_start = all_words[0].start
+            event_end = all_words[-1].end
+            body = _karaoke_event_text(event, event_start)
+            start_str = _format_ass_time(event_start)
+            end_str = _format_ass_time(event_end)
+            dialogue_lines.append(
+                f"Dialogue: 0,{start_str},{end_str},Default,,0,0,0,,{body}"
+            )
+
+    events_section = f"[Events]\n{event_format}\n" + "\n".join(dialogue_lines) + "\n"
+
+    return script_info + "\n" + styles_section + "\n" + events_section

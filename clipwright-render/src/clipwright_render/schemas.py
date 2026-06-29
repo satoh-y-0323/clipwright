@@ -169,6 +169,58 @@ class SubtitleOptions(BaseModel):
         ),
     ] = None
 
+    # --- Karaoke fields (additive; F-R-01/03/05 / ADR-K6/K7/K8) ---
+
+    karaoke: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "When true, treat `path` as a word-level WebVTT (inline timestamps)"
+                " and burn word-synced karaoke highlights (ASS \\k). Default false"
+                " keeps the existing subtitle burn-in path unchanged."
+            ),
+        ),
+    ] = False
+
+    highlight_color: Annotated[
+        str | None,
+        Field(
+            default=None,
+            pattern=r"^#[0-9a-fA-F]{6}$",
+            description=(
+                "Active (sung) word colour in #RRGGBB; maps to ASS PrimaryColour."
+                " Karaoke only. Default yellow (#FFFF00) when None."
+            ),
+        ),
+    ] = None
+
+    chars_per_line: Annotated[
+        int,
+        Field(
+            default=42,
+            ge=1,
+            le=200,
+            description=(
+                "Greedy char budget per karaoke line. Small values (~12) give"
+                " pop-on (1-2 words); larger values give classic in-line highlight."
+            ),
+        ),
+    ] = 42
+
+    max_lines: Annotated[
+        int,
+        Field(
+            default=2,
+            ge=1,
+            le=4,
+            description=(
+                "Max lines per karaoke screen event; overflow words spill to a new"
+                " ASS Dialogue event timed to their own words."
+            ),
+        ),
+    ] = 2
+
     @field_validator("font_name")
     @classmethod
     def _validate_font_name_no_forbidden_chars(cls, v: str | None) -> str | None:
