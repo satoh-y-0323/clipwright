@@ -5,6 +5,34 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.0] - 2026-06-29
+
+Frame-extraction interval-mode manifest fix (spec5 D2).
+
+### Fixed (`clipwright-frames` v0.3.1)
+
+- **Interval mode now extracts one frame per manifest timestamp, so the manifest matches the
+  files on disk.** `extract_frames(mode="interval")` previously computed its `frames.json`
+  manifest from the analytic start-aligned grid of `compute_interval_timestamps` (e.g. `[0, 15,
+  30, 45, 60, 75]`) while extracting the actual frames with the ffmpeg `fps=1/N` filter, which
+  samples at period *midpoints* and emits a different number of frames near the tail. For a clip
+  whose length is not an exact multiple of the interval, the manifest listed a final
+  `frame_NNNNN.jpg` that was never written, so an agent consuming the manifest would try to open
+  a non-existent file. Interval mode now uses the same per-`-ss` single-frame extraction path as
+  `scene`/`timestamps` mode, making the extracted-frame list the single source of truth for the
+  manifest `count` and frame paths (`manifest.count == number of files on disk`, every manifest
+  path exists). The now-unused `build_fps_command` helper was removed.
+
+### Security (`clipwright-frames` v0.3.1)
+
+- **Interval mode is now bounded against frame-count blow-up (CWE-400).** Because per-`-ss`
+  extraction spawns one ffmpeg process per frame, a tiny `interval_sec` over a long clip could
+  spawn an unbounded number of processes (and write an unbounded number of files). Interval
+  extraction now rejects requests that would produce more than a fixed maximum number of frames,
+  with an O(1) pre-estimate guard *before* the timestamp list is materialised (preventing memory
+  blow-up) plus an exact post-count guard. The error message names the frame count and the limit
+  without leaking any filesystem path or subprocess output.
+
 ## [0.26.0] - 2026-06-28
 
 Timeline source matching fix across color, loudness, noise, and stabilize tools.

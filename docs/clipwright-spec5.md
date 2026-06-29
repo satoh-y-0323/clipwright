@@ -180,7 +180,21 @@ folding this comparison into `clipwright.pathpolicy` so it cannot drift per tool
 
 ---
 
-### D2. `clipwright-frames` interval mode — manifest count overstates the frames actually written  *Medium*
+### D2. `clipwright-frames` interval mode — manifest count overstates the frames actually written  *Medium* — **RESOLVED**
+
+**Resolution (shipped — suite v0.27.0 / `clipwright-frames` v0.3.1):** interval mode now
+extracts one frame per `compute_interval_timestamps` value via per-`-ss` single-frame
+extraction — the exact path `scene`/`timestamps` mode already use — instead of the `fps=1/N`
+filter. The list of successfully extracted frames is the single source of truth for the
+`frames.json` `count` and the frame paths, so `manifest.count` always equals the number of
+files on disk and every manifest path exists. The now-unused `build_fps_command` helper (and
+its tests) were removed. Verified by an integration e2e on a non-multiple clip length (9 s /
+4 s, where the old fps-filter path dropped the tail frame) asserting `manifest["count"] ==
+len(glob(frame_*.jpg))` and that every manifest path satisfies `os.path.exists`, plus a real
+stdio-MCP e2e. Hardening: because per-`-ss` extraction spawns one ffmpeg process per frame, a
+frame-count guard (O(1) pre-estimate before list materialisation + exact post-count check)
+rejects pathological tiny-`interval_sec`-over-long-clip inputs (CWE-400) without leaking any
+path or subprocess output.
 
 **Symptom**
 `extract_frames(mode="interval", interval_sec=15)` on the 77 s clip reports
@@ -710,7 +724,8 @@ render      ✓ (NVENC+hwdecode;     overlay     ✗ cascade from D1 (works stan
 silence     ✓ (VAD 8 / energy 5)   reframe     ✓ NEW mode="track" (80 kf, follows subject)
 scene       ✓ (psd 12 / ffmpeg 0)  sequence    ✓
 frames      ✓ scene_sample;        transition  ✓ (4:2:0 confirmed on real footage)
-              ✗ interval manifest (D2)  stabilize ~ apply params fixed (D4 RESOLVED:
+              ✓ interval manifest (D2 RESOLVED: per-ss, manifest==disk)
+                                     stabilize ~ apply params fixed (D4 RESOLVED:
                                                     crop=black/optzoom=1/smoothing=12/
                                                     unsharp + -threads 1 for vid.stab
                                                     #144); but unusable-by-default on
@@ -770,9 +785,14 @@ directly for Latin captions).
    `ok`/artifact/`yuv420p` + a 15× crash-regression loop. Code on `main`; shipped
    together with the D3/D6 severity gate as suite **v0.25.0** (render 0.15.0 /
    stabilize 0.4.0). Spun off: vid.stab #144 upstream tracking and **D5**.
-4. **D2 — frames interval manifest overcounts vs fps-filter output** (Medium):
-   manifest lists a non-existent final frame; extract interval frames per
-   `compute_interval_timestamps` via `-ss` so manifest == disk (as scene mode does).
+4. **D2 — frames interval manifest overcounts vs fps-filter output** (Medium) —
+   **RESOLVED** (shipped — suite v0.27.0 / `clipwright-frames` v0.3.1): interval mode
+   now extracts one frame per `compute_interval_timestamps` value via per-`-ss` single-frame
+   extraction (the same path `scene`/`timestamps` use), so the extracted-frame list is the
+   single source of truth and `manifest.count == len(glob(frame_*.jpg))` with every manifest
+   path existing. The unused `build_fps_command` was removed. Hardened against per-`-ss`
+   process blow-up with a frame-count guard (pre-estimate + exact, CWE-400). Verified by a
+   non-multiple-length integration e2e (9 s / 4 s) and a real stdio-MCP e2e.
 5. **Caption wrap for Latin languages** (Medium): `wrap_captions` hard-errors on
    English; accept space-delimited wrapping or an explicit passthrough.
 6. **Word-level/karaoke captions · color-grading depth · video PiP · NLE
