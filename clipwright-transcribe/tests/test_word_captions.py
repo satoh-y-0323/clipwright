@@ -24,7 +24,7 @@ from typing import Any
 import pytest
 from clipwright.errors import ClipwrightError, ErrorCode
 
-# New symbols below raise ImportError until s1-captions-impl is merged (correct Red).
+# Symbols exported by captions.py (s1-captions-impl implementation).
 from clipwright_transcribe.captions import (
     MAX_WORDS_TRANSCRIBE,
     WordSegment,

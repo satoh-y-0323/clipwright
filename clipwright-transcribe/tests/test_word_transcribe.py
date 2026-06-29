@@ -47,7 +47,7 @@ FPS = 30.0
 # ---------------------------------------------------------------------------
 
 # Plain-dict word segments (mirrors WordSegment TypedDict schema, architecture §2-1).
-# Used to mock _run_whisper.words without importing WordSegment (not yet in captions.py).
+# Used to mock _run_whisper.words without importing WordSegment from captions.py.
 _FAKE_WORD_SEGMENTS: list[dict[str, Any]] = [
     {
         "start_sec": 0.0,
@@ -178,7 +178,7 @@ class TestWordTimestampsSchema:
 
         Regression guard: adding word_timestamps must not accidentally relax
         the extra='forbid' policy (SR L-1 / architecture §2-1).
-        Expected to pass even before implementation (policy invariant).
+        Policy invariant that must hold regardless of implementation.
         """
         from pydantic import ValidationError
 
@@ -253,7 +253,7 @@ class TestWhisperRunWordsField:
         words: list[WordSegment] is added additively to the NamedTuple.
         """
         assert "words" in WhisperRun._fields, (
-            f"WhisperRun._fields={WhisperRun._fields!r} — 'words' not yet added"
+            f"WhisperRun._fields={WhisperRun._fields!r} — 'words' field is absent"
         )
 
 
@@ -593,9 +593,8 @@ class TestWordErrorSanitization:
             )
 
         # If an error was produced (not ok), verify path sanitisation.
-        # If ok is True (word path not yet implemented), the test cannot make the
-        # path-exposure assertion; this is still a Red failure because result.ok
-        # being True means the words.vtt write was not attempted at all.
+        # If ok is True, the write succeeded; verify the artifact was actually written
+        # to confirm the word_timestamps path was exercised.
         if result.ok is False and result.error is not None:
             assert absolute_path not in result.error.message, (
                 "Absolute path must not be exposed in error message (SEC-02/CWE-209).\n"
@@ -603,10 +602,9 @@ class TestWordErrorSanitization:
                 f"  Message: {result.error.message!r}"
             )
         else:
-            # word_timestamps=True not yet handled: enforce at least that the
-            # words.vtt file was written (if ok=True, it should exist)
+            # ok=True: enforce that words.vtt was actually written.
             words_vtt = Path(output).parent / (Path(output).stem + ".words.vtt")
             assert words_vtt.exists(), (
-                "result.ok=True but words.vtt not written — word_timestamps=True "
-                "path is not yet implemented (Red: feature missing)"
+                "result.ok=True but words.vtt not found — "
+                "word_timestamps=True must produce the artifact"
             )

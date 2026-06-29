@@ -273,6 +273,22 @@ class TestParseWordVtt:
         # Hint must expose the limit so callers know how to split input
         assert "3" in exc_info.value.hint
 
+    def test_cwe400_single_cue_many_words_early_fail(self, tmp_path: Path) -> None:
+        # SR-NEW / CWE-400: a single cue with more inline-timestamp words than
+        # max_words must raise INVALID_INPUT before the full match list is
+        # materialised in memory (streaming fix).
+        # Arrange: 10 inline-timestamp words in one cue; limit set to 5.
+        timestamps = " ".join(f"<00:00:{i:02d}.000>word{i}" for i in range(10))
+        vtt_content = f"WEBVTT\n\n00:00:00.000 --> 00:00:10.000\n{timestamps}\n"
+        vtt = tmp_path / "single_cue_many.vtt"
+        vtt.write_text(vtt_content, encoding="utf-8")
+
+        # Act / Assert
+        with pytest.raises(ClipwrightError) as exc_info:
+            _parse_word_vtt(str(vtt), max_words=5, max_cues=_MAX_CUES)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+        assert "5" in exc_info.value.hint
+
     def test_cwe400_exceeds_max_cues_raises_invalid_input(self, tmp_path: Path) -> None:
         # Arrange: canonical has 2 cues; set max_cues=1 to trigger limit
         vtt = tmp_path / "over_cues.vtt"

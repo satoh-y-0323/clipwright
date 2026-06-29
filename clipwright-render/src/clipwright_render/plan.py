@@ -4492,9 +4492,12 @@ def _parse_word_vtt(path: str, *, max_words: int, max_cues: int) -> list[_WordCu
         # Join body lines (all lines after the timing header)
         body = " ".join(lines[timing_idx + 1 :]).strip()
 
-        # Locate all inline timestamps via finditer (type-safe; no re.split Any)
-        match_list = list(_INLINE_TS_RE.finditer(body))
-        has_tags = bool(match_list)
+        # SR-NEW / CWE-400: iterate lazily to avoid materialising the full match
+        # list before the word limit fires. Peek at the first match to determine
+        # has_tags without consuming the rest of the iterator.
+        _match_iter = _INLINE_TS_RE.finditer(body)
+        _first_match: re.Match[str] | None = next(_match_iter, None)
+        has_tags = _first_match is not None
 
         if not has_tags:
             # No inline timestamps → static line (ADR-K7)
@@ -4524,19 +4527,32 @@ def _parse_word_vtt(path: str, *, max_words: int, max_cues: int) -> list[_WordCu
 
         cues_with_tags += 1
 
-        # Extract (timestamp_str, text) pairs from match positions
+        # Extract (timestamp_str, text) pairs via pairwise lazy traversal.
+        # SR-NEW / CWE-400: total_words is incremented here so the limit fires
+        # before word_starts/word_texts grow beyond max_words (streaming fix).
         word_starts: list[float] = []
         word_texts: list[str] = []
-        for idx, mt in enumerate(match_list):
-            ts_str: str = mt.group(1)
-            text_start = mt.end()
-            text_end = (
-                match_list[idx + 1].start() if idx + 1 < len(match_list) else len(body)
-            )
+        _cur: re.Match[str] | None = _first_match
+        while _cur is not None:
+            _nxt: re.Match[str] | None = next(_match_iter, None)
+            ts_str: str = _cur.group(1)
+            text_start = _cur.end()
+            text_end = _nxt.start() if _nxt is not None else len(body)
             text = body[text_start:text_end].strip()
             if text:
+                total_words += 1
+                if total_words > max_words:
+                    raise ClipwrightError(
+                        code=ErrorCode.INVALID_INPUT,
+                        message="Word-VTT exceeds the maximum word count.",
+                        hint=(
+                            f"The file contains more than {max_words} words. "
+                            "Split the input into smaller segments."
+                        ),
+                    )
                 word_starts.append(_parse_vtt_time(ts_str))
                 word_texts.append(text)
+            _cur = _nxt
 
         # CR-H-1 / architecture §5: enforce monotonic inline timestamps.
         # Non-monotonic timestamps (next < current) would produce negative cs
@@ -4555,22 +4571,11 @@ def _parse_word_vtt(path: str, *, max_words: int, max_cues: int) -> list[_WordCu
                 word_starts[_mi + 1] = word_starts[_mi]
 
         # Build _KaraokeWord list: word.end = next word's start or cue end.
-        # Check before append: total_words is incremented and checked before the
-        # word is added to the list, so at most max_words words are held in memory
-        # when the limit is reached (SR-L-1 / CWE-400).
+        # total_words was already incremented in the extraction loop above
+        # (SR-NEW / CWE-400); do not re-count here.
         words: list[_KaraokeWord] = []
         for j, (wstart, wtext) in enumerate(zip(word_starts, word_texts, strict=False)):
             wend = word_starts[j + 1] if j + 1 < len(word_starts) else cue_end
-            total_words += 1
-            if total_words > max_words:
-                raise ClipwrightError(
-                    code=ErrorCode.INVALID_INPUT,
-                    message="Word-VTT exceeds the maximum word count.",
-                    hint=(
-                        f"The file contains more than {max_words} words. "
-                        "Split the input into smaller segments."
-                    ),
-                )
             words.append(_KaraokeWord(text=wtext, start=wstart, end=wend))
 
         cues.append(_WordCue(start=cue_start, end=cue_end, words=words))
