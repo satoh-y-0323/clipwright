@@ -2405,8 +2405,8 @@ class TestIntervalFrameCountLimit:
         """_SMALL_MAX + 1 timestamps -> ok=False / INVALID_INPUT (boundary+1).
 
         F-3: the pre-estimate check fires before compute_interval_timestamps() is
-        called (estimated = 6.0 > 5), so run() is never invoked and no list is
-        materialised.
+        called (estimated_count = int(6.0 / 1.0) = 6 > 5), so run() is never
+        invoked and no list is materialised.
         """
         from clipwright_frames.extract import extract_frames
         from clipwright_frames.plan import compute_interval_timestamps
