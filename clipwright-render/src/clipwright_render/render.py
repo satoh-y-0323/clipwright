@@ -27,6 +27,7 @@ Design decisions:
 from __future__ import annotations
 
 import math
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -46,8 +47,12 @@ from clipwright_render.encoders import (
     hwaccel_value,
 )
 from clipwright_render.plan import (
+    MAX_CUES,
+    MAX_WORDS,
     BgmClip,
     ProbeInfo,
+    _build_karaoke_ass,
+    _parse_word_vtt,
     build_plan,
     resolve_bgm,
     resolve_kept_ranges,
@@ -855,6 +860,22 @@ def _render_inner(
                 hint="Set the subtitle file extension to one of .srt / .vtt / .ass.",
             )
 
+        # karaoke=True requires a word-level WebVTT (.vtt) input (F-R-04 / ADR-K7).
+        # Checked after the extension WL guard so non-WL extensions receive the
+        # generic WL error first (priority: FILE_EXT_INVALID > KARAOKE_EXT).
+        if options.subtitle.karaoke and sub_ext != ".vtt":
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message=(
+                    f"karaoke=True requires a word-level WebVTT file (.vtt),"
+                    f" but got extension {sub_ext!r}."
+                ),
+                hint=(
+                    "Supply a word-level .vtt file produced by"
+                    " clipwright_transcribe with word_timestamps=True."
+                ),
+            )
+
         # When fonts_dir is specified: validate that it is an existing directory
         # (ADR-S7). Boundary is not enforced (it is natural to point to a
         # system/bundled font location)
@@ -994,6 +1015,52 @@ def _render_inner(
     # The call is inside _render_inner which is wrapped by render_timeline's
     # try/except ClipwrightError, so the error is converted to ok=False envelope.
     resolved: ResolvedEncoder | None = _resolve_hw_encoder(options)
+
+    # --- 4f. Karaoke ASS generation (F-R-04 / ADR-K4) ---
+    # When subtitle.karaoke=True: parse the word-level VTT, build a self-contained
+    # ASS document in a TemporaryDirectory, and swap subtitle.path so that
+    # _append_subtitle_filter detects is_ass=True (suppresses charenc and
+    # force_style per DC-AS-002 / ADR-K4).
+    #
+    # The TemporaryDirectory object is held as _karaoke_scratch so it remains
+    # alive through the entire _render_inner call—covering both build_plan
+    # (filter_complex generation) and any subsequent ffmpeg execution (actual
+    # file read).  When _render_inner returns (normally or via exception) the
+    # object goes out of scope and Python cleans up the directory automatically.
+    #
+    # When karaoke=False (default), _karaoke_scratch stays None and this block
+    # is completely bypassed; existing subtitle paths flow unmodified to
+    # build_plan (F-R-07 / AC-7 regression guarantee).
+    _karaoke_scratch: tempfile.TemporaryDirectory[str] | None = None
+    if options.subtitle is not None and options.subtitle.karaoke:
+        # Frame dimensions for PlayResX/Y in the ASS [Script Info] section.
+        # Use the explicit render resolution when specified; fall back to the
+        # probe dimensions from the first source; last resort 1920×1080 (should
+        # not occur in practice: no-video sources raise UNSUPPORTED upstream).
+        _kara_w: int = (
+            options.width if options.width is not None else (probe_info.width or 1920)
+        )
+        _kara_h: int = (
+            options.height
+            if options.height is not None
+            else (probe_info.height or 1080)
+        )
+        _karaoke_scratch = tempfile.TemporaryDirectory()
+        _ass_cues = _parse_word_vtt(
+            options.subtitle.path, max_words=MAX_WORDS, max_cues=MAX_CUES
+        )
+        _ass_content = _build_karaoke_ass(_ass_cues, options.subtitle, _kara_w, _kara_h)
+        _ass_path = Path(_karaoke_scratch.name) / "karaoke.ass"
+        _ass_path.write_text(_ass_content, encoding="utf-8")
+        # Replace subtitle.path with the generated .ass.  model_copy is used
+        # (bypasses Pydantic validators; see SR-M-3 note in step 4c).
+        # The karaoke field is preserved in the copied object but is not
+        # re-evaluated downstream.
+        options = options.model_copy(
+            update={
+                "subtitle": options.subtitle.model_copy(update={"path": str(_ass_path)})
+            }
+        )
 
     # --- 5b. build_plan ---
     # Pass source_probes to enable multi-source path (ADR-C2-r2 / ADR-C9-r2).
