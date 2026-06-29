@@ -1,19 +1,18 @@
-"""test_karaoke_render.py — Red-phase tests for karaoke wiring in render.py / build_plan.
+"""test_karaoke_render.py — Tests for karaoke wiring in render.py / build_plan.
 
-Dependency: s2-karaoke-plan-impl is already complete (plan.py has _parse_word_vtt,
+Dependency: s2-karaoke-plan-impl is complete (plan.py has _parse_word_vtt,
 _build_karaoke_ass, etc., and SubtitleOptions has karaoke/highlight_color/chars_per_line/
-max_lines).  This file covers the render.py / build_plan wiring that is NOT YET
-implemented in s2-render-wiring-impl.
+max_lines).  This file covers the render.py / build_plan wiring implemented in
+s2-render-wiring-impl.
 
-Red-phase failure reasons:
-  - render.py has no karaoke extension guard: tests in Section 1 fail because
-    karaoke=True + .srt / .ass currently succeeds (result["ok"] is True) instead of
-    returning INVALID_INPUT (result["ok"] is False).
-  - build_plan has no scratch_dir / karaoke.ass generation: tests in Sections 3 and 5
-    fail because the filter_complex still treats the word-VTT path as a plain .vtt
-    (charenc=UTF-8 present, force_style present, no .ass reference).
+Coverage areas:
+  - render.py karaoke extension guard: Section 1 verifies that karaoke=True + .srt / .ass
+    returns INVALID_INPUT (result["ok"] is False).
+  - build_plan scratch_dir / karaoke.ass generation: Sections 3 and 5 verify that the
+    filter_complex references the generated .ass file (charenc=UTF-8 absent, force_style
+    absent, .ass extension present).
 
-Green tests (regression guards, must stay Green through implementation):
+Regression guards (must stay Green):
   - Section 1c: karaoke=False + .srt accepted (existing path unaffected).
   - Section 2:  symlink .vtt rejected (check_media_ref already active; POSIX CI only).
   - Section 3d: subtitles=filename= node present in filter_complex.
@@ -141,8 +140,8 @@ def _make_media_info(
 class TestKaraokeExtensionGuard:
     """render.py must reject non-.vtt paths when karaoke=True (F-R-04 / ADR-K7).
 
-    Red reason: render.py has no karaoke extension guard; karaoke=True + .srt / .ass
-    currently returns ok=True instead of the expected INVALID_INPUT.
+    karaoke=True + .srt / .ass must return INVALID_INPUT; karaoke requires a
+    word-level WebVTT input.
     """
 
     def test_karaoke_true_srt_returns_invalid_input(self, tmp_path: Path) -> None:
@@ -150,8 +149,6 @@ class TestKaraokeExtensionGuard:
 
         F-R-04 / ADR-K7: karaoke burn-in requires a word-level WebVTT as input.
         The hint must guide users to supply a word-level .vtt file.
-
-        Red reason: no extension guard in render.py → result["ok"] is True.
         """
         src = str(tmp_path / "clip.mp4")
         Path(src).touch()
@@ -189,8 +186,6 @@ class TestKaraokeExtensionGuard:
         """karaoke=True + .ass path → ok=False / INVALID_INPUT (F-R-04 / ADR-K7).
 
         ASS with karaoke=True is rejected even though .ass is in the extension WL.
-
-        Red reason: no extension guard in render.py → result["ok"] is True.
         """
         src = str(tmp_path / "clip.mp4")
         Path(src).touch()
@@ -318,16 +313,16 @@ class TestKaraokePathValidation:
 class TestKaraokeFilterWiring:
     """build_plan karaoke wiring: .ass generated in scratch dir, is_ass=True branch.
 
-    Red reason: build_plan has no scratch_dir / karaoke.ass generation; the
-    filter_complex currently treats word-VTT as a plain .vtt (charenc=UTF-8 present,
-    force_style present with font_size=24, .ass extension absent).
+    Verifies that build_plan writes karaoke.ass to a scratch dir and routes the
+    filter_complex through the is_ass=True branch (charenc=UTF-8 absent,
+    force_style absent, .ass extension present).
     """
 
     def _render_karaoke_dry(self, tmp_path: Path) -> dict[str, Any]:
         """Run render_timeline with karaoke=True against the canonical VTT fixture.
 
-        Uses font_size=24 so that force_style IS generated in the current code
-        (before implementation), making the no-force_style assertion Red.
+        Uses font_size=24 to verify that force_style is suppressed for karaoke paths
+        (is_ass=True branch active; DC-AS-002 / ADR-K4).
         """
         src = str(tmp_path / "clip.mp4")
         Path(src).touch()
@@ -358,7 +353,6 @@ class TestKaraokeFilterWiring:
         After implementation, karaoke.ass is written to a scratch dir and its
         path (ending in .ass) appears in the subtitles=filename= filter node.
 
-        Red reason: build_plan karaoke wiring absent; filter_complex uses .vtt path.
         """
         result = self._render_karaoke_dry(tmp_path)
 
@@ -375,8 +369,6 @@ class TestKaraokeFilterWiring:
 
         is_ass=True (detected from the generated .ass extension) suppresses the
         charenc=UTF-8 option that is added for SRT/VTT paths (ADR-K4 / DC-AS-002).
-
-        Red reason: .vtt path currently triggers charenc=UTF-8 (wrong branch).
         """
         result = self._render_karaoke_dry(tmp_path)
 
@@ -393,9 +385,8 @@ class TestKaraokeFilterWiring:
 
         The generated karaoke.ass carries its own V4+ Style section, so force_style
         must not be applied (DC-AS-002 / ADR-K4). font_size=24 is set in the
-        helper so that the current code DOES produce force_style (making this Red).
-
-        Red reason: .vtt + font_size=24 currently produces force_style= in filter_complex.
+        helper to confirm that is_ass=True suppresses force_style even when font_size
+        is specified.
         """
         result = self._render_karaoke_dry(tmp_path)
 
@@ -480,9 +471,6 @@ class TestKaraokeTempLifecycle:
     The two-step assertion:
       1. filter_complex must reference a .ass file (karaoke.ass was generated).
       2. The .ass path must NOT reside under the timeline/output tmp_path directory.
-
-    Red reason: filter_complex currently has no .ass reference (build_plan not yet
-    wired), so assertion 1 fails.
     """
 
     def test_karaoke_ass_path_not_under_output_dir(self, tmp_path: Path) -> None:
@@ -492,8 +480,6 @@ class TestKaraokeTempLifecycle:
           - The .ass is generated (inside build_plan karaoke path).
           - Its path is embedded in filter_complex and can be inspected.
           - No real ffmpeg is invoked.
-
-        Red reason: filter_complex has no .ass reference (first assertion fails).
         """
         src = str(tmp_path / "clip.mp4")
         Path(src).touch()
@@ -519,7 +505,7 @@ class TestKaraokeTempLifecycle:
         assert result["ok"] is True, f"render_timeline failed unexpectedly: {result}"
         fc = result["data"]["filter_complex"]
 
-        # Assertion 1: filter_complex must reference a .ass path (Red: absent before impl)
+        # Assertion 1: filter_complex must reference a .ass path
         assert ".ass" in fc, (
             "filter_complex does not reference a .ass file — "
             "build_plan scratch_dir wiring is missing (temp lifecycle cannot be verified):\n"
