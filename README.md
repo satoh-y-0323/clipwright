@@ -256,6 +256,38 @@ eliminates this problem entirely.
 
 ---
 
+### Word-synced karaoke captions
+
+To produce word-synced ("karaoke") captions where each word highlights as it is
+spoken, use `word_timestamps=true` in `clipwright_transcribe` and
+`subtitle.karaoke=true` in `clipwright_render`:
+
+1. **Transcribe with word timestamps** to get the word-level VTT artifact:
+   ```
+   clipwright_transcribe(media="clip.mp4", output="clip.otio", word_timestamps=true)
+   → artifacts: [{role:"timeline"}, {role:"captions", path:"clip.srt"}, ...,
+                 {role:"word_captions", path:"clip.words.vtt"}]
+   ```
+2. **Render with karaoke mode** using the word-VTT path:
+   ```
+   clipwright_render(
+     timeline="clip.otio",
+     output="karaoke.mp4",
+     options={"subtitle": {"path": "clip.words.vtt", "karaoke": true,
+                           "highlight_color": "#FFFF00"}}
+   )
+   ```
+
+Style parameters: `highlight_color` (default `#FFFF00` — yellow), `chars_per_line`
+(default 42), `max_lines` (default 2). CWE-400: inputs exceeding 50 000 words or
+10 000 cues return `INVALID_INPUT`. `karaoke=false` (default) leaves all existing
+render calls byte-for-byte unchanged.
+
+> **wrap + karaoke note:** `clipwright_wrap_captions` karaoke fold-through is
+> Phase 2. The `transcribe → render` direct chain is fully functional without it.
+
+---
+
 ## Available Tools
 
 | Package | MCP Tool | Description |
@@ -267,9 +299,9 @@ eliminates this problem entirely.
 | `clipwright-silence` | `clipwright_detect_silence` | Detect silent regions in audio via FFmpeg `silencedetect` and annotate OTIO markers |
 | `clipwright-loudness` | `clipwright_measure_loudness` | Measure EBU R128 loudness (integrated LUFS / true-peak) via FFmpeg |
 | `clipwright-noise` | `clipwright_reduce_noise` | Annotate OTIO timeline with FFmpeg `afftdn` noise-reduction settings |
-| `clipwright-transcribe` | `clipwright_transcribe` | Transcribe audio to text via whisper-cli and write word-level OTIO markers. Transparently uses CUDA / Metal whisper.cpp builds (point `CLIPWRIGHT_WHISPER` at a GPU build); `data.backend.device` and `data.realtime_factor` confirm the device and speed at runtime |
+| `clipwright-transcribe` | `clipwright_transcribe` | Transcribe audio to text via whisper-cli and write word-level OTIO markers. Transparently uses CUDA / Metal whisper.cpp builds (point `CLIPWRIGHT_WHISPER` at a GPU build); `data.backend.device` and `data.realtime_factor` confirm the device and speed at runtime. Set `word_timestamps=true` to also emit a word-level WebVTT artifact (`<stem>.words.vtt`) with WebVTT inline timestamps (`<HH:MM:SS.mmm>word`) and add `metadata["clipwright"]["words"]` to the OTIO marker — required input for `clipwright_render` karaoke mode |
 | `clipwright-bgm` | `clipwright_place_bgm` | Write BGM placement annotations (volume / fade / ducking) to OTIO timeline |
-| `clipwright-render` | `clipwright_render` | Realize OTIO edit operations (trim / concat / filters / LinearTimeWarp speed changes / drawtext overlays) to an output media file via FFmpeg. Re-times `.srt` subtitle cues and `text_overlay` markers to program time when the timeline contains silence cuts or speed warps (`retime_markers="auto"` by default); writes a non-destructive `{output_stem}.retimed.srt` alongside the output. `.vtt`/`.ass` and multi-source timelines are skipped with a warning. Supports hardware-accelerated encode (`hw_encoder`: none/auto/nvenc/amf/qsv/vaapi/videotoolbox) and GPU decode (`hwaccel_decode`). NVENC verified on dev; AMF/QSV/VAAPI/VideoToolbox experimental. |
+| `clipwright-render` | `clipwright_render` | Realize OTIO edit operations (trim / concat / filters / LinearTimeWarp speed changes / drawtext overlays) to an output media file via FFmpeg. Re-times `.srt` subtitle cues and `text_overlay` markers to program time when the timeline contains silence cuts or speed warps (`retime_markers="auto"` by default); writes a non-destructive `{output_stem}.retimed.srt` alongside the output. `.vtt`/`.ass` and multi-source timelines are skipped with a warning. Supports hardware-accelerated encode (`hw_encoder`: none/auto/nvenc/amf/qsv/vaapi/videotoolbox) and GPU decode (`hwaccel_decode`). NVENC verified on dev; AMF/QSV/VAAPI/VideoToolbox experimental. **Karaoke mode**: set `subtitle.karaoke=true` with a word-level WebVTT path (`subtitle.path=<stem>.words.vtt` produced by `clipwright_transcribe(word_timestamps=true)`) to burn word-synced karaoke captions via ASS `\k` tags. Style options: `highlight_color` (default `#FFFF00`), `chars_per_line` (default 42), `max_lines` (default 2). `karaoke=false` (default) leaves all existing render calls unchanged. |
 | `clipwright-speed` | `clipwright_set_speed` | Annotate a clip with a speed multiplier via OTIO `LinearTimeWarp`; materialized by `clipwright-render` |
 | `clipwright-text` | `clipwright_add_text` | Annotate an OTIO timeline with text overlay settings (drawtext); rendered to video by `clipwright-render` |
 | `clipwright-wrap` | `clipwright_wrap_captions` | Wrap subtitle cues (SRT/VTT) to fit within line-length limits. Supports CJK and Thai via BudouX phrase-boundary segmentation, and Latin-script space-delimited languages (`en`, `es`, `fr`, `de`, `it`, `pt`, `nl`) via greedy word-wrap on whitespace boundaries. CJK/Thai and Latin paths are independent; the `language` parameter selects the segmentation strategy. Non-destructive: writes a new subtitle file. |

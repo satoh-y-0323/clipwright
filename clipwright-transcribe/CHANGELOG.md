@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-06-30
+
+### Added
+
+- **Word-level WebVTT artifact**: `clipwright_transcribe` now accepts a new
+  `word_timestamps: bool = False` option. When `true`, an additional artifact
+  `<stem>.words.vtt` is written alongside the existing SRT/VTT/OTIO outputs.
+  The file uses WebVTT inline timestamps (`<HH:MM:SS.mmm>word`) so each word's
+  start time is embedded directly in the cue body, enabling `clipwright_render`
+  to burn karaoke-style word-synced captions via `subtitle.karaoke=true`.
+- **OTIO words metadata**: When `word_timestamps=true`, the OTIO marker gains a
+  `metadata["clipwright"]["words"]` list (`[{text, start, end}]`, floats in
+  seconds) for downstream tools that need per-word timing without parsing the VTT.
+  `metadata["clipwright"]["version"]` is updated to `"0.5.0"`.
+- **`words` count in `summary`**: The one-line `summary` now reports the number of
+  words extracted (e.g. `" Words: 42."`) when `word_timestamps=true`.
+- **CWE-400 guard**: `extract_word_segments` rejects input with more than 50 000
+  words (`MAX_WORDS_TRANSCRIBE = 50_000`), returning `INVALID_INPUT` with the
+  limit in the `hint`.
+
+### Changed
+
+- `word_timestamps=false` (default): all existing outputs (SRT / VTT / OTIO /
+  `summary`) are byte-for-byte identical to v0.4.0. No whisper command changes,
+  no extra artifacts, no additional cost (ADR-K2 — tokens-based word
+  reconstruction does not require a separate whisper run).
+
 ## [0.4.0] - 2026-06-26
 
 ### Changed

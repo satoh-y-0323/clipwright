@@ -557,7 +557,46 @@ pass the raw .srt straight to render").
 
 ---
 
-### Word-level / karaoke caption timing  *Medium*  *(transcribe / wrap / render)*
+### Word-level / karaoke caption timing  *Medium*  *(transcribe / wrap / render)*  — **RESOLVED**
+
+**Resolution (shipped — `clipwright-transcribe` v0.5.0 / `clipwright-render`
+v0.16.0 / suite v0.29.0):**
+
+- **`clipwright-transcribe`**: new `word_timestamps: bool = False` option. When
+  `true`, emits a word-level WebVTT artifact (`<stem>.words.vtt`) with WebVTT
+  inline timestamps (`<HH:MM:SS.mmm>word`) and adds
+  `metadata["clipwright"]["words"]` (`[{text, start, end}]`) to the OTIO marker.
+  Existing SRT / VTT / OTIO outputs are byte-for-byte unchanged with
+  `word_timestamps=false` (default). CWE-400: inputs > 50 000 words return
+  `INVALID_INPUT`. Ships as `clipwright-transcribe` v0.5.0.
+
+- **`clipwright-render`**: new `SubtitleOptions` fields `karaoke: bool = False`,
+  `highlight_color: str | None = None` (default `#FFFF00`),
+  `chars_per_line: int = 42`, `max_lines: int = 2`.  When `karaoke=true`,
+  render parses the word-level WebVTT, groups words into lines with a greedy
+  char-budget algorithm, generates ASS `\k<cs>` tags (cs = 1/100 s,
+  accumulated boundary differences for drift-free totals), and burns via the
+  existing `subtitles` / libass path.  `pix_fmt=yuv420p` is maintained.  ASS
+  injection guarded (escape `\`, `{`, `}`).  CWE-400: parser rejects > 50 000
+  words or > 10 000 cues.  `karaoke=false` (default) leaves all existing render
+  calls byte-for-byte identical to v0.15.0.  Ships as `clipwright-render`
+  v0.16.0.
+
+**Chain:**
+```
+clipwright_transcribe(word_timestamps=true)  →  <stem>.words.vtt
+clipwright_render(subtitle.path=<stem>.words.vtt, subtitle.karaoke=true)  →  output.mp4
+```
+
+**Phase 2 — `clipwright-wrap` karaoke fold-through (out of scope for this
+release):** `clipwright_wrap_captions` line-segment-word 3-level mapping for
+karaoke is a more complex integration requiring a new carrier format or
+fold-through contract and is deferred to a future release.  The `transcribe →
+render` direct karaoke chain is fully functional without it.
+
+---
+
+*Original entry (retained for reference):*
 
 **What it does**
 Emits per-word timestamps and burns word-synced ("karaoke") captions that
@@ -728,7 +767,9 @@ media+timeline match regression (D1) and the interval manifest mismatch (D2).
 core        ✓                      speed       ✓
 trim        ✓                      text        ✗ cascade from D1 (works standalone)
 render      ✓ (NVENC+hwdecode;     overlay     ✗ cascade from D1 (works standalone)
-              transition=yuv420p)   bgm         ✗ cascade from D1 (works standalone)
+              transition=yuv420p;   bgm         ✗ cascade from D1 (works standalone)
+              karaoke=true
+              v0.16.0 RESOLVED)
 silence     ✓ (VAD 8 / energy 5)   reframe     ✓ NEW mode="track" (80 kf, follows subject)
 scene       ✓ (psd 12 / ffmpeg 0)  sequence    ✓
 frames      ✓ scene_sample;        transition  ✓ (4:2:0 confirmed on real footage)
@@ -740,7 +781,10 @@ frames      ✓ scene_sample;        transition  ✓ (4:2:0 confirmed on real fo
                                                     low-motion footage — needs severity
                                                     gate (D6/D3, next session)
 transcribe  ✓ (en, CPU 1.37x)      color       ✓ create path; ✗ with timeline (D1)
-wrap        ✓ (Latin en/es/fr/de/it/pt/nl RESOLVED v0.28.0)   loudness ✗ (D1)
+            ✓ word_timestamps=true  loudness ✗ (D1)
+              (word VTT + OTIO words
+               v0.5.0 RESOLVED)
+wrap        ✓ (Latin en/es/fr/de/it/pt/nl RESOLVED v0.28.0)
                                     noise       ✗ (D1 cascade; same latent bug)
 ```
 
@@ -806,9 +850,13 @@ directly for Latin captions).
    space-delimited Latin-script languages (`en`, `es`, `fr`, `de`, `it`, `pt`, `nl`);
    Latin cues are wrapped on whitespace word boundaries using the existing
    `max_chars`/`max_lines` shaping. CJK/Thai (budoux) unchanged.
-6. **Word-level/karaoke captions · color-grading depth · video PiP · NLE
-   interop · subtitle translation** (Medium): reach/quality features for a general
-   editing suite.
+6. **Word-level/karaoke captions** (Medium) — **RESOLVED** (shipped —
+   `clipwright-transcribe` v0.5.0 / `clipwright-render` v0.16.0 / suite v0.29.0):
+   `word_timestamps=true` on transcribe emits a word-level WebVTT artifact;
+   `subtitle.karaoke=true` on render burns ASS `\k` word-synced captions.
+   **`clipwright-wrap` karaoke fold-through is Phase 2 (deferred).**
+   Remaining reach/quality features: **color-grading depth · video PiP · NLE
+   interop · subtitle translation** (Medium): for a general editing suite.
 7. **D5 — render raw stderr in `SUBPROCESS_FAILED` (CWE-209)** (Low) · **two-pass
    `unsharp` pre-pass · residual libvidstab build crash · diarization · Ken Burns ·
    export presets** (Low–Medium): follow-ups.

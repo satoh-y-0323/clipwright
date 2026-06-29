@@ -5,6 +5,48 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.29.0] - 2026-06-30
+
+Word-level / karaoke caption timing (spec5 Priority #6 RESOLVED).
+
+### Added (`clipwright-transcribe` v0.5.0)
+
+- **`word_timestamps` option**: `clipwright_transcribe` now accepts
+  `word_timestamps: bool = False`. When `true`, a word-level WebVTT artifact
+  (`<stem>.words.vtt`) is written alongside the existing SRT/VTT/OTIO outputs.
+  Each cue body contains WebVTT inline timestamps (`<HH:MM:SS.mmm>word`) that
+  carry the per-word start time. `metadata["clipwright"]["words"]` on the OTIO
+  marker gains a `[{text, start, end}]` list for downstream tools. CWE-400:
+  inputs exceeding 50 000 words return `INVALID_INPUT` before the artifact is
+  generated. `word_timestamps=false` (default) is byte-for-byte identical to
+  v0.4.0 — no whisper command changes, no extra artifacts, no additional cost.
+
+### Added (`clipwright-render` v0.16.0)
+
+- **Karaoke burn-in**: `SubtitleOptions` gains `karaoke: bool = False`,
+  `highlight_color: str | None = None` (default `#FFFF00`),
+  `chars_per_line: int = 42`, and `max_lines: int = 2`.  When `karaoke=true`,
+  render parses the word-level WebVTT from `clipwright_transcribe`, groups words
+  into lines with a greedy char-budget algorithm, and generates ASS `\k<cs>` tags
+  (cs = 1/100 s, accumulated boundary differences for drift-free totals).  The
+  generated ASS is burned in via the existing `subtitles` / libass filter path.
+  `pix_fmt=yuv420p` is maintained.  CWE-400: the VTT parser rejects inputs
+  exceeding 50 000 words or 10 000 cues before any ASS is generated.  ASS
+  injection is guarded by escaping `\`, `{`, `}` in word text before `\k` tag
+  generation.  `karaoke=false` (default) leaves all existing render calls
+  byte-for-byte identical to v0.15.0.
+
+### Chain
+
+```
+clipwright_transcribe(word_timestamps=true)  →  <stem>.words.vtt
+clipwright_render(subtitle.path=<stem>.words.vtt, subtitle.karaoke=true)  →  output.mp4
+```
+
+> **wrap karaoke note:** `clipwright_wrap_captions` karaoke fold-through
+> (line-segment-word 3-level mapping) is Phase 2 and is **not** included in this
+> release. The `transcribe → render` direct chain is fully functional without it.
+
 ## [0.28.0] - 2026-06-29
 
 Latin-script (space-delimited) caption word-wrap support (spec5).

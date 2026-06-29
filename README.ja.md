@@ -244,6 +244,32 @@ src/clipwright/
 
 ---
 
+### 単語同期カラオケ字幕
+
+各単語が発話に合わせてハイライトされるカラオケ字幕を生成するには、`clipwright_transcribe` で `word_timestamps=true` を指定し、`clipwright_render` で `subtitle.karaoke=true` を使う。
+
+1. **単語タイムスタンプ付きで transcribe** して単語単位 VTT artifact を取得する:
+   ```
+   clipwright_transcribe(media="clip.mp4", output="clip.otio", word_timestamps=true)
+   → artifacts: [{role:"timeline"}, {role:"captions", path:"clip.srt"}, ...,
+                 {role:"word_captions", path:"clip.words.vtt"}]
+   ```
+2. **カラオケモードで render** する（word-VTT パスを subtitle.path に指定）:
+   ```
+   clipwright_render(
+     timeline="clip.otio",
+     output="karaoke.mp4",
+     options={"subtitle": {"path": "clip.words.vtt", "karaoke": true,
+                           "highlight_color": "#FFFF00"}}
+   )
+   ```
+
+スタイルパラメータ: `highlight_color`（デフォルト `#FFFF00`・黄色）・`chars_per_line`（デフォルト 42）・`max_lines`（デフォルト 2）。CWE-400: 50,000 語または 10,000 cue を超える入力は `INVALID_INPUT` を返す。`karaoke=false`（デフォルト）では既存のすべてのレンダリング呼び出しはバイト単位で同一。
+
+> **wrap + karaoke 注記:** `clipwright_wrap_captions` のカラオケ折り返し対応は Phase 2 です。`transcribe → render` の直接チェーンはそれなしでも完全に機能します。
+
+---
+
 ## 利用可能なツール
 
 | パッケージ | MCP ツール | 説明 |
@@ -255,9 +281,9 @@ src/clipwright/
 | `clipwright-silence` | `clipwright_detect_silence` | FFmpeg `silencedetect` で無音区間を検出し OTIO マーカーを注記する |
 | `clipwright-loudness` | `clipwright_measure_loudness` | FFmpeg で EBU R128 ラウドネス（積分 LUFS / トゥルーピーク）を測定する |
 | `clipwright-noise` | `clipwright_reduce_noise` | FFmpeg `afftdn` のノイズ低減設定を OTIO タイムラインに注記する |
-| `clipwright-transcribe` | `clipwright_transcribe` | whisper-cli で音声をテキスト化し、単語単位の OTIO マーカーを書き込む。CUDA / Metal ビルドの whisper.cpp を透過利用可（`CLIPWRIGHT_WHISPER` を GPU ビルドに向けるだけで GPU 動作）。`data.backend.device` と `data.realtime_factor` で実機デバイスと速度をランタイム確認できる |
+| `clipwright-transcribe` | `clipwright_transcribe` | whisper-cli で音声をテキスト化し、単語単位の OTIO マーカーを書き込む。CUDA / Metal ビルドの whisper.cpp を透過利用可（`CLIPWRIGHT_WHISPER` を GPU ビルドに向けるだけで GPU 動作）。`data.backend.device` と `data.realtime_factor` で実機デバイスと速度をランタイム確認できる。`word_timestamps=true` を指定すると単語単位 WebVTT artifact（`<stem>.words.vtt`・WebVTT inline timestamp `<HH:MM:SS.mmm>word` 形式）を追加出力し、OTIO マーカーに `metadata["clipwright"]["words"]` を付与する。これは `clipwright_render` のカラオケモードへの入力として使用する |
 | `clipwright-bgm` | `clipwright_place_bgm` | BGM の配置注記（音量 / フェード / ダッキング）を OTIO タイムラインに書く |
-| `clipwright-render` | `clipwright_render` | OTIO の編集オペレーション（トリム / 連結 / フィルタ / LinearTimeWarp 速度変換 / drawtext テキストオーバーレイ）を FFmpeg で出力メディアに実体化する。タイムラインに無音カットやスピード変換が含まれる場合、`.srt` 字幕キューと `text_overlay` マーカーをプログラム時間へ再タイミングする（デフォルト `retime_markers="auto"`）。再タイミング時は非破壊で `{output_stem}.retimed.srt` を出力する。`.vtt` / `.ass` およびマルチソースタイムラインは warning 付きでスキップする。ハードウェアエンコード（`hw_encoder`: none/auto/nvenc/amf/qsv/vaapi/videotoolbox）および GPU デコード（`hwaccel_decode`）をサポート。NVENC は開発機で動作確認済み。AMF / QSV / VAAPI / VideoToolbox は experimental（コミュニティ検証待ち）。 |
+| `clipwright-render` | `clipwright_render` | OTIO の編集オペレーション（トリム / 連結 / フィルタ / LinearTimeWarp 速度変換 / drawtext テキストオーバーレイ）を FFmpeg で出力メディアに実体化する。タイムラインに無音カットやスピード変換が含まれる場合、`.srt` 字幕キューと `text_overlay` マーカーをプログラム時間へ再タイミングする（デフォルト `retime_markers="auto"`）。再タイミング時は非破壊で `{output_stem}.retimed.srt` を出力する。`.vtt` / `.ass` およびマルチソースタイムラインは warning 付きでスキップする。ハードウェアエンコード（`hw_encoder`: none/auto/nvenc/amf/qsv/vaapi/videotoolbox）および GPU デコード（`hwaccel_decode`）をサポート。NVENC は開発機で動作確認済み。AMF / QSV / VAAPI / VideoToolbox は experimental（コミュニティ検証待ち）。**カラオケモード**: `subtitle.karaoke=true` と単語単位 WebVTT パス（`clipwright_transcribe(word_timestamps=true)` が出力する `<stem>.words.vtt`）を指定すると、ASS `\k` タグを用いた単語同期カラオケ字幕を焼き込む。スタイルオプション: `highlight_color`（デフォルト `#FFFF00`）・`chars_per_line`（デフォルト 42）・`max_lines`（デフォルト 2）。`karaoke=false`（デフォルト）では既存のすべてのレンダリング呼び出しは変更なし。 |
 | `clipwright-speed` | `clipwright_set_speed` | OTIO の `LinearTimeWarp` でクリップに速度倍率を注記する。実体化は `clipwright-render` が行う |
 | `clipwright-text` | `clipwright_add_text` | OTIO タイムラインにテキストオーバーレイ設定（drawtext）を注記する。映像への描画は `clipwright-render` が行う |
 | `clipwright-wrap` | `clipwright_wrap_captions` | 字幕キュー（SRT/VTT）を行長制限内に収まるよう折り返す。CJK・Thai は BudouX フレーズ境界分割、空白区切り Latin 言語（`en` / `es` / `fr` / `de` / `it` / `pt` / `nl`）は単語境界での greedy word-wrap に対応。`language` パラメータで分割戦略を選択する。非破壊: 新しい字幕ファイルのみ書き出す。 |

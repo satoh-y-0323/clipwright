@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-06-30
+
+### Added
+
+- **Karaoke burn-in mode**: `SubtitleOptions` gains four new fields:
+  `karaoke: bool = False`, `highlight_color: str | None = None` (default
+  `#FFFF00` — yellow), `chars_per_line: int = 42`, `max_lines: int = 2`.
+  When `karaoke=true`, `clipwright_render` parses the word-level WebVTT
+  produced by `clipwright_transcribe(word_timestamps=true)`, groups words into
+  lines via a greedy char-budget algorithm, generates ASS `\k<cs>` tags (cs =
+  1/100 s karaoke duration, computed as accumulated boundary differences for
+  drift-free totals), and burns the result into the output video via the
+  existing `subtitles` / libass filter path.
+- **`highlight_color`** maps to the ASS `PrimaryColour` (the karaoke highlight);
+  `font_color` remains the `SecondaryColour` (pre-highlight text). Both accept
+  `#RRGGBB` and are converted to ASS `&HBBGGRR` internally.
+- **ASS injection guard (SEC-04)**: word text is escaped (`\`, `{`, `}`) before
+  `\k` tag generation to prevent ASS injection.
+- **CWE-400 guards**: the VTT parser rejects input with more than 50 000 words
+  or 10 000 cues (`INVALID_INPUT`, hint includes the limit); guards are applied
+  at parse time (before any ASS is generated) to prevent OOM.
+- **`pix_fmt=yuv420p` maintained** in karaoke mode (F-R-06; no chroma
+  renegotiation from the ASS path).
+
+### Changed
+
+- `karaoke=false` (default): the existing subtitle burn-in path (SRT / VTT / ASS
+  via `subtitles` filter) is byte-for-byte identical to v0.15.0. No behavioural
+  change to any existing render call.
+
 ## [0.14.0] - 2026-06-27
 
 ### Changed
