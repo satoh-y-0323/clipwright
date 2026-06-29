@@ -2338,3 +2338,195 @@ class TestInspectMediaSubprocessFailureSanitised:
                 )
             else:
                 pytest.fail(f"Expected ClipwrightError({error_code}) was not raised")
+
+
+# ===========================================================================
+# F-1 (SR-NEW / CWE-400): interval mode frame count limit
+# ===========================================================================
+
+
+class TestIntervalFrameCountLimit:
+    """F-1 (SR-NEW / CWE-400): interval mode rejects requests exceeding _MAX_INTERVAL_FRAMES.
+
+    The guard fires after compute_interval_timestamps() so that legitimate
+    short-duration x small-interval combinations remain accepted; only
+    long-duration x small-interval combinations that exceed the ceiling are
+    rejected without spawning any ffmpeg processes.
+
+    Boundary values tested:
+      - exactly _MAX_INTERVAL_FRAMES -> ok=True
+      - _MAX_INTERVAL_FRAMES + 1     -> ok=False / INVALID_INPUT
+    """
+
+    def test_frame_count_at_limit_is_accepted(self, tmp_path: Path) -> None:
+        """Exactly _MAX_INTERVAL_FRAMES timestamps -> ok=True (boundary: limit OK)."""
+        from clipwright_frames.extract import _MAX_INTERVAL_FRAMES, extract_frames
+        from clipwright_frames.plan import compute_interval_timestamps
+
+        # interval_sec=1.0, duration_sec=_MAX_INTERVAL_FRAMES -> exactly N timestamps.
+        interval_sec = 1.0
+        duration_sec = float(_MAX_INTERVAL_FRAMES)
+        assert (
+            len(compute_interval_timestamps(duration_sec, interval_sec))
+            == _MAX_INTERVAL_FRAMES
+        )
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        media_info = _make_media_info(path=media, duration_sec=duration_sec)
+
+        out_dir = tmp_path / "frames_out"
+        out_dir.mkdir()
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with (
+            patch("clipwright_frames.extract.inspect_media", return_value=media_info),
+            patch("clipwright_frames.extract.run", side_effect=_fake_run),
+        ):
+            result = extract_frames(
+                media, str(out_dir), _opts(mode="interval", interval_sec=interval_sec)
+            )
+
+        assert result.ok is True
+
+    def test_frame_count_one_above_limit_returns_invalid_input(
+        self, tmp_path: Path
+    ) -> None:
+        """_MAX_INTERVAL_FRAMES + 1 timestamps -> ok=False / INVALID_INPUT (boundary+1)."""
+        from clipwright_frames.extract import _MAX_INTERVAL_FRAMES, extract_frames
+        from clipwright_frames.plan import compute_interval_timestamps
+
+        # interval_sec=1.0, duration_sec=N+1 -> exactly N+1 timestamps.
+        interval_sec = 1.0
+        duration_sec = float(_MAX_INTERVAL_FRAMES + 1)
+        assert (
+            len(compute_interval_timestamps(duration_sec, interval_sec))
+            == _MAX_INTERVAL_FRAMES + 1
+        )
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        media_info = _make_media_info(path=media, duration_sec=duration_sec)
+
+        out_dir = tmp_path / "frames_out"
+        out_dir.mkdir()
+
+        run_call_count = [0]
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            run_call_count[0] += 1
+            return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with (
+            patch("clipwright_frames.extract.inspect_media", return_value=media_info),
+            patch("clipwright_frames.extract.run", side_effect=_fake_run),
+        ):
+            result = extract_frames(
+                media, str(out_dir), _opts(mode="interval", interval_sec=interval_sec)
+            )
+
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.INVALID_INPUT
+        # Guard must fire before any ffmpeg subprocess is launched.
+        assert run_call_count[0] == 0, (
+            "run() must not be called when the frame count limit is exceeded"
+        )
+
+    def test_error_message_contains_frame_count_and_limit(self, tmp_path: Path) -> None:
+        """INVALID_INPUT message must state the computed frame count and the limit."""
+        from clipwright_frames.extract import _MAX_INTERVAL_FRAMES, extract_frames
+
+        interval_sec = 1.0
+        duration_sec = float(_MAX_INTERVAL_FRAMES + 1)
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        media_info = _make_media_info(path=media, duration_sec=duration_sec)
+
+        out_dir = tmp_path / "frames_out"
+        out_dir.mkdir()
+
+        with (
+            patch("clipwright_frames.extract.inspect_media", return_value=media_info),
+            patch("clipwright_frames.extract.run"),
+        ):
+            result = extract_frames(
+                media, str(out_dir), _opts(mode="interval", interval_sec=interval_sec)
+            )
+
+        assert result.ok is False
+        assert result.error is not None
+        msg = result.error.message
+        # message must state the computed frame count and the ceiling.
+        assert str(_MAX_INTERVAL_FRAMES + 1) in msg, (
+            f"message must state computed frame count {_MAX_INTERVAL_FRAMES + 1}; "
+            f"got: {msg!r}"
+        )
+        assert str(_MAX_INTERVAL_FRAMES) in msg, (
+            f"message must state the limit {_MAX_INTERVAL_FRAMES}; got: {msg!r}"
+        )
+
+    def test_error_hint_mentions_interval_sec(self, tmp_path: Path) -> None:
+        """INVALID_INPUT hint must guide the caller to increase interval_sec."""
+        from clipwright_frames.extract import _MAX_INTERVAL_FRAMES, extract_frames
+
+        interval_sec = 1.0
+        duration_sec = float(_MAX_INTERVAL_FRAMES + 1)
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        media_info = _make_media_info(path=media, duration_sec=duration_sec)
+
+        out_dir = tmp_path / "frames_out"
+        out_dir.mkdir()
+
+        with (
+            patch("clipwright_frames.extract.inspect_media", return_value=media_info),
+            patch("clipwright_frames.extract.run"),
+        ):
+            result = extract_frames(
+                media, str(out_dir), _opts(mode="interval", interval_sec=interval_sec)
+            )
+
+        assert result.ok is False
+        assert result.error is not None
+        hint = result.error.hint
+        assert "interval_sec" in hint, (
+            f"hint must mention 'interval_sec' to guide the caller; got: {hint!r}"
+        )
+
+    def test_error_message_does_not_contain_file_paths(self, tmp_path: Path) -> None:
+        """INVALID_INPUT error message must not expose file paths (CWE-209)."""
+        from clipwright_frames.extract import _MAX_INTERVAL_FRAMES, extract_frames
+
+        interval_sec = 1.0
+        duration_sec = float(_MAX_INTERVAL_FRAMES + 1)
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        media_info = _make_media_info(path=media, duration_sec=duration_sec)
+
+        out_dir = tmp_path / "frames_out"
+        out_dir.mkdir()
+
+        with (
+            patch("clipwright_frames.extract.inspect_media", return_value=media_info),
+            patch("clipwright_frames.extract.run"),
+        ):
+            result = extract_frames(
+                media, str(out_dir), _opts(mode="interval", interval_sec=interval_sec)
+            )
+
+        assert result.ok is False
+        assert result.error is not None
+        msg = result.error.message
+        # No directory paths or filenames in the error message (CWE-209).
+        assert str(tmp_path) not in msg, (
+            f"error message must not contain directory path; got: {msg!r}"
+        )
+        assert "video.mp4" not in msg, (
+            f"error message must not contain filename; got: {msg!r}"
+        )

@@ -430,7 +430,7 @@ class TestIntervalMode:
         The per-ss loop fix extracts at each grid point directly, making the manifest
         count and disk file count agree at 3.
 
-        This test is expected to FAIL against the unfixed fps-filter implementation:
+        Against the unfixed fps-filter implementation, this test would fail:
         manifest count=3, disk files=2, frame_00002.jpg missing.
         """
         video_path = str(tmp_path / "video.mp4")

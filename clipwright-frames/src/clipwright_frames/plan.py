@@ -71,7 +71,7 @@ def build_single_frame_command(
     out_path: str,
     options: ExtractFramesOptions,
 ) -> list[str]:
-    """Build ffmpeg command for scene/timestamps mode (single frame extraction).
+    """Build ffmpeg command for single-frame extraction (all modes: interval/scene/ts).
 
     -ss is placed before -i for fast input seeking. The timestamp is converted to
     str so the caller can pass the list directly to subprocess without re-casting.

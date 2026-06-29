@@ -51,6 +51,14 @@ from clipwright_frames.schemas import ExtractFramesOptions
 # Mirrors clipwright-reframe _MAX_TIMEOUT_DURATION_S (10 years).
 _MAX_TIMEOUT_DURATION_S: float = 315_360_000.0
 
+# Maximum number of frames allowed in interval mode to prevent resource exhaustion.
+# A small interval_sec combined with a long duration_sec can produce thousands of
+# ffmpeg processes and output files. This guard fires after
+# compute_interval_timestamps() so that short-duration x small-interval cases are
+# accepted; only long-duration combinations exceeding the ceiling are rejected
+# (CWE-400 / SR-NEW).
+_MAX_INTERVAL_FRAMES: int = 10_000
+
 
 def _write_frames_otio(
     out_dir: Path,
@@ -239,6 +247,19 @@ def _extract_frames_inner(
             )
         else:
             timestamps = compute_interval_timestamps(duration_sec, interval_sec)
+            n = len(timestamps)
+            if n > _MAX_INTERVAL_FRAMES:
+                raise ClipwrightError(
+                    code=ErrorCode.INVALID_INPUT,
+                    message=(
+                        f"interval_sec={interval_sec} would extract {n} frames, "
+                        f"exceeding the limit of {_MAX_INTERVAL_FRAMES}."
+                    ),
+                    hint=(
+                        f"Increase interval_sec so the number of extracted frames "
+                        f"stays within {_MAX_INTERVAL_FRAMES}."
+                    ),
+                )
             for idx, ts in enumerate(timestamps):
                 out_path = str(out_dir / frame_filename(idx, options.format))
                 cmd = build_single_frame_command(
