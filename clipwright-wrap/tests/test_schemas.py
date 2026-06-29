@@ -2,9 +2,10 @@
 
 Pins the WrapCaptionsOptions spec from architecture WR-AD-05.
 
-DC-AM-005 gate: language pattern allows only languages confirmed loadable via real spike.
-  ja / zh-hans / zh-hant / th (all 4 loaded successfully)
-  regex: ^(ja|zh-hans|zh-hant|th)$
+Language allowlist (T-1/T-2):
+  CJK/Thai: ja / zh-hans / zh-hant / th  (budoux phrase-boundary segmentation)
+  Latin: en / es / fr / de / it / pt / nl  (in-process whitespace word segmentation)
+  regex: LANGUAGE_PATTERN from languages.py
 
 Apply transcribe SR M-1 style input validation (pattern / max_length) to WrapCaptionsOptions.
 """
@@ -87,10 +88,16 @@ class TestLanguageField:
     # Constraint violations: pattern mismatch (language not supported by budoux)
     # -----------------------------------------------------------------------
 
-    def test_language_en_rejected(self) -> None:
-        """language='en' raises ValidationError due to pattern mismatch (English is not supported)."""
-        with pytest.raises(ValidationError):
-            WrapCaptionsOptions(language="en")
+    def test_language_en_accepted(self) -> None:
+        """language='en' is accepted (English is a supported space-delimited Latin language; T-1)."""
+        opts = WrapCaptionsOptions(language="en")
+        assert opts.language == "en"
+
+    @pytest.mark.parametrize("lang", ["en", "es", "fr", "de", "it", "pt", "nl"])
+    def test_latin_languages_accepted(self, lang: str) -> None:
+        """All 7 space-delimited Latin-script languages are accepted by the updated pattern (T-1)."""
+        opts = WrapCaptionsOptions(language=lang)
+        assert opts.language == lang
 
     def test_language_xx_rejected(self) -> None:
         """language='xx' raises ValidationError due to pattern mismatch (unknown language)."""
@@ -120,18 +127,16 @@ class TestLanguageField:
     @pytest.mark.parametrize(
         "invalid_lang",
         [
-            "en",  # English (not supported by budoux)
             "xx",  # unknown language
             "",  # empty string
-            "zh",  # incomplete Chinese code
+            "zh",  # incomplete Chinese code (neither zh-hans nor zh-hant)
             "JP",  # uppercase
             "ja-JP",  # locale format
-            "ko",  # Korean (not supported)
-            "fr",  # French (not supported)
+            "ko",  # Korean (not in CJK or space-delimited allowlist)
         ],
     )
     def test_invalid_languages_rejected(self, invalid_lang: str) -> None:
-        """Languages not matching pattern ^(ja|zh-hans|zh-hant|th)$ → ValidationError (parametrised)."""
+        """Languages not in the LANGUAGE_PATTERN allowlist → ValidationError (parametrised)."""
         with pytest.raises(ValidationError):
             WrapCaptionsOptions(language=invalid_lang)
 
@@ -309,6 +314,39 @@ def test_all_fields_zh_hans() -> None:
 # ===========================================================================
 # Confirm no redefinition of shared types
 # ===========================================================================
+
+
+# ===========================================================================
+# T-2: LANGUAGE_PATTERN covers the expected CJK + Latin allowlist
+# ===========================================================================
+
+
+def test_language_pattern_covers_cjk_and_latin() -> None:
+    """LANGUAGE_PATTERN accepts all CJK and Latin allowlist codes (T-2, AC-6)."""
+    import re
+
+    from clipwright_wrap.languages import (
+        CJK_LANGUAGES,
+        LANGUAGE_PATTERN,
+        SPACE_DELIMITED_LANGUAGES,
+    )
+
+    for lang in CJK_LANGUAGES + SPACE_DELIMITED_LANGUAGES:
+        assert re.fullmatch(LANGUAGE_PATTERN, lang) is not None, (
+            f"Expected {lang!r} to match LANGUAGE_PATTERN"
+        )
+
+
+def test_language_pattern_rejects_unsupported_codes() -> None:
+    """LANGUAGE_PATTERN rejects codes outside the allowlist (T-2, AC-3)."""
+    import re
+
+    from clipwright_wrap.languages import LANGUAGE_PATTERN
+
+    for lang in ("ko", "xx", "", "zh", "JP", "ja-JP"):
+        assert re.fullmatch(LANGUAGE_PATTERN, lang) is None, (
+            f"Expected {lang!r} to NOT match LANGUAGE_PATTERN"
+        )
 
 
 def test_wrap_captions_options_does_not_redefine_core_types() -> None:

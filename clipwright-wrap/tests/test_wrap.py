@@ -278,12 +278,10 @@ class TestLanguageValidation:
         with pytest.raises(ValidationError):
             WrapCaptionsOptions(language="xx")
 
-    def test_invalid_language_en_raises_validation_error(self) -> None:
-        """WrapCaptionsOptions(language='en') raises ValidationError (English is not supported)."""
-        from pydantic import ValidationError
-
-        with pytest.raises(ValidationError):
-            WrapCaptionsOptions(language="en")
+    def test_language_en_accepted_in_options(self) -> None:
+        """WrapCaptionsOptions(language='en') is accepted (contract change: en is now valid; T-1)."""
+        opts = WrapCaptionsOptions(language="en")
+        assert opts.language == "en"
 
     def test_valid_language_ja_accepted_in_options(self) -> None:
         """WrapCaptionsOptions(language='ja') is accepted."""
@@ -291,8 +289,14 @@ class TestLanguageValidation:
         assert opts.language == "ja"
 
     @pytest.mark.parametrize("lang", ["ja", "zh-hans", "zh-hant", "th"])
-    def test_valid_languages_accepted(self, lang: str) -> None:
-        """All 4 valid languages can be constructed without ValidationError."""
+    def test_valid_cjk_languages_accepted(self, lang: str) -> None:
+        """All 4 CJK/Thai languages can be constructed without ValidationError."""
+        opts = WrapCaptionsOptions(language=lang)
+        assert opts.language == lang
+
+    @pytest.mark.parametrize("lang", ["en", "es", "fr", "de", "it", "pt", "nl"])
+    def test_valid_latin_languages_accepted(self, lang: str) -> None:
+        """All 7 space-delimited Latin languages can be constructed without ValidationError (T-1)."""
         opts = WrapCaptionsOptions(language=lang)
         assert opts.language == lang
 
@@ -1411,3 +1415,370 @@ class TestUncoveredBranches:
         assert result["ok"] is False
         # UNKNOWN_CUSTOM_ERROR_XYZ does not exist in ErrorCode → falls back to INTERNAL
         assert result["error"]["code"] == "INTERNAL"
+
+
+# ===========================================================================
+# T-5: Latin (English) word-wrap end-to-end (Red phase)
+#
+# All tests in this class FAIL at current HEAD with:
+#   pydantic.ValidationError: language='en' does not match pattern ^(ja|zh-hans|zh-hant|th)$
+# This is the expected Red evidence: 'en' is not yet in the language allowlist.
+# No subprocess mock is needed because the Latin path (after Green) is fully in-process.
+# ===========================================================================
+
+
+class TestLatinWordWrap:
+    """T-5: End-to-end wrap_captions with language='en' on an English .srt file.
+
+    At current HEAD, WrapCaptionsOptions(language='en') raises ValidationError because
+    'en' does not match the pattern ^(ja|zh-hans|zh-hant|th)$. All tests in this class
+    fail with ValidationError (Red evidence: language class not yet implemented).
+
+    After Green (impl-wrap-latin):
+      - language='en' is accepted by the updated LANGUAGE_PATTERN
+      - wrap_captions returns ok=True using in-process whitespace split (no subprocess)
+      - Each output line respects max_chars with word-boundary wrapping
+      - Single spaces are preserved between words (joiner=' ')
+      - No text is truncated (all input words appear in the output)
+    """
+
+    # Canonical English fixture: 9 words, 43 chars total — does not fit on one
+    # line at max_chars<=15, so word-boundary wrapping is observable.
+    _ENGLISH_SRT = (
+        "1\n00:00:00,000 --> 00:00:03,000\n"
+        "The quick brown fox jumps over the lazy dog\n"
+    )
+
+    def _make_input_en(self, tmp_path: Path, name: str = "input_en.srt") -> str:
+        """Write the English fixture SRT to tmp_path and return its absolute path."""
+        p = tmp_path / name
+        p.write_text(self._ENGLISH_SRT, encoding="utf-8")
+        return str(p)
+
+    def test_english_srt_wrap_ok_true(self, tmp_path: Path) -> None:
+        """wrap_captions with language='en' returns ok=True (T-5, AC-1).
+
+        Red: WrapCaptionsOptions(language='en') raises ValidationError at current HEAD.
+        """
+        wrap_captions = _import_wrap_captions()
+        inp = self._make_input_en(tmp_path, "input_en_ok.srt")
+        out = str(tmp_path / "output_en_ok.srt")
+        # ValidationError raised here at current HEAD (Red evidence)
+        opts = WrapCaptionsOptions(language="en", max_chars=20, max_lines=2)
+        result: dict[str, Any] = wrap_captions(inp, out, opts)
+        assert result["ok"] is True
+
+    def test_english_srt_data_language_preserved(self, tmp_path: Path) -> None:
+        """data.language is 'en' in the result envelope (T-5, AC-1).
+
+        Red: WrapCaptionsOptions(language='en') raises ValidationError at current HEAD.
+        """
+        wrap_captions = _import_wrap_captions()
+        inp = self._make_input_en(tmp_path, "input_en_lang.srt")
+        out = str(tmp_path / "output_en_lang.srt")
+        opts = WrapCaptionsOptions(language="en", max_chars=20, max_lines=2)
+        result: dict[str, Any] = wrap_captions(inp, out, opts)
+        assert result["ok"] is True
+        assert result["data"]["language"] == "en"
+
+    def test_english_srt_lines_within_max_chars(self, tmp_path: Path) -> None:
+        """Each text line in the output is at most max_chars characters (T-5, AC-1 line-length).
+
+        Red: WrapCaptionsOptions(language='en') raises ValidationError at current HEAD.
+        With max_chars=15, 'The quick brown fox...' must be split across multiple lines.
+        """
+        wrap_captions = _import_wrap_captions()
+        max_chars = 15
+        inp = self._make_input_en(tmp_path, "input_en_chars.srt")
+        out = str(tmp_path / "output_en_chars.srt")
+        opts = WrapCaptionsOptions(language="en", max_chars=max_chars, max_lines=3)
+        result: dict[str, Any] = wrap_captions(inp, out, opts)
+        assert result["ok"] is True
+
+        content = Path(out).read_text(encoding="utf-8")
+        for line in content.splitlines():
+            stripped = line.strip()
+            # Skip SRT structural lines (index number and timecode arrow)
+            if stripped and not stripped.isdigit() and "-->" not in stripped:
+                assert len(stripped) <= max_chars, (
+                    f"Output line exceeds max_chars={max_chars}: {stripped!r}"
+                )
+
+    def test_english_srt_word_boundaries_no_concatenation(self, tmp_path: Path) -> None:
+        """Adjacent words in the output are never concatenated without a space (T-5, AC-1 word-boundary).
+
+        Red: WrapCaptionsOptions(language='en') raises ValidationError at current HEAD.
+        If joiner is omitted or set to '' for Latin, adjacent words would be written
+        as 'quickbrown' etc. — this test guards against that regression.
+        """
+        wrap_captions = _import_wrap_captions()
+        inp = self._make_input_en(tmp_path, "input_en_concat.srt")
+        out = str(tmp_path / "output_en_concat.srt")
+        opts = WrapCaptionsOptions(language="en", max_chars=15, max_lines=3)
+        result: dict[str, Any] = wrap_captions(inp, out, opts)
+        assert result["ok"] is True
+
+        content = Path(out).read_text(encoding="utf-8")
+        # Every adjacent word-pair from the fixture must NOT appear without a separating space.
+        adjacent_no_space = [
+            "Thequick",
+            "quickbrown",
+            "brownfox",
+            "foxjumps",
+            "jumpsover",
+            "overthe",
+            "thelazy",
+            "lazydog",
+        ]
+        for bad_pair in adjacent_no_space:
+            assert bad_pair not in content, (
+                f"Word concatenation without space detected: {bad_pair!r} in output"
+            )
+
+    def test_english_srt_no_text_truncation(self, tmp_path: Path) -> None:
+        """All nine words from the input fixture appear in the output (no text truncation; T-5, AC-1).
+
+        Red: WrapCaptionsOptions(language='en') raises ValidationError at current HEAD.
+        wrap_captions must not drop any word regardless of max_chars / max_lines settings.
+        """
+        wrap_captions = _import_wrap_captions()
+        inp = self._make_input_en(tmp_path, "input_en_trunc.srt")
+        out = str(tmp_path / "output_en_trunc.srt")
+        opts = WrapCaptionsOptions(language="en", max_chars=15, max_lines=3)
+        result: dict[str, Any] = wrap_captions(inp, out, opts)
+        assert result["ok"] is True
+
+        content = Path(out).read_text(encoding="utf-8")
+        for word in [
+            "The",
+            "quick",
+            "brown",
+            "fox",
+            "jumps",
+            "over",
+            "the",
+            "lazy",
+            "dog",
+        ]:
+            assert word in content, (
+                f"Input word {word!r} is missing from the output (text truncation detected)"
+            )
+
+
+# ===========================================================================
+# T-6: Latin path does not call subprocess.run (budoux non-dependency; AC-4)
+# ===========================================================================
+
+
+class TestLatinNoSubprocess:
+    """T-6: wrap_captions with language='en' must not call subprocess.run (AC-4, FR-5, NFR-2).
+
+    The Latin in-process path (text.split()) bypasses budoux entirely. Even when
+    budoux is absent from the environment, language='en' must return ok=True.
+    """
+
+    _ENGLISH_SRT = "1\n00:00:00,000 --> 00:00:03,000\nHello world\n"
+
+    def test_latin_does_not_call_subprocess_run(
+        self, tmp_path: Path, mocker: Any
+    ) -> None:
+        """subprocess.run is NOT called when language='en' (T-6, AC-4).
+
+        The mock is set up to track calls; if the Latin path inadvertently
+        launches a subprocess, the mock records the call and the assertion fails.
+        """
+        wrap_captions = _import_wrap_captions()
+        inp = tmp_path / "latin.srt"
+        inp.write_text(self._ENGLISH_SRT, encoding="utf-8")
+        out = str(tmp_path / "latin_out.srt")
+
+        mock_run: MagicMock = mocker.patch("clipwright_wrap.wrap.subprocess.run")
+
+        opts = WrapCaptionsOptions(language="en", max_chars=20, max_lines=2)
+        result: dict[str, Any] = wrap_captions(str(inp), out, opts)
+
+        assert result["ok"] is True
+        mock_run.assert_not_called()
+
+    def test_latin_returns_ok_without_budoux(self, tmp_path: Path) -> None:
+        """language='en' returns ok=True even when budoux subprocess is not invoked (T-6, AC-4).
+
+        No mock for subprocess; Latin path is fully in-process and never touches budoux.
+        """
+        wrap_captions = _import_wrap_captions()
+        inp = tmp_path / "latin2.srt"
+        inp.write_text(self._ENGLISH_SRT, encoding="utf-8")
+        out = str(tmp_path / "latin2_out.srt")
+
+        opts = WrapCaptionsOptions(language="en", max_chars=20, max_lines=2)
+        result: dict[str, Any] = wrap_captions(str(inp), out, opts)
+
+        assert result["ok"] is True
+        assert result["data"]["language"] == "en"
+
+
+# ===========================================================================
+# T-8: Long single word > max_chars recorded in overflow_width_cue_indices (AC-5)
+# ===========================================================================
+
+
+class TestLatinOverflow:
+    """T-8: A single word exceeding max_chars is recorded in overflow_width_cue_indices (AC-5).
+
+    Latin word-wrap must not split words mid-character. An oversized word is
+    placed on its own line and flagged as width overflow, not truncated.
+    """
+
+    def test_extraordinary_overflow_recorded_not_truncated(
+        self, tmp_path: Path
+    ) -> None:
+        """'Extraordinary' (13 chars) with max_chars=5 → overflow_width_cue_indices=[0] (T-8, AC-5).
+
+        The word must appear in the output; no text is dropped.
+        """
+        wrap_captions = _import_wrap_captions()
+        srt = "1\n00:00:00,000 --> 00:00:01,000\nExtraordinary\n"
+        inp = tmp_path / "overflow.srt"
+        inp.write_text(srt, encoding="utf-8")
+        out = str(tmp_path / "overflow_out.srt")
+
+        opts = WrapCaptionsOptions(language="en", max_chars=5, max_lines=2)
+        result: dict[str, Any] = wrap_captions(str(inp), out, opts)
+
+        assert result["ok"] is True
+        data = result["data"]
+        # Overflow recorded at cue index 0
+        assert 0 in data["overflow_width_cue_indices"], (
+            f"Expected overflow at index 0, got: {data['overflow_width_cue_indices']!r}"
+        )
+        # Text is not truncated
+        content = Path(out).read_text(encoding="utf-8")
+        assert "Extraordinary" in content
+
+
+# ===========================================================================
+# T-9: Multi-space normalisation and empty cue robustness
+# ===========================================================================
+
+
+class TestLatinSpaceNormalisation:
+    """T-9: text.split() normalises multiple/leading/trailing spaces; empty cue is safe (§6.2).
+
+    str.split() with no argument collapses consecutive whitespace to a single token
+    boundary and strips leading/trailing whitespace. The output uses joiner=' ',
+    so output words are always separated by a single space regardless of input spacing.
+    """
+
+    def test_multi_space_between_words_normalised_to_single(
+        self, tmp_path: Path
+    ) -> None:
+        """Multiple spaces between words are normalised to a single space in the output (T-9)."""
+        wrap_captions = _import_wrap_captions()
+        # Input has double-space between words
+        srt = "1\n00:00:00,000 --> 00:00:01,000\nhello  world\n"
+        inp = tmp_path / "multi_space.srt"
+        inp.write_text(srt, encoding="utf-8")
+        out = str(tmp_path / "multi_space_out.srt")
+
+        opts = WrapCaptionsOptions(language="en", max_chars=40, max_lines=2)
+        result: dict[str, Any] = wrap_captions(str(inp), out, opts)
+
+        assert result["ok"] is True
+        content = Path(out).read_text(encoding="utf-8")
+        # "hello  world" (double space) must not appear; "hello world" must appear
+        assert "hello  world" not in content
+        assert "hello" in content
+        assert "world" in content
+
+    def test_empty_cue_text_does_not_crash(self, tmp_path: Path) -> None:
+        """A cue with empty text produces an empty output cue without exception (T-9)."""
+        wrap_captions = _import_wrap_captions()
+        # Two-cue SRT: first cue empty, second cue has real text
+        srt = (
+            "1\n00:00:00,000 --> 00:00:01,000\n\n"
+            "\n"
+            "2\n00:00:01,000 --> 00:00:02,000\nhello world\n"
+        )
+        inp = tmp_path / "empty_cue.srt"
+        inp.write_text(srt, encoding="utf-8")
+        out = str(tmp_path / "empty_cue_out.srt")
+
+        opts = WrapCaptionsOptions(language="en", max_chars=40, max_lines=2)
+        result: dict[str, Any] = wrap_captions(str(inp), out, opts)
+
+        assert result["ok"] is True
+        content = Path(out).read_text(encoding="utf-8")
+        # The non-empty cue's text must appear
+        assert "hello world" in content
+
+
+# ===========================================================================
+# T-10: Defensive guard — unsupported language bypassing Pydantic schema
+# ===========================================================================
+
+
+class TestDefensiveLanguageGuard:
+    """T-10: Unsupported language passed directly to wrap.py hits INVALID_INPUT guard (AC-3).
+
+    Pydantic rejects 'ko' at schema construction, but wrap._wrap_inner has a
+    defensive guard for direct/bypass callers. This test uses model_construct()
+    to bypass Pydantic validation and reach the guard.
+    """
+
+    _ENGLISH_SRT = "1\n00:00:00,000 --> 00:00:03,000\nHello world\n"
+
+    def test_ko_direct_call_returns_invalid_input(self, tmp_path: Path) -> None:
+        """language='ko' bypassing Pydantic → INVALID_INPUT from the defensive guard (T-10, AC-3)."""
+        from clipwright_wrap.wrap import wrap_captions
+
+        inp = tmp_path / "ko.srt"
+        inp.write_text(self._ENGLISH_SRT, encoding="utf-8")
+        out = str(tmp_path / "ko_out.srt")
+
+        # Bypass Pydantic validation to reach the defensive guard in wrap.py
+        opts = WrapCaptionsOptions.model_construct(
+            language="ko", max_chars=16, max_lines=2
+        )
+        result: dict[str, Any] = wrap_captions(str(inp), out, opts)
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == "INVALID_INPUT"
+
+    def test_ko_hint_lists_accepted_codes(self, tmp_path: Path) -> None:
+        """Defensive guard hint enumerates the accepted language codes (T-10, AC-3)."""
+        from clipwright_wrap.wrap import wrap_captions
+
+        inp = tmp_path / "ko2.srt"
+        inp.write_text(self._ENGLISH_SRT, encoding="utf-8")
+        out = str(tmp_path / "ko2_out.srt")
+
+        opts = WrapCaptionsOptions.model_construct(
+            language="ko", max_chars=16, max_lines=2
+        )
+        result: dict[str, Any] = wrap_captions(str(inp), out, opts)
+
+        assert result["ok"] is False
+        hint = result["error"].get("hint", "")
+        # Hint must list at least one CJK and one Latin code
+        assert "ja" in hint
+        assert "en" in hint
+
+    def test_ko_hint_exposes_no_path(self, tmp_path: Path) -> None:
+        """Defensive guard hint and message expose no file path (T-10, CWE-209)."""
+        from clipwright_wrap.wrap import wrap_captions
+
+        inp = tmp_path / "ko3.srt"
+        inp.write_text(self._ENGLISH_SRT, encoding="utf-8")
+        out = str(tmp_path / "ko3_out.srt")
+
+        opts = WrapCaptionsOptions.model_construct(
+            language="ko", max_chars=16, max_lines=2
+        )
+        result: dict[str, Any] = wrap_captions(str(inp), out, opts)
+
+        assert result["ok"] is False
+        error = result["error"]
+        # tmp_path components must not appear in message or hint (path non-exposure)
+        path_component = tmp_path.name
+        assert path_component not in error.get("message", "")
+        assert path_component not in error.get("hint", "")

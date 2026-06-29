@@ -754,3 +754,33 @@ class TestStdoutJsonOnly:
 
         raw_output = fake_stdout.getvalue()
         assert raw_output.strip().startswith("{")
+
+
+# ===========================================================================
+# T-7: _PARSER_LOADERS drift gate — keys must equal CJK_LANGUAGES (ADR-3/§5)
+# ===========================================================================
+
+
+class TestParserLoadersDriftGate:
+    """T-7: wrap_cli._PARSER_LOADERS keys must match languages.CJK_LANGUAGES (drift gate).
+
+    Both collections are the canonical definition of languages handled by budoux.
+    If a language is added to one but not the other, this test fails, alerting
+    the developer that the two definitions have drifted.
+
+    wrap_cli.py itself does not import languages.py (subprocess loose coupling is
+    preserved); the test imports both and asserts set equality.
+    """
+
+    def test_parser_loaders_keys_match_cjk_languages(self) -> None:
+        """set(wrap_cli._PARSER_LOADERS.keys()) == set(CJK_LANGUAGES) (T-7, ADR-3)."""
+        import clipwright_wrap.wrap_cli as wrap_cli_mod
+        from clipwright_wrap.languages import CJK_LANGUAGES
+
+        loader_keys = set(wrap_cli_mod._PARSER_LOADERS.keys())
+        cjk_set = set(CJK_LANGUAGES)
+
+        assert loader_keys == cjk_set, (
+            f"_PARSER_LOADERS keys {loader_keys!r} differ from CJK_LANGUAGES {cjk_set!r}. "
+            "Update wrap_cli._PARSER_LOADERS or languages.CJK_LANGUAGES to remove drift."
+        )

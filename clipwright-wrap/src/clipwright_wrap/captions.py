@@ -241,7 +241,7 @@ def parse_captions(text: str, fmt: str) -> list[Cue]:
         )
 
 
-def wrap_cue_lines(segments: list[str], max_chars: int) -> list[str]:
+def wrap_cue_lines(segments: list[str], max_chars: int, joiner: str = "") -> list[str]:
     """Return lines formed by greedily packing phrase-boundary tokens up to max_chars.
 
     Conforms to WR-AD-04/WR-AD-14:
@@ -249,8 +249,6 @@ def wrap_cue_lines(segments: list[str], max_chars: int) -> list[str]:
       limit is exceeded (greedy fill).
     - If a single segment exceeds max_chars on its own, it is placed on its own
       line without splitting.
-    - No delimiter is inserted between segments
-      (WR-AD-14(i); joining lines restores the original text).
     - '\\n' is not included in len() of each line (WR-AD-14(ii)).
     - Full-width and half-width characters are each counted as 1
       (WR-AD-14(iii); uniform len() check).
@@ -258,6 +256,10 @@ def wrap_cue_lines(segments: list[str], max_chars: int) -> list[str]:
     Args:
         segments: List of phrase-boundary tokens.
         max_chars: Maximum number of characters per line (gt=0).
+        joiner: String inserted between adjacent tokens on the same line.
+            ``joiner=""`` (default) concatenates tokens directly, preserving
+            CJK byte-equivalence (WR-AD-14(i)). ``joiner=" "`` inserts one
+            space between words, suitable for space-delimited (Latin) languages.
 
     Returns:
         List of lines (no '\\n' within any line). Returns [] for empty segments.
@@ -272,9 +274,9 @@ def wrap_cue_lines(segments: list[str], max_chars: int) -> list[str]:
         if not current_line:
             # Start of a line: place segment even if exceeds max_chars (no splitting)
             current_line = seg
-        elif len(current_line) + len(seg) <= max_chars:
-            # Adding the segment stays within max_chars → append to the same line
-            current_line += seg
+        elif len(current_line) + len(joiner) + len(seg) <= max_chars:
+            # Adding the segment (with joiner) stays within max_chars → append
+            current_line += joiner + seg
         else:
             # Would exceed the limit → insert a line break
             lines.append(current_line)
@@ -286,13 +288,13 @@ def wrap_cue_lines(segments: list[str], max_chars: int) -> list[str]:
     return lines
 
 
-def _merge_to_max_lines(lines: list[str], max_lines: int) -> tuple[list[str], bool]:
+def _merge_to_max_lines(
+    lines: list[str], max_lines: int, joiner: str = ""
+) -> tuple[list[str], bool]:
     """Reduce *lines* to at most *max_lines* by greedy front-merge.
 
     Adjacent lines are concatenated from the front (index 0 + index 1 → index 0)
-    with an empty-string separator "" until ``len(lines) <= max_lines``.
-    This preserves the original text under WR-AD-14: joining all resulting lines
-    with "" restores the source text identical to joining *lines* with "".
+    with *joiner* as separator until ``len(lines) <= max_lines``.
 
     The algorithm is deterministic: identical inputs always produce identical
     outputs.  When ``max_lines == 1`` every line is folded into a single string.
@@ -306,6 +308,10 @@ def _merge_to_max_lines(lines: list[str], max_lines: int) -> tuple[list[str], bo
     Args:
         lines: Lines to merge.  May be empty.
         max_lines: Target upper bound on the number of lines (gt=0).
+        joiner: String inserted between the two lines being merged.
+            ``joiner=""`` (default) concatenates directly, preserving CJK
+            byte-equivalence under WR-AD-14. ``joiner=" "`` inserts one space,
+            suitable for space-delimited (Latin) languages.
 
     Returns:
         A 2-tuple ``(merged_lines, merged)`` where:
@@ -320,7 +326,7 @@ def _merge_to_max_lines(lines: list[str], max_lines: int) -> tuple[list[str], bo
 
     result = list(lines)
     while len(result) > max_lines:
-        result[0] = result[0] + result[1]
+        result[0] = result[0] + joiner + result[1]
         del result[1]
 
     return (result, True)

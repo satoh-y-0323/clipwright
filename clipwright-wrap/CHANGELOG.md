@@ -5,6 +5,36 @@ All notable changes to `clipwright-wrap` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-06-29
+
+### Added
+
+- **Latin (space-delimited) language word-wrap**: `clipwright_wrap_captions` now
+  accepts space-delimited Latin-script languages (`en`, `es`, `fr`, `de`, `it`,
+  `pt`, `nl`) in addition to CJK/Thai. Latin cues are wrapped on word boundaries
+  using whitespace segmentation, preserving a single space between words. This
+  unblocks the transcribe → wrap → render chain for English subtitles.
+
+### Changed
+
+- **`language` accepts Latin allowlist**: the MCP input schema `language` pattern
+  is extended from `^(ja|zh-hans|zh-hant|th)$` to include the Latin allowlist.
+  CJK/Thai segmentation (budoux) and output remain byte-for-byte unchanged.
+- **`wrap_cue_lines` / `_merge_to_max_lines` gain a `joiner` parameter** (default
+  `""`): CJK uses `""` (no delimiter, unchanged); Latin uses `" "`. The
+  `max_chars` budget accounts for the joiner.
+
+### Fixed
+
+- **`__version__` drift**: `clipwright_wrap.__version__` corrected from `0.1.1`
+  to match the package version.
+
+### Notes
+
+- Latin word-wrap runs in-process (whitespace split); it does not launch the
+  budoux subprocess. `DEPENDENCY_MISSING` (budoux) can only occur on the CJK/Thai
+  path.
+
 ## [0.2.0] - 2026-06-14
 
 ### Changed

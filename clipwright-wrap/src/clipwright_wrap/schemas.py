@@ -10,12 +10,15 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from clipwright_wrap.languages import LANGUAGE_PATTERN
+
 
 class WrapCaptionsOptions(BaseModel):
     """Options for clipwright_wrap_captions (WR-AD-05).
 
-    language selects the budoux parser.
-    All 4 languages confirmed loadable in spike-budoux (DC-AM-005).
+    language selects the segmentation strategy: CJK/Thai (ja/zh-hans/zh-hant/th)
+    use budoux phrase-boundary segmentation; space-delimited Latin-script languages
+    (en/es/fr/de/it/pt/nl) use whitespace word segmentation.
     max_chars is the maximum number of characters per line
     (each character counts as 1; len() check).
     max_lines is the maximum number of lines per cue; when a cue exceeds
@@ -32,11 +35,12 @@ class WrapCaptionsOptions(BaseModel):
         Field(
             default="ja",
             max_length=7,
-            pattern=r"^(ja|zh-hans|zh-hant|th)$",
+            pattern=LANGUAGE_PATTERN,
             description=(
-                "Language code to select the budoux phrase-boundary parser. "
-                "Supported languages: ja / zh-hans / zh-hant / th. "
-                "All 4 languages confirmed in spike-budoux (DC-AM-005). "
+                "Language code selecting the caption-wrapping segmentation strategy. "
+                "CJK/Thai (ja / zh-hans / zh-hant / th) use budoux phrase-boundary "
+                "segmentation; space-delimited Latin-script languages "
+                "(en / es / fr / de / it / pt / nl) use whitespace word segmentation. "
                 "Unsupported values are rejected with INVALID_INPUT."
             ),
         ),

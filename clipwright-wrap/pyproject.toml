@@ -1,6 +1,6 @@
 [project]
 name = "clipwright-wrap"
-version = "0.2.0"
+version = "0.3.0"
 description = "MCP tool to format subtitle file (SRT/VTT) text at phrase boundaries with line wrapping using BudouX."
 readme = "README.md"
 license = { text = "MIT" }

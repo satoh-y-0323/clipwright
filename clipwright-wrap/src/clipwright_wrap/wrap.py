@@ -1,12 +1,14 @@
 """wrap.py — clipwright-wrap orchestration layer.
 
 Output validation → input existence check → subtitle parsing →
-wrap_cli launch (phrase segmentation) →
+segmentation (CJK: wrap_cli subprocess; Latin: in-process split) →
 greedy line-filling, front-merge convergence, and re-serialisation via captions →
 output write → envelope return.
 
 Design decisions:
-- wrap_cli is launched as sys.executable -m clipwright_wrap.wrap_cli (WR-AD-01).
+- Language routing: CJK/Thai (ja/zh-hans/zh-hant/th) → wrap_cli subprocess (WR-AD-01).
+  Latin (en/es/fr/de/it/pt/nl) → in-process text.split() (no subprocess).
+  Unsupported languages raise ClipwrightError(INVALID_INPUT) with a prescriptive hint.
 - wrap_cli error detection is based on the "error" key in stdout JSON (DC-AS-007).
 - subprocess failure/timeout uses the sanitised message in SUBPROCESS_SAFE_MESSAGE.
 - FILE_NOT_FOUND message contains only the basename (no full path exposure; WR-AD-09).
@@ -41,6 +43,7 @@ from clipwright_wrap.captions import (
     serialize_captions,
     wrap_cue_lines,
 )
+from clipwright_wrap.languages import is_cjk, is_space_delimited
 from clipwright_wrap.schemas import WrapCaptionsOptions
 
 # Timeout coefficient proportional to cue count (WR-AD-11/WR-AD-15(2))
@@ -173,14 +176,40 @@ def _wrap_inner(
             ),
         ) from None
 
-    # --- 5. Launch wrap_cli (WR-AD-02; DC-AS-007) ---
+    # --- 5. Segmentation: select strategy by language class ---
+
+    language = options.language
+
+    # Defensive guard. The Pydantic pattern at the MCP boundary already restricts
+    # language to the allowlist, so this is reached only on direct/bypass calls.
+    if not (is_cjk(language) or is_space_delimited(language)):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message="Unsupported language for caption wrapping.",
+            hint=(
+                "Specify one of: ja, zh-hans, zh-hant, th (CJK/Thai, budoux); "
+                "or en, es, fr, de, it, pt, nl (space-delimited Latin)."
+            ),
+        )
+
+    # joiner: "" preserves CJK byte-equivalence; " " inserts one space between words.
+    joiner = " " if is_space_delimited(language) else ""
 
     cue_count = len(cues)
-    # For 0 entries, skip wrap_cli and serialise directly
-    if cue_count > 0:
+    segments: list[list[str]]
+
+    if cue_count == 0:
+        segments = []
+    elif is_space_delimited(language):
+        # In-process whitespace split. No subprocess, no budoux (FR-5/NFR-2).
+        # str.split() with no argument collapses consecutive whitespace and strips
+        # leading/trailing whitespace — empty cues produce [] (no empty tokens).
+        segments = [cue.text.split() for cue in cues]
+    else:
+        # CJK/Thai: existing budoux subprocess path (WR-AD-01/WR-AD-02/DC-AS-007).
         stdin_payload = json.dumps(
             {
-                "language": options.language,
+                "language": language,
                 "texts": [cue.text for cue in cues],
             },
             ensure_ascii=False,
@@ -228,8 +257,8 @@ def _wrap_inner(
         if "error" in parsed:
             err = parsed["error"]
             code_str: str = err.get("code", str(ErrorCode.INTERNAL))
-            msg: str = err.get("message", "An error occurred in wrap_cli")
-            hint: str = err.get("hint", "Please report with reproduction steps.")
+            wrap_msg: str = err.get("message", "An error occurred in wrap_cli")
+            wrap_hint: str = err.get("hint", "Please report with reproduction steps.")
             # wrap_cli runs in a separate process and only emits fixed, path-free
             # error message/hint strings (verified against wrap_cli.py). These are
             # transcribed as-is into the envelope. As a defensive cap against a
@@ -237,18 +266,16 @@ def _wrap_inner(
             # (SR-M-2). This also bounds the language hint enumeration leak (SR-L-2,
             # resolved by the same bound).
             # bound chosen above fixed-string length to avoid truncating known messages
-            msg = msg[:500]
-            hint = hint[:500]
+            wrap_msg = wrap_msg[:500]
+            wrap_hint = wrap_hint[:500]
             # Convert to ErrorCode (DEPENDENCY_MISSING propagated as-is)
             try:
-                code = ErrorCode(code_str)
+                err_code = ErrorCode(code_str)
             except ValueError:
-                code = ErrorCode.INTERNAL
-            raise ClipwrightError(code=code, message=msg, hint=hint)
+                err_code = ErrorCode.INTERNAL
+            raise ClipwrightError(code=err_code, message=wrap_msg, hint=wrap_hint)
 
-        segments: list[list[str]] = parsed.get("segments", [])
-    else:
-        segments = []
+        segments = parsed.get("segments", [])
 
     # --- 6. Apply wrap_cue_lines → front-merge → overflow detection pipeline ---
 
@@ -258,10 +285,10 @@ def _wrap_inner(
 
     for i, cue in enumerate(cues):
         seg = segments[i] if i < len(segments) else [cue.text]
-        lines = wrap_cue_lines(seg, options.max_chars)
+        lines = wrap_cue_lines(seg, options.max_chars, joiner=joiner)
 
         # Front-merge: collapse lines to at most max_lines (ADR-W1)
-        lines, merged = _merge_to_max_lines(lines, options.max_lines)
+        lines, merged = _merge_to_max_lines(lines, options.max_lines, joiner=joiner)
         if merged:
             merged_cue_indices.append(i)
 

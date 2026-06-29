@@ -1205,3 +1205,156 @@ class TestWrAd12TranscribeCompatibility:
         assert len(cues) == 1
         assert cues[0].start == "00:01:30,500"
         assert cues[0].end == "00:01:31,000"
+
+
+# ===========================================================================
+# T-3: wrap_cue_lines joiner parameter (Latin word-wrap — Red phase)
+#
+# All tests in this class FAIL at current HEAD with:
+#   TypeError: wrap_cue_lines() got an unexpected keyword argument 'joiner'
+# This is the expected Red evidence: the joiner feature is not yet implemented.
+# ===========================================================================
+
+
+class TestWrapCueLinesJoiner:
+    """T-3: wrap_cue_lines must accept a joiner keyword argument for space-delimited (Latin) wrapping.
+
+    Design contract (architecture-report ADR-2):
+      wrap_cue_lines(segments, max_chars, joiner='') -> list[str]
+      - Budget: len(current_line) + len(joiner) + len(seg) <= max_chars
+      - Concat:  current_line += joiner + seg
+      - Default joiner='' preserves CJK byte-equivalence (WR-AD-14).
+
+    Red evidence: TypeError at current HEAD (joiner kwarg not yet accepted).
+    """
+
+    def test_joiner_space_kwarg_accepted(self) -> None:
+        """wrap_cue_lines(segs, max_chars, joiner=' ') does not raise TypeError (T-3 Red marker).
+
+        At current HEAD this raises TypeError; passes only after the joiner parameter
+        is added to wrap_cue_lines in captions.py.
+        """
+        result = wrap_cue_lines(["Hello", "world"], max_chars=20, joiner=" ")
+        assert isinstance(result, list)
+
+    def test_joiner_space_char_budget_includes_joiner_length(self) -> None:
+        """Budget is len(current)+len(joiner)+len(seg) <= max_chars when joiner=' ' (T-3a, AC-1).
+
+        'Hello'(5) + ' '(1) + 'world'(5) = 11 > max_chars=10 → 2 lines (joiner budget).
+        Without joiner in budget: 5+5=10 <= 10 → 1 line (wrong for Latin word-wrap).
+        max_chars=10 distinguishes the two budget strategies.
+        """
+        result = wrap_cue_lines(["Hello", "world"], max_chars=10, joiner=" ")
+        assert len(result) == 2, (
+            f"Expected 2 lines when joiner budget forces split at max_chars=10, got {result!r}"
+        )
+        assert result[0] == "Hello"
+        assert result[1] == "world"
+
+    def test_joiner_space_words_joined_with_single_space_within_line(self) -> None:
+        """Words that fit within max_chars are joined with a single space when joiner=' ' (T-3b, AC-1).
+
+        'The'(3)+' '(1)+'quick'(5)=9 <= 20; 9+' '(1)+'brown'(5)=15 <= 20 → 1 line.
+        Expected line text: 'The quick brown' (single space between each word).
+        """
+        result = wrap_cue_lines(["The", "quick", "brown"], max_chars=20, joiner=" ")
+        assert len(result) == 1
+        assert result[0] == "The quick brown"
+
+    def test_joiner_space_line_start_has_no_leading_space(self) -> None:
+        """The first segment on a new line has no leading space (joiner only inside same-line pairs).
+
+        After budget overflow, the next segment starts a fresh line without a leading space.
+        'Hello' fits; 'Hello'(5)+' '+'world'(5)=11>10 → line break; 'world' starts line 2.
+        """
+        result = wrap_cue_lines(["Hello", "world"], max_chars=10, joiner=" ")
+        assert result[1] == "world"  # must be exactly "world", not " world"
+
+    def test_joiner_empty_default_cjk_byte_equivalence(self) -> None:
+        """joiner='' (explicit kwarg) gives byte-identical output to calling without joiner (T-3c, AC-2).
+
+        Ensures CJK callers that pass joiner='' receive the exact same lines as callers
+        that omit the argument, maintaining backward compatibility.
+        """
+        segs = ["今日は", "いい", "天気です。"]
+        result_no_kwarg = wrap_cue_lines(segs, max_chars=10)
+        result_empty_joiner = wrap_cue_lines(segs, max_chars=10, joiner="")
+        assert result_no_kwarg == result_empty_joiner, (
+            "joiner='' must produce byte-identical output to the no-kwarg call (CJK byte-equivalence)"
+        )
+
+
+# ===========================================================================
+# T-4: _merge_to_max_lines joiner parameter (Latin word-wrap — Red phase)
+#
+# All tests in this class FAIL at current HEAD with:
+#   TypeError: _merge_to_max_lines() got an unexpected keyword argument 'joiner'
+# This is the expected Red evidence: the joiner feature is not yet implemented.
+# ===========================================================================
+
+
+class TestMergeToMaxLinesJoiner:
+    """T-4: _merge_to_max_lines must accept a joiner keyword argument for space-delimited front-merge.
+
+    Design contract (architecture-report ADR-2):
+      _merge_to_max_lines(lines, max_lines, joiner='') -> tuple[list[str], bool]
+      - front-merge: result[0] = result[0] + joiner + result[1]
+      - Default joiner='' preserves CJK byte-equivalence (WR-AD-14).
+
+    Red evidence: TypeError at current HEAD (joiner kwarg not yet accepted).
+    """
+
+    def test_joiner_space_kwarg_accepted(self) -> None:
+        """_merge_to_max_lines(lines, max_lines, joiner=' ') does not raise TypeError (T-4 Red marker).
+
+        At current HEAD this raises TypeError; passes only after the joiner parameter
+        is added to _merge_to_max_lines in captions.py.
+        """
+        from clipwright_wrap.captions import _merge_to_max_lines
+
+        result, merged = _merge_to_max_lines(
+            ["Hello", "world", "foo"], max_lines=2, joiner=" "
+        )
+        assert isinstance(result, list)
+
+    def test_joiner_space_front_merge_produces_space_joined_pair(self) -> None:
+        """front-merge with joiner=' ' gives result[0]+' '+result[1] (T-4b, AC-1).
+
+        lines=['Hello', 'world', 'foo'], max_lines=2:
+          step 1: result[0]='Hello'+' '+'world'='Hello world'; result=['Hello world','foo'].
+        """
+        from clipwright_wrap.captions import _merge_to_max_lines
+
+        lines = ["Hello", "world", "foo"]
+        result, merged = _merge_to_max_lines(lines, max_lines=2, joiner=" ")
+        assert len(result) == 2
+        assert merged is True
+        assert result[0] == "Hello world"
+        assert result[1] == "foo"
+
+    def test_joiner_space_convergence_to_max_lines_1_space_separated(self) -> None:
+        """Multiple front-merges with joiner=' ' collapse all lines into a single space-separated string.
+
+        lines=['a','b','c','d'], max_lines=1 → 'a b c d'.
+        """
+        from clipwright_wrap.captions import _merge_to_max_lines
+
+        lines = ["a", "b", "c", "d"]
+        result, merged = _merge_to_max_lines(lines, max_lines=1, joiner=" ")
+        assert len(result) == 1
+        assert merged is True
+        assert result[0] == "a b c d"
+
+    def test_joiner_empty_default_front_merge_unchanged_cjk(self) -> None:
+        """joiner='' (explicit kwarg) gives byte-identical front-merge to calling without joiner (T-4c, AC-2).
+
+        CJK round-trip identity must hold: ''.join(result_no_kwarg) == ''.join(result_empty_joiner).
+        """
+        from clipwright_wrap.captions import _merge_to_max_lines
+
+        lines = ["今日は", "いい", "天気"]
+        result_no_kwarg, _ = _merge_to_max_lines(lines, max_lines=2)
+        result_empty_joiner, _ = _merge_to_max_lines(lines, max_lines=2, joiner="")
+        assert result_no_kwarg == result_empty_joiner, (
+            "joiner='' must produce byte-identical front-merge to the no-kwarg call (CJK byte-equivalence)"
+        )
