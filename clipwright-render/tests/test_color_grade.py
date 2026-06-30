@@ -3,7 +3,8 @@
 Covers _RenderWhiteBalance, _RenderColorGrade, _validate_color_grade,
 _append_wb_filter, _append_lut3d_filter, and build_plan with color directives.
 
-Requirements: architecture-report-20260630-231945.md §5.2 / §6 / D4 / D6
+Requirements: architecture-report-20260701-075722.md §2.2 / §5 / §7
+(WB redesign: colorbalance → colorchannelmixer per-channel gain)
 FR-7/8/9 (WB + lut3d stages), NFR-2/4/5/6 (security/numeric/escape/yuv420p),
 AC-4/5/6/8 (LUT pathpolicy / ordering / numeric lock / backward compat).
 """
@@ -55,8 +56,9 @@ _COLOR_DICT_BASE: dict[str, Any] = {
     },
 }
 
-# Typical WB correction values (warm-biased scene: positive r, small g, negative b).
-_WB_PARAMS: dict[str, float] = {"r": 0.12, "g": -0.05, "b": -0.08}
+# Typical WB correction values (warm-biased scene: r gain above neutral, b gain below).
+# Per-channel gains for colorchannelmixer: neutral = 1.0, range [0.0, 4.0].
+_WB_PARAMS: dict[str, float] = {"r": 1.4, "g": 0.9, "b": 0.6}
 
 # Color dict with white_balance present (no lut); used in most ordering tests.
 _COLOR_DICT_WB: dict[str, Any] = {
@@ -171,31 +173,40 @@ class TestColorGradeSchema:
         assert _RenderWhiteBalance is not None
 
     def test_wb_model_r_g_b_fields(self) -> None:
-        """_RenderWhiteBalance accepts r, g, b float fields in [-1, 1]."""
+        """_RenderWhiteBalance accepts r, g, b float gains in [0.0, 4.0]."""
         from clipwright_render.plan import _RenderWhiteBalance  # type: ignore[attr-defined]
 
-        wb = _RenderWhiteBalance(r=0.12, g=-0.05, b=-0.08)
-        assert wb.r == pytest.approx(0.12)
-        assert wb.g == pytest.approx(-0.05)
-        assert wb.b == pytest.approx(-0.08)
+        wb = _RenderWhiteBalance(r=1.4, g=0.9, b=0.6)
+        assert wb.r == pytest.approx(1.4)
+        assert wb.g == pytest.approx(0.9)
+        assert wb.b == pytest.approx(0.6)
 
-    def test_wb_model_defaults_all_zero(self) -> None:
-        """_RenderWhiteBalance default values are 0.0 (neutral white balance)."""
+    def test_wb_model_defaults_all_one(self) -> None:
+        """_RenderWhiteBalance default values are 1.0 (neutral per-channel gain)."""
         from clipwright_render.plan import _RenderWhiteBalance  # type: ignore[attr-defined]
 
         wb = _RenderWhiteBalance()
-        assert wb.r == 0.0
-        assert wb.g == 0.0
-        assert wb.b == 0.0
+        assert wb.r == 1.0
+        assert wb.g == 1.0
+        assert wb.b == 1.0
 
-    def test_wb_model_rejects_out_of_range(self) -> None:
-        """_RenderWhiteBalance rejects r/g/b outside [-1.0, 1.0]."""
+    def test_wb_model_rejects_above_max(self) -> None:
+        """_RenderWhiteBalance rejects r/g/b above 4.0 (le=4.0 upper bound)."""
         from pydantic import ValidationError
 
         from clipwright_render.plan import _RenderWhiteBalance  # type: ignore[attr-defined]
 
         with pytest.raises(ValidationError):
-            _RenderWhiteBalance(r=2.0, g=0.0, b=0.0)
+            _RenderWhiteBalance(r=5.0, g=1.0, b=1.0)
+
+    def test_wb_model_rejects_negative(self) -> None:
+        """_RenderWhiteBalance rejects negative r/g/b (ge=0.0 lower bound)."""
+        from pydantic import ValidationError
+
+        from clipwright_render.plan import _RenderWhiteBalance  # type: ignore[attr-defined]
+
+        with pytest.raises(ValidationError):
+            _RenderWhiteBalance(r=-0.1, g=1.0, b=1.0)
 
     def test_wb_model_rejects_extra_keys(self) -> None:
         """_RenderWhiteBalance rejects unknown fields (extra: forbid / CWE-20)."""
@@ -239,7 +250,7 @@ class TestColorGradeSchema:
             _RenderWhiteBalance,
         )
 
-        wb = _RenderWhiteBalance(r=0.1, g=0.0, b=-0.1)
+        wb = _RenderWhiteBalance(r=1.2, g=1.0, b=0.8)
         grade = _RenderColorGrade(eq=None, white_balance=wb, lut=None)
         assert grade.white_balance is wb
 
@@ -294,13 +305,13 @@ class TestValidateColorGrade:
         assert grade.lut is None
 
     def test_white_balance_present_populates_wb_fields(self) -> None:
-        """white_balance key present -> grade.white_balance reflects r/g/b values."""
+        """white_balance key present -> grade.white_balance reflects r/g/b gain values."""
         grade = self._validate({"white_balance": _WB_PARAMS})
         assert grade is not None
         assert grade.white_balance is not None
-        assert grade.white_balance.r == pytest.approx(0.12)
-        assert grade.white_balance.g == pytest.approx(-0.05)
-        assert grade.white_balance.b == pytest.approx(-0.08)
+        assert grade.white_balance.r == pytest.approx(1.4)
+        assert grade.white_balance.g == pytest.approx(0.9)
+        assert grade.white_balance.b == pytest.approx(0.6)
 
     def test_eq_key_present_populates_eq(self) -> None:
         """eq key present -> grade.eq reflects the values."""
@@ -312,20 +323,37 @@ class TestValidateColorGrade:
         assert grade.eq is not None
         assert grade.eq.brightness == pytest.approx(0.2)
 
-    def test_invalid_wb_r_out_of_range_raises_invalid_input(self) -> None:
-        """white_balance.r=5.0 (out of [-1, 1]) -> INVALID_INPUT."""
-        color: dict[str, Any] = {"white_balance": {"r": 5.0, "g": 0.0, "b": 0.0}}
+    def test_invalid_wb_r_above_max_raises_invalid_input(self) -> None:
+        """white_balance.r=5.0 (above le=4.0) -> INVALID_INPUT."""
+        color: dict[str, Any] = {"white_balance": {"r": 5.0, "g": 1.0, "b": 1.0}}
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._validate(color)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_invalid_wb_r_negative_raises_invalid_input(self) -> None:
+        """white_balance.r=-0.1 (below ge=0.0) -> INVALID_INPUT."""
+        color: dict[str, Any] = {"white_balance": {"r": -0.1, "g": 1.0, "b": 1.0}}
         with pytest.raises(ClipwrightError) as exc_info:
             self._validate(color)
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_wb_error_message_no_input_value(self) -> None:
         """INVALID_INPUT message for WB must not expose the raw value (CWE-209)."""
-        color: dict[str, Any] = {"white_balance": {"r": 5.0, "g": 0.0, "b": 0.0}}
+        color: dict[str, Any] = {"white_balance": {"r": 5.0, "g": 1.0, "b": 1.0}}
         with pytest.raises(ClipwrightError) as exc_info:
             self._validate(color)
         assert "5.0" not in exc_info.value.message
         assert exc_info.value.__cause__ is None
+
+    def test_wb_hint_mentions_per_channel_gain_and_range(self) -> None:
+        """INVALID_INPUT hint for WB must mention per-channel gain and [0.0, 4.0] (§2.2)."""
+        color: dict[str, Any] = {"white_balance": {"r": 5.0, "g": 1.0, "b": 1.0}}
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._validate(color)
+        hint = exc_info.value.hint or ""
+        assert "per-channel gain" in hint, f"hint must mention 'per-channel gain': {hint!r}"
+        assert "neutral=1.0" in hint, f"hint must mention 'neutral=1.0': {hint!r}"
+        assert "[0.0, 4.0]" in hint, f"hint must mention '[0.0, 4.0]': {hint!r}"
 
     def test_valid_lut_path_populates_lut(self, tmp_path: Path) -> None:
         """Valid absolute .cube path -> grade.lut is set (resolved path)."""
@@ -356,7 +384,7 @@ class TestValidateColorGrade:
 
 
 class TestAppendWbFilter:
-    """_append_wb_filter appends colorbalance segment and returns new label (§6.3 / FR-7)."""
+    """_append_wb_filter appends colorchannelmixer segment and returns new label (§5 / FR-7)."""
 
     def _append(
         self,
@@ -368,7 +396,7 @@ class TestAppendWbFilter:
 
         return _append_wb_filter(parts, label, wb)
 
-    def _make_wb(self, r: float = 0.0, g: float = 0.0, b: float = 0.0) -> Any:
+    def _make_wb(self, r: float = 1.0, g: float = 1.0, b: float = 1.0) -> Any:
         from clipwright_render.plan import _RenderWhiteBalance  # type: ignore[attr-defined]
 
         return _RenderWhiteBalance(r=r, g=g, b=b)
@@ -387,64 +415,82 @@ class TestAppendWbFilter:
         assert result == "[outvscaled]"
 
     def test_valid_wb_returns_outvwb_label(self) -> None:
-        """Valid white_balance -> returns '[outvwb]' label."""
+        """Non-neutral white_balance gain -> returns '[outvwb]' label."""
         parts: list[str] = []
-        wb = self._make_wb(r=0.12, g=-0.05, b=-0.08)
+        wb = self._make_wb(r=1.4, g=0.9, b=0.6)
         result = self._append(parts, "[outv]", wb)
         assert result == "[outvwb]"
 
     def test_valid_wb_appends_exactly_one_segment(self) -> None:
-        """Valid white_balance -> exactly one segment appended to filter_parts."""
+        """Non-neutral white_balance gain -> exactly one segment appended to filter_parts."""
         parts: list[str] = []
-        wb = self._make_wb(r=0.12, g=-0.05, b=-0.08)
+        wb = self._make_wb(r=1.4, g=0.9, b=0.6)
         self._append(parts, "[outv]", wb)
         assert len(parts) == 1
 
     def test_segment_starts_with_input_label(self) -> None:
         """Appended segment starts with the input video label."""
         parts: list[str] = []
-        wb = self._make_wb(r=0.12, g=-0.05, b=-0.08)
+        wb = self._make_wb(r=1.4, g=0.9, b=0.6)
         self._append(parts, "[outvscaled]", wb)
         assert parts[0].startswith("[outvscaled]")
 
     def test_segment_ends_with_outvwb(self) -> None:
         """Appended segment ends with '[outvwb]'."""
         parts: list[str] = []
-        wb = self._make_wb(r=0.12, g=-0.05, b=-0.08)
+        wb = self._make_wb(r=1.4, g=0.9, b=0.6)
         self._append(parts, "[outv]", wb)
         assert parts[0].endswith("[outvwb]")
 
-    def test_colorbalance_keyword_in_segment(self) -> None:
-        """Segment contains 'colorbalance=' keyword."""
+    def test_colorchannelmixer_keyword_in_segment(self) -> None:
+        """Segment contains 'colorchannelmixer=' keyword (regression guard: no colorbalance)."""
         parts: list[str] = []
-        wb = self._make_wb(r=0.12, g=-0.05, b=-0.08)
+        wb = self._make_wb(r=1.4, g=0.9, b=0.6)
         self._append(parts, "[outv]", wb)
-        assert "colorbalance=" in parts[0]
+        assert "colorchannelmixer=" in parts[0], (
+            f"colorchannelmixer= not found in segment: {parts[0]!r}"
+        )
+        assert "colorbalance" not in parts[0], (
+            f"colorbalance must not appear in WB segment (regression guard): {parts[0]!r}"
+        )
 
-    def test_rm_gm_bm_params_in_segment(self) -> None:
-        """Segment contains rm=, gm=, bm= parameters."""
+    def test_rr_gg_bb_params_in_segment(self) -> None:
+        """Segment contains rr=, gg=, bb= per-channel gain parameters."""
         parts: list[str] = []
-        wb = self._make_wb(r=0.12, g=-0.05, b=-0.08)
+        wb = self._make_wb(r=1.4, g=0.9, b=0.6)
         self._append(parts, "[outv]", wb)
-        assert "rm=" in parts[0]
-        assert "gm=" in parts[0]
-        assert "bm=" in parts[0]
+        assert "rr=" in parts[0]
+        assert "gg=" in parts[0]
+        assert "bb=" in parts[0]
 
-    def test_full_colorbalance_segment_format(self) -> None:
-        """Full segment: [label]colorbalance=rm={r:g}:gm={g:g}:bm={b:g}[outvwb] (§6.3 / AC-6)."""
+    def test_full_colorchannelmixer_segment_format(self) -> None:
+        """Full segment: [label]colorchannelmixer=rr={r:g}:gg={g:g}:bb={b:g}[outvwb] (§5 / SR-INJ-002)."""
         parts: list[str] = []
-        r, g, b = 0.12, -0.05, -0.08
+        r, g, b = 1.4, 0.9, 0.6
         wb = self._make_wb(r=r, g=g, b=b)
         self._append(parts, "[outv]", wb)
-        expected_seg = f"colorbalance=rm={r:g}:gm={g:g}:bm={b:g}"
+        expected_seg = f"colorchannelmixer=rr={r:g}:gg={g:g}:bb={b:g}"
         assert expected_seg in parts[0]
 
-    def test_neutral_wb_zero_values_format(self) -> None:
-        """Neutral WB (r=g=b=0.0) emits colorbalance=rm=0:gm=0:bm=0 (no exponent)."""
+    def test_all_one_gain_is_noop(self) -> None:
+        """WB with all gains==1.0 (neutral) -> label unchanged, no segment appended (no-op, §5)."""
         parts: list[str] = []
-        wb = self._make_wb(r=0.0, g=0.0, b=0.0)
-        self._append(parts, "[outv]", wb)
-        assert "colorbalance=rm=0:gm=0:bm=0" in parts[0]
+        wb = self._make_wb(r=1.0, g=1.0, b=1.0)
+        result = self._append(parts, "[outv]", wb)
+        assert result == "[outv]", (
+            f"All-one WB must be no-op; label must be unchanged, got {result!r}"
+        )
+        assert parts == [], (
+            f"All-one WB must not append any segment, got {parts!r}"
+        )
+
+    def test_all_one_gain_outvscaled_is_noop(self) -> None:
+        """WB r=g=b=1.0 with [outvscaled] label -> [outvscaled] returned unchanged (both no-op conditions)."""
+        parts: list[str] = []
+        wb = self._make_wb(r=1.0, g=1.0, b=1.0)
+        result = self._append(parts, "[outvscaled]", wb)
+        assert result == "[outvscaled]"
+        assert parts == []
 
 
 # ===========================================================================
@@ -548,25 +594,25 @@ class TestAppendLut3dFilter:
 
 
 class TestGradeOrderingSingleSource:
-    """colorbalance -> eq -> lut3d -> subtitles order in single-source path (AC-5 / FR-9)."""
+    """colorchannelmixer -> eq -> lut3d -> subtitles order in single-source path (AC-5 / FR-9)."""
 
-    def test_colorbalance_before_eq_before_lut3d(self, tmp_path: Path) -> None:
-        """colorbalance= pos < eq= pos < lut3d=file=' pos in single-source filter_complex."""
+    def test_colorchannelmixer_before_eq_before_lut3d(self, tmp_path: Path) -> None:
+        """colorchannelmixer= pos < eq= pos < lut3d=file=' pos in single-source filter_complex."""
         cube = tmp_path / "film.cube"
         cube.write_text("LUT_3D_SIZE 2\n")
         color: dict[str, Any] = {**_COLOR_DICT_WB, "lut": str(cube)}
         plan = _single_source_plan_grade(color=color)
         fc = plan.filter_complex
 
-        wb_pos = fc.find("colorbalance=")
+        wb_pos = fc.find("colorchannelmixer=")
         eq_pos = fc.find("eq=")
         lut_pos = fc.find("lut3d=file='")
 
-        assert wb_pos != -1, f"colorbalance= not found in filter_complex: {fc!r}"
+        assert wb_pos != -1, f"colorchannelmixer= not found in filter_complex: {fc!r}"
         assert eq_pos != -1, f"eq= not found in filter_complex: {fc!r}"
         assert lut_pos != -1, f"lut3d=file=' not found in filter_complex: {fc!r}"
         assert wb_pos < eq_pos, (
-            f"colorbalance (pos={wb_pos}) must precede eq (pos={eq_pos})"
+            f"colorchannelmixer (pos={wb_pos}) must precede eq (pos={eq_pos})"
         )
         assert eq_pos < lut_pos, f"eq (pos={eq_pos}) must precede lut3d (pos={lut_pos})"
 
@@ -637,29 +683,29 @@ class TestGradeOrderingSingleSource:
 
 
 class TestGradeOrderingMultiSource:
-    """colorbalance -> eq -> lut3d -> subtitles order in multi-source path (AC-5 / FR-9)."""
+    """colorchannelmixer -> eq -> lut3d -> subtitles order in multi-source path (AC-5 / FR-9)."""
 
-    def test_colorbalance_before_eq_before_lut3d(self, tmp_path: Path) -> None:
-        """colorbalance < eq < lut3d ordering in multi-source filter_complex (AC-5)."""
+    def test_colorchannelmixer_before_eq_before_lut3d(self, tmp_path: Path) -> None:
+        """colorchannelmixer < eq < lut3d ordering in multi-source filter_complex (AC-5)."""
         cube = tmp_path / "film.cube"
         cube.write_text("LUT_3D_SIZE 2\n")
         color: dict[str, Any] = {**_COLOR_DICT_WB, "lut": str(cube)}
         plan = _multi_source_plan_grade(color=color)
         fc = plan.filter_complex
 
-        wb_pos = fc.find("colorbalance=")
+        wb_pos = fc.find("colorchannelmixer=")
         eq_pos = fc.find("eq=")
         lut_pos = fc.find("lut3d=file='")
 
         assert wb_pos != -1, (
-            f"colorbalance= not found in multi-source filter_complex: {fc!r}"
+            f"colorchannelmixer= not found in multi-source filter_complex: {fc!r}"
         )
         assert eq_pos != -1, f"eq= not found in multi-source filter_complex: {fc!r}"
         assert lut_pos != -1, (
             f"lut3d=file=' not found in multi-source filter_complex: {fc!r}"
         )
         assert wb_pos < eq_pos, (
-            f"colorbalance (pos={wb_pos}) must precede eq (pos={eq_pos})"
+            f"colorchannelmixer (pos={wb_pos}) must precede eq (pos={eq_pos})"
         )
         assert eq_pos < lut_pos, f"eq (pos={eq_pos}) must precede lut3d (pos={lut_pos})"
 
@@ -716,42 +762,45 @@ class TestGradeOrderingMultiSource:
 
 
 class TestGradeNumericLock:
-    """AC-6: WB values in filtergraph use :g formatting (no exponent; no special chars)."""
+    """AC-6 / SR-INJ-002: WB values in filtergraph use :g formatting (no exponent; no special chars)."""
 
     def test_wb_values_g_format_no_exponent(self) -> None:
-        """:g-formatted colorbalance= values must not contain exponent notation."""
+        """:g-formatted colorchannelmixer= values must not contain exponent notation."""
         plan = _single_source_plan_grade(color=_COLOR_DICT_WB)
         fc = plan.filter_complex
-        m = re.search(r"colorbalance=rm=([^:]+):gm=([^:]+):bm=([^\[]+)", fc)
+        m = re.search(r"colorchannelmixer=rr=([^:]+):gg=([^:]+):bb=([^\[]+)", fc)
         assert m is not None, (
-            f"colorbalance= pattern not found in filter_complex: {fc!r}"
+            f"colorchannelmixer= pattern not found in filter_complex: {fc!r}"
         )
         for val_str in m.groups():
             val_str = val_str.strip()
-            assert re.fullmatch(r"-?[\d.]+", val_str), (
-                f"Non-:g value in colorbalance parameter: {val_str!r}"
+            assert re.fullmatch(r"[\d.]+", val_str), (
+                f"Non-:g value in colorchannelmixer parameter: {val_str!r}"
             )
 
     def test_wb_values_no_filtergraph_special_chars(self) -> None:
-        """colorbalance= param values must not contain filtergraph delimiters."""
+        """colorchannelmixer= param values must not contain filtergraph delimiters."""
         plan = _single_source_plan_grade(color=_COLOR_DICT_WB)
         fc = plan.filter_complex
-        m = re.search(r"colorbalance=rm=([^:]+):gm=([^:]+):bm=([^\[]+)", fc)
-        assert m is not None, f"colorbalance= pattern not found: {fc!r}"
+        m = re.search(r"colorchannelmixer=rr=([^:]+):gg=([^:]+):bb=([^\[]+)", fc)
+        assert m is not None, f"colorchannelmixer= pattern not found: {fc!r}"
         for val_str in m.groups():
             for special in ("[", "]", ",", ";"):
                 assert special not in val_str, (
                     f"Special char {special!r} leaked into WB value {val_str!r}"
                 )
 
-    def test_zero_wb_values_no_exponent_notation(self) -> None:
-        """Neutral WB (all zeros) -> rm=0:gm=0:bm=0 (not 0e+00 or similar)."""
+    def test_typical_gain_values_no_exponent(self) -> None:
+        """Typical gains (1.4/0.9/0.6) render without exponent notation (:g lock, SR-INJ-002)."""
         color: dict[str, Any] = {
             **_COLOR_DICT_BASE,
-            "white_balance": {"r": 0.0, "g": 0.0, "b": 0.0},
+            "white_balance": {"r": 1.4, "g": 0.9, "b": 0.6},
         }
         plan = _single_source_plan_grade(color=color)
-        assert "colorbalance=rm=0:gm=0:bm=0" in plan.filter_complex
+        # :g format: 1.4 -> "1.4", 0.9 -> "0.9", 0.6 -> "0.6" (no exponent)
+        assert "colorchannelmixer=rr=1.4:gg=0.9:bb=0.6" in plan.filter_complex, (
+            f"Expected rr=1.4:gg=0.9:bb=0.6 in filter_complex: {plan.filter_complex!r}"
+        )
 
 
 # ===========================================================================
@@ -760,15 +809,15 @@ class TestGradeNumericLock:
 
 
 class TestGradeBackwardCompat:
-    """AC-8: v0.2.x color directive -> no colorbalance/lut3d; filtergraph matches v0.16.0."""
+    """AC-8/FR-10: v0.2.x color directive -> no colorchannelmixer/lut3d; filtergraph matches v0.16.0."""
 
-    def test_v02x_dict_no_colorbalance_in_filter_complex(self) -> None:
-        """v0.2.x color dict (eq only, no white_balance) -> no colorbalance= in filter_complex."""
+    def test_v02x_dict_no_colorchannelmixer_in_filter_complex(self) -> None:
+        """v0.2.x color dict (eq only, no white_balance) -> no colorchannelmixer= in filter_complex."""
         from clipwright_render.plan import _RenderColorGrade  # type: ignore[attr-defined]
 
         plan = _single_source_plan_grade(color=_COLOR_DICT_BASE)
-        assert "colorbalance" not in plan.filter_complex, (
-            "colorbalance must not appear when white_balance key is absent (AC-8)"
+        assert "colorchannelmixer" not in plan.filter_complex, (
+            "colorchannelmixer must not appear when white_balance key is absent (AC-8)"
         )
 
     def test_v02x_dict_no_lut3d_in_filter_complex(self) -> None:
@@ -794,14 +843,33 @@ class TestGradeBackwardCompat:
         plan = _single_source_plan_grade(color=_COLOR_DICT_BASE)
         assert "[outvlut]" not in plan.filter_complex
 
-    def test_explicit_none_wb_and_lut_no_colorbalance(self) -> None:
-        """Explicit white_balance=None, lut=None -> strict no-op (no colorbalance/lut3d)."""
+    def test_explicit_none_wb_and_lut_no_colorchannelmixer(self) -> None:
+        """Explicit white_balance=None, lut=None -> strict no-op (no colorchannelmixer/lut3d)."""
         from clipwright_render.plan import _RenderColorGrade  # type: ignore[attr-defined]
 
         color: dict[str, Any] = {**_COLOR_DICT_BASE, "white_balance": None, "lut": None}
         plan = _single_source_plan_grade(color=color)
-        assert "colorbalance" not in plan.filter_complex
+        assert "colorchannelmixer" not in plan.filter_complex
         assert "lut3d" not in plan.filter_complex
+
+    def test_all_one_wb_same_as_no_wb(self) -> None:
+        """All-gain-1.0 white_balance -> same filter_complex as absent WB (no-op, FR-10/AC-8)."""
+        from clipwright_render.plan import _RenderColorGrade  # type: ignore[attr-defined]
+
+        # v0.2.x: no white_balance key
+        plan_no_wb = _single_source_plan_grade(color=_COLOR_DICT_BASE)
+        # Caller sends all-neutral gains: must produce identical filter_complex
+        color_all_one: dict[str, Any] = {
+            **_COLOR_DICT_BASE,
+            "white_balance": {"r": 1.0, "g": 1.0, "b": 1.0},
+        }
+        plan_all_one = _single_source_plan_grade(color=color_all_one)
+        assert "colorchannelmixer" not in plan_all_one.filter_complex, (
+            "All-gain-1.0 WB must not inject colorchannelmixer (no-op, AC-8)"
+        )
+        assert plan_all_one.filter_complex == plan_no_wb.filter_complex, (
+            "All-gain-1.0 WB must produce byte-identical filter_complex as no-WB (AC-8)"
+        )
 
     def test_v02x_eq_stage_still_present_without_wb_lut(self) -> None:
         """v0.2.x dict: eq stage is still injected when only eq is present (no regression)."""

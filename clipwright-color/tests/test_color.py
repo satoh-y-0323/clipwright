@@ -729,15 +729,28 @@ def _fake_measured_with_chroma(
 
 
 class TestAutoWhiteBalance:
-    """Auto WB derivation from uavg/vavg using BT.601 gray-world inverse-cast (§4.2)."""
+    """Auto WB derivation using von Kries gray-world gain model (§3.1, ADR-CO-7 revised).
 
-    def test_wb_formula_with_known_chroma(self, tmp_path: Path) -> None:
-        """Given known uavg/vavg, white_balance must match the §4.2 formula.
+    Formula: BT.601 JFIF full-range affine inverse on channel means recovers per-channel
+    RGB averages from YAVG/UAVG/VAVG.  Gain = gray / channel_avg, interpolated by
+    WB_STRENGTH and clamped to [WB_GAIN_MIN=0.5, WB_GAIN_MAX=2.0].
+    """
 
-        uavg=148, vavg=138  →  dU=20, dV=10
-        r = -1.402 * 10 / 255.0  ≈ -0.054980
-        g = (0.344 * 20 + 0.714 * 10) / 255.0  ≈  0.054980
-        b = -1.772 * 20 / 255.0  ≈ -0.138980
+    def test_wb_blue_cast_r_gt_1_b_lt_1(self, tmp_path: Path) -> None:
+        """Blue cast (high uavg, low vavg) must yield r>1.0 and b<1.0 with approx values.
+
+        yavg=128, uavg=180, vavg=110 is a blue-dominated scene:
+          b_avg=220 >> gray≈149 >> r_avg=103 → b gain<1.0 (reduces blue), r gain>1.0 (boosts red).
+        This matches the e2e observation rr≈1.4:bb≈0.6 direction (ADR-CO-7 revised §0).
+
+        Expected (WB_STRENGTH=1.0, _AVG_FLOOR=1.0, clamp [0.5, 2.0]):
+          dU=52, dV=-18
+          r_avg = 128 + 1.402*(-18) = 102.764
+          g_avg = 128 - 0.344136*52 - 0.714136*(-18) = 122.959
+          b_avg = 128 + 1.772*52 = 220.144
+          gray  = (r_avg + g_avg + b_avg) / 3 ≈ 148.622
+          r_gain = gray/r_avg ≈ 1.446 > 1.0
+          b_gain = gray/b_avg ≈ 0.675 < 1.0
         """
         from clipwright_color.color import (
             detect_color,  # type: ignore[import-not-found]
@@ -748,12 +761,23 @@ class TestAutoWhiteBalance:
         output = tmp_path / "out.otio"
         opts = DetectColorOptions(target_luma=128.0)
 
-        uavg, vavg = 148.0, 138.0
+        yavg, uavg, vavg = 128.0, 180.0, 110.0
         dU = uavg - 128.0
         dV = vavg - 128.0
-        expected_r = -1.402 * dV / 255.0
-        expected_g = (0.344 * dU + 0.714 * dV) / 255.0
-        expected_b = -1.772 * dU / 255.0
+        r_avg = yavg + 1.402 * dV
+        g_avg = yavg - 0.344136 * dU - 0.714136 * dV
+        b_avg = yavg + 1.772 * dU
+        gray = (r_avg + g_avg + b_avg) / 3.0
+        _AVG_FLOOR = 1.0
+        _WB_GAIN_MIN, _WB_GAIN_MAX = 0.5, 2.0
+
+        def _expected_gain(ch_avg: float) -> float:
+            raw = gray / max(ch_avg, _AVG_FLOOR)
+            return max(_WB_GAIN_MIN, min(_WB_GAIN_MAX, raw))
+
+        expected_r = _expected_gain(r_avg)
+        expected_g = _expected_gain(g_avg)
+        expected_b = _expected_gain(b_avg)
 
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(
@@ -763,7 +787,7 @@ class TestAutoWhiteBalance:
             mp.setattr(
                 "clipwright_color.color.measure_brightness",
                 lambda media_path, options: _fake_measured_with_chroma(
-                    yavg=128.0, uavg=uavg, vavg=vavg
+                    yavg=yavg, uavg=uavg, vavg=vavg
                 ),
             )
             result = detect_color(
@@ -778,7 +802,13 @@ class TestAutoWhiteBalance:
         color_meta = tl.metadata["clipwright"]["color"]
         wb = color_meta.get("white_balance")
         assert wb is not None, (
-            "§4.2: white_balance must be written when uavg/vavg are present."
+            "§3.1: white_balance must be written when blue cast is present."
+        )
+        assert wb["r"] > 1.0, (
+            f"blue cast must yield r>1.0 (gain model): got {wb['r']:.4f}"
+        )
+        assert wb["b"] < 1.0, (
+            f"blue cast must yield b<1.0 (gain model): got {wb['b']:.4f}"
         )
         assert wb["r"] == pytest.approx(expected_r, abs=1e-4), (
             f"r mismatch: expected {expected_r:.6f}, got {wb['r']}"
@@ -790,13 +820,14 @@ class TestAutoWhiteBalance:
             f"b mismatch: expected {expected_b:.6f}, got {wb['b']}"
         )
 
-    def test_wb_clamp_applied_at_extremes(self, tmp_path: Path) -> None:
-        """WB shifts must be clamped to [-1,1] for extreme uavg/vavg values (§4.2).
+    def test_wb_extreme_cast_clamps_to_band(self, tmp_path: Path) -> None:
+        """Extreme cast must clamp gains to [WB_GAIN_MIN=0.5, WB_GAIN_MAX=2.0].
 
-        uavg=255, vavg=255 → dU=127, dV=127
-        b = -1.772*127/255 ≈ -0.882 (no clamp needed, within range)
-        Use uavg=0, vavg=0 → dU=-128, dV=-128
-        r = -1.402*(-128)/255 ≈ +0.703 (within range but tests direction)
+        yavg=50, uavg=255, vavg=0 is a maximally extreme cast:
+          r_avg = 50 + 1.402*(-128) = -129.456 → floor at _AVG_FLOOR=1.0
+          raw r gain = gray(≈81) / 1.0 = 81 → clamps to 2.0.
+          b_avg = 50 + 1.772*127 = 275.044
+          raw b gain = gray(≈81) / 275 ≈ 0.295 → clamps to 0.5.
         """
         from clipwright_color.color import (
             detect_color,  # type: ignore[import-not-found]
@@ -807,11 +838,6 @@ class TestAutoWhiteBalance:
         output = tmp_path / "out.otio"
         opts = DetectColorOptions(target_luma=128.0)
 
-        # uavg=0, vavg=0 → extreme cast toward blue-green
-        # r = -1.402*(-128)/255 ≈ 0.703  (clamped to [−1,1] = 0.703)
-        # g = (0.344*(−128)+0.714*(−128))/255 = (−43.9−91.4)/255 ≈ −0.531
-        # b = -1.772*(−128)/255 ≈ 0.890
-
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(
                 "clipwright_color.color.inspect_media",
@@ -820,7 +846,7 @@ class TestAutoWhiteBalance:
             mp.setattr(
                 "clipwright_color.color.measure_brightness",
                 lambda media_path, options: _fake_measured_with_chroma(
-                    yavg=128.0, uavg=0.0, vavg=0.0
+                    yavg=50.0, uavg=255.0, vavg=0.0
                 ),
             )
             result = detect_color(
@@ -830,10 +856,54 @@ class TestAutoWhiteBalance:
         assert result["ok"] is True, f"error={result.get('error')}"
         tl = otio.adapters.read_from_file(str(output))
         wb = tl.metadata["clipwright"]["color"].get("white_balance")
-        assert wb is not None, "white_balance must be written"
-        assert -1.0 <= wb["r"] <= 1.0, "r must be clamped to [-1,1]"
-        assert -1.0 <= wb["g"] <= 1.0, "g must be clamped to [-1,1]"
-        assert -1.0 <= wb["b"] <= 1.0, "b must be clamped to [-1,1]"
+        assert wb is not None, "white_balance must be written for extreme cast."
+        assert wb["r"] == pytest.approx(2.0, abs=1e-6), (
+            f"r must clamp to WB_GAIN_MAX=2.0 for extreme cast, got {wb['r']}"
+        )
+        assert wb["b"] == pytest.approx(0.5, abs=1e-6), (
+            f"b must clamp to WB_GAIN_MIN=0.5 for extreme cast, got {wb['b']}"
+        )
+
+    def test_wb_neutral_chroma_omits_white_balance(self, tmp_path: Path) -> None:
+        """Neutral chroma (uavg=vavg=128) yields all gains 1.0 → white_balance omitted (§3.3).
+
+        When the scene is already a neutral gray-world, dU=dV=0, all BT.601 channel averages
+        equal yavg, gray == yavg, and every gain = gray/channel_avg = 1.0 exactly.
+        Per §3.3, all-1.0 gains are a no-op and white_balance must not be written.
+        """
+        from clipwright_color.color import (
+            detect_color,  # type: ignore[import-not-found]
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "out.otio"
+        opts = DetectColorOptions(target_luma=128.0)
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(
+                "clipwright_color.color.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_color.color.measure_brightness",
+                lambda media_path, options: _fake_measured_with_chroma(
+                    yavg=128.0, uavg=128.0, vavg=128.0
+                ),
+            )
+            result = detect_color(
+                media=str(media), output=str(output), options=opts, timeline=None
+            )
+
+        assert result["ok"] is True, f"error={result.get('error')}"
+        tl = otio.adapters.read_from_file(str(output))
+        color_meta = tl.metadata["clipwright"]["color"]
+        assert color_meta is not None, "directive must be written even for neutral chroma."
+        wb = color_meta.get("white_balance")
+        assert wb is None, (
+            "§3.3: white_balance must be omitted when all gains are exactly 1.0 "
+            f"(neutral chroma, uavg=vavg=128). Got: {wb!r}"
+        )
 
 
 # ===========================================================================
@@ -962,7 +1032,15 @@ class TestCallerWbOverride:
     def test_temperature_tint_override_yields_axis_mapping(
         self, tmp_path: Path
     ) -> None:
-        """temperature=0.3, tint=0.1 → r=+0.3, b=-0.3, g=-0.1; auto WB discarded."""
+        """temperature=0.3, tint=0.1 → r=1.15, b=0.85, g=0.95; auto WB discarded.
+
+        Gain formula (WB_AXIS_SPAN=0.5, clamp [0.5, 2.0]):
+          r = clamp(1.0 + 0.5*0.3, 0.5, 2.0) = 1.15
+          b = clamp(1.0 - 0.5*0.3, 0.5, 2.0) = 0.85
+          g = clamp(1.0 - 0.5*0.1, 0.5, 2.0) = 0.95
+        Even with uavg/vavg present (would yield different auto WB),
+        the caller override must take precedence and auto WB must be discarded.
+        """
         from clipwright_color.color import (
             detect_color,  # type: ignore[import-not-found]
         )
@@ -996,20 +1074,27 @@ class TestCallerWbOverride:
         assert result["ok"] is True, f"error={result.get('error')}"
         tl = otio.adapters.read_from_file(str(output))
         wb = tl.metadata["clipwright"]["color"].get("white_balance")
-        assert wb is not None
-        # temperature=0.3 → r=+0.3, b=-0.3; tint=0.1 → g=-0.1
-        assert wb["r"] == pytest.approx(0.3, abs=1e-4), (
-            f"r must equal +temperature (0.3), got {wb['r']}"
+        assert wb is not None, "white_balance must be written for non-neutral caller override."
+        # temperature=0.3 → r=1.15, b=0.85; tint=0.1 → g=0.95 (WB_AXIS_SPAN=0.5)
+        assert wb["r"] == pytest.approx(1.15, abs=1e-4), (
+            f"r must equal 1.0+0.5*temperature (1.15), got {wb['r']}"
         )
-        assert wb["b"] == pytest.approx(-0.3, abs=1e-4), (
-            f"b must equal -temperature (-0.3), got {wb['b']}"
+        assert wb["b"] == pytest.approx(0.85, abs=1e-4), (
+            f"b must equal 1.0-0.5*temperature (0.85), got {wb['b']}"
         )
-        assert wb["g"] == pytest.approx(-0.1, abs=1e-4), (
-            f"g must equal -tint (-0.1), got {wb['g']}"
+        assert wb["g"] == pytest.approx(0.95, abs=1e-4), (
+            f"g must equal 1.0-0.5*tint (0.95), got {wb['g']}"
         )
 
     def test_temperature_only_zero_g_axis(self, tmp_path: Path) -> None:
-        """temperature=0.5, tint omitted → r=+0.5, b=-0.5, g=0.0 (tint defaults to 0)."""
+        """temperature=0.5, tint omitted → r=1.25, b=0.75, g=1.0 (tint defaults to 0.0).
+
+        Gain formula (WB_AXIS_SPAN=0.5, clamp [0.5, 2.0]):
+          r = clamp(1.0 + 0.5*0.5, 0.5, 2.0) = 1.25
+          b = clamp(1.0 - 0.5*0.5, 0.5, 2.0) = 0.75
+          g = clamp(1.0 - 0.5*0.0, 0.5, 2.0) = 1.0 (tint absent → n=0.0)
+        Since r and b differ from 1.0, white_balance must be written despite g=1.0.
+        """
         from clipwright_color.color import (
             detect_color,  # type: ignore[import-not-found]
         )
@@ -1036,12 +1121,18 @@ class TestCallerWbOverride:
             )
 
         assert result["ok"] is True
-        wb = tl = otio.adapters.read_from_file(str(output))  # noqa: F841
+        tl = otio.adapters.read_from_file(str(output))
         wb = tl.metadata["clipwright"]["color"].get("white_balance")
-        assert wb is not None
-        assert wb["r"] == pytest.approx(0.5, abs=1e-4)
-        assert wb["b"] == pytest.approx(-0.5, abs=1e-4)
-        assert wb["g"] == pytest.approx(0.0, abs=1e-4)
+        assert wb is not None, "white_balance must be written when r and b differ from 1.0."
+        assert wb["r"] == pytest.approx(1.25, abs=1e-4), (
+            f"§3.2: r must equal 1.0+0.5*0.5 (1.25), got {wb['r']}"
+        )
+        assert wb["b"] == pytest.approx(0.75, abs=1e-4), (
+            f"§3.2: b must equal 1.0-0.5*0.5 (0.75), got {wb['b']}"
+        )
+        assert wb["g"] == pytest.approx(1.0, abs=1e-4), (
+            f"§3.2: g must be 1.0 when tint not supplied, got {wb['g']}"
+        )
 
 
 # ===========================================================================
@@ -1332,32 +1423,30 @@ class TestDistinctOtioNfr9:
 
 
 class TestCallerWbZeroIsNeutral:
-    """CR-M-1: temperature=0.0 / tint=0.0 supplied explicitly must produce neutral WB.
+    """CR-M-1: temperature=0.0 / tint=0.0 supplied explicitly must trigger caller override.
 
-    The implementation uses ``temperature or 0.0`` which treats 0.0 as falsy.
-    If the has_caller_wb check ever shifts from ``is not None`` to truthiness
-    (``if temperature:``), then 0.0 would be silently ignored and auto-WB or
-    no-WB would be used instead of the explicit neutral caller intent.
+    In the von Kries gain model, temperature=0.0/tint=0.0 produces all gains=1.0.
+    Per §3.3, all-1.0 gains are omitted → white_balance=None.
 
-    These regression tests lock in the correct is-None semantics so that any
-    future regression from falsy-check changes is caught immediately.
+    The is-not-None check is still critical: if the implementation treats 0.0 as None
+    (falsy shortcut ``if temperature:``) it falls through to auto-WB.  With non-neutral
+    chroma mock data, auto-WB would produce non-1.0 gains → white_balance would be
+    non-None.  Asserting white_balance=None therefore confirms the is-not-None semantics
+    are preserved (caller override ran, produced neutral, §3.3 then omitted it).
 
-    Mock strategy: measure_brightness is patched to return chroma data that
-    would produce a non-neutral auto-WB (uavg=148, vavg=138).  If the caller
-    zero override is incorrectly ignored, the directive would contain non-zero
-    WB values, failing the neutral assertions.
+    Mock strategy: measure_brightness returns non-neutral chroma (uavg=180, vavg=110)
+    that would produce non-neutral auto-WB if caller override is incorrectly ignored.
     """
 
     def test_temperature_zero_tint_zero_explicit_is_neutral(
         self, tmp_path: Path
     ) -> None:
-        """temperature=0.0 and tint=0.0 supplied explicitly must produce neutral white_balance.
+        """temperature=0.0 and tint=0.0 explicitly supplied → gains=(1.0,1.0,1.0) → wb=None.
 
-        Regression guard: if implementation uses ``temperature or 0.0`` (falsy shortcut)
-        and also checks ``if temperature:`` for has_caller_wb, then 0.0 would fall through
-        to auto-WB.  Auto-WB from (uavg=148, vavg=138) produces non-zero r/g/b.
-        Neutral is r=0, g=0, b=0 per §4.3 mapping (temperature=0 → no r/b shift;
-        tint=0 → no g shift).
+        Regression guard (is-not-None semantics):
+          Correct: caller override triggered (temperature is not None) → gains=1.0 → §3.3 omit → wb=None.
+          Bug: falsy check ``if temperature:`` → 0.0 ignored → auto-WB on non-neutral chroma
+               → non-1.0 gains → white_balance is non-None (test fails).
         """
         from clipwright_color.color import (
             detect_color,  # type: ignore[import-not-found]
@@ -1372,7 +1461,7 @@ class TestCallerWbZeroIsNeutral:
             tint=0.0,
         )
 
-        # chroma data that would produce non-neutral auto-WB if caller override ignored
+        # Non-neutral chroma: auto-WB would yield non-1.0 gains if caller override is skipped.
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(
                 "clipwright_color.color.inspect_media",
@@ -1381,7 +1470,7 @@ class TestCallerWbZeroIsNeutral:
             mp.setattr(
                 "clipwright_color.color.measure_brightness",
                 lambda media_path, options: _fake_measured_with_chroma(
-                    yavg=128.0, uavg=148.0, vavg=138.0
+                    yavg=128.0, uavg=180.0, vavg=110.0
                 ),
             )
             result = detect_color(
@@ -1391,24 +1480,25 @@ class TestCallerWbZeroIsNeutral:
         assert result["ok"] is True, f"error={result.get('error')}"
         tl = otio.adapters.read_from_file(str(output))
         wb = tl.metadata["clipwright"]["color"].get("white_balance")
-        assert wb is not None, (
-            "CR-M-1: white_balance must be written when caller explicitly supplies"
-            " temperature=0.0 / tint=0.0 (is-not-None check must trigger override)."
-        )
-        assert wb["r"] == pytest.approx(0.0, abs=1e-6), (
-            f"CR-M-1: r must be 0.0 (neutral) for temperature=0.0, got {wb['r']}"
-        )
-        assert wb["b"] == pytest.approx(0.0, abs=1e-6), (
-            f"CR-M-1: b must be 0.0 (neutral) for temperature=0.0, got {wb['b']}"
-        )
-        assert wb["g"] == pytest.approx(0.0, abs=1e-6), (
-            f"CR-M-1: g must be 0.0 (neutral) for tint=0.0, got {wb['g']}"
+        # In the gain model: temperature=0.0/tint=0.0 → all gains=1.0 → §3.3 neutral omit.
+        # If auto-WB was incorrectly used instead, white_balance would be non-None.
+        assert wb is None, (
+            "CR-M-1: temperature=0.0/tint=0.0 must trigger caller override (is-not-None) "
+            "producing gains=(1.0,1.0,1.0); §3.3 then omits → white_balance=None. "
+            f"If non-None, auto-WB was incorrectly used. Got: {wb!r}"
         )
 
     def test_temperature_0_5_produces_correct_axis_mapping(
         self, tmp_path: Path
     ) -> None:
-        """temperature=0.5 must produce r=+0.5, b=-0.5, g=0.0 (§4.3 mapping)."""
+        """temperature=0.5 must produce r=1.25, b=0.75, g=1.0 (§3.2 gain mapping).
+
+        Gain formula (WB_AXIS_SPAN=0.5, clamp [0.5, 2.0]):
+          r = clamp(1.0 + 0.5*0.5, 0.5, 2.0) = 1.25
+          b = clamp(1.0 - 0.5*0.5, 0.5, 2.0) = 0.75
+          g = clamp(1.0 - 0.5*0.0, 0.5, 2.0) = 1.0 (tint not supplied)
+        r and b differ from 1.0 → white_balance must be written (§3.3 neutral check is all-1.0).
+        """
         from clipwright_color.color import (
             detect_color,  # type: ignore[import-not-found]
         )
@@ -1437,19 +1527,26 @@ class TestCallerWbZeroIsNeutral:
         assert result["ok"] is True, f"error={result.get('error')}"
         tl = otio.adapters.read_from_file(str(output))
         wb = tl.metadata["clipwright"]["color"].get("white_balance")
-        assert wb is not None, "white_balance must be written for temperature=0.5"
-        assert wb["r"] == pytest.approx(0.5, abs=1e-4), (
-            f"§4.3: r must equal +temperature (0.5), got {wb['r']}"
+        assert wb is not None, "white_balance must be written for temperature=0.5 (r/b differ from 1.0)."
+        assert wb["r"] == pytest.approx(1.25, abs=1e-4), (
+            f"§3.2: r must equal 1.0+0.5*0.5 (1.25), got {wb['r']}"
         )
-        assert wb["b"] == pytest.approx(-0.5, abs=1e-4), (
-            f"§4.3: b must equal -temperature (-0.5), got {wb['b']}"
+        assert wb["b"] == pytest.approx(0.75, abs=1e-4), (
+            f"§3.2: b must equal 1.0-0.5*0.5 (0.75), got {wb['b']}"
         )
-        assert wb["g"] == pytest.approx(0.0, abs=1e-4), (
-            f"§4.3: g must be 0.0 when tint not supplied, got {wb['g']}"
+        assert wb["g"] == pytest.approx(1.0, abs=1e-4), (
+            f"§3.2: g must be 1.0 when tint not supplied, got {wb['g']}"
         )
 
     def test_tint_0_5_produces_correct_g_axis(self, tmp_path: Path) -> None:
-        """tint=0.5 must produce g=-0.5; r and b stay 0.0 (§4.3 mapping)."""
+        """tint=0.5 must produce g=0.75; r and b stay 1.0 (§3.2 gain mapping).
+
+        Gain formula (WB_AXIS_SPAN=0.5, clamp [0.5, 2.0]):
+          g = clamp(1.0 - 0.5*0.5, 0.5, 2.0) = 0.75
+          r = clamp(1.0 + 0.5*0.0, 0.5, 2.0) = 1.0 (temperature not supplied → t=0.0)
+          b = clamp(1.0 - 0.5*0.0, 0.5, 2.0) = 1.0 (temperature not supplied)
+        g differs from 1.0 → white_balance must be written.
+        """
         from clipwright_color.color import (
             detect_color,  # type: ignore[import-not-found]
         )
@@ -1478,15 +1575,15 @@ class TestCallerWbZeroIsNeutral:
         assert result["ok"] is True, f"error={result.get('error')}"
         tl = otio.adapters.read_from_file(str(output))
         wb = tl.metadata["clipwright"]["color"].get("white_balance")
-        assert wb is not None, "white_balance must be written for tint=0.5"
-        assert wb["g"] == pytest.approx(-0.5, abs=1e-4), (
-            f"§4.3: g must equal -tint (-0.5), got {wb['g']}"
+        assert wb is not None, "white_balance must be written for tint=0.5 (g differs from 1.0)."
+        assert wb["g"] == pytest.approx(0.75, abs=1e-4), (
+            f"§3.2: g must equal 1.0-0.5*0.5 (0.75), got {wb['g']}"
         )
-        assert wb["r"] == pytest.approx(0.0, abs=1e-4), (
-            f"§4.3: r must be 0.0 when temperature not supplied, got {wb['r']}"
+        assert wb["r"] == pytest.approx(1.0, abs=1e-4), (
+            f"§3.2: r must be 1.0 when temperature not supplied, got {wb['r']}"
         )
-        assert wb["b"] == pytest.approx(0.0, abs=1e-4), (
-            f"§4.3: b must be 0.0 when temperature not supplied, got {wb['b']}"
+        assert wb["b"] == pytest.approx(1.0, abs=1e-4), (
+            f"§3.2: b must be 1.0 when temperature not supplied, got {wb['b']}"
         )
 
 

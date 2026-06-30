@@ -697,111 +697,126 @@ class TestBrightnessMeasuredChromaFields:
 
 
 class TestWhiteBalanceParams:
-    """WhiteBalanceParams is a new Pydantic model for colorbalance midtone shifts.
+    """WhiteBalanceParams is a Pydantic model for colorchannelmixer per-channel gains.
 
-    Maps 1:1 to ffmpeg colorbalance rm/gm/bm parameters.
-    Neutral = all 0.0. Range [-1, 1] per channel. extra=forbid; allow_inf_nan=False.
+    Maps 1:1 to ffmpeg colorchannelmixer rr/gg/bb diagonal gains (linear per-channel
+    multipliers). Neutral = all 1.0 (identity gain). Range [0.0, 4.0] per channel
+    (non-negative multipliers only; negative gains invert a channel and are rejected).
+    extra=forbid; allow_inf_nan=False.
     """
 
     def test_import_succeeds(self) -> None:
         """WhiteBalanceParams must be importable from clipwright_color.schemas."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
 
-    def test_default_r_is_zero(self) -> None:
-        """r must default to 0.0 (neutral — no red shift)."""
+    def test_default_r_is_one(self) -> None:
+        """r must default to 1.0 (neutral identity gain — no correction)."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
 
         wb = WhiteBalanceParams()
-        assert wb.r == pytest.approx(0.0)
+        assert wb.r == pytest.approx(1.0)
 
-    def test_default_g_is_zero(self) -> None:
-        """g must default to 0.0 (neutral)."""
+    def test_default_g_is_one(self) -> None:
+        """g must default to 1.0 (neutral identity gain)."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
 
         wb = WhiteBalanceParams()
-        assert wb.g == pytest.approx(0.0)
+        assert wb.g == pytest.approx(1.0)
 
-    def test_default_b_is_zero(self) -> None:
-        """b must default to 0.0 (neutral)."""
+    def test_default_b_is_one(self) -> None:
+        """b must default to 1.0 (neutral identity gain)."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
 
         wb = WhiteBalanceParams()
-        assert wb.b == pytest.approx(0.0)
+        assert wb.b == pytest.approx(1.0)
 
     def test_all_neutral_defaults_together(self) -> None:
-        """All three channels must default to 0.0 simultaneously (neutral = no WB correction)."""
+        """All three channels must default to 1.0 simultaneously (neutral = identity, no correction)."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
 
         wb = WhiteBalanceParams()
-        assert wb.r == pytest.approx(0.0)
-        assert wb.g == pytest.approx(0.0)
-        assert wb.b == pytest.approx(0.0)
+        assert wb.r == pytest.approx(1.0)
+        assert wb.g == pytest.approx(1.0)
+        assert wb.b == pytest.approx(1.0)
 
-    def test_positive_red_shift_accepted(self) -> None:
-        """r=0.5 (add red) must be accepted."""
+    def test_half_gain_accepted(self) -> None:
+        """r=0.5 (half gain, cuts red by 50%) must be accepted."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
 
         wb = WhiteBalanceParams(r=0.5)
         assert wb.r == pytest.approx(0.5)
 
-    def test_mixed_shifts_accepted(self) -> None:
-        """r=0.1, g=-0.05, b=-0.08 (typical gray-world correction) must be accepted."""
+    def test_double_gain_accepted(self) -> None:
+        """r=2.0 (double gain, boosts red) must be accepted."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
 
-        wb = WhiteBalanceParams(r=0.1, g=-0.05, b=-0.08)
-        assert wb.r == pytest.approx(0.1)
-        assert wb.g == pytest.approx(-0.05)
-        assert wb.b == pytest.approx(-0.08)
+        wb = WhiteBalanceParams(r=2.0)
+        assert wb.r == pytest.approx(2.0)
 
-    def test_boundary_minus1_plus1_accepted(self) -> None:
-        """r=-1.0 and g=1.0 (boundary values) must be accepted."""
+    def test_gain_values_in_range_accepted(self) -> None:
+        """r=1.4, g=1.0, b=0.6 (typical blue-cast correction) must be accepted."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
 
-        wb = WhiteBalanceParams(r=-1.0, g=1.0, b=0.0)
-        assert wb.r == pytest.approx(-1.0)
+        wb = WhiteBalanceParams(r=1.4, g=1.0, b=0.6)
+        assert wb.r == pytest.approx(1.4)
         assert wb.g == pytest.approx(1.0)
+        assert wb.b == pytest.approx(0.6)
+
+    def test_boundary_zero_accepted(self) -> None:
+        """r=0.0 (ge=0.0 lower bound) must be accepted."""
+        from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+
+        wb = WhiteBalanceParams(r=0.0)
+        assert wb.r == pytest.approx(0.0)
+
+    def test_boundary_four_accepted(self) -> None:
+        """b=4.0 (le=4.0 upper bound) must be accepted."""
+        from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+
+        wb = WhiteBalanceParams(b=4.0)
+        assert wb.b == pytest.approx(4.0)
+
+    def test_r_negative_rejected(self) -> None:
+        """r=-0.1 must raise ValidationError (ge=0.0 violated — negative gain inverts channel)."""
+        from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+
+        with pytest.raises(ValidationError):
+            WhiteBalanceParams(r=-0.1)
 
     def test_r_above_range_rejected(self) -> None:
-        """r=1.5 must raise ValidationError (le=1.0 violated)."""
+        """r=4.1 must raise ValidationError (le=4.0 violated)."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
 
         with pytest.raises(ValidationError):
-            WhiteBalanceParams(r=1.5)
+            WhiteBalanceParams(r=4.1)
 
-    def test_r_below_range_rejected(self) -> None:
-        """r=-1.5 must raise ValidationError (ge=-1.0 violated)."""
+    def test_g_negative_rejected(self) -> None:
+        """g=-0.1 must raise ValidationError (ge=0.0 violated)."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
 
         with pytest.raises(ValidationError):
-            WhiteBalanceParams(r=-1.5)
+            WhiteBalanceParams(g=-0.1)
 
     def test_g_above_range_rejected(self) -> None:
-        """g=1.5 must raise ValidationError (le=1.0 violated)."""
+        """g=4.1 must raise ValidationError (le=4.0 violated)."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
 
         with pytest.raises(ValidationError):
-            WhiteBalanceParams(g=1.5)
+            WhiteBalanceParams(g=4.1)
 
-    def test_g_below_range_rejected(self) -> None:
-        """g=-1.5 must raise ValidationError (ge=-1.0 violated)."""
+    def test_b_negative_rejected(self) -> None:
+        """b=-0.1 must raise ValidationError (ge=0.0 violated)."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
 
         with pytest.raises(ValidationError):
-            WhiteBalanceParams(g=-1.5)
+            WhiteBalanceParams(b=-0.1)
 
     def test_b_above_range_rejected(self) -> None:
-        """b=1.5 must raise ValidationError (le=1.0 violated)."""
+        """b=4.1 must raise ValidationError (le=4.0 violated)."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
 
         with pytest.raises(ValidationError):
-            WhiteBalanceParams(b=1.5)
-
-    def test_b_below_range_rejected(self) -> None:
-        """b=-1.5 must raise ValidationError (ge=-1.0 violated)."""
-        from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
-
-        with pytest.raises(ValidationError):
-            WhiteBalanceParams(b=-1.5)
+            WhiteBalanceParams(b=4.1)
 
     def test_extra_field_rejected(self) -> None:
         """Unknown field must raise ValidationError (extra=forbid)."""
@@ -885,10 +900,10 @@ class TestColorDirectiveNewFields:
         assert d.white_balance is None
 
     def test_white_balance_params_accepted(self) -> None:
-        """ColorDirective with a WhiteBalanceParams value must be accepted."""
+        """ColorDirective with a WhiteBalanceParams gain value must be accepted."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
 
-        wb = WhiteBalanceParams(r=0.1, g=-0.05, b=-0.08)
+        wb = WhiteBalanceParams(r=1.4, g=1.0, b=0.7)
         d = ColorDirective(
             version="0.3.0",
             kind="color",
@@ -897,7 +912,7 @@ class TestColorDirectiveNewFields:
             white_balance=wb,
         )
         assert d.white_balance is not None
-        assert d.white_balance.r == pytest.approx(0.1)
+        assert d.white_balance.r == pytest.approx(1.4)
 
     def test_lut_path_accepted(self) -> None:
         """ColorDirective with a lut path string must be accepted."""
@@ -947,7 +962,7 @@ class TestColorDirectiveNewFields:
         """A ColorDirective with all new fields populated must be accepted."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
 
-        wb = WhiteBalanceParams(r=0.05, g=-0.02, b=-0.04)
+        wb = WhiteBalanceParams(r=1.4, g=1.0, b=0.7)
         measured = BrightnessMeasured(
             yavg=110.0, sampled_frames=12, uavg=132.0, vavg=124.0
         )
@@ -961,7 +976,7 @@ class TestColorDirectiveNewFields:
             lut="/media/luts/filmic.cube",
         )
         assert d.white_balance is not None
-        assert d.white_balance.r == pytest.approx(0.05)
+        assert d.white_balance.r == pytest.approx(1.4)
         assert d.measured is not None
         assert d.measured.uavg == pytest.approx(132.0)
         assert d.lut == "/media/luts/filmic.cube"
