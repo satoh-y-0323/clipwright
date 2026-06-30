@@ -281,7 +281,7 @@ dev = [
 
 [[package]]
 name = "clipwright-color"
-version = "0.2.1"
+version = "0.3.0"
 source = { editable = "clipwright-color" }
 dependencies = [
     { name = "clipwright" },
@@ -504,7 +504,7 @@ dev = [
 
 [[package]]
 name = "clipwright-render"
-version = "0.16.0"
+version = "0.17.0"
 source = { editable = "clipwright-render" }
 dependencies = [
     { name = "clipwright" },

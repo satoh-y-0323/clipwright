@@ -614,13 +614,22 @@ add a karaoke styling mode to `render`'s subtitle path (ASS `\k` tags).
 
 ---
 
-### Color grading depth: LUT / white-balance / saturation / contrast  *Medium*  *(color extension)*
+### Color grading depth: LUT / white-balance / saturation / contrast  *Medium*  *(color extension)*  — **RESOLVED** (shipped — `clipwright-color` v0.3.0 / `clipwright-render` v0.17.0 / suite v0.30.0)
 
-**What it does**
+**Resolution:** `clipwright_detect_color` now measures chroma cast (`UAVG`/`VAVG` from
+`signalstats`) and stores auto white-balance as `ColorDirective.white_balance` (a `colorbalance`
+directive). Caller-supplied `saturation`, `contrast`, `gamma` are accepted via
+`DetectColorOptions` and written into the existing `EqParams` block. An optional caller-provided
+`.cube` path is validated and stored as `ColorDirective.lut`. `clipwright-render` applies the
+directive in a fixed three-stage order: `colorbalance` (WB) → `eq` (saturation/contrast/gamma)
+→ `lut3d`. All new `ColorDirective` fields are `Optional`; v0.2.x directives are
+backward-compatible. WB measurement failures degrade gracefully (field omitted, warning emitted).
+
+**What it does** *(original spec)*
 Extends `detect_color` / the render color stage beyond a luma brightness offset to
 full primary grading: white balance, saturation, contrast, and 3D-LUT application.
 
-**Why it is needed**
+**Why it is needed** *(original spec)*
 `detect_color` currently measures luma and writes a brightness offset; that is a
 correction, not a grade. A general editing suite is expected to do basic look
 work (warm/cool balance, saturation, a LUT for a consistent look across shots).
@@ -957,8 +966,11 @@ directly for Latin captions).
    `word_timestamps=true` on transcribe emits a word-level WebVTT artifact;
    `subtitle.karaoke=true` on render burns ASS `\k` word-synced captions.
    **`clipwright-wrap` karaoke fold-through is Phase 2 (deferred).**
-   Remaining reach/quality features: **color-grading depth · video PiP · NLE
-   interop · subtitle translation** (Medium): for a general editing suite.
+   **Color grading depth** (Medium) — **RESOLVED** (shipped — `clipwright-color` v0.3.0 /
+   `clipwright-render` v0.17.0 / suite v0.30.0): WB (`colorbalance`), saturation/contrast/gamma
+   (`eq`), and 3D-LUT (`lut3d`) across the color detect → render pipeline.
+   Remaining reach/quality features: **video PiP · NLE interop · subtitle translation**
+   (Medium): for a general editing suite.
 7. **Cross-cutting backlog (promoted from maintainer notes):**
    **wrap karaoke fold-through** (Low–Medium) — completes the v0.29.0 karaoke
    feature with a line ↔ segment ↔ word mapping so CJK captions can be both

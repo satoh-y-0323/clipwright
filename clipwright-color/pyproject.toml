@@ -1,6 +1,6 @@
 [project]
 name = "clipwright-color"
-version = "0.2.1"
+version = "0.3.0"
 description = "MCP tool for video brightness detection and OTIO timeline color annotation generation. Measures average luma with ffmpeg signalstats and writes an eq color-correction directive to timeline-level metadata."
 readme = "README.md"
 license = { text = "MIT" }

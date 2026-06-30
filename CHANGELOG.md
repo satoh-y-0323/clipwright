@@ -5,6 +5,60 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.30.0] - 2026-07-01
+
+Color grading depth — white balance, saturation/contrast/gamma, and 3D-LUT (spec5 Medium-reach entry RESOLVED).
+
+### Added (`clipwright-color` v0.3.0)
+
+- **Auto white-balance measurement**: `clipwright_detect_color` now measures chroma cast by
+  extracting `UAVG` and `VAVG` from the `signalstats` filter (same ffprobe pipeline as `YAVG`).
+  Deviation of the median `UAVG`/`VAVG` from the neutral point (128 in 8-bit YUV) is converted to
+  a `colorbalance` correction stored in a new `ColorDirective.white_balance` field. If the chroma
+  measurement fails (subprocess error, parse failure, or insufficient samples), the `white_balance`
+  field is omitted from the directive, the timeline is saved with the remaining grade fields intact,
+  and a `warnings` entry describes the failure (mirrors the existing luma-measurement degradation
+  path U-1).
+
+- **Caller saturation / contrast / gamma**: `DetectColorOptions` gains optional `saturation`,
+  `contrast`, and `gamma` fields. When supplied, these are written directly into the existing
+  `EqParams` fields of `ColorDirective.eq`, which `clipwright-render` already consumes via
+  `_append_eq_filter`. When omitted, fields remain at neutral defaults — no behavioural change to
+  existing callers.
+
+- **Caller temperature / tint override**: `DetectColorOptions` gains optional `temperature`
+  (warm/cool axis) and `tint` (green/magenta axis) fields. When provided, these are used instead of
+  the auto-measurement result to populate `ColorDirective.white_balance`, giving the caller direct
+  control over the look.
+
+- **Caller 3D-LUT**: `DetectColorOptions` gains an optional `lut` field (path to a `.cube` file).
+  The path is validated (existence, extension, no symlinks) at detect time and written into a new
+  `ColorDirective.lut` field. All new `ColorDirective` fields are `Optional` with `None` default,
+  maintaining backward compatibility with directives written by v0.2.x.
+
+### Added (`clipwright-render` v0.17.0)
+
+- **WB filter stage (`colorbalance`)**: when `ColorDirective.white_balance` is present, a
+  `colorbalance` filter is injected before the existing `eq` stage. When absent, the stage is
+  a no-op.
+
+- **3D-LUT filter stage (`lut3d`)**: when `ColorDirective.lut` is present, `lut3d=file='…'` is
+  injected after the `eq` stage. The `.cube` path is re-validated at render time via
+  `clipwright.pathpolicy.validate_source_file` (defence-in-depth; the OTIO is untrusted). When
+  absent, the stage is a no-op.
+
+- **Grade application order**: `colorbalance` (WB) → `eq` (saturation / contrast / gamma) →
+  `lut3d`. Existing single-field `eq` calls from v0.16.0 and earlier are byte-for-byte identical
+  when `white_balance` and `lut` are absent.
+
+### Chain
+
+```
+clipwright_detect_color(media="clip.mp4", output="grade.otio",
+                        saturation=1.2, contrast=1.05, lut="look.cube")
+clipwright_render(timeline="grade.otio", output="graded.mp4")
+```
+
 ## [0.29.0] - 2026-06-30
 
 Word-level / karaoke caption timing (spec5 Priority #6 RESOLVED).
