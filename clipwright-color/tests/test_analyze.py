@@ -854,8 +854,7 @@ class TestChromaExtraction:
     def test_yavg_stays_mean_when_chroma_present(self, tmp_path: Path) -> None:
         """yavg must remain the mean of YAVG values when chroma is also present (FR-10).
 
-        This test first asserts yavg (currently passes — regression guard) then asserts
-        uavg is also populated (currently fails — triggers Red for the combined test).
+        Verifies both yavg (regression guard) and uavg populated in the same pass.
         """
         from clipwright_color.analyze import (
             measure_brightness,  # type: ignore[import-not-found]
@@ -946,10 +945,7 @@ class TestChromaParseFailure:
     def test_uavg_field_present_in_measured_dict_when_chroma_absent(
         self, tmp_path: Path
     ) -> None:
-        """BrightnessMeasured.model_dump() must include 'uavg' key (as None) when absent.
-
-        Red: BrightnessMeasured currently has no uavg field, so model_dump() omits the key.
-        """
+        """BrightnessMeasured.model_dump() must include 'uavg' key (as None) when absent."""
         from clipwright_color.analyze import (
             measure_brightness,  # type: ignore[import-not-found]
         )

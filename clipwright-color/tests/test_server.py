@@ -333,10 +333,7 @@ class TestNewOptionsInSchema:
     # -------------------------------------------------------------------------
 
     def test_schema_includes_saturation(self) -> None:
-        """Input schema must include 'saturation' (DetectColorOptions FR-1).
-
-        RED: DetectColorOptions has no saturation field yet → not in schema.
-        """
+        """Input schema must include 'saturation' (DetectColorOptions FR-1)."""
         schema_str = self._get_tool_input_schema_str()
         assert '"saturation"' in schema_str, (
             "FR-1: input schema must include 'saturation' option."
@@ -344,20 +341,14 @@ class TestNewOptionsInSchema:
         )
 
     def test_schema_includes_contrast(self) -> None:
-        """Input schema must include 'contrast' (DetectColorOptions FR-1).
-
-        RED: DetectColorOptions has no contrast field yet → not in schema.
-        """
+        """Input schema must include 'contrast' (DetectColorOptions FR-1)."""
         schema_str = self._get_tool_input_schema_str()
         assert '"contrast"' in schema_str, (
             "FR-1: input schema must include 'contrast' option."
         )
 
     def test_schema_includes_gamma(self) -> None:
-        """Input schema must include 'gamma' (DetectColorOptions FR-1).
-
-        RED: DetectColorOptions has no gamma field yet → not in schema.
-        """
+        """Input schema must include 'gamma' (DetectColorOptions FR-1)."""
         schema_str = self._get_tool_input_schema_str()
         assert '"gamma"' in schema_str, (
             "FR-1: input schema must include 'gamma' option."
@@ -368,20 +359,14 @@ class TestNewOptionsInSchema:
     # -------------------------------------------------------------------------
 
     def test_schema_includes_temperature(self) -> None:
-        """Input schema must include 'temperature' option (FR-3).
-
-        RED: DetectColorOptions has no temperature field yet → not in schema.
-        """
+        """Input schema must include 'temperature' option (FR-3)."""
         schema_str = self._get_tool_input_schema_str()
         assert '"temperature"' in schema_str, (
             "FR-3: input schema must include 'temperature' option."
         )
 
     def test_schema_includes_tint(self) -> None:
-        """Input schema must include 'tint' option (FR-3).
-
-        RED: DetectColorOptions has no tint field yet → not in schema.
-        """
+        """Input schema must include 'tint' option (FR-3)."""
         schema_str = self._get_tool_input_schema_str()
         assert '"tint"' in schema_str, "FR-3: input schema must include 'tint' option."
 
@@ -390,10 +375,7 @@ class TestNewOptionsInSchema:
     # -------------------------------------------------------------------------
 
     def test_schema_includes_lut(self) -> None:
-        """Input schema must include 'lut' option (FR-5).
-
-        RED: DetectColorOptions has no lut field yet → not in schema.
-        """
+        """Input schema must include 'lut' option (FR-5)."""
         schema_str = self._get_tool_input_schema_str()
         assert '"lut"' in schema_str, "FR-5: input schema must include 'lut' option."
 
@@ -402,10 +384,7 @@ class TestNewOptionsInSchema:
     # -------------------------------------------------------------------------
 
     def test_docstring_mentions_temperature_option(self) -> None:
-        """Tool description must mention 'temperature' option (FR-3 / ADR-CO-7).
-
-        RED: current docstring does not mention temperature.
-        """
+        """Tool description must mention 'temperature' option (FR-3 / ADR-CO-7)."""
         description = self._get_tool_description()
         assert "temperature" in description.lower(), (
             "ADR-CO-7: tool description must mention 'temperature'."
@@ -413,22 +392,14 @@ class TestNewOptionsInSchema:
         )
 
     def test_docstring_mentions_tint_option(self) -> None:
-        """Tool description must mention 'tint' option (FR-3 / ADR-CO-7).
-
-        RED: current docstring does not mention tint.
-        """
+        """Tool description must mention 'tint' option (FR-3 / ADR-CO-7)."""
         description = self._get_tool_description()
         assert "tint" in description.lower(), (
             "ADR-CO-7: tool description must mention 'tint'."
         )
 
     def test_docstring_does_not_describe_temperature_in_kelvin(self) -> None:
-        """ADR-CO-7: temperature must NOT be described in Kelvin; it is a normalised [-1,1] axis.
-
-        RED: current docstring doesn't mention temperature at all, so 'kelvin' is absent —
-        this test may pass trivially.  After implementation the description must remain
-        Kelvin-free and use 'normalised'/'axis' or '[-1,1]' language instead.
-        """
+        """ADR-CO-7: temperature must NOT be described in Kelvin; it is a normalised [-1,1] axis."""
         description = self._get_tool_description()
         assert "kelvin" not in description.lower(), (
             "ADR-CO-7: temperature must NOT be described in Kelvin."
@@ -436,10 +407,7 @@ class TestNewOptionsInSchema:
         )
 
     def test_docstring_mentions_normalised_axes_for_wb_override(self) -> None:
-        """ADR-CO-7: description must indicate temperature/tint are normalised [-1,1] axes.
-
-        RED: current docstring does not mention temperature/tint at all.
-        """
+        """ADR-CO-7: description must indicate temperature/tint are normalised [-1,1] axes."""
         description = self._get_tool_description()
         # At least one of the expected language markers must appear
         has_normalised = any(

@@ -960,6 +960,22 @@ class TestLutPathSecurity:
             self._validate_grade(color, otio_dir=tmp_path)
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
+    def test_lut_del_char_raises_invalid_input(self, tmp_path: Path) -> None:
+        """lut path with DEL (0x7F) → INVALID_INPUT; message/hint must not expose path (CWE-209 / SR-L-1).
+
+        Regression guard: _CONTROL_CHARS includes 0x7F.  If 0x7F is ever removed
+        from that set, this test turns red.  The check must fire before any
+        filesystem access; the offending path must not appear in message or hint.
+        """
+        bad_lut = str(tmp_path / "bad\x7fchar.cube")
+        color: dict[str, Any] = {**_COLOR_DICT_BASE, "lut": bad_lut}
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._validate_grade(color, otio_dir=tmp_path)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+        assert bad_lut not in exc_info.value.message
+        if exc_info.value.hint:
+            assert bad_lut not in exc_info.value.hint
+
     def test_lut_single_quote_build_plan_rejected(self, tmp_path: Path) -> None:
         """build_plan with single-quote lut raises INVALID_INPUT; no broken filtergraph emitted.
 

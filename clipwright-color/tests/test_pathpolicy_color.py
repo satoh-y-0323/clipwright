@@ -626,9 +626,8 @@ class TestLutCubePathpolicy:
     def test_valid_cube_inside_otio_dir_stored_relative(self, tmp_path: Path) -> None:
         """Valid .cube co-located with output OTIO must be stored as relative POSIX path.
 
-        RED: DetectColorOptions has no lut field yet → ValidationError at opts construction.
-        After implementation: directive.lut must be a relative POSIX path (no backslash,
-        no leading '/', using media_ref_for_otio semantics).
+        directive.lut must be a relative POSIX path (no backslash, no leading '/'),
+        using media_ref_for_otio semantics.
         """
         from clipwright_color.color import (  # type: ignore[import-not-found]
             detect_color,
@@ -640,7 +639,6 @@ class TestLutCubePathpolicy:
         cube_file.write_text("# dummy cube")
         output = tmp_path / "out.otio"
 
-        # RED: lut field does not exist on DetectColorOptions yet
         opts = DetectColorOptions(  # type: ignore[call-arg]
             target_luma=128.0,
             lut=str(cube_file),
@@ -678,10 +676,7 @@ class TestLutCubePathpolicy:
         )
 
     def test_valid_cube_outside_otio_dir_stored_absolute(self, tmp_path: Path) -> None:
-        """Valid .cube outside the output directory must be stored as absolute path.
-
-        RED: DetectColorOptions has no lut field yet → ValidationError at opts construction.
-        """
+        """Valid .cube outside the output directory must be stored as absolute path."""
         from clipwright_color.color import (  # type: ignore[import-not-found]
             detect_color,
         )
@@ -733,8 +728,7 @@ class TestLutCubePathpolicy:
     def test_symlink_cube_rejected(self, tmp_path: Path) -> None:
         """A .cube that is a symlink must be rejected (CWE-59 / ADR-CO-10).
 
-        RED: DetectColorOptions has no lut field yet → ValidationError.
-        After implementation: FILE_NOT_FOUND or PATH_NOT_ALLOWED.
+        Expected outcome: FILE_NOT_FOUND or PATH_NOT_ALLOWED.
         """
 
         from clipwright_color.color import (  # type: ignore[import-not-found]
@@ -783,10 +777,7 @@ class TestLutCubePathpolicy:
     # -------------------------------------------------------------------------
 
     def test_traversal_cube_path_rejected(self, tmp_path: Path) -> None:
-        """A .cube path containing ../ traversal must be rejected (CWE-22 / CWE-59).
-
-        RED: DetectColorOptions has no lut field yet → ValidationError.
-        """
+        """A .cube path containing ../ traversal must be rejected (CWE-22 / CWE-59)."""
         from clipwright_color.color import (  # type: ignore[import-not-found]
             detect_color,
         )
@@ -830,10 +821,8 @@ class TestLutCubePathpolicy:
         """AC-7/CWE-209: .cube validation failure must not expose the full file path.
 
         validate_source_file() leaks 'File not found: <path>' verbatim.
-        The implementation must wrap/scrub that message (ADR-CO-10 / §5.1).
-
-        RED: DetectColorOptions has no lut field yet → ValidationError.
-        After implementation: error message/hint must not contain the sentinel dir segment.
+        The implementation wraps/scrubs that message (ADR-CO-10 / §5.1).
+        Error message/hint must not contain the sentinel dir segment.
         """
         from clipwright_color.color import (  # type: ignore[import-not-found]
             detect_color,
@@ -887,10 +876,7 @@ class TestDetectColorOptionsLutInjection:
     SubtitleOptions.path / image_path / font_path.  A lut path that contains a
     single-quote or a control character (\\x00, \\n) can escape ffmpeg argument
     quoting in filter-graph strings and must be rejected at the schema level.
-
-    All three pytest.raises tests are RED until schemas.py adds the validator to
-    the DetectColorOptions.lut field.  The CWE-209 test verifies that the
-    validation error does not echo the offending path value.
+    The CWE-209 test verifies that the validation error does not echo the offending path value.
     """
 
     def test_single_quote_in_lut_path_rejected(self) -> None:
@@ -927,12 +913,10 @@ class TestDetectColorOptionsLutInjection:
     def test_del_char_in_lut_path_rejected(self) -> None:
         """lut path containing DEL (\\x7f / U+007F) must raise ValidationError.
 
-        SR-L-1-new regression: the writer-side validator currently rejects
-        c < '\\x20' (0x00-0x1F) but NOT 0x7F (DEL), while the reader-side
-        _CONTROL_CHARS in clipwright-render plan.py rejects 0x00-0x1F PLUS 0x7F.
-        Asymmetry: a DEL-bearing lut path passes the writer but fails the reader.
-
-        RED until _validate_lut_no_injection_chars adds `or c == "\\x7f"`.
+        SR-L-1-new: the writer-side validator rejects c < '\\x20' (0x00-0x1F) AND
+        0x7F (DEL), matching the reader-side _CONTROL_CHARS in clipwright-render plan.py
+        which rejects 0x00-0x1F PLUS 0x7F. _validate_lut_no_injection_chars includes
+        `or c == "\\x7f"` to maintain symmetry.
         """
         with pytest.raises(ValidationError):
             DetectColorOptions(lut="/luts/grade\x7ftest.cube")
@@ -942,9 +926,6 @@ class TestDetectColorOptionsLutInjection:
 
         SR-L-1-new / CWE-209: model_config hide_input_in_errors=True is present;
         confirms it suppresses the path value for the 0x7F (DEL) case too.
-
-        RED until _validate_lut_no_injection_chars rejects 0x7F (today no
-        ValidationError is raised for DEL, so pytest.raises itself fails first).
         """
         _SENTINEL = "grade_del_sentinel_7f"
         with pytest.raises(ValidationError) as exc_info:

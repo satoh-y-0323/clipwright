@@ -420,38 +420,32 @@ class TestDetectColorOptionsEqOverrides:
     def test_saturation_option_default_is_none(self) -> None:
         """saturation option field must default to None (FR-1 / backward-compat)."""
         opts = DetectColorOptions()
-        assert opts.saturation is None  # Red: AttributeError — field not yet on model
+        assert opts.saturation is None
 
     def test_contrast_option_default_is_none(self) -> None:
         """contrast option field must default to None."""
         opts = DetectColorOptions()
-        assert opts.contrast is None  # Red: AttributeError
+        assert opts.contrast is None
 
     def test_gamma_option_default_is_none(self) -> None:
         """gamma option field must default to None."""
         opts = DetectColorOptions()
-        assert opts.gamma is None  # Red: AttributeError
+        assert opts.gamma is None
 
     def test_saturation_valid_midrange_accepted(self) -> None:
         """saturation=1.0 (mid-range) must be accepted without error."""
         opts = DetectColorOptions(saturation=1.0)
-        assert opts.saturation == pytest.approx(
-            1.0
-        )  # Red: ValidationError (extra=forbid)
+        assert opts.saturation == pytest.approx(1.0)
 
     def test_saturation_zero_accepted(self) -> None:
         """saturation=0.0 (ge=0.0 lower bound) must be accepted."""
         opts = DetectColorOptions(saturation=0.0)
-        assert opts.saturation == pytest.approx(
-            0.0
-        )  # Red: ValidationError (extra=forbid)
+        assert opts.saturation == pytest.approx(0.0)
 
     def test_saturation_two_accepted(self) -> None:
         """saturation=2.0 (le=2.0 upper bound) must be accepted."""
         opts = DetectColorOptions(saturation=2.0)
-        assert opts.saturation == pytest.approx(
-            2.0
-        )  # Red: ValidationError (extra=forbid)
+        assert opts.saturation == pytest.approx(2.0)
 
     def test_saturation_above_range_rejected(self) -> None:
         """saturation=2.5 must raise ValidationError (le=2.0 violated)."""
@@ -466,9 +460,7 @@ class TestDetectColorOptionsEqOverrides:
     def test_contrast_option_valid_accepted(self) -> None:
         """contrast option=1.0 must be accepted."""
         opts = DetectColorOptions(contrast=1.0)
-        assert opts.contrast == pytest.approx(
-            1.0
-        )  # Red: ValidationError (extra=forbid)
+        assert opts.contrast == pytest.approx(1.0)
 
     def test_contrast_option_above_range_rejected(self) -> None:
         """contrast option=2.5 must raise ValidationError (le=2.0 violated)."""
@@ -483,7 +475,7 @@ class TestDetectColorOptionsEqOverrides:
     def test_gamma_option_valid_accepted(self) -> None:
         """gamma option=1.0 must be accepted."""
         opts = DetectColorOptions(gamma=1.0)
-        assert opts.gamma == pytest.approx(1.0)  # Red: ValidationError (extra=forbid)
+        assert opts.gamma == pytest.approx(1.0)
 
     def test_gamma_option_zero_rejected(self) -> None:
         """gamma option=0.0 must raise ValidationError (ge=0.1 violated)."""
@@ -511,40 +503,32 @@ class TestDetectColorOptionsWbOverrides:
     def test_temperature_default_is_none(self) -> None:
         """temperature field must default to None (use auto WB)."""
         opts = DetectColorOptions()
-        assert opts.temperature is None  # Red: AttributeError
+        assert opts.temperature is None
 
     def test_tint_default_is_none(self) -> None:
         """tint field must default to None (use auto WB)."""
         opts = DetectColorOptions()
-        assert opts.tint is None  # Red: AttributeError
+        assert opts.tint is None
 
     def test_temperature_warm_accepted(self) -> None:
         """temperature=0.5 (warm bias) must be accepted."""
         opts = DetectColorOptions(temperature=0.5)
-        assert opts.temperature == pytest.approx(
-            0.5
-        )  # Red: ValidationError (extra=forbid)
+        assert opts.temperature == pytest.approx(0.5)
 
     def test_temperature_cool_accepted(self) -> None:
         """temperature=-0.5 (cool bias) must be accepted."""
         opts = DetectColorOptions(temperature=-0.5)
-        assert opts.temperature == pytest.approx(
-            -0.5
-        )  # Red: ValidationError (extra=forbid)
+        assert opts.temperature == pytest.approx(-0.5)
 
     def test_temperature_boundary_plus1_accepted(self) -> None:
         """temperature=1.0 (le=1.0 upper bound) must be accepted."""
         opts = DetectColorOptions(temperature=1.0)
-        assert opts.temperature == pytest.approx(
-            1.0
-        )  # Red: ValidationError (extra=forbid)
+        assert opts.temperature == pytest.approx(1.0)
 
     def test_temperature_boundary_minus1_accepted(self) -> None:
         """temperature=-1.0 (ge=-1.0 lower bound) must be accepted."""
         opts = DetectColorOptions(temperature=-1.0)
-        assert opts.temperature == pytest.approx(
-            -1.0
-        )  # Red: ValidationError (extra=forbid)
+        assert opts.temperature == pytest.approx(-1.0)
 
     def test_temperature_above_range_rejected(self) -> None:
         """temperature=1.5 must raise ValidationError (le=1.0 violated)."""
@@ -559,7 +543,7 @@ class TestDetectColorOptionsWbOverrides:
     def test_tint_magenta_accepted(self) -> None:
         """tint=0.3 (magenta bias) must be accepted."""
         opts = DetectColorOptions(tint=0.3)
-        assert opts.tint == pytest.approx(0.3)  # Red: ValidationError (extra=forbid)
+        assert opts.tint == pytest.approx(0.3)
 
     def test_tint_above_range_rejected(self) -> None:
         """tint=1.5 must raise ValidationError (le=1.0 violated)."""
@@ -587,24 +571,22 @@ class TestDetectColorOptionsLutField:
     def test_lut_option_default_is_none(self) -> None:
         """lut option field must default to None (no LUT applied)."""
         opts = DetectColorOptions()
-        assert opts.lut is None  # Red: AttributeError
+        assert opts.lut is None
 
     def test_lut_valid_path_accepted(self) -> None:
         """A valid .cube path string must be accepted."""
         opts = DetectColorOptions(lut="/path/to/grade.cube")
-        assert opts.lut == "/path/to/grade.cube"  # Red: ValidationError (extra=forbid)
+        assert opts.lut == "/path/to/grade.cube"
 
     def test_lut_min_length_one_accepted(self) -> None:
         """A single-char lut value (min_length=1) must be accepted."""
         opts = DetectColorOptions(lut="x")
-        assert opts.lut == "x"  # Red: ValidationError (extra=forbid)
+        assert opts.lut == "x"
 
     def test_lut_max_length_4096_accepted(self) -> None:
         """A lut value exactly 4096 chars long (le=max_length) must be accepted."""
         opts = DetectColorOptions(lut="x" * 4096)
-        assert (
-            opts.lut is not None and len(opts.lut) == 4096
-        )  # Red: ValidationError (extra=forbid)
+        assert opts.lut is not None and len(opts.lut) == 4096
 
     def test_lut_empty_string_rejected(self) -> None:
         """lut="" must raise ValidationError (min_length=1 violated)."""
@@ -619,7 +601,7 @@ class TestDetectColorOptionsLutField:
     def test_lut_none_explicit_accepted(self) -> None:
         """Explicit lut=None must be accepted (same as default)."""
         opts = DetectColorOptions(lut=None)
-        assert opts.lut is None  # Red: ValidationError (extra=forbid)
+        assert opts.lut is None
 
 
 # ===========================================================================
@@ -638,32 +620,32 @@ class TestBrightnessMeasuredChromaFields:
     def test_uavg_default_is_none(self) -> None:
         """uavg must default to None (absent in v0.2.x dicts — backward compat)."""
         m = BrightnessMeasured(yavg=128.0, sampled_frames=5)
-        assert m.uavg is None  # Red: AttributeError — field not yet on model
+        assert m.uavg is None
 
     def test_vavg_default_is_none(self) -> None:
         """vavg must default to None."""
         m = BrightnessMeasured(yavg=128.0, sampled_frames=5)
-        assert m.vavg is None  # Red: AttributeError
+        assert m.vavg is None
 
     def test_uavg_neutral_value_accepted(self) -> None:
         """uavg=128.0 (neutral chroma) must be accepted."""
         m = BrightnessMeasured(yavg=128.0, uavg=128.0, sampled_frames=5)
-        assert m.uavg == pytest.approx(128.0)  # Red: ValidationError (extra=forbid)
+        assert m.uavg == pytest.approx(128.0)
 
     def test_vavg_neutral_value_accepted(self) -> None:
         """vavg=128.0 must be accepted."""
         m = BrightnessMeasured(yavg=128.0, vavg=128.0, sampled_frames=5)
-        assert m.vavg == pytest.approx(128.0)  # Red: ValidationError (extra=forbid)
+        assert m.vavg == pytest.approx(128.0)
 
     def test_uavg_zero_accepted(self) -> None:
         """uavg=0.0 (ge=0.0 lower bound) must be accepted."""
         m = BrightnessMeasured(yavg=128.0, uavg=0.0, sampled_frames=5)
-        assert m.uavg == pytest.approx(0.0)  # Red: ValidationError (extra=forbid)
+        assert m.uavg == pytest.approx(0.0)
 
     def test_uavg_255_accepted(self) -> None:
         """uavg=255.0 (le=255.0 upper bound) must be accepted."""
         m = BrightnessMeasured(yavg=128.0, uavg=255.0, sampled_frames=5)
-        assert m.uavg == pytest.approx(255.0)  # Red: ValidationError (extra=forbid)
+        assert m.uavg == pytest.approx(255.0)
 
     def test_uavg_above_255_rejected(self) -> None:
         """uavg=256.0 must raise ValidationError (le=255.0 violated)."""
@@ -705,8 +687,8 @@ class TestBrightnessMeasuredChromaFields:
         v02x_dict = {"yavg": 96.4, "ymin": 9.0, "ymax": 242.0, "sampled_frames": 12}
         m = BrightnessMeasured.model_validate(v02x_dict)
         assert m.yavg == pytest.approx(96.4)
-        assert m.uavg is None  # Red: AttributeError — field not yet on model
-        assert m.vavg is None  # Red: AttributeError
+        assert m.uavg is None
+        assert m.vavg is None
 
 
 # ===========================================================================
@@ -724,7 +706,6 @@ class TestWhiteBalanceParams:
     def test_import_succeeds(self) -> None:
         """WhiteBalanceParams must be importable from clipwright_color.schemas."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
-        # Red: ImportError — class not yet defined in schemas.py
 
     def test_default_r_is_zero(self) -> None:
         """r must default to 0.0 (neutral — no red shift)."""
@@ -861,14 +842,14 @@ class TestColorDirectiveNewFields:
         d = ColorDirective(
             version="0.3.0", kind="color", target_luma=128.0, eq=EqParams()
         )
-        assert d.white_balance is None  # Red: AttributeError — field not yet on model
+        assert d.white_balance is None
 
     def test_lut_field_default_is_none(self) -> None:
         """lut field must default to None when not supplied."""
         d = ColorDirective(
             version="0.3.0", kind="color", target_luma=128.0, eq=EqParams()
         )
-        assert d.lut is None  # Red: AttributeError
+        assert d.lut is None
 
     def test_v02x_directive_without_wb_and_lut_parses(self) -> None:
         """A v0.2.x ColorDirective JSON with no white_balance and no lut parses without error.
@@ -889,8 +870,8 @@ class TestColorDirectiveNewFields:
             },
         }
         d = ColorDirective.model_validate(v02x_dict)
-        assert d.white_balance is None  # Red: AttributeError — field not yet on model
-        assert d.lut is None  # Red: AttributeError
+        assert d.white_balance is None
+        assert d.lut is None
 
     def test_white_balance_none_explicit_accepted(self) -> None:
         """Explicit white_balance=None must be accepted (same as absent)."""
@@ -901,9 +882,7 @@ class TestColorDirectiveNewFields:
             eq=EqParams(),
             white_balance=None,
         )
-        assert (
-            d.white_balance is None
-        )  # Red: ValidationError (extra=forbid on current model)
+        assert d.white_balance is None
 
     def test_white_balance_params_accepted(self) -> None:
         """ColorDirective with a WhiteBalanceParams value must be accepted."""
@@ -918,9 +897,7 @@ class TestColorDirectiveNewFields:
             white_balance=wb,
         )
         assert d.white_balance is not None
-        assert d.white_balance.r == pytest.approx(
-            0.1
-        )  # Red: ValidationError (extra=forbid)
+        assert d.white_balance.r == pytest.approx(0.1)
 
     def test_lut_path_accepted(self) -> None:
         """ColorDirective with a lut path string must be accepted."""
@@ -931,9 +908,7 @@ class TestColorDirectiveNewFields:
             eq=EqParams(),
             lut="/resolved/path/to/grade.cube",
         )
-        assert (
-            d.lut == "/resolved/path/to/grade.cube"
-        )  # Red: ValidationError (extra=forbid)
+        assert d.lut == "/resolved/path/to/grade.cube"
 
     def test_lut_none_explicit_accepted(self) -> None:
         """Explicit lut=None must be accepted (no LUT applied in render)."""
@@ -944,7 +919,7 @@ class TestColorDirectiveNewFields:
             eq=EqParams(),
             lut=None,
         )
-        assert d.lut is None  # Red: ValidationError (extra=forbid)
+        assert d.lut is None
 
     def test_lut_max_length_4096_accepted(self) -> None:
         """lut exactly 4096 chars must be accepted (max_length=4096 boundary)."""
@@ -955,9 +930,7 @@ class TestColorDirectiveNewFields:
             eq=EqParams(),
             lut="x" * 4096,
         )
-        assert (
-            d.lut is not None and len(d.lut) == 4096
-        )  # Red: ValidationError (extra=forbid)
+        assert d.lut is not None and len(d.lut) == 4096
 
     def test_lut_above_max_length_rejected(self) -> None:
         """lut longer than 4096 chars must raise ValidationError (max_length=4096 violated)."""
@@ -991,7 +964,7 @@ class TestColorDirectiveNewFields:
         assert d.white_balance.r == pytest.approx(0.05)
         assert d.measured is not None
         assert d.measured.uavg == pytest.approx(132.0)
-        assert d.lut == "/media/luts/filmic.cube"  # Red: ValidationError (extra=forbid)
+        assert d.lut == "/media/luts/filmic.cube"
 
 
 # ===========================================================================
@@ -1003,12 +976,7 @@ class TestColorDirectiveLutMinLength:
     """SR-V-001: ColorDirective.lut must have min_length=1 (parity with DetectColorOptions.lut).
 
     DetectColorOptions.lut already enforces min_length=1.  ColorDirective.lut
-    currently only has max_length=4096 — an empty string can be stored in the
-    directive, which is meaningless and opens a CWE-20 injection path.
-
-    test_color_directive_lut_empty_string_rejected is RED until schemas.py
-    adds min_length=1 to the ColorDirective.lut Field annotation.
-    test_color_directive_lut_nonempty_accepted is a regression guard (Green).
+    also has min_length=1 — an empty string is meaningless and opens a CWE-20 injection path.
     """
 
     def test_color_directive_lut_empty_string_rejected(self) -> None:

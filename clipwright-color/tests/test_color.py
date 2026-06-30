@@ -738,9 +738,6 @@ class TestAutoWhiteBalance:
         r = -1.402 * 10 / 255.0  ≈ -0.054980
         g = (0.344 * 20 + 0.714 * 10) / 255.0  ≈  0.054980
         b = -1.772 * 20 / 255.0  ≈ -0.138980
-
-        RED: BrightnessMeasured has no uavg/vavg fields yet →
-        ValidationError inside _detect_color_inner → ok=False (not ok=True).
         """
         from clipwright_color.color import (
             detect_color,  # type: ignore[import-not-found]
@@ -850,10 +847,7 @@ class TestWbChromaAbsent:
     def test_wb_warning_emitted_when_chroma_not_measurable(
         self, tmp_path: Path
     ) -> None:
-        """FR-4: A warning about WB failure must appear when uavg/vavg are absent.
-
-        RED: current implementation emits no WB-specific warning when chroma absent.
-        """
+        """FR-4: A warning about WB failure must appear when uavg/vavg are absent."""
         from clipwright_color.color import (
             detect_color,  # type: ignore[import-not-found]
         )
@@ -968,10 +962,7 @@ class TestCallerWbOverride:
     def test_temperature_tint_override_yields_axis_mapping(
         self, tmp_path: Path
     ) -> None:
-        """temperature=0.3, tint=0.1 → r=+0.3, b=-0.3, g=-0.1; auto WB discarded.
-
-        RED: DetectColorOptions has no temperature/tint fields yet → ValidationError.
-        """
+        """temperature=0.3, tint=0.1 → r=+0.3, b=-0.3, g=-0.1; auto WB discarded."""
         from clipwright_color.color import (
             detect_color,  # type: ignore[import-not-found]
         )
@@ -979,7 +970,6 @@ class TestCallerWbOverride:
         media = tmp_path / "video.mp4"
         media.write_bytes(b"dummy")
         output = tmp_path / "out.otio"
-        # RED: temperature/tint fields do not exist on DetectColorOptions yet
         opts = DetectColorOptions(  # type: ignore[call-arg]
             target_luma=128.0,
             temperature=0.3,
@@ -1019,10 +1009,7 @@ class TestCallerWbOverride:
         )
 
     def test_temperature_only_zero_g_axis(self, tmp_path: Path) -> None:
-        """temperature=0.5, tint omitted → r=+0.5, b=-0.5, g=0.0 (tint defaults to 0).
-
-        RED: DetectColorOptions has no temperature field yet → ValidationError.
-        """
+        """temperature=0.5, tint omitted → r=+0.5, b=-0.5, g=0.0 (tint defaults to 0)."""
         from clipwright_color.color import (
             detect_color,  # type: ignore[import-not-found]
         )
@@ -1066,10 +1053,7 @@ class TestEqPopulation:
     """FR-1: saturation/contrast/gamma caller options populate EqParams fields."""
 
     def test_saturation_option_writes_to_eq(self, tmp_path: Path) -> None:
-        """saturation=1.5 must be written into eq.saturation.
-
-        RED: DetectColorOptions has no saturation field yet → ValidationError.
-        """
+        """saturation=1.5 must be written into eq.saturation."""
         from clipwright_color.color import (
             detect_color,  # type: ignore[import-not-found]
         )
@@ -1103,10 +1087,7 @@ class TestEqPopulation:
         )
 
     def test_contrast_option_writes_to_eq(self, tmp_path: Path) -> None:
-        """contrast=0.8 must be written into eq.contrast.
-
-        RED: DetectColorOptions has no contrast field yet → ValidationError.
-        """
+        """contrast=0.8 must be written into eq.contrast."""
         from clipwright_color.color import (
             detect_color,  # type: ignore[import-not-found]
         )
@@ -1140,10 +1121,7 @@ class TestEqPopulation:
         )
 
     def test_gamma_option_writes_to_eq(self, tmp_path: Path) -> None:
-        """gamma=2.2 must be written into eq.gamma.
-
-        RED: DetectColorOptions has no gamma field yet → ValidationError.
-        """
+        """gamma=2.2 must be written into eq.gamma."""
         from clipwright_color.color import (
             detect_color,  # type: ignore[import-not-found]
         )
@@ -1210,11 +1188,7 @@ class TestEqPopulation:
     def test_data_block_returns_actual_eq_values_not_hardcoded(
         self, tmp_path: Path
     ) -> None:
-        """data block must return actual saturation/contrast/gamma, not hardcoded 1.0.
-
-        RED: (a) DetectColorOptions has no saturation/contrast/gamma fields yet, and
-             (b) current ok_result always writes hardcoded 1.0 for these fields.
-        """
+        """data block must return actual saturation/contrast/gamma, not hardcoded 1.0."""
         from clipwright_color.color import (
             detect_color,  # type: ignore[import-not-found]
         )
@@ -1319,11 +1293,7 @@ class TestDistinctOtioNfr9:
     def test_output_equals_timeline_rejected_with_new_options(
         self, tmp_path: Path
     ) -> None:
-        """output == timeline must be rejected even with temperature/tint options.
-
-        RED: DetectColorOptions has no temperature/tint fields yet → ValidationError.
-        After implementation: PATH_NOT_ALLOWED is the expected outcome.
-        """
+        """output == timeline must be rejected even with temperature/tint options."""
         from clipwright_color.color import (
             detect_color,  # type: ignore[import-not-found]
         )
@@ -1333,7 +1303,7 @@ class TestDistinctOtioNfr9:
         timeline_file = tmp_path / "existing.otio"
         timeline_file.write_bytes(b"dummy otio")
 
-        # temperature/tint options — fields don't exist yet (RED at construction)
+        # temperature/tint caller override options
         opts = DetectColorOptions(  # type: ignore[call-arg]
             target_luma=128.0,
             temperature=0.2,
@@ -1528,15 +1498,12 @@ class TestCallerWbZeroIsNeutral:
 class TestFr4WarningWording:
     """SR-L-2 / SR-R-001: FR-4 warning must use fixed public wording, not internal names.
 
-    The current warning string contains the internal field names "uavg/vavg" and the
+    The warning string must not contain internal field names "uavg/vavg" or the
     implementation annotation "(FR-4)".  These are internal implementation details
     that must not appear in externally visible messages (CWE-209 / NFR-3).
 
     The warning must still convey that white balance could not be derived and that
     chroma measurement was unavailable — in fixed, user-facing wording.
-
-    test_fr4_warning_contains_no_internal_names is RED until color.py replaces the
-    current warning string with one that omits "uavg", "vavg", "(FR-4)", "FR-4".
     """
 
     def test_fr4_warning_contains_no_internal_names(self, tmp_path: Path) -> None:
