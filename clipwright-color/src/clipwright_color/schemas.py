@@ -122,16 +122,18 @@ class EqParams(BaseModel):
 
 
 class WhiteBalanceParams(BaseModel):
-    """colorbalance midtone shifts; neutral = all 0. Reader mirror in render (ADR-CO-3).
+    """Per-channel RGB gain for colorchannelmixer rr/gg/bb diagonal; neutral = all 1.0.
 
-    Maps 1:1 to ffmpeg colorbalance rm/gm/bm parameters. Range [-1, 1] per channel.
+    Maps 1:1 to ffmpeg colorchannelmixer rr/gg/bb diagonal gains (linear per-channel
+    multipliers). Neutral = all 1.0 (identity gain). Range [0.0, 4.0] per channel
+    (non-negative multipliers only; negative gains invert a channel and are rejected).
     """
 
     model_config = {"extra": "forbid", "allow_inf_nan": False}
 
-    r: Annotated[float, Field(ge=-1.0, le=1.0)] = 0.0
-    g: Annotated[float, Field(ge=-1.0, le=1.0)] = 0.0
-    b: Annotated[float, Field(ge=-1.0, le=1.0)] = 0.0
+    r: Annotated[float, Field(ge=0.0, le=4.0)] = 1.0
+    g: Annotated[float, Field(ge=0.0, le=4.0)] = 1.0
+    b: Annotated[float, Field(ge=0.0, le=4.0)] = 1.0
 
 
 class ColorDirective(BaseModel):

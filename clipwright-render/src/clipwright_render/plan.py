@@ -1948,20 +1948,17 @@ def _append_eq_filter(
 class _RenderWhiteBalance(BaseModel):
     """Reader-side validation of color["white_balance"] (ADR-CO-3 re-declaration).
 
-    Mirrors WhiteBalanceParams in clipwright-color (writer). Ranges duplicated
-    with a sync comment — update both copies when changing. Unknown keys
-    forbidden; inf/nan rejected (CWE-20).
-
-    r/g/b: colorbalance midtone shifts in [-1, 1] (colorbalance rm/gm/bm).
-    Neutral value is 0.0 for all channels.
+    r/g/b: per-channel RGB gains for colorchannelmixer rr/gg/bb. Neutral = 1.0.
+    Mirror of clipwright-color WhiteBalanceParams (ranges duplicated; sync on change).
+    Unknown keys forbidden; inf/nan rejected (CWE-20).
     """
 
     # Ranges mirror WhiteBalanceParams in clipwright-color schemas.py (ADR-CO-3 sync).
     model_config = {"extra": "forbid", "allow_inf_nan": False}
 
-    r: Annotated[float, Field(ge=-1.0, le=1.0)] = 0.0
-    g: Annotated[float, Field(ge=-1.0, le=1.0)] = 0.0
-    b: Annotated[float, Field(ge=-1.0, le=1.0)] = 0.0
+    r: Annotated[float, Field(ge=0.0, le=4.0)] = 1.0  # colorchannelmixer rr
+    g: Annotated[float, Field(ge=0.0, le=4.0)] = 1.0  # colorchannelmixer gg
+    b: Annotated[float, Field(ge=0.0, le=4.0)] = 1.0  # colorchannelmixer bb
 
 
 @dataclass
@@ -1973,7 +1970,7 @@ class _RenderColorGrade:
     the corresponding filter stage is a no-op (backward compatible; FR-10/AC-8).
 
     eq: validated eq params (None → no eq stage).
-    white_balance: validated WB params (None → no colorbalance stage).
+    white_balance: validated WB params (None → no colorchannelmixer stage).
     lut: resolved + boundary-validated absolute path to .cube file (None → no
         lut3d stage). Not yet escaped; _append_lut3d_filter applies escaping.
     """
@@ -2002,7 +1999,10 @@ def _validate_color_wb(color: dict[str, Any]) -> _RenderWhiteBalance | None:
                 "Color white_balance directive validation failed."
                 " Check field names, types, and values."
             ),
-            hint=("color['white_balance'] must have r, g, b each in [-1.0, 1.0]."),
+            hint=(
+                "color['white_balance'] must have r, g, b each in [0.0, 4.0]"
+                " (per-channel gain, neutral=1.0)."
+            ),
         ) from None
 
 
@@ -2123,15 +2123,16 @@ def _append_wb_filter(
     video_map_label: str,
     wb: _RenderWhiteBalance | None,
 ) -> str:
-    """Append the colorbalance white-balance stage and return the new video label.
+    """Append the colorchannelmixer white-balance stage and return the new video label.
 
-    No-op when wb is None (backward compatible; FR-10/AC-8). :g formatting
-    locks numeric values to standard decimal notation (SR-INJ-002 / NFR-4).
-    Placed at the ADR-CO-4 injection point: scale-after, subtitle-before (D4).
+    No-op when wb is None or all gains equal 1.0 (neutral; backward compatible;
+    FR-10/AC-8). :g formatting locks numeric values to standard decimal notation
+    (SR-INJ-002 / NFR-4). Placed at the ADR-CO-4 injection point: scale-after,
+    subtitle-before (D4).
     """
-    if wb is None:
+    if wb is None or (wb.r == 1.0 and wb.g == 1.0 and wb.b == 1.0):
         return video_map_label
-    seg = f"colorbalance=rm={wb.r:g}:gm={wb.g:g}:bm={wb.b:g}"
+    seg = f"colorchannelmixer=rr={wb.r:g}:gg={wb.g:g}:bb={wb.b:g}"
     filter_parts.append(f"{video_map_label}{seg}[outvwb]")
     return "[outvwb]"
 
@@ -3488,7 +3489,7 @@ def _build_filter_complex(
 
     # Inject color grade stages after scale/reframe, before subtitle
     # (ADR-CO-4: geometry normalise → colour correct → overlay burn-in).
-    # Order: colorbalance (WB) → eq → lut3d (D4 / FR-7/8/9).
+    # Order: colorchannelmixer (WB) → eq → lut3d (D4 / FR-7/8/9).
     # Each stage is a no-op when its field is None (backward compatible; FR-10/AC-8).
     _grade = color_grade
     video_map_label = _append_wb_filter(

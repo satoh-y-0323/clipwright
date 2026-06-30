@@ -898,7 +898,9 @@ class TestAutoWhiteBalance:
         assert result["ok"] is True, f"error={result.get('error')}"
         tl = otio.adapters.read_from_file(str(output))
         color_meta = tl.metadata["clipwright"]["color"]
-        assert color_meta is not None, "directive must be written even for neutral chroma."
+        assert color_meta is not None, (
+            "directive must be written even for neutral chroma."
+        )
         wb = color_meta.get("white_balance")
         assert wb is None, (
             "§3.3: white_balance must be omitted when all gains are exactly 1.0 "
@@ -1074,7 +1076,9 @@ class TestCallerWbOverride:
         assert result["ok"] is True, f"error={result.get('error')}"
         tl = otio.adapters.read_from_file(str(output))
         wb = tl.metadata["clipwright"]["color"].get("white_balance")
-        assert wb is not None, "white_balance must be written for non-neutral caller override."
+        assert wb is not None, (
+            "white_balance must be written for non-neutral caller override."
+        )
         # temperature=0.3 → r=1.15, b=0.85; tint=0.1 → g=0.95 (WB_AXIS_SPAN=0.5)
         assert wb["r"] == pytest.approx(1.15, abs=1e-4), (
             f"r must equal 1.0+0.5*temperature (1.15), got {wb['r']}"
@@ -1123,7 +1127,9 @@ class TestCallerWbOverride:
         assert result["ok"] is True
         tl = otio.adapters.read_from_file(str(output))
         wb = tl.metadata["clipwright"]["color"].get("white_balance")
-        assert wb is not None, "white_balance must be written when r and b differ from 1.0."
+        assert wb is not None, (
+            "white_balance must be written when r and b differ from 1.0."
+        )
         assert wb["r"] == pytest.approx(1.25, abs=1e-4), (
             f"§3.2: r must equal 1.0+0.5*0.5 (1.25), got {wb['r']}"
         )
@@ -1527,7 +1533,9 @@ class TestCallerWbZeroIsNeutral:
         assert result["ok"] is True, f"error={result.get('error')}"
         tl = otio.adapters.read_from_file(str(output))
         wb = tl.metadata["clipwright"]["color"].get("white_balance")
-        assert wb is not None, "white_balance must be written for temperature=0.5 (r/b differ from 1.0)."
+        assert wb is not None, (
+            "white_balance must be written for temperature=0.5 (r/b differ from 1.0)."
+        )
         assert wb["r"] == pytest.approx(1.25, abs=1e-4), (
             f"§3.2: r must equal 1.0+0.5*0.5 (1.25), got {wb['r']}"
         )
@@ -1575,7 +1583,9 @@ class TestCallerWbZeroIsNeutral:
         assert result["ok"] is True, f"error={result.get('error')}"
         tl = otio.adapters.read_from_file(str(output))
         wb = tl.metadata["clipwright"]["color"].get("white_balance")
-        assert wb is not None, "white_balance must be written for tint=0.5 (g differs from 1.0)."
+        assert wb is not None, (
+            "white_balance must be written for tint=0.5 (g differs from 1.0)."
+        )
         assert wb["g"] == pytest.approx(0.75, abs=1e-4), (
             f"§3.2: g must equal 1.0-0.5*0.5 (0.75), got {wb['g']}"
         )

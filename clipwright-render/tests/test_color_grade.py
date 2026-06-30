@@ -351,7 +351,9 @@ class TestValidateColorGrade:
         with pytest.raises(ClipwrightError) as exc_info:
             self._validate(color)
         hint = exc_info.value.hint or ""
-        assert "per-channel gain" in hint, f"hint must mention 'per-channel gain': {hint!r}"
+        assert "per-channel gain" in hint, (
+            f"hint must mention 'per-channel gain': {hint!r}"
+        )
         assert "neutral=1.0" in hint, f"hint must mention 'neutral=1.0': {hint!r}"
         assert "[0.0, 4.0]" in hint, f"hint must mention '[0.0, 4.0]': {hint!r}"
 
@@ -480,9 +482,7 @@ class TestAppendWbFilter:
         assert result == "[outv]", (
             f"All-one WB must be no-op; label must be unchanged, got {result!r}"
         )
-        assert parts == [], (
-            f"All-one WB must not append any segment, got {parts!r}"
-        )
+        assert parts == [], f"All-one WB must not append any segment, got {parts!r}"
 
     def test_all_one_gain_outvscaled_is_noop(self) -> None:
         """WB r=g=b=1.0 with [outvscaled] label -> [outvscaled] returned unchanged (both no-op conditions)."""
