@@ -77,7 +77,7 @@ class DetectColorOptions(BaseModel):
         """
         if v is None:
             return v
-        if "'" in v or any(c < "\x20" for c in v):
+        if "'" in v or any(c < "\x20" or c == "\x7f" for c in v):
             raise ValueError(
                 "lut must not contain a single quote or control character"
                 " (prevents ffmpeg argument injection; CWE-78)."
