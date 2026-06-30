@@ -2031,9 +2031,50 @@ def _validate_color_grade(color: dict[str, Any], otio_dir: Path) -> _RenderColor
     lut: str | None = None
     raw_lut = color.get("lut")
     if raw_lut is not None:
-        # §5.2 step 1: resolve lut ref against the timeline directory.
         lut_ref = str(raw_lut)
+
+        # §5.2 step 0a: single-quote / control-char rejection (CWE-78 / SR-INJ-002).
+        # Must fire before any filesystem access or filtergraph construction.
+        # Mirror of image_path (~L572) and font_path (~L1298) checks.
+        for ch in lut_ref:
+            if ch == "'":
+                raise ClipwrightError(
+                    code=ErrorCode.INVALID_INPUT,
+                    message=(
+                        "The timeline contains an invalid LUT reference:"
+                        " lut path contains a single quote."
+                    ),
+                    hint="LUT path must not contain single quotes.",
+                )
+            if ch in _CONTROL_CHARS:
+                raise ClipwrightError(
+                    code=ErrorCode.INVALID_INPUT,
+                    message=(
+                        "The timeline contains an invalid LUT reference:"
+                        " lut path contains a control character."
+                    ),
+                    hint="LUT path must not contain control characters.",
+                )
+
         lut_path = Path(lut_ref)
+
+        # SR-L-3: reject relative lut refs when otio_dir is not absolute.
+        # build_plan passes Path(".") when _tl_path_img is None; resolving
+        # a relative lut against the process CWD is non-deterministic and unsafe.
+        if not lut_path.is_absolute() and not otio_dir.is_absolute():
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message=(
+                    "A relative LUT reference cannot be resolved:"
+                    " the OTIO file path is required to establish the boundary."
+                ),
+                hint=(
+                    "Use an absolute path for the LUT file, or ensure the render"
+                    " call provides an OTIO timeline with a known file path."
+                ),
+            )
+
+        # §5.2 step 1: resolve lut ref against the timeline directory.
         if not lut_path.is_absolute():
             lut_path = otio_dir / lut_path
 

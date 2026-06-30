@@ -224,9 +224,9 @@ def _detect_color_inner(
             # FR-4: chroma absent — omit white_balance and emit diagnostic warning
             white_balance = None
             warnings.append(
-                "White balance could not be derived: chroma values (uavg/vavg)"
-                " were not available in the measurement (FR-4)."
-                " white_balance will not be written to the directive."
+                "White balance could not be derived:"
+                " chroma measurement was not available."
+                " The white_balance directive will be omitted."
             )
 
         # EqParams population (FR-1): use caller-supplied values or neutral defaults
@@ -349,8 +349,8 @@ def _derive_caller_wb(
     Returns:
         WhiteBalanceParams with r/g/b midtone shifts clamped to [-1, 1].
     """
-    t = temperature or 0.0
-    n = tint or 0.0
+    t = temperature if temperature is not None else 0.0
+    n = tint if tint is not None else 0.0
     r = _clamp(+t, -1.0, 1.0)
     b = _clamp(-t, -1.0, 1.0)
     g = _clamp(-n, -1.0, 1.0)
