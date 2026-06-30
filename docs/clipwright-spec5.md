@@ -745,15 +745,117 @@ None — a `preset` option on `clipwright_render` mapping to vetted encode setti
 
 ---
 
+## Cross-cutting backlog (promoted from maintainer notes)
+
+These two items were carried in the maintainer's session backlog rather than as
+spec5 entries. They are catalogued here, with a priority, so they live in the same
+tracked surface as the gaps above. One completes an already-shipped feature; the
+other is a performance track that refines the two GPU rows in *Out of scope* below.
+
+### Karaoke fold-through in `clipwright-wrap` (line-wrapped word-synced captions)  *Low–Medium*  *(wrap extension)* — **Phase 2, deferred**
+
+**What it does**
+Lets the line-wrapping stage (`clipwright_wrap_captions`) carry per-word timing
+through the wrap, so one caption can be **both** line-broken (budoux for CJK /
+greedy for Latin) **and** word-synced ("karaoke") in the same burn. Today the two
+are mutually exclusive.
+
+**Why it is needed**
+The shipped karaoke path (suite v0.29.0) is the **direct**
+`transcribe(word_timestamps=true) → render(karaoke=true)` chain: `render` groups
+words into lines itself with a flat char-budget and never routes through `wrap`.
+That is fine for Latin (libass breaks Latin on spaces), but for **CJK karaoke** —
+the Japanese short-form audience that is the project's home turf — you want budoux
+phrase-boundary line-breaking *and* per-word highlight at once, and no path does
+both. `wrap` operates on cue-/segment-level SRT/VTT and discards word timings, so
+routing karaoke through it loses the `\k` timing.
+
+**MCP tool name(s)**
+None — extend `clipwright_wrap_captions` to accept the word-level WebVTT carrier
+(the `<HH:MM:SS.mmm>word` inline-timestamp format `transcribe` already emits) and
+re-emit a *wrapped* word-level carrier (or an ASS `\k` script) that preserves each
+word's start/end across the inserted line breaks.
+
+**Implementation hints**
+- Requires a **3-level line ↔ segment ↔ word mapping**: parse the word carrier,
+  run the existing budoux/greedy line-breaker on the word *sequence* (not the flat
+  string), then re-attach each word's `(start, end)` to its post-wrap line. This is
+  the "new carrier format / fold-through contract" the v0.29.0 release notes named
+  as the reason it was deferred.
+- Keep the direct `transcribe → render` karaoke chain unchanged; this is an
+  *additional* CJK-friendly path, not a replacement.
+- Reuse `captions.py` `wrap_cue_lines` / `_merge_to_max_lines` on a word-token
+  list; `render` already owns ASS `\k` generation, so `wrap` could stop at
+  "wrapped word-VTT" and let `render` burn it.
+
+**Priority rationale** — *Low–Medium*: completes a shipped Medium feature and
+serves the project's core JP short-form audience, but the common case (Latin
+karaoke, and CJK *or* karaoke separately) already works, so it ranks below the four
+open Medium reach features (color depth / PiP / NLE interop / translation).
+
+---
+
+### Full-GPU filtergraph (keep frames on-GPU through CUDA-native filters)  *Low*  *(render / perf)* — **bounded upside; partly environmental**
+
+**What it does**
+Runs the render filter chain on the GPU end-to-end — decode → CUDA-native filters
+(`scale_cuda`, `overlay_cuda`, `transpose_cuda`, crop/pad) → NVENC encode — instead
+of the current download-to-system-memory model, eliminating the per-frame
+`hwdownload`/`hwupload` round-trips.
+
+**Why it is needed / what already ships**
+NVENC **encode** (`RenderOptions(hw_encoder=…)`) and **decode**
+(`hwaccel_decode=True`) are already wired (suite v0.11.0 / render 0.8.0). But the
+filters still run on CPU: `-hwaccel cuda` decodes on the GPU and ffmpeg implicitly
+downloads each frame to system memory before the first non-CUDA filter (there are
+**no** `scale_cuda`/`overlay_cuda`/`hwdownload` nodes in `plan.py` today). Measured
+on a 180 s 1080p60 edit, NVENC cuts *pure* encode 3.4× (69 s → 20 s) but a *full*
+edit only −22 % (213 s → 165 s), because ~87 % of the time is filter-bound and
+stays on CPU.
+
+**The catch (why this is Low, not a quick win)**
+The **heaviest** filters in a real edit — `vidstabtransform` (stabilize), `afftdn`
+(noise), `drawtext`/libass (captions), `eq`/`curves` (color) — have **no CUDA
+equivalents** in ffmpeg. A full-GPU graph can only keep scaling/overlay/transpose/
+crop on the GPU, which are not the bottleneck. So the realistic win is confined to
+scale-/overlay-heavy, filter-light edits, and even there it competes with the
+existing `hwaccel_decode` path. This is why it stays a perf track, not a workflow
+blocker.
+
+**MCP tool name(s)**
+None — an opt-in `gpu_filtergraph` mode on `clipwright_render` that, when the graph
+contains *only* CUDA-mappable filters, emits the `_cuda` filter variants and skips
+the `hwdownload`; otherwise falls back to the current download model with a warning
+(so a single non-CUDA filter never silently disables it).
+
+**Implementation hints**
+- Detect CUDA-mappable-only graphs at plan time; map `scale`→`scale_cuda`,
+  `overlay`→`overlay_cuda`, `transpose`→`transpose_cuda`, and insert
+  `hwupload_cuda`/`hwdownload` only at the GPU↔CPU boundary.
+- Probe encoder/decoder availability with the existing `encoders.py` machinery;
+  keep the libx264 / system-memory fallback as the safe default (consistent with
+  `hw_encoder='auto'`).
+- **Separate, also-environmental:** a CUDA `whisper.cpp` build for transcribe speed
+  is a *build* swap (`CLIPWRIGHT_WHISPER` → CUDA build), not a clipwright code
+  change — see *Out of scope* below; kept distinct from this filtergraph item.
+
+**Priority rationale** — *Low*: a performance optimisation with a structurally
+bounded ceiling (the bottleneck filters have no CUDA path), not a capability gap or
+correctness issue, and it ships no broken output. Narratively the maintainer's
+"video filter stage on GPU" headline, but per the spec5 priority definitions it
+sits at Low.
+
+---
+
 ## Out of scope / environmental (not gaps)
 
 | Item | Reason |
 |------|--------|
-| GPU transcription speed | `transcribe` ran CPU at 1.37× realtime because the box has a CPU `whisper.cpp` build; pointing `CLIPWRIGHT_WHISPER` at a CUDA build is the fix (spec3 wiring). Not a clipwright gap. |
+| GPU transcription speed | `transcribe` ran CPU at 1.37× realtime because the box has a CPU `whisper.cpp` build; pointing `CLIPWRIGHT_WHISPER` at a CUDA build is the fix (spec3 wiring). Not a clipwright gap. (The broader GPU ambition is now tracked as the *Full-GPU filtergraph* backlog entry above; the whisper part stays environmental.) |
 | Music / voiceover sourcing | Providing the music bed and narration is the agent's job; clipwright mixes (`add_bgm`) and burns. Baking generators in fights the AI-first design. |
 | Logo / overlay asset creation | Providing the PNG is the agent's job; `add_overlay` consumed it. (A *video* PiP source is a real gap — see above.) |
 | Auto-highlight / one-click edit | Composing silence + scene + loudness into highlight selection remains the agent's job (spec3/spec4). A *scoring* primitive could assist but the decision stays orchestration. |
-| HW decode for filter-heavy graphs | Known spec3/spec4 limit (CPU filters force `hwdownload`); recorded in spec4. |
+| HW decode for filter-heavy graphs | Known spec3/spec4 limit (CPU filters force `hwdownload`); recorded in spec4. Now tracked with a priority as the *Full-GPU filtergraph* backlog entry above (Low). |
 
 ---
 
@@ -857,6 +959,14 @@ directly for Latin captions).
    **`clipwright-wrap` karaoke fold-through is Phase 2 (deferred).**
    Remaining reach/quality features: **color-grading depth · video PiP · NLE
    interop · subtitle translation** (Medium): for a general editing suite.
-7. **D5 — render raw stderr in `SUBPROCESS_FAILED` (CWE-209)** (Low) · **two-pass
+7. **Cross-cutting backlog (promoted from maintainer notes):**
+   **wrap karaoke fold-through** (Low–Medium) — completes the v0.29.0 karaoke
+   feature with a line ↔ segment ↔ word mapping so CJK captions can be both
+   budoux-wrapped and word-synced; below the four open Medium reach features.
+   **Full-GPU filtergraph** (Low) — keep frames on-GPU through CUDA-native filters;
+   NVENC encode + HW decode already ship (v0.11.0), but the bottleneck filters
+   (`vidstabtransform`/`afftdn`/libass/`eq`) have no CUDA path, so the upside is
+   structurally bounded (refines the two GPU rows in *Out of scope*).
+8. **D5 — render raw stderr in `SUBPROCESS_FAILED` (CWE-209)** (Low) · **two-pass
    `unsharp` pre-pass · residual libvidstab build crash · diarization · Ken Burns ·
    export presets** (Low–Medium): follow-ups.
