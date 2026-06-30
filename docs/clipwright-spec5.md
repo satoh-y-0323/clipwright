@@ -617,11 +617,11 @@ add a karaoke styling mode to `render`'s subtitle path (ASS `\k` tags).
 ### Color grading depth: LUT / white-balance / saturation / contrast  *Medium*  *(color extension)*  — **RESOLVED** (shipped — `clipwright-color` v0.3.0 / `clipwright-render` v0.17.0 / suite v0.30.0)
 
 **Resolution:** `clipwright_detect_color` now measures chroma cast (`UAVG`/`VAVG` from
-`signalstats`) and stores auto white-balance as `ColorDirective.white_balance` (a `colorbalance`
-directive). Caller-supplied `saturation`, `contrast`, `gamma` are accepted via
+`signalstats`) and stores auto white-balance as `ColorDirective.white_balance` (per-channel gains
+via `colorchannelmixer`, neutral 1.0, range [0.0, 4.0]). Caller-supplied `saturation`, `contrast`, `gamma` are accepted via
 `DetectColorOptions` and written into the existing `EqParams` block. An optional caller-provided
 `.cube` path is validated and stored as `ColorDirective.lut`. `clipwright-render` applies the
-directive in a fixed three-stage order: `colorbalance` (WB) → `eq` (saturation/contrast/gamma)
+directive in a fixed three-stage order: `colorchannelmixer` (WB per-channel gain) → `eq` (saturation/contrast/gamma)
 → `lut3d`. All new `ColorDirective` fields are `Optional`; v0.2.x directives are
 backward-compatible. WB measurement failures degrade gracefully (field omitted, warning emitted).
 
@@ -967,7 +967,7 @@ directly for Latin captions).
    `subtitle.karaoke=true` on render burns ASS `\k` word-synced captions.
    **`clipwright-wrap` karaoke fold-through is Phase 2 (deferred).**
    **Color grading depth** (Medium) — **RESOLVED** (shipped — `clipwright-color` v0.3.0 /
-   `clipwright-render` v0.17.0 / suite v0.30.0): WB (`colorbalance`), saturation/contrast/gamma
+   `clipwright-render` v0.17.0 / suite v0.30.0): WB (`colorchannelmixer` per-channel gain), saturation/contrast/gamma
    (`eq`), and 3D-LUT (`lut3d`) across the color detect → render pipeline.
    Remaining reach/quality features: **video PiP · NLE interop · subtitle translation**
    (Medium): for a general editing suite.

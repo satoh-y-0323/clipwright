@@ -84,7 +84,7 @@ def clipwright_detect_color(
     Returns the path of the resulting timeline.otio in artifacts.
 
     White-balance override: temperature and tint are normalised [-1, 1] axes
-    (colorbalance midtone shifts, NOT a colour temperature scale).
+    (normalised [-1,1] white-balance axes mapped to per-channel gain, NOT a colour-temperature scale).
     temperature +1 = warm/red, -1 = cool/blue.
     tint +1 = magenta, -1 = green.
     When neither is supplied, white balance is derived automatically from

@@ -3806,7 +3806,7 @@ def _build_multi_source_filter_complex(
     video_map_label = "[outv]"
 
     # Inject color grade stages after concat/normalisation, before subtitle
-    # (ADR-CO-4). Order: colorbalance (WB) → eq → lut3d (D4 / FR-7/8/9).
+    # (ADR-CO-4). Order: colorchannelmixer (WB) → eq → lut3d (D4 / FR-7/8/9).
     # Each stage is a no-op when its field is None (backward compatible; FR-10/AC-8).
     _grade = color_grade
     video_map_label = _append_wb_filter(

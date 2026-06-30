@@ -497,7 +497,7 @@ class TestDetectColorOptionsWbOverrides:
     """DetectColorOptions gains optional temperature/tint WB caller override fields (FR-3).
 
     None (default) means "use auto gray-world measurement result".
-    Ranges are normalised [-1, 1] axes matching the colorbalance representation (D1/ADR-CO-7).
+    Ranges are normalised [-1, 1] caller-facing axes mapped to per-channel gain [0, 4] (neutral 1.0) at render time (ADR-CO-7).
     """
 
     def test_temperature_default_is_none(self) -> None:

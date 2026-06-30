@@ -14,7 +14,7 @@ Color grading depth — white balance, saturation/contrast/gamma, and 3D-LUT (sp
 - **Auto white-balance measurement**: `clipwright_detect_color` now measures chroma cast by
   extracting `UAVG` and `VAVG` from the `signalstats` filter (same ffprobe pipeline as `YAVG`).
   Deviation of the median `UAVG`/`VAVG` from the neutral point (128 in 8-bit YUV) is converted to
-  a `colorbalance` correction stored in a new `ColorDirective.white_balance` field. If the chroma
+  a per-channel gain via `colorchannelmixer` (neutral 1.0, range [0.0, 4.0]) stored in a new `ColorDirective.white_balance` field. If the chroma
   measurement fails (subprocess error, parse failure, or insufficient samples), the `white_balance`
   field is omitted from the directive, the timeline is saved with the remaining grade fields intact,
   and a `warnings` entry describes the failure (mirrors the existing luma-measurement degradation
@@ -38,8 +38,8 @@ Color grading depth — white balance, saturation/contrast/gamma, and 3D-LUT (sp
 
 ### Added (`clipwright-render` v0.17.0)
 
-- **WB filter stage (`colorbalance`)**: when `ColorDirective.white_balance` is present, a
-  `colorbalance` filter is injected before the existing `eq` stage. When absent, the stage is
+- **WB filter stage (`colorchannelmixer`)**: when `ColorDirective.white_balance` is present, a
+  `colorchannelmixer` per-channel gain filter is injected before the existing `eq` stage. When absent, the stage is
   a no-op.
 
 - **3D-LUT filter stage (`lut3d`)**: when `ColorDirective.lut` is present, `lut3d=file='…'` is
@@ -47,7 +47,7 @@ Color grading depth — white balance, saturation/contrast/gamma, and 3D-LUT (sp
   `clipwright.pathpolicy.validate_source_file` (defence-in-depth; the OTIO is untrusted). When
   absent, the stage is a no-op.
 
-- **Grade application order**: `colorbalance` (WB) → `eq` (saturation / contrast / gamma) →
+- **Grade application order**: `colorchannelmixer` (WB per-channel gain) → `eq` (saturation / contrast / gamma) →
   `lut3d`. Existing single-field `eq` calls from v0.16.0 and earlier are byte-for-byte identical
   when `white_balance` and `lut` are absent.
 

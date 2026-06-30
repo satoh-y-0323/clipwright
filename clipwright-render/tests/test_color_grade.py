@@ -4,7 +4,7 @@ Covers _RenderWhiteBalance, _RenderColorGrade, _validate_color_grade,
 _append_wb_filter, _append_lut3d_filter, and build_plan with color directives.
 
 Requirements: architecture-report-20260701-075722.md §2.2 / §5 / §7
-(WB redesign: colorbalance → colorchannelmixer per-channel gain)
+(WB uses colorchannelmixer per-channel gain)
 FR-7/8/9 (WB + lut3d stages), NFR-2/4/5/6 (security/numeric/escape/yuv420p),
 AC-4/5/6/8 (LUT pathpolicy / ordering / numeric lock / backward compat).
 """
