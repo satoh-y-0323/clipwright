@@ -992,3 +992,43 @@ class TestColorDirectiveNewFields:
         assert d.measured is not None
         assert d.measured.uavg == pytest.approx(132.0)
         assert d.lut == "/media/luts/filmic.cube"  # Red: ValidationError (extra=forbid)
+
+
+# ===========================================================================
+# SR-V-001: ColorDirective.lut min_length=1
+# ===========================================================================
+
+
+class TestColorDirectiveLutMinLength:
+    """SR-V-001: ColorDirective.lut must have min_length=1 (parity with DetectColorOptions.lut).
+
+    DetectColorOptions.lut already enforces min_length=1.  ColorDirective.lut
+    currently only has max_length=4096 — an empty string can be stored in the
+    directive, which is meaningless and opens a CWE-20 injection path.
+
+    test_color_directive_lut_empty_string_rejected is RED until schemas.py
+    adds min_length=1 to the ColorDirective.lut Field annotation.
+    test_color_directive_lut_nonempty_accepted is a regression guard (Green).
+    """
+
+    def test_color_directive_lut_empty_string_rejected(self) -> None:
+        """ColorDirective with lut='' must raise ValidationError (min_length=1 absent on current schema)."""
+        with pytest.raises(ValidationError):
+            ColorDirective(
+                version="0.3.0",
+                kind="color",
+                target_luma=128.0,
+                eq=EqParams(),
+                lut="",
+            )
+
+    def test_color_directive_lut_nonempty_accepted(self) -> None:
+        """A non-empty lut value must continue to be accepted (regression guard)."""
+        d = ColorDirective(
+            version="0.3.0",
+            kind="color",
+            target_luma=128.0,
+            eq=EqParams(),
+            lut="grade.cube",
+        )
+        assert d.lut == "grade.cube"

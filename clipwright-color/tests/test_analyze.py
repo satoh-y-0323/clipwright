@@ -791,8 +791,8 @@ _SIGNALSTATS_STDERR_NO_CHROMA = """\
 class TestChromaExtraction:
     """Verify UAVG/VAVG median extraction via the same single ffmpeg signalstats pass.
 
-    All tests in this class are RED until BrightnessMeasured gains uavg/vavg fields
-    and _parse_signalstats is extended with _UAVG_RE/_VAVG_RE (ADR-CO-9, FR-2).
+    Validates ADR-CO-9 / FR-2: chroma fields are extracted in the same ffmpeg pass
+    that produces YAVG, using median (not mean) aggregation across sampled frames.
     """
 
     def test_uavg_is_median_not_mean(self, tmp_path: Path) -> None:
@@ -818,8 +818,6 @@ class TestChromaExtraction:
 
         measured = result["measured"]
         assert measured is not None
-        # Red: measured["uavg"] raises KeyError until BrightnessMeasured and
-        # _parse_signalstats are updated (ADR-CO-9).
         # median([120, 122, 126]) = 122.0  (mean would be 122.667)
         assert measured["uavg"] == pytest.approx(122.0, abs=0.01), (
             "D3: uavg must be median([120,122,126])=122.0, not mean=122.667."
@@ -848,7 +846,6 @@ class TestChromaExtraction:
 
         measured = result["measured"]
         assert measured is not None
-        # Red: KeyError until schema + parser are updated.
         # median([130, 132, 136]) = 132.0  (mean would be 132.667)
         assert measured["vavg"] == pytest.approx(132.0, abs=0.01), (
             "D3: vavg must be median([130,132,136])=132.0, not mean=132.667."
@@ -885,7 +882,6 @@ class TestChromaExtraction:
         assert measured["yavg"] == pytest.approx(100.0, abs=0.01), (
             "FR-10: yavg must remain mean([80,100,120])=100.0 regardless of chroma presence."
         )
-        # Red until uavg field is added to BrightnessMeasured and _parse_signalstats:
         assert measured["uavg"] == pytest.approx(122.0, abs=0.01), (
             "ADR-CO-9: uavg must be populated in the same pass that produced yavg."
         )
@@ -928,7 +924,6 @@ class TestChromaExtraction:
         )
         measured = result["measured"]
         assert measured is not None
-        # Red until BrightnessMeasured has uavg field:
         assert measured.get("uavg") is not None, (
             "FR-2: uavg must be populated in measured when UAVG lines are present in stderr."
         )
@@ -944,9 +939,8 @@ class TestChromaParseFailure:
 
     Brightness measurement must still succeed (measured is not None) — FR-4 finer-grained
     case, distinct from the full U-1 degradation where the whole measured is None.
-
-    Tests asserting "uavg" in measured are RED until BrightnessMeasured gains the optional
-    uavg/vavg fields (ADR-CO-9 §3.2).
+    Validates that BrightnessMeasured.model_dump() includes uavg/vavg keys (as None)
+    when chroma lines are absent from signalstats output (ADR-CO-9 §3.2).
     """
 
     def test_uavg_field_present_in_measured_dict_when_chroma_absent(
@@ -979,7 +973,6 @@ class TestChromaParseFailure:
         assert measured is not None, (
             "FR-4: brightness must still be measured when UAVG/VAVG lines are absent."
         )
-        # Red: 'uavg' key absent in model_dump() because BrightnessMeasured has no such field.
         assert "uavg" in measured, (
             "FR-4: measured dict must include 'uavg' key (None when chroma absent)."
         )
@@ -1007,7 +1000,6 @@ class TestChromaParseFailure:
 
         measured = result["measured"]
         assert measured is not None
-        # Red: KeyError until BrightnessMeasured has uavg field.
         assert measured["uavg"] is None, (
             "FR-4: uavg must be None when no UAVG lines found in signalstats output."
         )
@@ -1015,10 +1007,7 @@ class TestChromaParseFailure:
     def test_vavg_field_present_in_measured_dict_when_chroma_absent(
         self, tmp_path: Path
     ) -> None:
-        """BrightnessMeasured.model_dump() must include 'vavg' key (as None) when absent.
-
-        Red: BrightnessMeasured currently has no vavg field.
-        """
+        """BrightnessMeasured.model_dump() must include 'vavg' key (as None) when absent."""
         from clipwright_color.analyze import (
             measure_brightness,  # type: ignore[import-not-found]
         )
@@ -1040,7 +1029,6 @@ class TestChromaParseFailure:
 
         measured = result["measured"]
         assert measured is not None
-        # Red: 'vavg' key absent in model_dump() because BrightnessMeasured has no such field.
         assert "vavg" in measured, (
             "FR-4: measured dict must include 'vavg' key (None when chroma absent)."
         )
@@ -1068,7 +1056,6 @@ class TestChromaParseFailure:
 
         measured = result["measured"]
         assert measured is not None
-        # Red: KeyError until BrightnessMeasured has vavg field.
         assert measured["vavg"] is None, (
             "FR-4: vavg must be None when no VAVG lines found in signalstats output."
         )
@@ -1076,8 +1063,9 @@ class TestChromaParseFailure:
     def test_brightness_still_measures_when_chroma_absent(self, tmp_path: Path) -> None:
         """Brightness (yavg, sampled_frames) must be populated even when chroma absent (FR-4).
 
-        Regression guard: this test is GREEN before implementation — verifies brightness
-        is not accidentally broken when the chroma extraction code is added.
+        Regression guard: verifies that brightness measurement is not broken when
+        UAVG/VAVG lines are absent — chroma absence is a finer-grained degradation,
+        distinct from the full U-1 case where the whole measured dict is None.
         """
         from clipwright_color.analyze import (
             measure_brightness,  # type: ignore[import-not-found]

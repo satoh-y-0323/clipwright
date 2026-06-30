@@ -21,6 +21,7 @@ import opentimelineio as otio
 import pytest
 from clipwright.errors import ErrorCode
 from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo
+from pydantic import ValidationError
 
 from clipwright_color.schemas import (  # type: ignore[import-not-found]
     DetectColorOptions,
@@ -871,4 +872,50 @@ class TestLutCubePathpolicy:
         )
         assert "secret_dir_sentinel" not in hint, (
             f"CWE-209: full .cube path leaked in hint: {hint!r}"
+        )
+
+
+# ===========================================================================
+# SR-INJ-002: DetectColorOptions.lut single-quote / control-char rejection
+# ===========================================================================
+
+
+class TestDetectColorOptionsLutInjection:
+    """SR-INJ-002: DetectColorOptions.lut must reject paths containing injection chars.
+
+    Mirrors the _validate_path_no_single_quote field validator used on
+    SubtitleOptions.path / image_path / font_path.  A lut path that contains a
+    single-quote or a control character (\\x00, \\n) can escape ffmpeg argument
+    quoting in filter-graph strings and must be rejected at the schema level.
+
+    All three pytest.raises tests are RED until schemas.py adds the validator to
+    the DetectColorOptions.lut field.  The CWE-209 test verifies that the
+    validation error does not echo the offending path value.
+    """
+
+    def test_single_quote_in_lut_path_rejected(self) -> None:
+        """lut path containing single-quote must raise ValidationError (injection guard)."""
+        with pytest.raises(ValidationError):
+            DetectColorOptions(lut="/luts/a'b.cube")
+
+    def test_null_byte_in_lut_path_rejected(self) -> None:
+        """lut path containing null byte (\\x00) must raise ValidationError (injection guard)."""
+        with pytest.raises(ValidationError):
+            DetectColorOptions(lut="/luts/\x00grade.cube")
+
+    def test_newline_in_lut_path_rejected(self) -> None:
+        """lut path containing newline character (\\n) must raise ValidationError."""
+        with pytest.raises(ValidationError):
+            DetectColorOptions(lut="/luts/\ngrade.cube")
+
+    def test_single_quote_error_does_not_echo_path(self) -> None:
+        """CWE-209: ValidationError for single-quote lut must not expose the offending path value."""
+        _SENTINEL = "unique_sentinel_xzy987_lutpath"
+        with pytest.raises(ValidationError) as exc_info:
+            DetectColorOptions(lut=f"/luts/{_SENTINEL}'.cube")
+        # After implementation: the validation error text must not echo the sentinel value.
+        # Requires model_config hide_input_in_errors=True or equivalent scrubbing.
+        assert _SENTINEL not in str(exc_info.value), (
+            f"CWE-209: offending path value must not appear in the ValidationError text."
+            f" Got: {str(exc_info.value)!r}"
         )

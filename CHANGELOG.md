@@ -32,7 +32,7 @@ Color grading depth — white balance, saturation/contrast/gamma, and 3D-LUT (sp
   control over the look.
 
 - **Caller 3D-LUT**: `DetectColorOptions` gains an optional `lut` field (path to a `.cube` file).
-  The path is validated (existence, extension, no symlinks) at detect time and written into a new
+  The path is validated (existence, regular-file check, no symlinks) at detect time and written into a new
   `ColorDirective.lut` field. All new `ColorDirective` fields are `Optional` with `None` default,
   maintaining backward compatibility with directives written by v0.2.x.
 

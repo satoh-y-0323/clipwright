@@ -1354,3 +1354,251 @@ class TestDistinctOtioNfr9:
             "NFR-9: output == timeline must always be rejected."
             f" Got code: {result['error']['code']}"
         )
+
+
+# ===========================================================================
+# CR-M-1: caller WB is-None semantics — zero values must produce neutral WB
+# ===========================================================================
+
+
+class TestCallerWbZeroIsNeutral:
+    """CR-M-1: temperature=0.0 / tint=0.0 supplied explicitly must produce neutral WB.
+
+    The implementation uses ``temperature or 0.0`` which treats 0.0 as falsy.
+    If the has_caller_wb check ever shifts from ``is not None`` to truthiness
+    (``if temperature:``), then 0.0 would be silently ignored and auto-WB or
+    no-WB would be used instead of the explicit neutral caller intent.
+
+    These regression tests lock in the correct is-None semantics so that any
+    future regression from falsy-check changes is caught immediately.
+
+    Mock strategy: measure_brightness is patched to return chroma data that
+    would produce a non-neutral auto-WB (uavg=148, vavg=138).  If the caller
+    zero override is incorrectly ignored, the directive would contain non-zero
+    WB values, failing the neutral assertions.
+    """
+
+    def test_temperature_zero_tint_zero_explicit_is_neutral(
+        self, tmp_path: Path
+    ) -> None:
+        """temperature=0.0 and tint=0.0 supplied explicitly must produce neutral white_balance.
+
+        Regression guard: if implementation uses ``temperature or 0.0`` (falsy shortcut)
+        and also checks ``if temperature:`` for has_caller_wb, then 0.0 would fall through
+        to auto-WB.  Auto-WB from (uavg=148, vavg=138) produces non-zero r/g/b.
+        Neutral is r=0, g=0, b=0 per §4.3 mapping (temperature=0 → no r/b shift;
+        tint=0 → no g shift).
+        """
+        from clipwright_color.color import (
+            detect_color,  # type: ignore[import-not-found]
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "out.otio"
+        opts = DetectColorOptions(
+            target_luma=128.0,
+            temperature=0.0,
+            tint=0.0,
+        )
+
+        # chroma data that would produce non-neutral auto-WB if caller override ignored
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(
+                "clipwright_color.color.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_color.color.measure_brightness",
+                lambda media_path, options: _fake_measured_with_chroma(
+                    yavg=128.0, uavg=148.0, vavg=138.0
+                ),
+            )
+            result = detect_color(
+                media=str(media), output=str(output), options=opts, timeline=None
+            )
+
+        assert result["ok"] is True, f"error={result.get('error')}"
+        tl = otio.adapters.read_from_file(str(output))
+        wb = tl.metadata["clipwright"]["color"].get("white_balance")
+        assert wb is not None, (
+            "CR-M-1: white_balance must be written when caller explicitly supplies"
+            " temperature=0.0 / tint=0.0 (is-not-None check must trigger override)."
+        )
+        assert wb["r"] == pytest.approx(0.0, abs=1e-6), (
+            f"CR-M-1: r must be 0.0 (neutral) for temperature=0.0, got {wb['r']}"
+        )
+        assert wb["b"] == pytest.approx(0.0, abs=1e-6), (
+            f"CR-M-1: b must be 0.0 (neutral) for temperature=0.0, got {wb['b']}"
+        )
+        assert wb["g"] == pytest.approx(0.0, abs=1e-6), (
+            f"CR-M-1: g must be 0.0 (neutral) for tint=0.0, got {wb['g']}"
+        )
+
+    def test_temperature_0_5_produces_correct_axis_mapping(
+        self, tmp_path: Path
+    ) -> None:
+        """temperature=0.5 must produce r=+0.5, b=-0.5, g=0.0 (§4.3 mapping)."""
+        from clipwright_color.color import (
+            detect_color,  # type: ignore[import-not-found]
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "out.otio"
+        opts = DetectColorOptions(
+            target_luma=128.0,
+            temperature=0.5,
+        )
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(
+                "clipwright_color.color.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_color.color.measure_brightness",
+                lambda media_path, options: _fake_measured(yavg=128.0),
+            )
+            result = detect_color(
+                media=str(media), output=str(output), options=opts, timeline=None
+            )
+
+        assert result["ok"] is True, f"error={result.get('error')}"
+        tl = otio.adapters.read_from_file(str(output))
+        wb = tl.metadata["clipwright"]["color"].get("white_balance")
+        assert wb is not None, "white_balance must be written for temperature=0.5"
+        assert wb["r"] == pytest.approx(0.5, abs=1e-4), (
+            f"§4.3: r must equal +temperature (0.5), got {wb['r']}"
+        )
+        assert wb["b"] == pytest.approx(-0.5, abs=1e-4), (
+            f"§4.3: b must equal -temperature (-0.5), got {wb['b']}"
+        )
+        assert wb["g"] == pytest.approx(0.0, abs=1e-4), (
+            f"§4.3: g must be 0.0 when tint not supplied, got {wb['g']}"
+        )
+
+    def test_tint_0_5_produces_correct_g_axis(self, tmp_path: Path) -> None:
+        """tint=0.5 must produce g=-0.5; r and b stay 0.0 (§4.3 mapping)."""
+        from clipwright_color.color import (
+            detect_color,  # type: ignore[import-not-found]
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "out.otio"
+        opts = DetectColorOptions(
+            target_luma=128.0,
+            tint=0.5,
+        )
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(
+                "clipwright_color.color.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_color.color.measure_brightness",
+                lambda media_path, options: _fake_measured(yavg=128.0),
+            )
+            result = detect_color(
+                media=str(media), output=str(output), options=opts, timeline=None
+            )
+
+        assert result["ok"] is True, f"error={result.get('error')}"
+        tl = otio.adapters.read_from_file(str(output))
+        wb = tl.metadata["clipwright"]["color"].get("white_balance")
+        assert wb is not None, "white_balance must be written for tint=0.5"
+        assert wb["g"] == pytest.approx(-0.5, abs=1e-4), (
+            f"§4.3: g must equal -tint (-0.5), got {wb['g']}"
+        )
+        assert wb["r"] == pytest.approx(0.0, abs=1e-4), (
+            f"§4.3: r must be 0.0 when temperature not supplied, got {wb['r']}"
+        )
+        assert wb["b"] == pytest.approx(0.0, abs=1e-4), (
+            f"§4.3: b must be 0.0 when temperature not supplied, got {wb['b']}"
+        )
+
+
+# ===========================================================================
+# SR-L-2: FR-4 degradation warning must not expose internal names
+# ===========================================================================
+
+
+class TestFr4WarningWording:
+    """SR-L-2 / SR-R-001: FR-4 warning must use fixed public wording, not internal names.
+
+    The current warning string contains the internal field names "uavg/vavg" and the
+    implementation annotation "(FR-4)".  These are internal implementation details
+    that must not appear in externally visible messages (CWE-209 / NFR-3).
+
+    The warning must still convey that white balance could not be derived and that
+    chroma measurement was unavailable — in fixed, user-facing wording.
+
+    test_fr4_warning_contains_no_internal_names is RED until color.py replaces the
+    current warning string with one that omits "uavg", "vavg", "(FR-4)", "FR-4".
+    """
+
+    def test_fr4_warning_contains_no_internal_names(self, tmp_path: Path) -> None:
+        """FR-4 WB warning must not contain internal names: uavg, vavg, (FR-4), FR-4."""
+        from clipwright_color.color import (
+            detect_color,  # type: ignore[import-not-found]
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "out.otio"
+        opts = DetectColorOptions(target_luma=128.0)
+
+        # chroma absent — FR-4 degradation path
+        measured_no_chroma: dict[str, Any] = {
+            "measured": {
+                "yavg": 128.0,
+                "ymin": None,
+                "ymax": None,
+                "sampled_frames": 10,
+            },
+            "warnings": [],
+        }
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(
+                "clipwright_color.color.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_color.color.measure_brightness",
+                lambda media_path, options: measured_no_chroma,
+            )
+            result = detect_color(
+                media=str(media), output=str(output), options=opts, timeline=None
+            )
+
+        assert result["ok"] is True, f"Prerequisite failed: {result.get('error')}"
+
+        # Find the FR-4 WB degradation warning
+        warnings: list[str] = result.get("warnings", [])
+        wb_warnings = [
+            w
+            for w in warnings
+            if any(kw in w.lower() for kw in ("white", "balance", "chroma", "wb"))
+        ]
+        assert len(wb_warnings) > 0, (
+            "FR-4: a white-balance degradation warning must be present. "
+            f"Got warnings: {warnings!r}"
+        )
+
+        for w in wb_warnings:
+            w_lower = w.lower()
+            assert "uavg" not in w_lower, (
+                f"SR-R-001/CWE-209: warning must not expose internal name 'uavg'. Got: {w!r}"
+            )
+            assert "vavg" not in w_lower, (
+                f"SR-R-001/CWE-209: warning must not expose internal name 'vavg'. Got: {w!r}"
+            )
+            assert "(fr-4)" not in w_lower, (
+                f"SR-R-001: warning must not expose implementation tag '(FR-4)'. Got: {w!r}"
+            )
+            assert "fr-4" not in w_lower, (
+                f"SR-R-001: warning must not expose implementation tag 'FR-4'. Got: {w!r}"
+            )

@@ -1,13 +1,7 @@
-"""test_color_grade.py — Red-phase tests for WB/lut3d filter stages in clipwright-render.
+"""test_color_grade.py — Unit tests for WB / lut3d color grade stages in clipwright-render.
 
-Target functions (NOT YET IMPLEMENTED; all tests are expected to FAIL with
-ImportError, AttributeError, or AssertionError):
-  - _RenderWhiteBalance         — reader model mirroring WhiteBalanceParams (§6.1)
-  - _RenderColorGrade           — aggregate {eq, white_balance, lut} (§6.1 / ADR-CO-8)
-  - _validate_color_grade(color, otio_dir) -> _RenderColorGrade | None  (§6.1)
-  - _append_wb_filter(parts, label, wb) -> str                          (§6.3 / FR-7)
-  - _append_lut3d_filter(parts, label, lut_path) -> str                 (§6.3 / FR-8)
-  - build_plan(..., color=color_with_white_balance_and_lut)             (§6.2 / FR-9)
+Covers _RenderWhiteBalance, _RenderColorGrade, _validate_color_grade,
+_append_wb_filter, _append_lut3d_filter, and build_plan with color directives.
 
 Requirements: architecture-report-20260630-231945.md §5.2 / §6 / D4 / D6
 FR-7/8/9 (WB + lut3d stages), NFR-2/4/5/6 (security/numeric/escape/yuv420p),
@@ -913,6 +907,72 @@ class TestLutPathSecurity:
             self._validate_grade(color, otio_dir=tmp_path)
         assert str(link) not in exc_info.value.message
 
+    # -----------------------------------------------------------------------
+    # SR-M-1 [SR-INJ-002]: single-quote / control-char rejection (reader side)
+    # Mirror of image_path (plan.py L572) and font_path (plan.py L1298).
+    # FAILS until _validate_color_grade adds the single-quote / control-char check.
+    # -----------------------------------------------------------------------
+
+    def test_lut_single_quote_raises_invalid_input(self, tmp_path: Path) -> None:
+        """lut path with single quote → INVALID_INPUT before filtergraph (SR-M-1 / CWE-78).
+
+        A real file is created so that path-existence is NOT the failure cause;
+        the single-quote character must be the sole trigger.
+        """
+        cube = tmp_path / "a'b.cube"
+        cube.write_text("LUT_3D_SIZE 2\n")
+        color: dict[str, Any] = {**_COLOR_DICT_BASE, "lut": str(cube)}
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._validate_grade(color, otio_dir=tmp_path)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_lut_single_quote_error_no_value_leak(self, tmp_path: Path) -> None:
+        """INVALID_INPUT for single-quote lut must not expose the offending path (CWE-209 / SR-M-1)."""
+        cube = tmp_path / "a'b.cube"
+        cube.write_text("LUT_3D_SIZE 2\n")
+        offending_lut = str(cube)
+        color: dict[str, Any] = {**_COLOR_DICT_BASE, "lut": offending_lut}
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._validate_grade(color, otio_dir=tmp_path)
+        assert offending_lut not in exc_info.value.message
+        assert "a'b.cube" not in exc_info.value.message
+        if exc_info.value.hint:
+            assert offending_lut not in exc_info.value.hint
+
+    def test_lut_single_quote_error_no_cause_chain(self, tmp_path: Path) -> None:
+        """INVALID_INPUT for single-quote lut must suppress cause chain (CWE-209 / SR-M-1)."""
+        cube = tmp_path / "a'b.cube"
+        cube.write_text("LUT_3D_SIZE 2\n")
+        color: dict[str, Any] = {**_COLOR_DICT_BASE, "lut": str(cube)}
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._validate_grade(color, otio_dir=tmp_path)
+        assert exc_info.value.__cause__ is None
+
+    def test_lut_control_char_raises_invalid_input(self, tmp_path: Path) -> None:
+        """lut path with a control character → INVALID_INPUT (SR-M-1 / CWE-78).
+
+        Uses a path containing \\x01 which cannot be a valid filename component
+        on Windows; on all platforms the check must fire before any filesystem call.
+        """
+        bad_lut = str(tmp_path / "bad\x01char.cube")
+        color: dict[str, Any] = {**_COLOR_DICT_BASE, "lut": bad_lut}
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._validate_grade(color, otio_dir=tmp_path)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_lut_single_quote_build_plan_rejected(self, tmp_path: Path) -> None:
+        """build_plan with single-quote lut raises INVALID_INPUT; no broken filtergraph emitted.
+
+        Mirrors the contract for image_path / font_path: the plan must be rejected
+        before any filter_complex string is constructed (SR-M-1 / CWE-78).
+        """
+        cube = tmp_path / "a'b.cube"
+        cube.write_text("LUT_3D_SIZE 2\n")
+        color: dict[str, Any] = {**_COLOR_DICT_BASE, "lut": str(cube)}
+        with pytest.raises(ClipwrightError) as exc_info:
+            _single_source_plan_grade(color=color)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
 
 # ===========================================================================
 # Aspect CG-10: NFR-6 yuv420p pin remains intact after lut3d stage
@@ -952,3 +1012,79 @@ class TestYuv420pPin:
         assert "-pix_fmt" in plan.ffmpeg_args, (
             "-pix_fmt yuv420p pin must be in ffmpeg_args (post-filter)"
         )
+
+
+# ===========================================================================
+# Aspect CG-11: SR-L-3 — _otio_dir Path(".") / CWD fallback is unsafe
+# ===========================================================================
+
+
+class TestLutOtioDirFallback:
+    """SR-L-3: lut boundary must not depend on runtime CWD when OTIO path is absent.
+
+    When build_plan receives ranges without a _timeline_path attribute (OTIO path
+    is None), the current code sets _otio_dir = Path(".") and passes it to
+    _validate_color_grade.  A RELATIVE lut ref then resolves against the process
+    CWD, which is non-deterministic and can silently accept files that the caller
+    never intended to expose.
+
+    The fix: detect the (no-timeline-path + relative-lut) combination and raise
+    INVALID_INPUT with fixed wording before any filesystem access.
+
+    FAILS until plan.py removes the Path(".") fallback for relative luts.
+    """
+
+    def test_relative_lut_no_otio_path_raises_invalid_input(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Relative lut + no OTIO path (CWD fallback) → INVALID_INPUT, not silent acceptance.
+
+        Creates the .cube file in tmp_path and changes CWD to tmp_path so that
+        the current CWD-fallback logic WOULD accept it.  After the fix the check
+        must reject it before resolving against CWD at all.
+        """
+        cube = tmp_path / "lut.cube"
+        cube.write_text("LUT_3D_SIZE 2\n")
+        monkeypatch.chdir(tmp_path)
+
+        from clipwright_render.plan import _validate_color_grade  # type: ignore[attr-defined]
+
+        color: dict[str, Any] = {**_COLOR_DICT_BASE, "lut": "lut.cube"}
+        # Pass Path(".") as otio_dir — the value build_plan uses when OTIO path is None.
+        with pytest.raises(ClipwrightError) as exc_info:
+            _validate_color_grade(color, Path("."))
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_relative_lut_error_no_value_leak(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Relative lut error message must not expose the lut value (CWE-209 / SR-L-3)."""
+        cube = tmp_path / "lut.cube"
+        cube.write_text("LUT_3D_SIZE 2\n")
+        monkeypatch.chdir(tmp_path)
+
+        from clipwright_render.plan import _validate_color_grade  # type: ignore[attr-defined]
+
+        color: dict[str, Any] = {**_COLOR_DICT_BASE, "lut": "lut.cube"}
+        with pytest.raises(ClipwrightError) as exc_info:
+            _validate_color_grade(color, Path("."))
+        assert "lut.cube" not in exc_info.value.message
+        if exc_info.value.hint:
+            assert "lut.cube" not in exc_info.value.hint
+
+    def test_absolute_lut_no_otio_path_not_spuriously_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        """Absolute lut with no OTIO path validates normally — no spurious rejection (SR-L-3).
+
+        This is a regression guard: the fix must not break the absolute-lut path,
+        which is the normal production path (OTIO holds absolute refs).
+        """
+        from clipwright_render.plan import _validate_color_grade  # type: ignore[attr-defined]
+
+        cube = tmp_path / "film.cube"
+        cube.write_text("LUT_3D_SIZE 2\n")
+        color: dict[str, Any] = {**_COLOR_DICT_BASE, "lut": str(cube)}
+        # Pass Path(".") to simulate the no-OTIO-path scenario used in build_plan.
+        grade = _validate_color_grade(color, Path("."))
+        assert grade.lut is not None
