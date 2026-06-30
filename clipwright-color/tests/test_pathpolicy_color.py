@@ -919,3 +919,56 @@ class TestDetectColorOptionsLutInjection:
             f"CWE-209: offending path value must not appear in the ValidationError text."
             f" Got: {str(exc_info.value)!r}"
         )
+
+    # -------------------------------------------------------------------------
+    # SR-L-1-new: DEL (0x7F) control-char parity with reader-side _CONTROL_CHARS
+    # -------------------------------------------------------------------------
+
+    def test_del_char_in_lut_path_rejected(self) -> None:
+        """lut path containing DEL (\\x7f / U+007F) must raise ValidationError.
+
+        SR-L-1-new regression: the writer-side validator currently rejects
+        c < '\\x20' (0x00-0x1F) but NOT 0x7F (DEL), while the reader-side
+        _CONTROL_CHARS in clipwright-render plan.py rejects 0x00-0x1F PLUS 0x7F.
+        Asymmetry: a DEL-bearing lut path passes the writer but fails the reader.
+
+        RED until _validate_lut_no_injection_chars adds `or c == "\\x7f"`.
+        """
+        with pytest.raises(ValidationError):
+            DetectColorOptions(lut="/luts/grade\x7ftest.cube")
+
+    def test_del_char_error_does_not_echo_path(self) -> None:
+        """CWE-209: ValidationError for DEL-bearing lut must not expose the path value.
+
+        SR-L-1-new / CWE-209: model_config hide_input_in_errors=True is present;
+        confirms it suppresses the path value for the 0x7F (DEL) case too.
+
+        RED until _validate_lut_no_injection_chars rejects 0x7F (today no
+        ValidationError is raised for DEL, so pytest.raises itself fails first).
+        """
+        _SENTINEL = "grade_del_sentinel_7f"
+        with pytest.raises(ValidationError) as exc_info:
+            DetectColorOptions(lut=f"/luts/{_SENTINEL}\x7ftest.cube")
+        err_text = str(exc_info.value)
+        assert _SENTINEL not in err_text, (
+            "CWE-209: DEL-path value must not appear in the ValidationError text."
+            f" Got: {err_text!r}"
+        )
+        assert "test" not in err_text, (
+            "CWE-209: path fragment 'test' must not appear in ValidationError."
+            f" Got: {err_text!r}"
+        )
+        assert "/luts/" not in err_text, (
+            "CWE-209: path fragment '/luts/' must not appear in ValidationError."
+            f" Got: {err_text!r}"
+        )
+
+    def test_tilde_char_in_lut_path_not_rejected(self) -> None:
+        """lut path containing '~' (chr(0x7E)) must NOT be rejected by the control-char rule.
+
+        Parity sanity (C): only 0x00-0x1F and 0x7F are in the rejection set;
+        0x7E '~' is valid printable ASCII and must be accepted.
+        Pins the exact upper boundary of the rejection set.
+        """
+        opts = DetectColorOptions(lut="/luts/grade~test.cube")
+        assert opts.lut == "/luts/grade~test.cube"

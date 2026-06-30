@@ -910,7 +910,7 @@ class TestLutPathSecurity:
     # -----------------------------------------------------------------------
     # SR-M-1 [SR-INJ-002]: single-quote / control-char rejection (reader side)
     # Mirror of image_path (plan.py L572) and font_path (plan.py L1298).
-    # FAILS until _validate_color_grade adds the single-quote / control-char check.
+    # Validates SR-M-1 / CWE-78: single-quote / control-char rejection (reader side).
     # -----------------------------------------------------------------------
 
     def test_lut_single_quote_raises_invalid_input(self, tmp_path: Path) -> None:
@@ -1031,7 +1031,7 @@ class TestLutOtioDirFallback:
     The fix: detect the (no-timeline-path + relative-lut) combination and raise
     INVALID_INPUT with fixed wording before any filesystem access.
 
-    FAILS until plan.py removes the Path(".") fallback for relative luts.
+    Validates that the (no-timeline-path + relative-lut) combination raises INVALID_INPUT.
     """
 
     def test_relative_lut_no_otio_path_raises_invalid_input(
