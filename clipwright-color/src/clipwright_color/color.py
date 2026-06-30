@@ -20,10 +20,13 @@ Design decisions:
   files regardless of directory; relative traversal rejected (CWE-22).
 - measured=None: skip directive, still save timeline + return warning (U-1 parity).
 - brightness = clamp((target_luma - yavg) / 255.0, -1.0, 1.0).
-- Auto WB (§4.2): BT.601 gray-world inverse-cast from uavg/vavg; WB_STRENGTH
-  module constant scales correction strength (default 1.0 = full correction).
-- Caller WB override (§4.3): temperature/tint normalised [-1,1] axes take
-  precedence over auto derivation when either is supplied.
+- Auto WB (§4.2): von Kries gray-world gain model.  BT.601 JFIF full-range
+  affine inverse recovers per-channel RGB averages from yavg/uavg/vavg.
+  Gain = gray / channel_avg, interpolated by WB_STRENGTH, clamped to
+  [WB_GAIN_MIN, WB_GAIN_MAX].  Neutral scene (all gains==1.0) → omit WB (§3.3).
+- Caller WB override (§4.3): temperature/tint normalised [-1,1] axes mapped to
+  gain via WB_AXIS_SPAN; takes precedence over auto derivation when either is
+  supplied.  All-1.0 gains still trigger §3.3 omit.
 - FR-4 degradation: measured present but uavg/vavg absent → directive written
   WITH brightness+eq, white_balance omitted (None), WB warning appended.
 - eq population (FR-1): saturation/contrast/gamma from options; neutral defaults.
@@ -68,9 +71,16 @@ from clipwright_color.schemas import (
     WhiteBalanceParams,
 )
 
-# Module constant: WB correction strength multiplier applied to gray-world shifts.
-# 1.0 = full correction; lower values bias toward retaining the original look.
+# WB module constants (von Kries gray-world gain model, §4.2).
+# WB_STRENGTH: gain interpolation toward neutral (1.0 = full correction).
+# WB_GAIN_MIN/MAX: output clamp band for per-channel gains.
+# _AVG_FLOOR: minimum denominator to avoid division by zero or near-zero channel avg.
+# WB_AXIS_SPAN: half-range of the temperature/tint → gain linear map (§4.3).
 WB_STRENGTH = 1.0
+WB_GAIN_MIN = 0.5
+WB_GAIN_MAX = 2.0
+_AVG_FLOOR = 1.0
+WB_AXIS_SPAN = 0.5
 
 
 def detect_color(
@@ -219,7 +229,9 @@ def _detect_color_inner(
             white_balance = _derive_caller_wb(options.temperature, options.tint)
         elif measured_obj.uavg is not None and measured_obj.vavg is not None:
             # Auto gray-world derivation from available chroma (§4.2)
-            white_balance = _derive_auto_wb(measured_obj.uavg, measured_obj.vavg)
+            white_balance = _derive_auto_wb(
+                measured_obj.yavg, measured_obj.uavg, measured_obj.vavg
+            )
         else:
             # FR-4: chroma absent — omit white_balance and emit diagnostic warning
             white_balance = None
@@ -228,6 +240,15 @@ def _detect_color_inner(
                 " chroma measurement was not available."
                 " The white_balance directive will be omitted."
             )
+
+        # §3.3 Neutral→omit: all-1.0 gains are a no-op; omit white_balance entirely.
+        if (
+            white_balance is not None
+            and white_balance.r == 1.0
+            and white_balance.g == 1.0
+            and white_balance.b == 1.0
+        ):
+            white_balance = None
 
         # EqParams population (FR-1): use caller-supplied values or neutral defaults
         final_saturation = options.saturation if options.saturation is not None else 1.0
@@ -310,25 +331,50 @@ def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
 
 
-def _derive_auto_wb(uavg: float, vavg: float) -> WhiteBalanceParams:
-    """Derive colorbalance midtone shifts from BT.601 gray-world inverse-cast (§4.2).
+def _wb_gain(gray: float, channel_avg: float) -> float:
+    """Compute a von Kries per-channel gain, interpolated by WB_STRENGTH.
 
-    Neutral chroma in 8-bit YUV is 128. Offsets dU (Cb / blue-difference) and
-    dV (Cr / red-difference) are mapped to RGB midtone correction shifts and
-    normalised to [-1,1] by dividing by 255, then scaled by WB_STRENGTH.
+    raw = gray / max(channel_avg, _AVG_FLOOR) is the ideal correction gain.
+    WB_STRENGTH interpolates between neutral (1.0) and full correction (raw).
+    Result is clamped to [WB_GAIN_MIN, WB_GAIN_MAX].
 
     Args:
+        gray: Scene gray-world reference (mean of per-channel RGB averages).
+        channel_avg: Per-channel RGB average recovered from YUV.
+
+    Returns:
+        Gain in [WB_GAIN_MIN, WB_GAIN_MAX].
+    """
+    raw = gray / max(channel_avg, _AVG_FLOOR)
+    scaled = 1.0 + WB_STRENGTH * (raw - 1.0)
+    return _clamp(scaled, WB_GAIN_MIN, WB_GAIN_MAX)
+
+
+def _derive_auto_wb(yavg: float, uavg: float, vavg: float) -> WhiteBalanceParams:
+    """Derive per-channel RGB gains from BT.601 gray-world inverse-cast (§4.2).
+
+    Recovers per-channel RGB averages from YUV using the BT.601 JFIF full-range
+    affine inverse.  The gray-world reference (mean of R/G/B averages) is used as
+    the numerator for each per-channel von Kries gain.  WB_STRENGTH scales the
+    correction; gains are clamped to [WB_GAIN_MIN, WB_GAIN_MAX].
+
+    Args:
+        yavg: Mean luma (Y) value across sampled frames [0, 255].
         uavg: Median Cb (blue-difference) value across sampled frames [0, 255].
         vavg: Median Cr (red-difference) value across sampled frames [0, 255].
 
     Returns:
-        WhiteBalanceParams with r/g/b midtone shifts clamped to [-1, 1].
+        WhiteBalanceParams with r/g/b gains in [WB_GAIN_MIN, WB_GAIN_MAX].
     """
-    dU = uavg - 128.0  # Cb offset (blue-difference channel)
-    dV = vavg - 128.0  # Cr offset (red-difference channel)
-    r = _clamp(-1.402 * dV / 255.0 * WB_STRENGTH, -1.0, 1.0)
-    g = _clamp((0.344 * dU + 0.714 * dV) / 255.0 * WB_STRENGTH, -1.0, 1.0)
-    b = _clamp(-1.772 * dU / 255.0 * WB_STRENGTH, -1.0, 1.0)
+    dU = uavg - 128.0  # Cb offset
+    dV = vavg - 128.0  # Cr offset
+    r_avg = yavg + 1.402 * dV
+    g_avg = yavg - 0.344136 * dU - 0.714136 * dV
+    b_avg = yavg + 1.772 * dU
+    gray = (r_avg + g_avg + b_avg) / 3.0
+    r = _wb_gain(gray, r_avg)
+    g = _wb_gain(gray, g_avg)
+    b = _wb_gain(gray, b_avg)
     return WhiteBalanceParams(r=r, g=g, b=b)
 
 
@@ -336,24 +382,25 @@ def _derive_caller_wb(
     temperature: float | None,
     tint: float | None,
 ) -> WhiteBalanceParams:
-    """Compute colorbalance shifts from caller temperature/tint normalised axes (§4.3).
+    """Compute per-channel RGB gains from caller temperature/tint axes (§4.3).
 
-    temperature maps to the red/blue axis: +warm adds red and removes blue, -cool
-    does the inverse.  tint maps to the green axis (inverted): +magenta reduces
-    green, -green adds green.  A missing axis stays at 0 (neutral for that channel).
+    temperature maps to the red/blue axis via WB_AXIS_SPAN: positive (warm) boosts
+    red and reduces blue; negative (cool) does the inverse.  tint maps to the green
+    axis (inverted): positive (magenta) reduces green.  A missing axis stays at 0.0
+    (neutral gain 1.0 for that channel).
 
     Args:
         temperature: Warm/cool shift in [-1, 1]; None treated as 0.0.
         tint: Magenta/green shift in [-1, 1]; None treated as 0.0.
 
     Returns:
-        WhiteBalanceParams with r/g/b midtone shifts clamped to [-1, 1].
+        WhiteBalanceParams with r/g/b gains in [WB_GAIN_MIN, WB_GAIN_MAX].
     """
     t = temperature if temperature is not None else 0.0
     n = tint if tint is not None else 0.0
-    r = _clamp(+t, -1.0, 1.0)
-    b = _clamp(-t, -1.0, 1.0)
-    g = _clamp(-n, -1.0, 1.0)
+    r = _clamp(1.0 + WB_AXIS_SPAN * t, WB_GAIN_MIN, WB_GAIN_MAX)
+    b = _clamp(1.0 - WB_AXIS_SPAN * t, WB_GAIN_MIN, WB_GAIN_MAX)
+    g = _clamp(1.0 - WB_AXIS_SPAN * n, WB_GAIN_MIN, WB_GAIN_MAX)
     return WhiteBalanceParams(r=r, g=g, b=b)
 
 
