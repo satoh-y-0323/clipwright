@@ -253,7 +253,9 @@ class TestColorGradeSchema:
         """_RenderColorGrade stores a resolved path string in lut field."""
         from clipwright_render.plan import _RenderColorGrade  # type: ignore[attr-defined]
 
-        grade = _RenderColorGrade(eq=None, white_balance=None, lut="/resolved/film.cube")
+        grade = _RenderColorGrade(
+            eq=None, white_balance=None, lut="/resolved/film.cube"
+        )
         assert grade.lut == "/resolved/film.cube"
 
 
@@ -572,9 +574,7 @@ class TestGradeOrderingSingleSource:
         assert wb_pos < eq_pos, (
             f"colorbalance (pos={wb_pos}) must precede eq (pos={eq_pos})"
         )
-        assert eq_pos < lut_pos, (
-            f"eq (pos={eq_pos}) must precede lut3d (pos={lut_pos})"
-        )
+        assert eq_pos < lut_pos, f"eq (pos={eq_pos}) must precede lut3d (pos={lut_pos})"
 
     def test_lut3d_before_subtitles(self, tmp_path: Path) -> None:
         """lut3d=file=' pos < subtitles= pos when subtitle option is active (AC-5)."""
@@ -657,15 +657,17 @@ class TestGradeOrderingMultiSource:
         eq_pos = fc.find("eq=")
         lut_pos = fc.find("lut3d=file='")
 
-        assert wb_pos != -1, f"colorbalance= not found in multi-source filter_complex: {fc!r}"
+        assert wb_pos != -1, (
+            f"colorbalance= not found in multi-source filter_complex: {fc!r}"
+        )
         assert eq_pos != -1, f"eq= not found in multi-source filter_complex: {fc!r}"
-        assert lut_pos != -1, f"lut3d=file=' not found in multi-source filter_complex: {fc!r}"
+        assert lut_pos != -1, (
+            f"lut3d=file=' not found in multi-source filter_complex: {fc!r}"
+        )
         assert wb_pos < eq_pos, (
             f"colorbalance (pos={wb_pos}) must precede eq (pos={eq_pos})"
         )
-        assert eq_pos < lut_pos, (
-            f"eq (pos={eq_pos}) must precede lut3d (pos={lut_pos})"
-        )
+        assert eq_pos < lut_pos, f"eq (pos={eq_pos}) must precede lut3d (pos={lut_pos})"
 
     def test_outvwb_label_present_multi_source(self) -> None:
         """[outvwb] label present in multi-source filter_complex when WB is active."""
@@ -695,8 +697,12 @@ class TestGradeOrderingMultiSource:
 
         lut_pos = fc.find("lut3d=file='")
         sub_pos = fc.find("subtitles=")
-        assert lut_pos != -1, f"lut3d=file=' not found in multi-source filter_complex: {fc!r}"
-        assert sub_pos != -1, f"subtitles= not found in multi-source filter_complex: {fc!r}"
+        assert lut_pos != -1, (
+            f"lut3d=file=' not found in multi-source filter_complex: {fc!r}"
+        )
+        assert sub_pos != -1, (
+            f"subtitles= not found in multi-source filter_complex: {fc!r}"
+        )
         assert lut_pos < sub_pos
 
     def test_outvwb_before_outveq_multi_source(self) -> None:
@@ -723,7 +729,9 @@ class TestGradeNumericLock:
         plan = _single_source_plan_grade(color=_COLOR_DICT_WB)
         fc = plan.filter_complex
         m = re.search(r"colorbalance=rm=([^:]+):gm=([^:]+):bm=([^\[]+)", fc)
-        assert m is not None, f"colorbalance= pattern not found in filter_complex: {fc!r}"
+        assert m is not None, (
+            f"colorbalance= pattern not found in filter_complex: {fc!r}"
+        )
         for val_str in m.groups():
             val_str = val_str.strip()
             assert re.fullmatch(r"-?[\d.]+", val_str), (
@@ -835,7 +843,7 @@ class TestLutPathSecurity:
             self._validate_grade(color, otio_dir=tmp_path)
         assert exc_info.value.code in (
             ErrorCode.INVALID_INPUT,
-            ErrorCode.PERMISSION_DENIED,
+            ErrorCode.PATH_NOT_ALLOWED,
         )
 
     def test_traversal_error_no_full_path_in_message(self, tmp_path: Path) -> None:
@@ -877,7 +885,7 @@ class TestLutPathSecurity:
         reason="symlink creation requires elevated privileges on Windows (see MEMORY.md)",
     )
     def test_symlink_lut_raises_error(self, tmp_path: Path) -> None:
-        """Symlink .cube -> PERMISSION_DENIED or INVALID_INPUT (CWE-59 / AC-4 / ADR-CO-10)."""
+        """Symlink .cube -> PATH_NOT_ALLOWED or INVALID_INPUT (CWE-59 / AC-4 / ADR-CO-10)."""
         real_cube = tmp_path / "real.cube"
         real_cube.write_text("LUT_3D_SIZE 2\n")
         link = tmp_path / "symlink.cube"
@@ -886,7 +894,7 @@ class TestLutPathSecurity:
         with pytest.raises(ClipwrightError) as exc_info:
             self._validate_grade(color, otio_dir=tmp_path)
         assert exc_info.value.code in (
-            ErrorCode.PERMISSION_DENIED,
+            ErrorCode.PATH_NOT_ALLOWED,
             ErrorCode.INVALID_INPUT,
         )
 
@@ -928,7 +936,9 @@ class TestYuv420pPin:
             f"-pix_fmt must be 'yuv420p', got {plan.ffmpeg_args[idx + 1]!r}"
         )
 
-    def test_lut3d_in_filter_complex_yuv420p_in_ffmpeg_args(self, tmp_path: Path) -> None:
+    def test_lut3d_in_filter_complex_yuv420p_in_ffmpeg_args(
+        self, tmp_path: Path
+    ) -> None:
         """lut3d is in filter_complex (pre-encode); yuv420p pin is in ffmpeg_args (post-filter, NFR-6)."""
         from clipwright_render.plan import _RenderColorGrade  # type: ignore[attr-defined]
 

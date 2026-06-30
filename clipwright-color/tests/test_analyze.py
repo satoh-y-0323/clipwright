@@ -1148,12 +1148,13 @@ class TestChromaCwe209:
             "lavfi.signalstats.UAVG=122.000 lavfi.signalstats.VAVG=136.000"
         )
 
-        def _fail_with_chroma_in_msg(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+        def _fail_with_chroma_in_msg(
+            cmd: list[str], **kwargs: Any
+        ) -> CompletedProcess[str]:
             raise ClipwrightError(
                 code=ErrorCode.SUBPROCESS_FAILED,
                 message=(
-                    f"ffmpeg failed (exit 1): {raw_ffmpeg_stderr_fragment}"
-                    f" path={media}"
+                    f"ffmpeg failed (exit 1): {raw_ffmpeg_stderr_fragment} path={media}"
                 ),
                 hint="Check ffmpeg version.",
             )

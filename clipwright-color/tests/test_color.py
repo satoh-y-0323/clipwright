@@ -943,7 +943,9 @@ class TestWbChromaAbsent:
         assert result["ok"] is True
         tl = otio.adapters.read_from_file(str(output))
         color_meta = tl.metadata["clipwright"]["color"]
-        assert color_meta is not None, "Directive must still be written when chroma absent"
+        assert color_meta is not None, (
+            "Directive must still be written when chroma absent"
+        )
         # white_balance must be None (absent), not a neutral WhiteBalanceParams object
         assert color_meta.get("white_balance") is None, (
             "FR-4: white_balance must be None when uavg/vavg not measurable."

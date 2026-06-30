@@ -435,17 +435,23 @@ class TestDetectColorOptionsEqOverrides:
     def test_saturation_valid_midrange_accepted(self) -> None:
         """saturation=1.0 (mid-range) must be accepted without error."""
         opts = DetectColorOptions(saturation=1.0)
-        assert opts.saturation == pytest.approx(1.0)  # Red: ValidationError (extra=forbid)
+        assert opts.saturation == pytest.approx(
+            1.0
+        )  # Red: ValidationError (extra=forbid)
 
     def test_saturation_zero_accepted(self) -> None:
         """saturation=0.0 (ge=0.0 lower bound) must be accepted."""
         opts = DetectColorOptions(saturation=0.0)
-        assert opts.saturation == pytest.approx(0.0)  # Red: ValidationError (extra=forbid)
+        assert opts.saturation == pytest.approx(
+            0.0
+        )  # Red: ValidationError (extra=forbid)
 
     def test_saturation_two_accepted(self) -> None:
         """saturation=2.0 (le=2.0 upper bound) must be accepted."""
         opts = DetectColorOptions(saturation=2.0)
-        assert opts.saturation == pytest.approx(2.0)  # Red: ValidationError (extra=forbid)
+        assert opts.saturation == pytest.approx(
+            2.0
+        )  # Red: ValidationError (extra=forbid)
 
     def test_saturation_above_range_rejected(self) -> None:
         """saturation=2.5 must raise ValidationError (le=2.0 violated)."""
@@ -460,7 +466,9 @@ class TestDetectColorOptionsEqOverrides:
     def test_contrast_option_valid_accepted(self) -> None:
         """contrast option=1.0 must be accepted."""
         opts = DetectColorOptions(contrast=1.0)
-        assert opts.contrast == pytest.approx(1.0)  # Red: ValidationError (extra=forbid)
+        assert opts.contrast == pytest.approx(
+            1.0
+        )  # Red: ValidationError (extra=forbid)
 
     def test_contrast_option_above_range_rejected(self) -> None:
         """contrast option=2.5 must raise ValidationError (le=2.0 violated)."""
@@ -513,22 +521,30 @@ class TestDetectColorOptionsWbOverrides:
     def test_temperature_warm_accepted(self) -> None:
         """temperature=0.5 (warm bias) must be accepted."""
         opts = DetectColorOptions(temperature=0.5)
-        assert opts.temperature == pytest.approx(0.5)  # Red: ValidationError (extra=forbid)
+        assert opts.temperature == pytest.approx(
+            0.5
+        )  # Red: ValidationError (extra=forbid)
 
     def test_temperature_cool_accepted(self) -> None:
         """temperature=-0.5 (cool bias) must be accepted."""
         opts = DetectColorOptions(temperature=-0.5)
-        assert opts.temperature == pytest.approx(-0.5)  # Red: ValidationError (extra=forbid)
+        assert opts.temperature == pytest.approx(
+            -0.5
+        )  # Red: ValidationError (extra=forbid)
 
     def test_temperature_boundary_plus1_accepted(self) -> None:
         """temperature=1.0 (le=1.0 upper bound) must be accepted."""
         opts = DetectColorOptions(temperature=1.0)
-        assert opts.temperature == pytest.approx(1.0)  # Red: ValidationError (extra=forbid)
+        assert opts.temperature == pytest.approx(
+            1.0
+        )  # Red: ValidationError (extra=forbid)
 
     def test_temperature_boundary_minus1_accepted(self) -> None:
         """temperature=-1.0 (ge=-1.0 lower bound) must be accepted."""
         opts = DetectColorOptions(temperature=-1.0)
-        assert opts.temperature == pytest.approx(-1.0)  # Red: ValidationError (extra=forbid)
+        assert opts.temperature == pytest.approx(
+            -1.0
+        )  # Red: ValidationError (extra=forbid)
 
     def test_temperature_above_range_rejected(self) -> None:
         """temperature=1.5 must raise ValidationError (le=1.0 violated)."""
@@ -586,7 +602,9 @@ class TestDetectColorOptionsLutField:
     def test_lut_max_length_4096_accepted(self) -> None:
         """A lut value exactly 4096 chars long (le=max_length) must be accepted."""
         opts = DetectColorOptions(lut="x" * 4096)
-        assert opts.lut is not None and len(opts.lut) == 4096  # Red: ValidationError (extra=forbid)
+        assert (
+            opts.lut is not None and len(opts.lut) == 4096
+        )  # Red: ValidationError (extra=forbid)
 
     def test_lut_empty_string_rejected(self) -> None:
         """lut="" must raise ValidationError (min_length=1 violated)."""
@@ -711,24 +729,28 @@ class TestWhiteBalanceParams:
     def test_default_r_is_zero(self) -> None:
         """r must default to 0.0 (neutral — no red shift)."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+
         wb = WhiteBalanceParams()
         assert wb.r == pytest.approx(0.0)
 
     def test_default_g_is_zero(self) -> None:
         """g must default to 0.0 (neutral)."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+
         wb = WhiteBalanceParams()
         assert wb.g == pytest.approx(0.0)
 
     def test_default_b_is_zero(self) -> None:
         """b must default to 0.0 (neutral)."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+
         wb = WhiteBalanceParams()
         assert wb.b == pytest.approx(0.0)
 
     def test_all_neutral_defaults_together(self) -> None:
         """All three channels must default to 0.0 simultaneously (neutral = no WB correction)."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+
         wb = WhiteBalanceParams()
         assert wb.r == pytest.approx(0.0)
         assert wb.g == pytest.approx(0.0)
@@ -737,12 +759,14 @@ class TestWhiteBalanceParams:
     def test_positive_red_shift_accepted(self) -> None:
         """r=0.5 (add red) must be accepted."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+
         wb = WhiteBalanceParams(r=0.5)
         assert wb.r == pytest.approx(0.5)
 
     def test_mixed_shifts_accepted(self) -> None:
         """r=0.1, g=-0.05, b=-0.08 (typical gray-world correction) must be accepted."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+
         wb = WhiteBalanceParams(r=0.1, g=-0.05, b=-0.08)
         assert wb.r == pytest.approx(0.1)
         assert wb.g == pytest.approx(-0.05)
@@ -751,6 +775,7 @@ class TestWhiteBalanceParams:
     def test_boundary_minus1_plus1_accepted(self) -> None:
         """r=-1.0 and g=1.0 (boundary values) must be accepted."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+
         wb = WhiteBalanceParams(r=-1.0, g=1.0, b=0.0)
         assert wb.r == pytest.approx(-1.0)
         assert wb.g == pytest.approx(1.0)
@@ -758,54 +783,63 @@ class TestWhiteBalanceParams:
     def test_r_above_range_rejected(self) -> None:
         """r=1.5 must raise ValidationError (le=1.0 violated)."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+
         with pytest.raises(ValidationError):
             WhiteBalanceParams(r=1.5)
 
     def test_r_below_range_rejected(self) -> None:
         """r=-1.5 must raise ValidationError (ge=-1.0 violated)."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+
         with pytest.raises(ValidationError):
             WhiteBalanceParams(r=-1.5)
 
     def test_g_above_range_rejected(self) -> None:
         """g=1.5 must raise ValidationError (le=1.0 violated)."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+
         with pytest.raises(ValidationError):
             WhiteBalanceParams(g=1.5)
 
     def test_g_below_range_rejected(self) -> None:
         """g=-1.5 must raise ValidationError (ge=-1.0 violated)."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+
         with pytest.raises(ValidationError):
             WhiteBalanceParams(g=-1.5)
 
     def test_b_above_range_rejected(self) -> None:
         """b=1.5 must raise ValidationError (le=1.0 violated)."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+
         with pytest.raises(ValidationError):
             WhiteBalanceParams(b=1.5)
 
     def test_b_below_range_rejected(self) -> None:
         """b=-1.5 must raise ValidationError (ge=-1.0 violated)."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+
         with pytest.raises(ValidationError):
             WhiteBalanceParams(b=-1.5)
 
     def test_extra_field_rejected(self) -> None:
         """Unknown field must raise ValidationError (extra=forbid)."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+
         with pytest.raises(ValidationError):
             WhiteBalanceParams(unknown=0.5)  # type: ignore[call-arg]
 
     def test_inf_rejected(self) -> None:
         """inf r must be rejected (allow_inf_nan=False)."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+
         with pytest.raises(ValidationError):
             WhiteBalanceParams(r=math.inf)
 
     def test_nan_rejected(self) -> None:
         """nan r must be rejected (allow_inf_nan=False)."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+
         with pytest.raises(ValidationError):
             WhiteBalanceParams(r=math.nan)
 
@@ -824,12 +858,16 @@ class TestColorDirectiveNewFields:
 
     def test_white_balance_field_default_is_none(self) -> None:
         """white_balance must default to None when not supplied."""
-        d = ColorDirective(version="0.3.0", kind="color", target_luma=128.0, eq=EqParams())
+        d = ColorDirective(
+            version="0.3.0", kind="color", target_luma=128.0, eq=EqParams()
+        )
         assert d.white_balance is None  # Red: AttributeError — field not yet on model
 
     def test_lut_field_default_is_none(self) -> None:
         """lut field must default to None when not supplied."""
-        d = ColorDirective(version="0.3.0", kind="color", target_luma=128.0, eq=EqParams())
+        d = ColorDirective(
+            version="0.3.0", kind="color", target_luma=128.0, eq=EqParams()
+        )
         assert d.lut is None  # Red: AttributeError
 
     def test_v02x_directive_without_wb_and_lut_parses(self) -> None:
@@ -843,7 +881,12 @@ class TestColorDirectiveNewFields:
             "kind": "color",
             "target_luma": 128.0,
             "measured": None,
-            "eq": {"brightness": 0.05, "contrast": 1.0, "saturation": 1.0, "gamma": 1.0},
+            "eq": {
+                "brightness": 0.05,
+                "contrast": 1.0,
+                "saturation": 1.0,
+                "gamma": 1.0,
+            },
         }
         d = ColorDirective.model_validate(v02x_dict)
         assert d.white_balance is None  # Red: AttributeError — field not yet on model
@@ -858,11 +901,14 @@ class TestColorDirectiveNewFields:
             eq=EqParams(),
             white_balance=None,
         )
-        assert d.white_balance is None  # Red: ValidationError (extra=forbid on current model)
+        assert (
+            d.white_balance is None
+        )  # Red: ValidationError (extra=forbid on current model)
 
     def test_white_balance_params_accepted(self) -> None:
         """ColorDirective with a WhiteBalanceParams value must be accepted."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+
         wb = WhiteBalanceParams(r=0.1, g=-0.05, b=-0.08)
         d = ColorDirective(
             version="0.3.0",
@@ -872,7 +918,9 @@ class TestColorDirectiveNewFields:
             white_balance=wb,
         )
         assert d.white_balance is not None
-        assert d.white_balance.r == pytest.approx(0.1)  # Red: ValidationError (extra=forbid)
+        assert d.white_balance.r == pytest.approx(
+            0.1
+        )  # Red: ValidationError (extra=forbid)
 
     def test_lut_path_accepted(self) -> None:
         """ColorDirective with a lut path string must be accepted."""
@@ -883,7 +931,9 @@ class TestColorDirectiveNewFields:
             eq=EqParams(),
             lut="/resolved/path/to/grade.cube",
         )
-        assert d.lut == "/resolved/path/to/grade.cube"  # Red: ValidationError (extra=forbid)
+        assert (
+            d.lut == "/resolved/path/to/grade.cube"
+        )  # Red: ValidationError (extra=forbid)
 
     def test_lut_none_explicit_accepted(self) -> None:
         """Explicit lut=None must be accepted (no LUT applied in render)."""
@@ -905,7 +955,9 @@ class TestColorDirectiveNewFields:
             eq=EqParams(),
             lut="x" * 4096,
         )
-        assert d.lut is not None and len(d.lut) == 4096  # Red: ValidationError (extra=forbid)
+        assert (
+            d.lut is not None and len(d.lut) == 4096
+        )  # Red: ValidationError (extra=forbid)
 
     def test_lut_above_max_length_rejected(self) -> None:
         """lut longer than 4096 chars must raise ValidationError (max_length=4096 violated)."""
@@ -921,6 +973,7 @@ class TestColorDirectiveNewFields:
     def test_full_v03x_directive_with_all_new_fields(self) -> None:
         """A ColorDirective with all new fields populated must be accepted."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+
         wb = WhiteBalanceParams(r=0.05, g=-0.02, b=-0.04)
         measured = BrightnessMeasured(
             yavg=110.0, sampled_frames=12, uavg=132.0, vavg=124.0

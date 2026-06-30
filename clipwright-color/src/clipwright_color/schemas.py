@@ -16,6 +16,9 @@ class DetectColorOptions(BaseModel):
 
     target_luma: target average luma (0-255 scale). Default 128 (mid-grey).
     sample_interval_sec: ffmpeg fps=1/interval downsampling step (seconds, >0).
+    saturation/contrast/gamma: optional eq override; None = leave neutral default.
+    temperature/tint: optional WB override [-1,1] axes; None = use auto gray-world.
+    lut: optional caller-provided .cube path; None = no 3D-LUT applied.
     """
 
     model_config = {"extra": "forbid", "allow_inf_nan": False}
@@ -45,6 +48,18 @@ class DetectColorOptions(BaseModel):
         ),
     ] = 1.0
 
+    # FR-1 — caller eq overrides (None = leave neutral; no behavioural change)
+    saturation: Annotated[float, Field(ge=0.0, le=2.0)] | None = None
+    contrast: Annotated[float, Field(ge=0.0, le=2.0)] | None = None
+    gamma: Annotated[float, Field(ge=0.1, le=10.0)] | None = None
+
+    # FR-3 — caller WB override in normalised [-1,1] axes (None = use auto gray-world)
+    temperature: Annotated[float, Field(ge=-1.0, le=1.0)] | None = None
+    tint: Annotated[float, Field(ge=-1.0, le=1.0)] | None = None
+
+    # FR-5 — caller-provided 3D-LUT path (.cube)
+    lut: Annotated[str, Field(min_length=1, max_length=4096)] | None = None
+
 
 class BrightnessMeasured(BaseModel):
     """Raw signalstats measurement (writer side).
@@ -62,6 +77,9 @@ class BrightnessMeasured(BaseModel):
     ymin: Annotated[float, Field(ge=0.0, le=255.0)] | None = None
     ymax: Annotated[float, Field(ge=0.0, le=255.0)] | None = None
     sampled_frames: Annotated[int, Field(ge=0)]
+    # FR-2 — median chroma from signalstats (ADR-CO-9); None when unavailable
+    uavg: Annotated[float, Field(ge=0.0, le=255.0)] | None = None
+    vavg: Annotated[float, Field(ge=0.0, le=255.0)] | None = None
 
 
 class EqParams(BaseModel):
@@ -77,6 +95,19 @@ class EqParams(BaseModel):
     contrast: Annotated[float, Field(ge=0.0, le=2.0)] = 1.0
     saturation: Annotated[float, Field(ge=0.0, le=2.0)] = 1.0
     gamma: Annotated[float, Field(ge=0.1, le=10.0)] = 1.0
+
+
+class WhiteBalanceParams(BaseModel):
+    """colorbalance midtone shifts; neutral = all 0. Reader mirror in render (ADR-CO-3).
+
+    Maps 1:1 to ffmpeg colorbalance rm/gm/bm parameters. Range [-1, 1] per channel.
+    """
+
+    model_config = {"extra": "forbid", "allow_inf_nan": False}
+
+    r: Annotated[float, Field(ge=-1.0, le=1.0)] = 0.0
+    g: Annotated[float, Field(ge=-1.0, le=1.0)] = 0.0
+    b: Annotated[float, Field(ge=-1.0, le=1.0)] = 0.0
 
 
 class ColorDirective(BaseModel):
@@ -95,3 +126,6 @@ class ColorDirective(BaseModel):
     target_luma: Annotated[float, Field(ge=0.0, le=255.0, allow_inf_nan=False)]
     measured: BrightnessMeasured | None = None
     eq: EqParams
+    # FR-6 — new optional fields; None = render no-op (FR-10/AC-8 backward compat)
+    white_balance: WhiteBalanceParams | None = None
+    lut: Annotated[str, Field(max_length=4096)] | None = None

@@ -57,6 +57,7 @@ from typing import Annotated, Any, Literal
 import opentimelineio as otio
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.otio_utils import get_markers
+from clipwright.pathpolicy import check_media_ref, validate_source_file
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from clipwright_render.encoders import ResolvedEncoder
@@ -1944,6 +1945,175 @@ def _append_eq_filter(
     return "[outveq]"
 
 
+class _RenderWhiteBalance(BaseModel):
+    """Reader-side validation of color["white_balance"] (ADR-CO-3 re-declaration).
+
+    Mirrors WhiteBalanceParams in clipwright-color (writer). Ranges duplicated
+    with a sync comment — update both copies when changing. Unknown keys
+    forbidden; inf/nan rejected (CWE-20).
+
+    r/g/b: colorbalance midtone shifts in [-1, 1] (colorbalance rm/gm/bm).
+    Neutral value is 0.0 for all channels.
+    """
+
+    # Ranges mirror WhiteBalanceParams in clipwright-color schemas.py (ADR-CO-3 sync).
+    model_config = {"extra": "forbid", "allow_inf_nan": False}
+
+    r: Annotated[float, Field(ge=-1.0, le=1.0)] = 0.0
+    g: Annotated[float, Field(ge=-1.0, le=1.0)] = 0.0
+    b: Annotated[float, Field(ge=-1.0, le=1.0)] = 0.0
+
+
+@dataclass
+class _RenderColorGrade:
+    """Aggregate color grade directive threaded to both filter builders (ADR-CO-8).
+
+    Validated once by _validate_color_grade; both single- and multi-source builders
+    receive this object so the two paths stay symmetric. When a field is None,
+    the corresponding filter stage is a no-op (backward compatible; FR-10/AC-8).
+
+    eq: validated eq params (None → no eq stage).
+    white_balance: validated WB params (None → no colorbalance stage).
+    lut: resolved + boundary-validated absolute path to .cube file (None → no
+        lut3d stage). Not yet escaped; _append_lut3d_filter applies escaping.
+    """
+
+    eq: _RenderEqParams | None
+    white_balance: _RenderWhiteBalance | None
+    lut: str | None
+
+
+def _validate_color_wb(color: dict[str, Any]) -> _RenderWhiteBalance | None:
+    """Validate color["white_balance"]; raises INVALID_INPUT on failure.
+
+    Only color["white_balance"] is consumed. Returns None when the key is absent or
+    None (no WB correction; backward compatible; FR-10).
+    Security: input values are not included in error messages (CWE-209).
+    """
+    raw_wb = color.get("white_balance")
+    if raw_wb is None:
+        return None
+    try:
+        return _RenderWhiteBalance(**raw_wb)
+    except (ValidationError, TypeError):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "Color white_balance directive validation failed."
+                " Check field names, types, and values."
+            ),
+            hint=("color['white_balance'] must have r, g, b each in [-1.0, 1.0]."),
+        ) from None
+
+
+def _validate_color_grade(color: dict[str, Any], otio_dir: Path) -> _RenderColorGrade:
+    """Orchestrate eq + white_balance + lut validation into a _RenderColorGrade.
+
+    Validates all three sub-blocks of the color directive. Returns a
+    _RenderColorGrade with None fields for absent/None sub-blocks.
+    Never returns None — an empty dict yields _RenderColorGrade(None, None, None).
+
+    §5.2 / ADR-CO-8 / ADR-CO-10: the .cube lut path is resolved and
+    boundary-validated here (check_media_ref + validate_source_file wrapped to
+    scrub full path from messages; CWE-209).
+
+    Args:
+        color: raw color directive dict from the OTIO timeline.
+        otio_dir: directory of the OTIO file (used for relative lut resolution).
+
+    Raises:
+        ClipwrightError: INVALID_INPUT / PERMISSION_DENIED / FILE_NOT_FOUND on
+            any validation failure.
+    """
+    eq = _validate_color_eq(color)
+    wb = _validate_color_wb(color)
+
+    lut: str | None = None
+    raw_lut = color.get("lut")
+    if raw_lut is not None:
+        # §5.2 step 1: resolve lut ref against the timeline directory.
+        lut_ref = str(raw_lut)
+        lut_path = Path(lut_ref)
+        if not lut_path.is_absolute():
+            lut_path = otio_dir / lut_path
+
+        # §5.2 step 2: check_media_ref for boundary / existence / symlink.
+        try:
+            check_media_ref(lut_ref, otio_dir, "lut")
+        except ClipwrightError:
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message=(
+                    "LUT file reference validation failed."
+                    " The path may be outside the allowed boundary or inaccessible."
+                ),
+                hint=(
+                    "Ensure the .cube file exists, is inside the timeline directory"
+                    " (for relative refs), contains no symlinks, and has no"
+                    " path-traversal components."
+                ),
+            ) from None
+
+        # §5.2 step 3: validate_source_file on the resolved absolute path.
+        # Wrap to scrub full path from error message (CWE-209 / ADR-CO-10).
+        try:
+            validate_source_file(str(lut_path))
+        except ClipwrightError:
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message=(
+                    "LUT file validation failed."
+                    " The file may not exist, may be a symlink, or may not be"
+                    " a regular file."
+                ),
+                hint=(
+                    "Ensure the .cube file exists on disk, is a regular file,"
+                    " and contains no symlink components in its path."
+                ),
+            ) from None
+
+        lut = str(lut_path)
+
+    return _RenderColorGrade(eq=eq, white_balance=wb, lut=lut)
+
+
+def _append_wb_filter(
+    filter_parts: list[str],
+    video_map_label: str,
+    wb: _RenderWhiteBalance | None,
+) -> str:
+    """Append the colorbalance white-balance stage and return the new video label.
+
+    No-op when wb is None (backward compatible; FR-10/AC-8). :g formatting
+    locks numeric values to standard decimal notation (SR-INJ-002 / NFR-4).
+    Placed at the ADR-CO-4 injection point: scale-after, subtitle-before (D4).
+    """
+    if wb is None:
+        return video_map_label
+    seg = f"colorbalance=rm={wb.r:g}:gm={wb.g:g}:bm={wb.b:g}"
+    filter_parts.append(f"{video_map_label}{seg}[outvwb]")
+    return "[outvwb]"
+
+
+def _append_lut3d_filter(
+    filter_parts: list[str],
+    video_map_label: str,
+    lut_path: str | None,
+) -> str:
+    """Append the lut3d stage and return the new video label.
+
+    No-op when lut_path is None (backward compatible; FR-10/AC-8).
+    lut_path must be already resolved and boundary-validated (§5.2).
+    _escape_filtergraph + single-quote wrap applied (NFR-5 / subtitle precedent).
+    The .cube is a filter param, NOT a -i input (ADR-CO-10).
+    """
+    if lut_path is None:
+        return video_map_label
+    esc = _escape_filtergraph(lut_path)
+    filter_parts.append(f"{video_map_label}lut3d=file='{esc}'[outvlut]")
+    return "[outvlut]"
+
+
 # ===========================================================================
 # Reframe schema and filter helpers (no dependency on clipwright-reframe; inline)
 # Architecture §7.4 / §2 / §3 / §6.
@@ -3103,7 +3273,7 @@ def _build_filter_complex(
     options: RenderOptions,
     probe_info: ProbeInfo | None = None,
     text_overlays: list[TextOverlay] | None = None,
-    color_eq: _RenderEqParams | None = None,
+    color_grade: _RenderColorGrade | None = None,
     stabilize_basename: str | None = None,
     stabilize_smoothing: int = _DEFAULT_STABILIZE_SMOOTHING,
     reframe: _RenderReframe | None = None,
@@ -3275,10 +3445,20 @@ def _build_filter_complex(
         if probe_info is not None:
             frame_h = probe_info.height  # may be None → counter-scale skipped
 
-    # Inject eq color-correction stage after scale/reframe, before subtitle
+    # Inject color grade stages after scale/reframe, before subtitle
     # (ADR-CO-4: geometry normalise → colour correct → overlay burn-in).
-    # When color_eq is None, this is a no-op (backward compatible).
-    video_map_label = _append_eq_filter(filter_parts, video_map_label, color_eq)
+    # Order: colorbalance (WB) → eq → lut3d (D4 / FR-7/8/9).
+    # Each stage is a no-op when its field is None (backward compatible; FR-10/AC-8).
+    _grade = color_grade
+    video_map_label = _append_wb_filter(
+        filter_parts, video_map_label, _grade.white_balance if _grade else None
+    )
+    video_map_label = _append_eq_filter(
+        filter_parts, video_map_label, _grade.eq if _grade else None
+    )
+    video_map_label = _append_lut3d_filter(
+        filter_parts, video_map_label, _grade.lut if _grade else None
+    )
 
     # Inject subtitle stage after video_map_label is finalised (ADR-S4-r3).
     # When subtitle=None, nothing is done (backward compatible; ADR-S8).
@@ -3502,7 +3682,7 @@ def _build_multi_source_filter_complex(
     options: RenderOptions,
     first_source: str,
     text_overlays: list[TextOverlay] | None = None,
-    color_eq: _RenderEqParams | None = None,
+    color_grade: _RenderColorGrade | None = None,
     image_overlays: list[ImageOverlay] | None = None,
     transitions: list[_RenderTransition] | None = None,
     program_durations: list[float] | None = None,
@@ -3583,9 +3763,19 @@ def _build_multi_source_filter_complex(
     # front, so no post-concat scale is applied (ADR-C5-r2).
     video_map_label = "[outv]"
 
-    # Inject eq color-correction stage after concat/normalisation, before subtitle
-    # (ADR-CO-4). When color_eq is None, this is a no-op (backward compatible).
-    video_map_label = _append_eq_filter(filter_parts, video_map_label, color_eq)
+    # Inject color grade stages after concat/normalisation, before subtitle
+    # (ADR-CO-4). Order: colorbalance (WB) → eq → lut3d (D4 / FR-7/8/9).
+    # Each stage is a no-op when its field is None (backward compatible; FR-10/AC-8).
+    _grade = color_grade
+    video_map_label = _append_wb_filter(
+        filter_parts, video_map_label, _grade.white_balance if _grade else None
+    )
+    video_map_label = _append_eq_filter(
+        filter_parts, video_map_label, _grade.eq if _grade else None
+    )
+    video_map_label = _append_lut3d_filter(
+        filter_parts, video_map_label, _grade.lut if _grade else None
+    )
 
     # Inject subtitle stage after video_map_label is finalised (ADR-S4-r3).
     # When subtitle=None, nothing is done (backward compatible; ADR-S8).
@@ -3935,11 +4125,16 @@ def build_plan(
     if loudness is not None:
         loudness_directive = _validate_loudness_directive(loudness)
 
-    # Validate the color eq directive (raises INVALID_INPUT on failure)
-    # Only color["eq"] is consumed; tool/version/measured are ignored (ADR-CO-3).
-    color_eq: _RenderEqParams | None = None
+    # Validate the color grade directive (raises INVALID_INPUT on failure).
+    # Orchestrates eq + white_balance + lut validation (ADR-CO-8 / §6.1).
+    # otio_dir is required for lut ref resolution (§5.2); derived from _tl_path_img
+    # when available, else Path(".") as fallback.
+    _otio_dir: Path = (
+        Path(_tl_path_img).parent if _tl_path_img is not None else Path(".")
+    )
+    color_grade: _RenderColorGrade | None = None
     if color is not None:
-        color_eq = _validate_color_eq(color)
+        color_grade = _validate_color_grade(color, _otio_dir)
 
     # Validate the stabilize directive (raises INVALID_INPUT on failure)
     # Only trf_path / smoothing are consumed; severity/shakiness/accuracy etc. are
@@ -4091,7 +4286,7 @@ def build_plan(
             options,
             first_source,
             text_overlays=text_overlays,
-            color_eq=color_eq,
+            color_grade=color_grade,
             image_overlays=_image_overlays,
             transitions=transition_directive,
             program_durations=_program_durations,
@@ -4140,7 +4335,7 @@ def build_plan(
             options,
             probe_info,
             text_overlays=text_overlays,
-            color_eq=color_eq,
+            color_grade=color_grade,
             stabilize_basename=stabilize_basename,
             stabilize_smoothing=(
                 stabilize_directive.smoothing

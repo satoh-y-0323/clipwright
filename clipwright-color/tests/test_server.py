@@ -383,9 +383,7 @@ class TestNewOptionsInSchema:
         RED: DetectColorOptions has no tint field yet → not in schema.
         """
         schema_str = self._get_tool_input_schema_str()
-        assert '"tint"' in schema_str, (
-            "FR-3: input schema must include 'tint' option."
-        )
+        assert '"tint"' in schema_str, "FR-3: input schema must include 'tint' option."
 
     # -------------------------------------------------------------------------
     # LUT option (FR-5)
@@ -397,9 +395,7 @@ class TestNewOptionsInSchema:
         RED: DetectColorOptions has no lut field yet → not in schema.
         """
         schema_str = self._get_tool_input_schema_str()
-        assert '"lut"' in schema_str, (
-            "FR-5: input schema must include 'lut' option."
-        )
+        assert '"lut"' in schema_str, "FR-5: input schema must include 'lut' option."
 
     # -------------------------------------------------------------------------
     # Docstring / description: temperature/tint as normalised [-1,1] axes (ADR-CO-7)
@@ -448,7 +444,15 @@ class TestNewOptionsInSchema:
         # At least one of the expected language markers must appear
         has_normalised = any(
             kw in description.lower()
-            for kw in ("normalised", "normalized", "[-1", "[-1,", "axis", "warm", "cool")
+            for kw in (
+                "normalised",
+                "normalized",
+                "[-1",
+                "[-1,",
+                "axis",
+                "warm",
+                "cool",
+            )
         )
         assert has_normalised, (
             "ADR-CO-7: description must mention normalised axes for temperature/tint"

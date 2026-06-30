@@ -622,9 +622,7 @@ class TestLutCubePathpolicy:
     # Valid .cube — stored as relative POSIX inside OTIO dir (AC-4)
     # -------------------------------------------------------------------------
 
-    def test_valid_cube_inside_otio_dir_stored_relative(
-        self, tmp_path: Path
-    ) -> None:
+    def test_valid_cube_inside_otio_dir_stored_relative(self, tmp_path: Path) -> None:
         """Valid .cube co-located with output OTIO must be stored as relative POSIX path.
 
         RED: DetectColorOptions has no lut field yet → ValidationError at opts construction.
@@ -678,9 +676,7 @@ class TestLutCubePathpolicy:
             f" Got: {lut_stored!r}"
         )
 
-    def test_valid_cube_outside_otio_dir_stored_absolute(
-        self, tmp_path: Path
-    ) -> None:
+    def test_valid_cube_outside_otio_dir_stored_absolute(self, tmp_path: Path) -> None:
         """Valid .cube outside the output directory must be stored as absolute path.
 
         RED: DetectColorOptions has no lut field yet → ValidationError at opts construction.
@@ -739,7 +735,6 @@ class TestLutCubePathpolicy:
         RED: DetectColorOptions has no lut field yet → ValidationError.
         After implementation: FILE_NOT_FOUND or PATH_NOT_ALLOWED.
         """
-        import sys
 
         from clipwright_color.color import (  # type: ignore[import-not-found]
             detect_color,
@@ -775,9 +770,7 @@ class TestLutCubePathpolicy:
                 media=str(media), output=str(output), options=opts, timeline=None
             )
 
-        assert result["ok"] is False, (
-            "CWE-59: symlink .cube must be rejected."
-        )
+        assert result["ok"] is False, "CWE-59: symlink .cube must be rejected."
         assert result["error"]["code"] in (
             ErrorCode.FILE_NOT_FOUND.value,
             ErrorCode.PATH_NOT_ALLOWED.value,
