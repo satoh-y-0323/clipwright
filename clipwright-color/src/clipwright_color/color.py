@@ -375,6 +375,12 @@ def _derive_auto_wb(yavg: float, uavg: float, vavg: float) -> WhiteBalanceParams
     r = _wb_gain(gray, r_avg)
     g = _wb_gain(gray, g_avg)
     b = _wb_gain(gray, b_avg)
+    # gray <= 0 arises only from pathological/synthetic YUV where all channel
+    # averages are near-zero or negative after the BT.601 full-range inverse.
+    # _wb_gain floors the denominator at _AVG_FLOOR and clamps the result to
+    # [WB_GAIN_MIN, WB_GAIN_MAX], so every gain is bounded (degraded gracefully)
+    # rather than raising an exception.  Real footage with effective chroma does
+    # not produce gray <= 0.
     return WhiteBalanceParams(r=r, g=g, b=b)
 
 

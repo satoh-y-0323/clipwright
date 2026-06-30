@@ -1956,9 +1956,9 @@ class _RenderWhiteBalance(BaseModel):
     # Ranges mirror WhiteBalanceParams in clipwright-color schemas.py (ADR-CO-3 sync).
     model_config = {"extra": "forbid", "allow_inf_nan": False}
 
-    r: Annotated[float, Field(ge=0.0, le=4.0)] = 1.0  # colorchannelmixer rr
-    g: Annotated[float, Field(ge=0.0, le=4.0)] = 1.0  # colorchannelmixer gg
-    b: Annotated[float, Field(ge=0.0, le=4.0)] = 1.0  # colorchannelmixer bb
+    r: Annotated[float, Field(gt=0.0, le=4.0)] = 1.0  # colorchannelmixer rr
+    g: Annotated[float, Field(gt=0.0, le=4.0)] = 1.0  # colorchannelmixer gg
+    b: Annotated[float, Field(gt=0.0, le=4.0)] = 1.0  # colorchannelmixer bb
 
 
 @dataclass
@@ -2000,7 +2000,7 @@ def _validate_color_wb(color: dict[str, Any]) -> _RenderWhiteBalance | None:
                 " Check field names, types, and values."
             ),
             hint=(
-                "color['white_balance'] must have r, g, b each in [0.0, 4.0]"
+                "color['white_balance'] must have r, g, b each in (0.0, 4.0]"
                 " (per-channel gain, neutral=1.0)."
             ),
         ) from None

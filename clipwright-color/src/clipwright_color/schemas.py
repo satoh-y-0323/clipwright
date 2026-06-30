@@ -125,15 +125,17 @@ class WhiteBalanceParams(BaseModel):
     """Per-channel RGB gain for colorchannelmixer rr/gg/bb diagonal; neutral = all 1.0.
 
     Maps 1:1 to ffmpeg colorchannelmixer rr/gg/bb diagonal gains (linear per-channel
-    multipliers). Neutral = all 1.0 (identity gain). Range [0.0, 4.0] per channel
-    (non-negative multipliers only; negative gains invert a channel and are rejected).
+    multipliers). Neutral = all 1.0 (identity gain). Range (0.0, 4.0] per channel —
+    gain must be strictly positive (gt=0.0): zero gain collapses a channel to black,
+    so 0 is rejected (gain is a positive multiplier, not an on/off switch).
+    Negative gains invert a channel and are also rejected.
     """
 
     model_config = {"extra": "forbid", "allow_inf_nan": False}
 
-    r: Annotated[float, Field(ge=0.0, le=4.0)] = 1.0
-    g: Annotated[float, Field(ge=0.0, le=4.0)] = 1.0
-    b: Annotated[float, Field(ge=0.0, le=4.0)] = 1.0
+    r: Annotated[float, Field(gt=0.0, le=4.0)] = 1.0
+    g: Annotated[float, Field(gt=0.0, le=4.0)] = 1.0
+    b: Annotated[float, Field(gt=0.0, le=4.0)] = 1.0
 
 
 class ColorDirective(BaseModel):
