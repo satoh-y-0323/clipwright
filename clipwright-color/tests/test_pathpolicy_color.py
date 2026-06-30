@@ -330,7 +330,7 @@ class TestCheckMediaRefNewPolicy:
         pointing to media; output in media_dir (same as media to isolate from the
         same-dir block and focus on check_media_ref behavior).
 
-        After migration: check_media_ref accepts absolute existing regular files.
+        check_media_ref accepts absolute existing regular files.
         """
         from clipwright_color.color import (  # type: ignore[import-not-found]
             detect_color,
@@ -377,7 +377,7 @@ class TestCheckMediaRefNewPolicy:
     def test_relative_traversal_in_timeline_rejected(self, tmp_path: Path) -> None:
         """Relative path traversal (../) in OTIO source must remain PATH_NOT_ALLOWED.
 
-        Regression guard: CWE-22 guard must be maintained after migration.
+        Regression guard: the CWE-22 traversal guard must hold.
         """
         from clipwright_color.color import (  # type: ignore[import-not-found]
             detect_color,
@@ -492,8 +492,8 @@ class TestCwdIndependentTimelineMatch:
     """Regression guard for spec5 D1: relative target_url must be resolved against
     otio_dir, not CWD.
 
-    After the fix (check_timeline_source_matches), relative target_url is joined
-    against otio_dir, making the comparison CWD-independent.
+    check_timeline_source_matches resolves relative target_url against otio_dir,
+    making the comparison CWD-independent.
     AC-1 verifies the matching source succeeds regardless of CWD.
     AC-2 confirms a genuinely mismatched source is still rejected.
     """
@@ -555,8 +555,7 @@ class TestCwdIndependentTimelineMatch:
     ) -> None:
         """AC-2: timeline has a different relative source basename -> ok=False, INVALID_INPUT.
 
-        Even after the D1 fix, a genuinely mismatched source must still be rejected
-        with INVALID_INPUT.
+        A genuinely mismatched source must be rejected with INVALID_INPUT.
         """
         from clipwright_color.color import (  # type: ignore[import-not-found]
             detect_color,
@@ -805,8 +804,7 @@ class TestLutCubePathpolicy:
                 media=str(media), output=str(output), options=opts, timeline=None
             )
 
-        # Either rejected outright or the file doesn't exist — either is acceptable Red evidence.
-        # After implementation: must be FILE_NOT_FOUND or PATH_NOT_ALLOWED.
+        # Accept either FILE_NOT_FOUND or PATH_NOT_ALLOWED (traversal rejected).
         assert result["ok"] is False, (
             "Directory traversal ../ in .cube path must be rejected."
         )
@@ -899,8 +897,7 @@ class TestDetectColorOptionsLutInjection:
         _SENTINEL = "unique_sentinel_xzy987_lutpath"
         with pytest.raises(ValidationError) as exc_info:
             DetectColorOptions(lut=f"/luts/{_SENTINEL}'.cube")
-        # After implementation: the validation error text must not echo the sentinel value.
-        # Requires model_config hide_input_in_errors=True or equivalent scrubbing.
+        # The validation error text must not echo the path value (CWE-209; hide_input_in_errors).
         assert _SENTINEL not in str(exc_info.value), (
             f"CWE-209: offending path value must not appear in the ValidationError text."
             f" Got: {str(exc_info.value)!r}"

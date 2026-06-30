@@ -1056,8 +1056,8 @@ class TestLutOtioDirFallback:
         """Relative lut + no OTIO path (CWD fallback) → INVALID_INPUT, not silent acceptance.
 
         Creates the .cube file in tmp_path and changes CWD to tmp_path so that
-        the current CWD-fallback logic WOULD accept it.  After the fix the check
-        must reject it before resolving against CWD at all.
+        a CWD-based resolve would find the file.  The validator must reject the
+        relative lut path before resolving against CWD, returning INVALID_INPUT.
         """
         cube = tmp_path / "lut.cube"
         cube.write_text("LUT_3D_SIZE 2\n")

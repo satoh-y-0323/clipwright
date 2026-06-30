@@ -1104,8 +1104,8 @@ class TestChromaCwe209:
     """Regression guard: subprocess failure raises with scrubbed message; no new leak path.
 
     These tests confirm that the existing CWE-209 protection is not broken by the
-    new chroma extraction code path. The tests are GREEN pre-implementation and must
-    remain GREEN after implementation (NFR-3 / architecture-report §4.1).
+    new chroma extraction code path. These regression guards stay green
+    (NFR-3 / architecture-report §4.1).
     """
 
     def test_subprocess_failure_message_no_raw_ffmpeg_stderr(
