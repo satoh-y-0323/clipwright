@@ -304,3 +304,154 @@ class TestMcpBoundary:
         assert structured is not None
         assert "ok" in structured
         assert structured["ok"] is True
+
+
+# ===========================================================================
+# New options surfaced in input schema / docstring (ADR-CO-7 / FR-1 / FR-3 / FR-5)
+# ===========================================================================
+
+
+class TestNewOptionsInSchema:
+    """Input schema and docstring must surface the new eq/WB/lut options (FR-1/FR-3/FR-5)."""
+
+    def _get_tool_input_schema_str(self) -> str:
+        """Return the full JSON-serialised inputSchema for clipwright_detect_color."""
+        import json
+
+        tools = asyncio.run(mcp.list_tools())
+        tool = next(t for t in tools if t.name == "clipwright_detect_color")
+        return json.dumps(tool.inputSchema or {})
+
+    def _get_tool_description(self) -> str:
+        """Return the description string for clipwright_detect_color."""
+        tools = asyncio.run(mcp.list_tools())
+        tool = next(t for t in tools if t.name == "clipwright_detect_color")
+        return tool.description or ""
+
+    # -------------------------------------------------------------------------
+    # eq options (FR-1): saturation / contrast / gamma
+    # -------------------------------------------------------------------------
+
+    def test_schema_includes_saturation(self) -> None:
+        """Input schema must include 'saturation' (DetectColorOptions FR-1).
+
+        RED: DetectColorOptions has no saturation field yet → not in schema.
+        """
+        schema_str = self._get_tool_input_schema_str()
+        assert '"saturation"' in schema_str, (
+            "FR-1: input schema must include 'saturation' option."
+            f" Schema excerpt: {schema_str[:300]}"
+        )
+
+    def test_schema_includes_contrast(self) -> None:
+        """Input schema must include 'contrast' (DetectColorOptions FR-1).
+
+        RED: DetectColorOptions has no contrast field yet → not in schema.
+        """
+        schema_str = self._get_tool_input_schema_str()
+        assert '"contrast"' in schema_str, (
+            "FR-1: input schema must include 'contrast' option."
+        )
+
+    def test_schema_includes_gamma(self) -> None:
+        """Input schema must include 'gamma' (DetectColorOptions FR-1).
+
+        RED: DetectColorOptions has no gamma field yet → not in schema.
+        """
+        schema_str = self._get_tool_input_schema_str()
+        assert '"gamma"' in schema_str, (
+            "FR-1: input schema must include 'gamma' option."
+        )
+
+    # -------------------------------------------------------------------------
+    # WB override options (FR-3): temperature / tint
+    # -------------------------------------------------------------------------
+
+    def test_schema_includes_temperature(self) -> None:
+        """Input schema must include 'temperature' option (FR-3).
+
+        RED: DetectColorOptions has no temperature field yet → not in schema.
+        """
+        schema_str = self._get_tool_input_schema_str()
+        assert '"temperature"' in schema_str, (
+            "FR-3: input schema must include 'temperature' option."
+        )
+
+    def test_schema_includes_tint(self) -> None:
+        """Input schema must include 'tint' option (FR-3).
+
+        RED: DetectColorOptions has no tint field yet → not in schema.
+        """
+        schema_str = self._get_tool_input_schema_str()
+        assert '"tint"' in schema_str, (
+            "FR-3: input schema must include 'tint' option."
+        )
+
+    # -------------------------------------------------------------------------
+    # LUT option (FR-5)
+    # -------------------------------------------------------------------------
+
+    def test_schema_includes_lut(self) -> None:
+        """Input schema must include 'lut' option (FR-5).
+
+        RED: DetectColorOptions has no lut field yet → not in schema.
+        """
+        schema_str = self._get_tool_input_schema_str()
+        assert '"lut"' in schema_str, (
+            "FR-5: input schema must include 'lut' option."
+        )
+
+    # -------------------------------------------------------------------------
+    # Docstring / description: temperature/tint as normalised [-1,1] axes (ADR-CO-7)
+    # -------------------------------------------------------------------------
+
+    def test_docstring_mentions_temperature_option(self) -> None:
+        """Tool description must mention 'temperature' option (FR-3 / ADR-CO-7).
+
+        RED: current docstring does not mention temperature.
+        """
+        description = self._get_tool_description()
+        assert "temperature" in description.lower(), (
+            "ADR-CO-7: tool description must mention 'temperature'."
+            f" Got description: {description[:200]!r}"
+        )
+
+    def test_docstring_mentions_tint_option(self) -> None:
+        """Tool description must mention 'tint' option (FR-3 / ADR-CO-7).
+
+        RED: current docstring does not mention tint.
+        """
+        description = self._get_tool_description()
+        assert "tint" in description.lower(), (
+            "ADR-CO-7: tool description must mention 'tint'."
+        )
+
+    def test_docstring_does_not_describe_temperature_in_kelvin(self) -> None:
+        """ADR-CO-7: temperature must NOT be described in Kelvin; it is a normalised [-1,1] axis.
+
+        RED: current docstring doesn't mention temperature at all, so 'kelvin' is absent —
+        this test may pass trivially.  After implementation the description must remain
+        Kelvin-free and use 'normalised'/'axis' or '[-1,1]' language instead.
+        """
+        description = self._get_tool_description()
+        assert "kelvin" not in description.lower(), (
+            "ADR-CO-7: temperature must NOT be described in Kelvin."
+            " Use normalised [-1, 1] axis language instead."
+        )
+
+    def test_docstring_mentions_normalised_axes_for_wb_override(self) -> None:
+        """ADR-CO-7: description must indicate temperature/tint are normalised [-1,1] axes.
+
+        RED: current docstring does not mention temperature/tint at all.
+        """
+        description = self._get_tool_description()
+        # At least one of the expected language markers must appear
+        has_normalised = any(
+            kw in description.lower()
+            for kw in ("normalised", "normalized", "[-1", "[-1,", "axis", "warm", "cool")
+        )
+        assert has_normalised, (
+            "ADR-CO-7: description must mention normalised axes for temperature/tint"
+            " (not Kelvin)."
+            f" Got description: {description[:300]!r}"
+        )

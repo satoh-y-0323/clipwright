@@ -608,3 +608,274 @@ class TestCwdIndependentTimelineMatch:
         )
         assert "video" not in result["error"]["message"]
         assert "other_clip" not in result["error"]["message"]
+
+
+# ===========================================================================
+# .cube / LUT path-boundary tests (AC-4 / AC-7 / CWE-59 / ADR-CO-10)
+# ===========================================================================
+
+
+class TestLutCubePathpolicy:
+    """.cube LUT path validation: storage form, symlink rejection, traversal, CWE-209."""
+
+    # -------------------------------------------------------------------------
+    # Valid .cube — stored as relative POSIX inside OTIO dir (AC-4)
+    # -------------------------------------------------------------------------
+
+    def test_valid_cube_inside_otio_dir_stored_relative(
+        self, tmp_path: Path
+    ) -> None:
+        """Valid .cube co-located with output OTIO must be stored as relative POSIX path.
+
+        RED: DetectColorOptions has no lut field yet → ValidationError at opts construction.
+        After implementation: directive.lut must be a relative POSIX path (no backslash,
+        no leading '/', using media_ref_for_otio semantics).
+        """
+        from clipwright_color.color import (  # type: ignore[import-not-found]
+            detect_color,
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        cube_file = tmp_path / "grade.cube"
+        cube_file.write_text("# dummy cube")
+        output = tmp_path / "out.otio"
+
+        # RED: lut field does not exist on DetectColorOptions yet
+        opts = DetectColorOptions(  # type: ignore[call-arg]
+            target_luma=128.0,
+            lut=str(cube_file),
+        )
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(
+                "clipwright_color.color.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_color.color.measure_brightness",
+                lambda media_path, options: _fake_measured(yavg=128.0),
+            )
+            result = detect_color(
+                media=str(media), output=str(output), options=opts, timeline=None
+            )
+
+        assert result["ok"] is True, f"error={result.get('error')}"
+        import opentimelineio as otio
+
+        tl = otio.adapters.read_from_file(str(output))
+        color_meta = tl.metadata["clipwright"]["color"]
+        lut_stored = color_meta.get("lut")
+        assert lut_stored is not None, (
+            "AC-4: directive.lut must be written for a valid .cube co-located with OTIO."
+        )
+        assert not Path(lut_stored).is_absolute(), (
+            "DC-AM-004: .cube inside OTIO dir must be stored as relative POSIX path."
+            f" Got: {lut_stored!r}"
+        )
+        assert "\\" not in lut_stored, (
+            "Stored lut path must use forward slashes (POSIX), not backslashes."
+            f" Got: {lut_stored!r}"
+        )
+
+    def test_valid_cube_outside_otio_dir_stored_absolute(
+        self, tmp_path: Path
+    ) -> None:
+        """Valid .cube outside the output directory must be stored as absolute path.
+
+        RED: DetectColorOptions has no lut field yet → ValidationError at opts construction.
+        """
+        from clipwright_color.color import (  # type: ignore[import-not-found]
+            detect_color,
+        )
+
+        lut_dir = tmp_path / "luts"
+        lut_dir.mkdir()
+        cube_file = lut_dir / "grade.cube"
+        cube_file.write_text("# dummy cube")
+
+        out_dir = tmp_path / "work"
+        out_dir.mkdir()
+        media = out_dir / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = out_dir / "out.otio"
+
+        opts = DetectColorOptions(  # type: ignore[call-arg]
+            target_luma=128.0,
+            lut=str(cube_file),
+        )
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(
+                "clipwright_color.color.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_color.color.measure_brightness",
+                lambda media_path, options: _fake_measured(yavg=128.0),
+            )
+            result = detect_color(
+                media=str(media), output=str(output), options=opts, timeline=None
+            )
+
+        assert result["ok"] is True, f"error={result.get('error')}"
+        import opentimelineio as otio
+
+        tl = otio.adapters.read_from_file(str(output))
+        lut_stored = tl.metadata["clipwright"]["color"].get("lut")
+        assert lut_stored is not None, "directive.lut must be written"
+        assert Path(lut_stored).is_absolute(), (
+            "DC-AM-004: .cube outside OTIO dir must be stored as absolute path."
+            f" Got: {lut_stored!r}"
+        )
+
+    # -------------------------------------------------------------------------
+    # Symlink .cube rejected (CWE-59)
+    # -------------------------------------------------------------------------
+
+    def test_symlink_cube_rejected(self, tmp_path: Path) -> None:
+        """A .cube that is a symlink must be rejected (CWE-59 / ADR-CO-10).
+
+        RED: DetectColorOptions has no lut field yet → ValidationError.
+        After implementation: FILE_NOT_FOUND or PATH_NOT_ALLOWED.
+        """
+        import sys
+
+        from clipwright_color.color import (  # type: ignore[import-not-found]
+            detect_color,
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "out.otio"
+
+        real_cube = tmp_path / "real.cube"
+        real_cube.write_text("# dummy cube")
+        symlink_cube = tmp_path / "link.cube"
+        try:
+            symlink_cube.symlink_to(real_cube)
+        except OSError:
+            pytest.skip("Symlink creation not available on this system")
+
+        opts = DetectColorOptions(  # type: ignore[call-arg]
+            target_luma=128.0,
+            lut=str(symlink_cube),
+        )
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(
+                "clipwright_color.color.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_color.color.measure_brightness",
+                lambda media_path, options: _fake_measured(yavg=128.0),
+            )
+            result = detect_color(
+                media=str(media), output=str(output), options=opts, timeline=None
+            )
+
+        assert result["ok"] is False, (
+            "CWE-59: symlink .cube must be rejected."
+        )
+        assert result["error"]["code"] in (
+            ErrorCode.FILE_NOT_FOUND.value,
+            ErrorCode.PATH_NOT_ALLOWED.value,
+            ErrorCode.INVALID_INPUT.value,
+        ), f"Unexpected error code: {result['error']['code']!r}"
+
+    # -------------------------------------------------------------------------
+    # Directory traversal in .cube path rejected
+    # -------------------------------------------------------------------------
+
+    def test_traversal_cube_path_rejected(self, tmp_path: Path) -> None:
+        """A .cube path containing ../ traversal must be rejected (CWE-22 / CWE-59).
+
+        RED: DetectColorOptions has no lut field yet → ValidationError.
+        """
+        from clipwright_color.color import (  # type: ignore[import-not-found]
+            detect_color,
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "out.otio"
+
+        traversal_path = str(tmp_path / ".." / "outside.cube")
+        opts = DetectColorOptions(  # type: ignore[call-arg]
+            target_luma=128.0,
+            lut=traversal_path,
+        )
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(
+                "clipwright_color.color.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_color.color.measure_brightness",
+                lambda media_path, options: _fake_measured(yavg=128.0),
+            )
+            result = detect_color(
+                media=str(media), output=str(output), options=opts, timeline=None
+            )
+
+        # Either rejected outright or the file doesn't exist — either is acceptable Red evidence.
+        # After implementation: must be FILE_NOT_FOUND or PATH_NOT_ALLOWED.
+        assert result["ok"] is False, (
+            "Directory traversal ../ in .cube path must be rejected."
+        )
+
+    # -------------------------------------------------------------------------
+    # AC-7 / CWE-209: error message must NOT expose the full .cube path
+    # -------------------------------------------------------------------------
+
+    def test_cube_validation_error_does_not_leak_full_path(
+        self, tmp_path: Path
+    ) -> None:
+        """AC-7/CWE-209: .cube validation failure must not expose the full file path.
+
+        validate_source_file() leaks 'File not found: <path>' verbatim.
+        The implementation must wrap/scrub that message (ADR-CO-10 / §5.1).
+
+        RED: DetectColorOptions has no lut field yet → ValidationError.
+        After implementation: error message/hint must not contain the sentinel dir segment.
+        """
+        from clipwright_color.color import (  # type: ignore[import-not-found]
+            detect_color,
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "out.otio"
+
+        # Path that does NOT exist — triggers validate_source_file FILE_NOT_FOUND
+        nonexistent_cube = tmp_path / "secret_dir_sentinel" / "grade.cube"
+        opts = DetectColorOptions(  # type: ignore[call-arg]
+            target_luma=128.0,
+            lut=str(nonexistent_cube),
+        )
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(
+                "clipwright_color.color.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_color.color.measure_brightness",
+                lambda media_path, options: _fake_measured(yavg=128.0),
+            )
+            result = detect_color(
+                media=str(media), output=str(output), options=opts, timeline=None
+            )
+
+        assert result["ok"] is False
+        msg = result["error"].get("message", "")
+        hint = result["error"].get("hint", "")
+        # The sentinel directory name must NOT appear in the scrubbed error
+        assert "secret_dir_sentinel" not in msg, (
+            f"CWE-209: full .cube path leaked in message: {msg!r}"
+        )
+        assert "secret_dir_sentinel" not in hint, (
+            f"CWE-209: full .cube path leaked in hint: {hint!r}"
+        )

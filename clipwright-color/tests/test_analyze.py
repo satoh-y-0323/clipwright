@@ -22,6 +22,9 @@ Verification points:
   (f) SUBPROCESS_TIMEOUT
   (g) argv array, shell-free, timeout passed, -vf string equals expected value
   (h) inf/nan token in YAVG -> measured=None
+  (i) chroma-cast: UAVG/VAVG median extraction in same ffmpeg pass (ADR-CO-9, FR-2)
+  (j) chroma parse failure: uavg/vavg None while brightness still measures (FR-4)
+  (k) CWE-209: subprocess failure scrubs message even when chroma data present (NFR-3)
 
 Requirements: FR-2 (processing), NFR-2 (subprocess discipline), architecture-report §4.
 """
@@ -736,4 +739,442 @@ class TestInfNanYavg:
         assert result["measured"] is None, (
             "YAVG=inf is not matched by _YAVG_RE (digits only), so yavg_vals is empty"
             " and _parse_signalstats returns None."
+        )
+
+
+# ===========================================================================
+# Chroma-cast test fixtures
+# ===========================================================================
+
+# 3-frame signalstats output including UAVG/VAVG lines (same format as YAVG).
+# UAVG values: 120.0, 126.0, 122.0  -> sorted: [120.0, 122.0, 126.0] -> median = 122.0
+# VAVG values: 130.0, 132.0, 136.0  -> sorted: [130.0, 132.0, 136.0] -> median = 132.0
+# YAVG values: 80.0, 100.0, 120.0   -> mean = 100.0 (unchanged by FR-10 / ADR-CO-9)
+# Note: mean(UAVG) = 122.667, mean(VAVG) = 132.667 — different from median, used to
+#       confirm the implementation uses median and not mean.
+_SIGNALSTATS_STDERR_3FRAMES_WITH_CHROMA = """\
+[Parsed_metadata_2 @ 000002139b615380] lavfi.signalstats.YMIN=9
+[Parsed_metadata_2 @ 000002139b615380] lavfi.signalstats.YAVG=80.000
+[Parsed_metadata_2 @ 000002139b615380] lavfi.signalstats.YMAX=200
+[Parsed_metadata_2 @ 000002139b615380] lavfi.signalstats.UAVG=120.000
+[Parsed_metadata_2 @ 000002139b615380] lavfi.signalstats.VAVG=130.000
+[Parsed_metadata_2 @ 000002139b615381] lavfi.signalstats.YMIN=20
+[Parsed_metadata_2 @ 000002139b615381] lavfi.signalstats.YAVG=100.000
+[Parsed_metadata_2 @ 000002139b615381] lavfi.signalstats.YMAX=230
+[Parsed_metadata_2 @ 000002139b615381] lavfi.signalstats.UAVG=126.000
+[Parsed_metadata_2 @ 000002139b615381] lavfi.signalstats.VAVG=132.000
+[Parsed_metadata_2 @ 000002139b615382] lavfi.signalstats.YMIN=30
+[Parsed_metadata_2 @ 000002139b615382] lavfi.signalstats.YAVG=120.000
+[Parsed_metadata_2 @ 000002139b615382] lavfi.signalstats.YMAX=240
+[Parsed_metadata_2 @ 000002139b615382] lavfi.signalstats.UAVG=122.000
+[Parsed_metadata_2 @ 000002139b615382] lavfi.signalstats.VAVG=136.000
+"""
+
+# 2-frame output with YAVG/YMIN/YMAX but no UAVG/VAVG lines.
+# YAVG values: 80.0, 100.0  -> mean = 90.0, sampled_frames = 2
+# UAVG/VAVG: absent -> uavg=None, vavg=None expected in BrightnessMeasured (FR-4)
+_SIGNALSTATS_STDERR_NO_CHROMA = """\
+[Parsed_metadata_2 @ 000002139b615380] lavfi.signalstats.YMIN=9
+[Parsed_metadata_2 @ 000002139b615380] lavfi.signalstats.YAVG=80.000
+[Parsed_metadata_2 @ 000002139b615380] lavfi.signalstats.YMAX=200
+[Parsed_metadata_2 @ 000002139b615381] lavfi.signalstats.YMIN=20
+[Parsed_metadata_2 @ 000002139b615381] lavfi.signalstats.YAVG=100.000
+[Parsed_metadata_2 @ 000002139b615381] lavfi.signalstats.YMAX=230
+"""
+
+
+# ===========================================================================
+# (i) chroma extraction: UAVG/VAVG median in same ffmpeg pass (ADR-CO-9, FR-2)
+# ===========================================================================
+
+
+class TestChromaExtraction:
+    """Verify UAVG/VAVG median extraction via the same single ffmpeg signalstats pass.
+
+    All tests in this class are RED until BrightnessMeasured gains uavg/vavg fields
+    and _parse_signalstats is extended with _UAVG_RE/_VAVG_RE (ADR-CO-9, FR-2).
+    """
+
+    def test_uavg_is_median_not_mean(self, tmp_path: Path) -> None:
+        """uavg must be median(120, 122, 126) = 122.0, not mean = 122.667 (D3 / ADR-CO-9)."""
+        from clipwright_color.analyze import (
+            measure_brightness,  # type: ignore[import-not-found]
+        )
+        from clipwright_color.schemas import (
+            DetectColorOptions,  # type: ignore[import-not-found]
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        opts = DetectColorOptions()
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr("clipwright_color.analyze.resolve_tool", _fake_resolve)
+            mp.setattr(
+                "clipwright_color.analyze.run",
+                _make_run_ok(_SIGNALSTATS_STDERR_3FRAMES_WITH_CHROMA),
+            )
+            result = measure_brightness(media, opts)
+
+        measured = result["measured"]
+        assert measured is not None
+        # Red: measured["uavg"] raises KeyError until BrightnessMeasured and
+        # _parse_signalstats are updated (ADR-CO-9).
+        # median([120, 122, 126]) = 122.0  (mean would be 122.667)
+        assert measured["uavg"] == pytest.approx(122.0, abs=0.01), (
+            "D3: uavg must be median([120,122,126])=122.0, not mean=122.667."
+        )
+
+    def test_vavg_is_median_not_mean(self, tmp_path: Path) -> None:
+        """vavg must be median(130, 132, 136) = 132.0, not mean = 132.667 (D3 / ADR-CO-9)."""
+        from clipwright_color.analyze import (
+            measure_brightness,  # type: ignore[import-not-found]
+        )
+        from clipwright_color.schemas import (
+            DetectColorOptions,  # type: ignore[import-not-found]
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        opts = DetectColorOptions()
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr("clipwright_color.analyze.resolve_tool", _fake_resolve)
+            mp.setattr(
+                "clipwright_color.analyze.run",
+                _make_run_ok(_SIGNALSTATS_STDERR_3FRAMES_WITH_CHROMA),
+            )
+            result = measure_brightness(media, opts)
+
+        measured = result["measured"]
+        assert measured is not None
+        # Red: KeyError until schema + parser are updated.
+        # median([130, 132, 136]) = 132.0  (mean would be 132.667)
+        assert measured["vavg"] == pytest.approx(132.0, abs=0.01), (
+            "D3: vavg must be median([130,132,136])=132.0, not mean=132.667."
+        )
+
+    def test_yavg_stays_mean_when_chroma_present(self, tmp_path: Path) -> None:
+        """yavg must remain the mean of YAVG values when chroma is also present (FR-10).
+
+        This test first asserts yavg (currently passes — regression guard) then asserts
+        uavg is also populated (currently fails — triggers Red for the combined test).
+        """
+        from clipwright_color.analyze import (
+            measure_brightness,  # type: ignore[import-not-found]
+        )
+        from clipwright_color.schemas import (
+            DetectColorOptions,  # type: ignore[import-not-found]
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        opts = DetectColorOptions()
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr("clipwright_color.analyze.resolve_tool", _fake_resolve)
+            mp.setattr(
+                "clipwright_color.analyze.run",
+                _make_run_ok(_SIGNALSTATS_STDERR_3FRAMES_WITH_CHROMA),
+            )
+            result = measure_brightness(media, opts)
+
+        measured = result["measured"]
+        assert measured is not None
+        # YAVG mean must be unchanged (FR-10 / ADR-CO-9)
+        assert measured["yavg"] == pytest.approx(100.0, abs=0.01), (
+            "FR-10: yavg must remain mean([80,100,120])=100.0 regardless of chroma presence."
+        )
+        # Red until uavg field is added to BrightnessMeasured and _parse_signalstats:
+        assert measured["uavg"] == pytest.approx(122.0, abs=0.01), (
+            "ADR-CO-9: uavg must be populated in the same pass that produced yavg."
+        )
+
+    def test_chroma_extracted_in_single_subprocess_pass(self, tmp_path: Path) -> None:
+        """run must be called exactly once; chroma uses the same signalstats pass (ADR-CO-9).
+
+        Counts invocations via the existing mock pattern in this file.
+        """
+        from clipwright_color.analyze import (
+            measure_brightness,  # type: ignore[import-not-found]
+        )
+        from clipwright_color.schemas import (
+            DetectColorOptions,  # type: ignore[import-not-found]
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        opts = DetectColorOptions()
+
+        call_count = 0
+
+        def _counting_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            nonlocal call_count
+            call_count += 1
+            return CompletedProcess(
+                args=cmd,
+                returncode=0,
+                stdout="",
+                stderr=_SIGNALSTATS_STDERR_3FRAMES_WITH_CHROMA,
+            )
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr("clipwright_color.analyze.resolve_tool", _fake_resolve)
+            mp.setattr("clipwright_color.analyze.run", _counting_run)
+            result = measure_brightness(media, opts)
+
+        assert call_count == 1, (
+            "ADR-CO-9: chroma must be extracted from the same ffmpeg pass — run called once."
+        )
+        measured = result["measured"]
+        assert measured is not None
+        # Red until BrightnessMeasured has uavg field:
+        assert measured.get("uavg") is not None, (
+            "FR-2: uavg must be populated in measured when UAVG lines are present in stderr."
+        )
+
+
+# ===========================================================================
+# (j) chroma parse failure: uavg/vavg None; brightness still measures (FR-4)
+# ===========================================================================
+
+
+class TestChromaParseFailure:
+    """When UAVG/VAVG lines are absent in stderr, uavg/vavg must be None in measured.
+
+    Brightness measurement must still succeed (measured is not None) — FR-4 finer-grained
+    case, distinct from the full U-1 degradation where the whole measured is None.
+
+    Tests asserting "uavg" in measured are RED until BrightnessMeasured gains the optional
+    uavg/vavg fields (ADR-CO-9 §3.2).
+    """
+
+    def test_uavg_field_present_in_measured_dict_when_chroma_absent(
+        self, tmp_path: Path
+    ) -> None:
+        """BrightnessMeasured.model_dump() must include 'uavg' key (as None) when absent.
+
+        Red: BrightnessMeasured currently has no uavg field, so model_dump() omits the key.
+        """
+        from clipwright_color.analyze import (
+            measure_brightness,  # type: ignore[import-not-found]
+        )
+        from clipwright_color.schemas import (
+            DetectColorOptions,  # type: ignore[import-not-found]
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        opts = DetectColorOptions()
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr("clipwright_color.analyze.resolve_tool", _fake_resolve)
+            mp.setattr(
+                "clipwright_color.analyze.run",
+                _make_run_ok(_SIGNALSTATS_STDERR_NO_CHROMA),
+            )
+            result = measure_brightness(media, opts)
+
+        measured = result["measured"]
+        assert measured is not None, (
+            "FR-4: brightness must still be measured when UAVG/VAVG lines are absent."
+        )
+        # Red: 'uavg' key absent in model_dump() because BrightnessMeasured has no such field.
+        assert "uavg" in measured, (
+            "FR-4: measured dict must include 'uavg' key (None when chroma absent)."
+        )
+
+    def test_uavg_is_none_when_chroma_absent(self, tmp_path: Path) -> None:
+        """measured['uavg'] must be None when no UAVG lines appear in stderr (FR-4)."""
+        from clipwright_color.analyze import (
+            measure_brightness,  # type: ignore[import-not-found]
+        )
+        from clipwright_color.schemas import (
+            DetectColorOptions,  # type: ignore[import-not-found]
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        opts = DetectColorOptions()
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr("clipwright_color.analyze.resolve_tool", _fake_resolve)
+            mp.setattr(
+                "clipwright_color.analyze.run",
+                _make_run_ok(_SIGNALSTATS_STDERR_NO_CHROMA),
+            )
+            result = measure_brightness(media, opts)
+
+        measured = result["measured"]
+        assert measured is not None
+        # Red: KeyError until BrightnessMeasured has uavg field.
+        assert measured["uavg"] is None, (
+            "FR-4: uavg must be None when no UAVG lines found in signalstats output."
+        )
+
+    def test_vavg_field_present_in_measured_dict_when_chroma_absent(
+        self, tmp_path: Path
+    ) -> None:
+        """BrightnessMeasured.model_dump() must include 'vavg' key (as None) when absent.
+
+        Red: BrightnessMeasured currently has no vavg field.
+        """
+        from clipwright_color.analyze import (
+            measure_brightness,  # type: ignore[import-not-found]
+        )
+        from clipwright_color.schemas import (
+            DetectColorOptions,  # type: ignore[import-not-found]
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        opts = DetectColorOptions()
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr("clipwright_color.analyze.resolve_tool", _fake_resolve)
+            mp.setattr(
+                "clipwright_color.analyze.run",
+                _make_run_ok(_SIGNALSTATS_STDERR_NO_CHROMA),
+            )
+            result = measure_brightness(media, opts)
+
+        measured = result["measured"]
+        assert measured is not None
+        # Red: 'vavg' key absent in model_dump() because BrightnessMeasured has no such field.
+        assert "vavg" in measured, (
+            "FR-4: measured dict must include 'vavg' key (None when chroma absent)."
+        )
+
+    def test_vavg_is_none_when_chroma_absent(self, tmp_path: Path) -> None:
+        """measured['vavg'] must be None when no VAVG lines appear in stderr (FR-4)."""
+        from clipwright_color.analyze import (
+            measure_brightness,  # type: ignore[import-not-found]
+        )
+        from clipwright_color.schemas import (
+            DetectColorOptions,  # type: ignore[import-not-found]
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        opts = DetectColorOptions()
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr("clipwright_color.analyze.resolve_tool", _fake_resolve)
+            mp.setattr(
+                "clipwright_color.analyze.run",
+                _make_run_ok(_SIGNALSTATS_STDERR_NO_CHROMA),
+            )
+            result = measure_brightness(media, opts)
+
+        measured = result["measured"]
+        assert measured is not None
+        # Red: KeyError until BrightnessMeasured has vavg field.
+        assert measured["vavg"] is None, (
+            "FR-4: vavg must be None when no VAVG lines found in signalstats output."
+        )
+
+    def test_brightness_still_measures_when_chroma_absent(self, tmp_path: Path) -> None:
+        """Brightness (yavg, sampled_frames) must be populated even when chroma absent (FR-4).
+
+        Regression guard: this test is GREEN before implementation — verifies brightness
+        is not accidentally broken when the chroma extraction code is added.
+        """
+        from clipwright_color.analyze import (
+            measure_brightness,  # type: ignore[import-not-found]
+        )
+        from clipwright_color.schemas import (
+            DetectColorOptions,  # type: ignore[import-not-found]
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        opts = DetectColorOptions()
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr("clipwright_color.analyze.resolve_tool", _fake_resolve)
+            mp.setattr(
+                "clipwright_color.analyze.run",
+                _make_run_ok(_SIGNALSTATS_STDERR_NO_CHROMA),
+            )
+            result = measure_brightness(media, opts)
+
+        measured = result["measured"]
+        assert measured is not None, (
+            "FR-4: measured must not be None when YAVG lines are present (chroma absence"
+            " is a finer-grained degradation, distinct from U-1 full measurement failure)."
+        )
+        assert measured["yavg"] == pytest.approx(90.0, abs=0.01), (
+            "FR-4: yavg must be mean([80.0, 100.0])=90.0 regardless of chroma absence."
+        )
+        assert measured["sampled_frames"] == 2, (
+            "FR-4: sampled_frames must be 2 (one per YAVG line in the fixture)."
+        )
+
+
+# ===========================================================================
+# (k) CWE-209: subprocess failure message scrubbed even with chroma data (NFR-3)
+# ===========================================================================
+
+
+class TestChromaCwe209:
+    """Regression guard: subprocess failure raises with scrubbed message; no new leak path.
+
+    These tests confirm that the existing CWE-209 protection is not broken by the
+    new chroma extraction code path. The tests are GREEN pre-implementation and must
+    remain GREEN after implementation (NFR-3 / architecture-report §4.1).
+    """
+
+    def test_subprocess_failure_message_no_raw_ffmpeg_stderr(
+        self, tmp_path: Path
+    ) -> None:
+        """SUBPROCESS_FAILED re-raised message must not contain raw ffmpeg stderr (CWE-209).
+
+        Simulates a run() that fails with a message containing UAVG/VAVG verbatim
+        (as ffmpeg might include in real stderr). The re-raised ClipwrightError must
+        use the fixed wording, not the raw message.
+        """
+        from clipwright_color.analyze import (
+            measure_brightness,  # type: ignore[import-not-found]
+        )
+        from clipwright_color.schemas import (
+            DetectColorOptions,  # type: ignore[import-not-found]
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        opts = DetectColorOptions()
+
+        raw_ffmpeg_stderr_fragment = (
+            "lavfi.signalstats.UAVG=122.000 lavfi.signalstats.VAVG=136.000"
+        )
+
+        def _fail_with_chroma_in_msg(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            raise ClipwrightError(
+                code=ErrorCode.SUBPROCESS_FAILED,
+                message=(
+                    f"ffmpeg failed (exit 1): {raw_ffmpeg_stderr_fragment}"
+                    f" path={media}"
+                ),
+                hint="Check ffmpeg version.",
+            )
+
+        with (
+            pytest.MonkeyPatch().context() as mp,
+            pytest.raises(ClipwrightError) as exc_info,
+        ):
+            mp.setattr("clipwright_color.analyze.resolve_tool", _fake_resolve)
+            mp.setattr("clipwright_color.analyze.run", _fail_with_chroma_in_msg)
+            measure_brightness(media, opts)
+
+        err = exc_info.value
+        assert err.code == ErrorCode.SUBPROCESS_FAILED
+        # The re-raised message must not contain the raw ffmpeg stderr (CWE-209).
+        assert "UAVG" not in err.message, (
+            "CWE-209: raw ffmpeg stderr with UAVG must not appear in the re-raised message."
+        )
+        assert "VAVG" not in err.message, (
+            "CWE-209: raw ffmpeg stderr with VAVG must not appear in the re-raised message."
+        )
+        assert str(tmp_path) not in err.message, (
+            "CWE-209: absolute path must not appear in the re-raised message."
         )

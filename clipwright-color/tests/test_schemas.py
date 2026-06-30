@@ -403,3 +403,539 @@ class TestColorDirectiveRequired:
         )
         assert d.measured is not None
         assert d.measured.yavg == pytest.approx(96.4)
+
+
+# ===========================================================================
+# DetectColorOptions — new optional eq override fields (FR-1, FR-6, architecture-report §3.1)
+# ===========================================================================
+
+
+class TestDetectColorOptionsEqOverrides:
+    """DetectColorOptions gains optional saturation/contrast/gamma eq override fields (FR-1).
+
+    All new fields default to None; None means "leave the EqParams neutral default unchanged."
+    Ranges mirror the EqParams constraints so callers cannot supply an invalid value.
+    """
+
+    def test_saturation_option_default_is_none(self) -> None:
+        """saturation option field must default to None (FR-1 / backward-compat)."""
+        opts = DetectColorOptions()
+        assert opts.saturation is None  # Red: AttributeError — field not yet on model
+
+    def test_contrast_option_default_is_none(self) -> None:
+        """contrast option field must default to None."""
+        opts = DetectColorOptions()
+        assert opts.contrast is None  # Red: AttributeError
+
+    def test_gamma_option_default_is_none(self) -> None:
+        """gamma option field must default to None."""
+        opts = DetectColorOptions()
+        assert opts.gamma is None  # Red: AttributeError
+
+    def test_saturation_valid_midrange_accepted(self) -> None:
+        """saturation=1.0 (mid-range) must be accepted without error."""
+        opts = DetectColorOptions(saturation=1.0)
+        assert opts.saturation == pytest.approx(1.0)  # Red: ValidationError (extra=forbid)
+
+    def test_saturation_zero_accepted(self) -> None:
+        """saturation=0.0 (ge=0.0 lower bound) must be accepted."""
+        opts = DetectColorOptions(saturation=0.0)
+        assert opts.saturation == pytest.approx(0.0)  # Red: ValidationError (extra=forbid)
+
+    def test_saturation_two_accepted(self) -> None:
+        """saturation=2.0 (le=2.0 upper bound) must be accepted."""
+        opts = DetectColorOptions(saturation=2.0)
+        assert opts.saturation == pytest.approx(2.0)  # Red: ValidationError (extra=forbid)
+
+    def test_saturation_above_range_rejected(self) -> None:
+        """saturation=2.5 must raise ValidationError (le=2.0 violated)."""
+        with pytest.raises(ValidationError):
+            DetectColorOptions(saturation=2.5)
+
+    def test_saturation_negative_rejected(self) -> None:
+        """saturation=-0.1 must raise ValidationError (ge=0.0 violated)."""
+        with pytest.raises(ValidationError):
+            DetectColorOptions(saturation=-0.1)
+
+    def test_contrast_option_valid_accepted(self) -> None:
+        """contrast option=1.0 must be accepted."""
+        opts = DetectColorOptions(contrast=1.0)
+        assert opts.contrast == pytest.approx(1.0)  # Red: ValidationError (extra=forbid)
+
+    def test_contrast_option_above_range_rejected(self) -> None:
+        """contrast option=2.5 must raise ValidationError (le=2.0 violated)."""
+        with pytest.raises(ValidationError):
+            DetectColorOptions(contrast=2.5)
+
+    def test_contrast_option_negative_rejected(self) -> None:
+        """contrast option=-0.1 must raise ValidationError (ge=0.0 violated)."""
+        with pytest.raises(ValidationError):
+            DetectColorOptions(contrast=-0.1)
+
+    def test_gamma_option_valid_accepted(self) -> None:
+        """gamma option=1.0 must be accepted."""
+        opts = DetectColorOptions(gamma=1.0)
+        assert opts.gamma == pytest.approx(1.0)  # Red: ValidationError (extra=forbid)
+
+    def test_gamma_option_zero_rejected(self) -> None:
+        """gamma option=0.0 must raise ValidationError (ge=0.1 violated)."""
+        with pytest.raises(ValidationError):
+            DetectColorOptions(gamma=0.0)
+
+    def test_gamma_option_above_range_rejected(self) -> None:
+        """gamma option=10.1 must raise ValidationError (le=10.0 violated)."""
+        with pytest.raises(ValidationError):
+            DetectColorOptions(gamma=10.1)
+
+
+# ===========================================================================
+# DetectColorOptions — new optional WB override fields (FR-3, FR-6, architecture-report §3.1)
+# ===========================================================================
+
+
+class TestDetectColorOptionsWbOverrides:
+    """DetectColorOptions gains optional temperature/tint WB caller override fields (FR-3).
+
+    None (default) means "use auto gray-world measurement result".
+    Ranges are normalised [-1, 1] axes matching the colorbalance representation (D1/ADR-CO-7).
+    """
+
+    def test_temperature_default_is_none(self) -> None:
+        """temperature field must default to None (use auto WB)."""
+        opts = DetectColorOptions()
+        assert opts.temperature is None  # Red: AttributeError
+
+    def test_tint_default_is_none(self) -> None:
+        """tint field must default to None (use auto WB)."""
+        opts = DetectColorOptions()
+        assert opts.tint is None  # Red: AttributeError
+
+    def test_temperature_warm_accepted(self) -> None:
+        """temperature=0.5 (warm bias) must be accepted."""
+        opts = DetectColorOptions(temperature=0.5)
+        assert opts.temperature == pytest.approx(0.5)  # Red: ValidationError (extra=forbid)
+
+    def test_temperature_cool_accepted(self) -> None:
+        """temperature=-0.5 (cool bias) must be accepted."""
+        opts = DetectColorOptions(temperature=-0.5)
+        assert opts.temperature == pytest.approx(-0.5)  # Red: ValidationError (extra=forbid)
+
+    def test_temperature_boundary_plus1_accepted(self) -> None:
+        """temperature=1.0 (le=1.0 upper bound) must be accepted."""
+        opts = DetectColorOptions(temperature=1.0)
+        assert opts.temperature == pytest.approx(1.0)  # Red: ValidationError (extra=forbid)
+
+    def test_temperature_boundary_minus1_accepted(self) -> None:
+        """temperature=-1.0 (ge=-1.0 lower bound) must be accepted."""
+        opts = DetectColorOptions(temperature=-1.0)
+        assert opts.temperature == pytest.approx(-1.0)  # Red: ValidationError (extra=forbid)
+
+    def test_temperature_above_range_rejected(self) -> None:
+        """temperature=1.5 must raise ValidationError (le=1.0 violated)."""
+        with pytest.raises(ValidationError):
+            DetectColorOptions(temperature=1.5)
+
+    def test_temperature_below_range_rejected(self) -> None:
+        """temperature=-1.5 must raise ValidationError (ge=-1.0 violated)."""
+        with pytest.raises(ValidationError):
+            DetectColorOptions(temperature=-1.5)
+
+    def test_tint_magenta_accepted(self) -> None:
+        """tint=0.3 (magenta bias) must be accepted."""
+        opts = DetectColorOptions(tint=0.3)
+        assert opts.tint == pytest.approx(0.3)  # Red: ValidationError (extra=forbid)
+
+    def test_tint_above_range_rejected(self) -> None:
+        """tint=1.5 must raise ValidationError (le=1.0 violated)."""
+        with pytest.raises(ValidationError):
+            DetectColorOptions(tint=1.5)
+
+    def test_tint_below_range_rejected(self) -> None:
+        """tint=-1.5 must raise ValidationError (ge=-1.0 violated)."""
+        with pytest.raises(ValidationError):
+            DetectColorOptions(tint=-1.5)
+
+
+# ===========================================================================
+# DetectColorOptions — new optional lut field (FR-5, FR-6, architecture-report §3.1)
+# ===========================================================================
+
+
+class TestDetectColorOptionsLutField:
+    """DetectColorOptions gains optional lut field for a caller-provided .cube path (FR-5).
+
+    The field stores the raw caller-provided path string; clipwright-color validates and
+    resolves it via pathpolicy helpers during detect_color execution.
+    """
+
+    def test_lut_option_default_is_none(self) -> None:
+        """lut option field must default to None (no LUT applied)."""
+        opts = DetectColorOptions()
+        assert opts.lut is None  # Red: AttributeError
+
+    def test_lut_valid_path_accepted(self) -> None:
+        """A valid .cube path string must be accepted."""
+        opts = DetectColorOptions(lut="/path/to/grade.cube")
+        assert opts.lut == "/path/to/grade.cube"  # Red: ValidationError (extra=forbid)
+
+    def test_lut_min_length_one_accepted(self) -> None:
+        """A single-char lut value (min_length=1) must be accepted."""
+        opts = DetectColorOptions(lut="x")
+        assert opts.lut == "x"  # Red: ValidationError (extra=forbid)
+
+    def test_lut_max_length_4096_accepted(self) -> None:
+        """A lut value exactly 4096 chars long (le=max_length) must be accepted."""
+        opts = DetectColorOptions(lut="x" * 4096)
+        assert opts.lut is not None and len(opts.lut) == 4096  # Red: ValidationError (extra=forbid)
+
+    def test_lut_empty_string_rejected(self) -> None:
+        """lut="" must raise ValidationError (min_length=1 violated)."""
+        with pytest.raises(ValidationError):
+            DetectColorOptions(lut="")
+
+    def test_lut_above_max_length_rejected(self) -> None:
+        """lut longer than 4096 chars must raise ValidationError (max_length=4096 violated)."""
+        with pytest.raises(ValidationError):
+            DetectColorOptions(lut="x" * 4097)
+
+    def test_lut_none_explicit_accepted(self) -> None:
+        """Explicit lut=None must be accepted (same as default)."""
+        opts = DetectColorOptions(lut=None)
+        assert opts.lut is None  # Red: ValidationError (extra=forbid)
+
+
+# ===========================================================================
+# BrightnessMeasured — new optional uavg / vavg chroma fields (FR-2, architecture-report §3.2)
+# ===========================================================================
+
+
+class TestBrightnessMeasuredChromaFields:
+    """BrightnessMeasured gains optional uavg/vavg fields for median chroma measurement.
+
+    Both fields are Optional (default None) so v0.2.x directives without them still validate.
+    Range [0.0, 255.0] matches the 8-bit YUV per-channel scale used by signalstats.
+    uavg/vavg are medians (not means) across sampled frames — consistent with ADR-CO-9.
+    """
+
+    def test_uavg_default_is_none(self) -> None:
+        """uavg must default to None (absent in v0.2.x dicts — backward compat)."""
+        m = BrightnessMeasured(yavg=128.0, sampled_frames=5)
+        assert m.uavg is None  # Red: AttributeError — field not yet on model
+
+    def test_vavg_default_is_none(self) -> None:
+        """vavg must default to None."""
+        m = BrightnessMeasured(yavg=128.0, sampled_frames=5)
+        assert m.vavg is None  # Red: AttributeError
+
+    def test_uavg_neutral_value_accepted(self) -> None:
+        """uavg=128.0 (neutral chroma) must be accepted."""
+        m = BrightnessMeasured(yavg=128.0, uavg=128.0, sampled_frames=5)
+        assert m.uavg == pytest.approx(128.0)  # Red: ValidationError (extra=forbid)
+
+    def test_vavg_neutral_value_accepted(self) -> None:
+        """vavg=128.0 must be accepted."""
+        m = BrightnessMeasured(yavg=128.0, vavg=128.0, sampled_frames=5)
+        assert m.vavg == pytest.approx(128.0)  # Red: ValidationError (extra=forbid)
+
+    def test_uavg_zero_accepted(self) -> None:
+        """uavg=0.0 (ge=0.0 lower bound) must be accepted."""
+        m = BrightnessMeasured(yavg=128.0, uavg=0.0, sampled_frames=5)
+        assert m.uavg == pytest.approx(0.0)  # Red: ValidationError (extra=forbid)
+
+    def test_uavg_255_accepted(self) -> None:
+        """uavg=255.0 (le=255.0 upper bound) must be accepted."""
+        m = BrightnessMeasured(yavg=128.0, uavg=255.0, sampled_frames=5)
+        assert m.uavg == pytest.approx(255.0)  # Red: ValidationError (extra=forbid)
+
+    def test_uavg_above_255_rejected(self) -> None:
+        """uavg=256.0 must raise ValidationError (le=255.0 violated)."""
+        with pytest.raises(ValidationError):
+            BrightnessMeasured(yavg=128.0, uavg=256.0, sampled_frames=5)
+
+    def test_uavg_negative_rejected(self) -> None:
+        """uavg=-1.0 must raise ValidationError (ge=0.0 violated)."""
+        with pytest.raises(ValidationError):
+            BrightnessMeasured(yavg=128.0, uavg=-1.0, sampled_frames=5)
+
+    def test_vavg_above_255_rejected(self) -> None:
+        """vavg=256.0 must raise ValidationError (le=255.0 violated)."""
+        with pytest.raises(ValidationError):
+            BrightnessMeasured(yavg=128.0, vavg=256.0, sampled_frames=5)
+
+    def test_vavg_negative_rejected(self) -> None:
+        """vavg=-1.0 must raise ValidationError (ge=0.0 violated)."""
+        with pytest.raises(ValidationError):
+            BrightnessMeasured(yavg=128.0, vavg=-1.0, sampled_frames=5)
+
+    def test_uavg_inf_rejected(self) -> None:
+        """inf uavg must be rejected (allow_inf_nan=False)."""
+        with pytest.raises(ValidationError):
+            BrightnessMeasured(yavg=128.0, uavg=math.inf, sampled_frames=5)
+
+    def test_vavg_nan_rejected(self) -> None:
+        """nan vavg must be rejected (allow_inf_nan=False)."""
+        with pytest.raises(ValidationError):
+            BrightnessMeasured(yavg=128.0, vavg=math.nan, sampled_frames=5)
+
+    def test_v02x_dict_without_chroma_parses_backward_compat(self) -> None:
+        """A v0.2.x dict with no uavg/vavg keys must parse successfully (AC-1 backward compat).
+
+        The parse must succeed and both chroma fields must be None after parsing.
+        This is the critical backward-compatibility guard: existing stored directives
+        must remain loadable after the schema extension.
+        """
+        v02x_dict = {"yavg": 96.4, "ymin": 9.0, "ymax": 242.0, "sampled_frames": 12}
+        m = BrightnessMeasured.model_validate(v02x_dict)
+        assert m.yavg == pytest.approx(96.4)
+        assert m.uavg is None  # Red: AttributeError — field not yet on model
+        assert m.vavg is None  # Red: AttributeError
+
+
+# ===========================================================================
+# WhiteBalanceParams — new model (FR-6, D2, ADR-CO-7, architecture-report §3.4)
+# ===========================================================================
+
+
+class TestWhiteBalanceParams:
+    """WhiteBalanceParams is a new Pydantic model for colorbalance midtone shifts.
+
+    Maps 1:1 to ffmpeg colorbalance rm/gm/bm parameters.
+    Neutral = all 0.0. Range [-1, 1] per channel. extra=forbid; allow_inf_nan=False.
+    """
+
+    def test_import_succeeds(self) -> None:
+        """WhiteBalanceParams must be importable from clipwright_color.schemas."""
+        from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+        # Red: ImportError — class not yet defined in schemas.py
+
+    def test_default_r_is_zero(self) -> None:
+        """r must default to 0.0 (neutral — no red shift)."""
+        from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+        wb = WhiteBalanceParams()
+        assert wb.r == pytest.approx(0.0)
+
+    def test_default_g_is_zero(self) -> None:
+        """g must default to 0.0 (neutral)."""
+        from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+        wb = WhiteBalanceParams()
+        assert wb.g == pytest.approx(0.0)
+
+    def test_default_b_is_zero(self) -> None:
+        """b must default to 0.0 (neutral)."""
+        from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+        wb = WhiteBalanceParams()
+        assert wb.b == pytest.approx(0.0)
+
+    def test_all_neutral_defaults_together(self) -> None:
+        """All three channels must default to 0.0 simultaneously (neutral = no WB correction)."""
+        from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+        wb = WhiteBalanceParams()
+        assert wb.r == pytest.approx(0.0)
+        assert wb.g == pytest.approx(0.0)
+        assert wb.b == pytest.approx(0.0)
+
+    def test_positive_red_shift_accepted(self) -> None:
+        """r=0.5 (add red) must be accepted."""
+        from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+        wb = WhiteBalanceParams(r=0.5)
+        assert wb.r == pytest.approx(0.5)
+
+    def test_mixed_shifts_accepted(self) -> None:
+        """r=0.1, g=-0.05, b=-0.08 (typical gray-world correction) must be accepted."""
+        from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+        wb = WhiteBalanceParams(r=0.1, g=-0.05, b=-0.08)
+        assert wb.r == pytest.approx(0.1)
+        assert wb.g == pytest.approx(-0.05)
+        assert wb.b == pytest.approx(-0.08)
+
+    def test_boundary_minus1_plus1_accepted(self) -> None:
+        """r=-1.0 and g=1.0 (boundary values) must be accepted."""
+        from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+        wb = WhiteBalanceParams(r=-1.0, g=1.0, b=0.0)
+        assert wb.r == pytest.approx(-1.0)
+        assert wb.g == pytest.approx(1.0)
+
+    def test_r_above_range_rejected(self) -> None:
+        """r=1.5 must raise ValidationError (le=1.0 violated)."""
+        from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+        with pytest.raises(ValidationError):
+            WhiteBalanceParams(r=1.5)
+
+    def test_r_below_range_rejected(self) -> None:
+        """r=-1.5 must raise ValidationError (ge=-1.0 violated)."""
+        from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+        with pytest.raises(ValidationError):
+            WhiteBalanceParams(r=-1.5)
+
+    def test_g_above_range_rejected(self) -> None:
+        """g=1.5 must raise ValidationError (le=1.0 violated)."""
+        from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+        with pytest.raises(ValidationError):
+            WhiteBalanceParams(g=1.5)
+
+    def test_g_below_range_rejected(self) -> None:
+        """g=-1.5 must raise ValidationError (ge=-1.0 violated)."""
+        from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+        with pytest.raises(ValidationError):
+            WhiteBalanceParams(g=-1.5)
+
+    def test_b_above_range_rejected(self) -> None:
+        """b=1.5 must raise ValidationError (le=1.0 violated)."""
+        from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+        with pytest.raises(ValidationError):
+            WhiteBalanceParams(b=1.5)
+
+    def test_b_below_range_rejected(self) -> None:
+        """b=-1.5 must raise ValidationError (ge=-1.0 violated)."""
+        from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+        with pytest.raises(ValidationError):
+            WhiteBalanceParams(b=-1.5)
+
+    def test_extra_field_rejected(self) -> None:
+        """Unknown field must raise ValidationError (extra=forbid)."""
+        from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+        with pytest.raises(ValidationError):
+            WhiteBalanceParams(unknown=0.5)  # type: ignore[call-arg]
+
+    def test_inf_rejected(self) -> None:
+        """inf r must be rejected (allow_inf_nan=False)."""
+        from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+        with pytest.raises(ValidationError):
+            WhiteBalanceParams(r=math.inf)
+
+    def test_nan_rejected(self) -> None:
+        """nan r must be rejected (allow_inf_nan=False)."""
+        from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+        with pytest.raises(ValidationError):
+            WhiteBalanceParams(r=math.nan)
+
+
+# ===========================================================================
+# ColorDirective — new optional white_balance and lut fields (FR-6, architecture-report §3.4)
+# ===========================================================================
+
+
+class TestColorDirectiveNewFields:
+    """ColorDirective gains white_balance (WhiteBalanceParams|None=None) and lut (str|None=None).
+
+    Both fields are Optional with None default for strict backward compatibility with v0.2.x
+    directives (AC-1 / AC-8 contract side). Absence of both fields is a no-op in render.
+    """
+
+    def test_white_balance_field_default_is_none(self) -> None:
+        """white_balance must default to None when not supplied."""
+        d = ColorDirective(version="0.3.0", kind="color", target_luma=128.0, eq=EqParams())
+        assert d.white_balance is None  # Red: AttributeError — field not yet on model
+
+    def test_lut_field_default_is_none(self) -> None:
+        """lut field must default to None when not supplied."""
+        d = ColorDirective(version="0.3.0", kind="color", target_luma=128.0, eq=EqParams())
+        assert d.lut is None  # Red: AttributeError
+
+    def test_v02x_directive_without_wb_and_lut_parses(self) -> None:
+        """A v0.2.x ColorDirective JSON with no white_balance and no lut parses without error.
+
+        This is the AC-1 / AC-8 backward-compatibility contract side test.
+        The directive written by clipwright-color v0.2.x must load cleanly in v0.3.0.
+        """
+        v02x_dict = {
+            "version": "0.2.1",
+            "kind": "color",
+            "target_luma": 128.0,
+            "measured": None,
+            "eq": {"brightness": 0.05, "contrast": 1.0, "saturation": 1.0, "gamma": 1.0},
+        }
+        d = ColorDirective.model_validate(v02x_dict)
+        assert d.white_balance is None  # Red: AttributeError — field not yet on model
+        assert d.lut is None  # Red: AttributeError
+
+    def test_white_balance_none_explicit_accepted(self) -> None:
+        """Explicit white_balance=None must be accepted (same as absent)."""
+        d = ColorDirective(
+            version="0.3.0",
+            kind="color",
+            target_luma=128.0,
+            eq=EqParams(),
+            white_balance=None,
+        )
+        assert d.white_balance is None  # Red: ValidationError (extra=forbid on current model)
+
+    def test_white_balance_params_accepted(self) -> None:
+        """ColorDirective with a WhiteBalanceParams value must be accepted."""
+        from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+        wb = WhiteBalanceParams(r=0.1, g=-0.05, b=-0.08)
+        d = ColorDirective(
+            version="0.3.0",
+            kind="color",
+            target_luma=128.0,
+            eq=EqParams(),
+            white_balance=wb,
+        )
+        assert d.white_balance is not None
+        assert d.white_balance.r == pytest.approx(0.1)  # Red: ValidationError (extra=forbid)
+
+    def test_lut_path_accepted(self) -> None:
+        """ColorDirective with a lut path string must be accepted."""
+        d = ColorDirective(
+            version="0.3.0",
+            kind="color",
+            target_luma=128.0,
+            eq=EqParams(),
+            lut="/resolved/path/to/grade.cube",
+        )
+        assert d.lut == "/resolved/path/to/grade.cube"  # Red: ValidationError (extra=forbid)
+
+    def test_lut_none_explicit_accepted(self) -> None:
+        """Explicit lut=None must be accepted (no LUT applied in render)."""
+        d = ColorDirective(
+            version="0.3.0",
+            kind="color",
+            target_luma=128.0,
+            eq=EqParams(),
+            lut=None,
+        )
+        assert d.lut is None  # Red: ValidationError (extra=forbid)
+
+    def test_lut_max_length_4096_accepted(self) -> None:
+        """lut exactly 4096 chars must be accepted (max_length=4096 boundary)."""
+        d = ColorDirective(
+            version="0.3.0",
+            kind="color",
+            target_luma=128.0,
+            eq=EqParams(),
+            lut="x" * 4096,
+        )
+        assert d.lut is not None and len(d.lut) == 4096  # Red: ValidationError (extra=forbid)
+
+    def test_lut_above_max_length_rejected(self) -> None:
+        """lut longer than 4096 chars must raise ValidationError (max_length=4096 violated)."""
+        with pytest.raises(ValidationError):
+            ColorDirective(
+                version="0.3.0",
+                kind="color",
+                target_luma=128.0,
+                eq=EqParams(),
+                lut="x" * 4097,
+            )
+
+    def test_full_v03x_directive_with_all_new_fields(self) -> None:
+        """A ColorDirective with all new fields populated must be accepted."""
+        from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+        wb = WhiteBalanceParams(r=0.05, g=-0.02, b=-0.04)
+        measured = BrightnessMeasured(
+            yavg=110.0, sampled_frames=12, uavg=132.0, vavg=124.0
+        )
+        d = ColorDirective(
+            version="0.3.0",
+            kind="color",
+            target_luma=128.0,
+            measured=measured,
+            eq=EqParams(brightness=0.07, saturation=1.1),
+            white_balance=wb,
+            lut="/media/luts/filmic.cube",
+        )
+        assert d.white_balance is not None
+        assert d.white_balance.r == pytest.approx(0.05)
+        assert d.measured is not None
+        assert d.measured.uavg == pytest.approx(132.0)
+        assert d.lut == "/media/luts/filmic.cube"  # Red: ValidationError (extra=forbid)
