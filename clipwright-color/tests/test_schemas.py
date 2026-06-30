@@ -762,12 +762,30 @@ class TestWhiteBalanceParams:
         assert wb.g == pytest.approx(1.0)
         assert wb.b == pytest.approx(0.6)
 
-    def test_boundary_zero_accepted(self) -> None:
-        """r=0.0 (ge=0.0 lower bound) must be accepted."""
+    def test_r_zero_rejected(self) -> None:
+        """r=0.0 must raise ValidationError (gt=0.0: zero gain destroys the channel — SR M-1).
+
+        gain=0 maps to colorchannelmixer rr=0 which multiplies all red output to black.
+        The schema lower bound is gt=0.0 (exclusive) to prevent silent black-channel corruption.
+        """
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
 
-        wb = WhiteBalanceParams(r=0.0)
-        assert wb.r == pytest.approx(0.0)
+        with pytest.raises(ValidationError):
+            WhiteBalanceParams(r=0.0)
+
+    def test_g_zero_rejected(self) -> None:
+        """g=0.0 must raise ValidationError (gt=0.0: zero gain destroys the channel — SR M-1)."""
+        from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+
+        with pytest.raises(ValidationError):
+            WhiteBalanceParams(g=0.0)
+
+    def test_b_zero_rejected(self) -> None:
+        """b=0.0 must raise ValidationError (gt=0.0: zero gain destroys the channel — SR M-1)."""
+        from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
+
+        with pytest.raises(ValidationError):
+            WhiteBalanceParams(b=0.0)
 
     def test_boundary_four_accepted(self) -> None:
         """b=4.0 (le=4.0 upper bound) must be accepted."""

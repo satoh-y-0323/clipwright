@@ -200,13 +200,42 @@ class TestColorGradeSchema:
             _RenderWhiteBalance(r=5.0, g=1.0, b=1.0)
 
     def test_wb_model_rejects_negative(self) -> None:
-        """_RenderWhiteBalance rejects negative r/g/b (ge=0.0 lower bound)."""
+        """_RenderWhiteBalance rejects negative r/g/b (gt=0.0 lower bound)."""
         from pydantic import ValidationError
 
         from clipwright_render.plan import _RenderWhiteBalance  # type: ignore[attr-defined]
 
         with pytest.raises(ValidationError):
             _RenderWhiteBalance(r=-0.1, g=1.0, b=1.0)
+
+    def test_wb_model_rejects_zero_gain(self) -> None:
+        """_RenderWhiteBalance rejects r/g/b=0.0 (gt=0.0 lower bound; SR M-1 guard).
+
+        Gain of exactly 0.0 sets the colorchannelmixer diagonal to zero,
+        producing a completely black channel / silent corruption.  gt=0.0
+        turns this silent-black into a detectable INVALID_INPUT at the model
+        level (SR M-1 Option B remediation).
+        """
+        from pydantic import ValidationError
+
+        from clipwright_render.plan import _RenderWhiteBalance  # type: ignore[attr-defined]
+
+        with pytest.raises(ValidationError):
+            _RenderWhiteBalance(r=0.0, g=1.0, b=1.0)
+
+    def test_wb_model_rejects_zero_gain_all_channels(self) -> None:
+        """_RenderWhiteBalance rejects r=g=b=0.0 (old colorbalance neutral guard; SR M-1).
+
+        Old colorbalance-format OTIO used neutral={r:0.0,g:0.0,b:0.0}.  After the
+        colorchannelmixer migration that dict would map rr=gg=bb=0, producing all-black
+        video with ok=True.  gt=0.0 converts this silent corruption into INVALID_INPUT.
+        """
+        from pydantic import ValidationError
+
+        from clipwright_render.plan import _RenderWhiteBalance  # type: ignore[attr-defined]
+
+        with pytest.raises(ValidationError):
+            _RenderWhiteBalance(r=0.0, g=0.0, b=0.0)
 
     def test_wb_model_rejects_extra_keys(self) -> None:
         """_RenderWhiteBalance rejects unknown fields (extra: forbid / CWE-20)."""
@@ -331,11 +360,43 @@ class TestValidateColorGrade:
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
 
     def test_invalid_wb_r_negative_raises_invalid_input(self) -> None:
-        """white_balance.r=-0.1 (below ge=0.0) -> INVALID_INPUT."""
+        """white_balance.r=-0.1 (below gt=0.0) -> INVALID_INPUT."""
         color: dict[str, Any] = {"white_balance": {"r": -0.1, "g": 1.0, "b": 1.0}}
         with pytest.raises(ClipwrightError) as exc_info:
             self._validate(color)
         assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_zero_gain_wb_r_raises_invalid_input(self) -> None:
+        """white_balance.r=0.0 (zero gain) -> INVALID_INPUT (SR M-1: silent-black guard).
+
+        Gain=0.0 sets colorchannelmixer rr=0, destroying the red channel silently.
+        gt=0.0 constraint converts this to a detectable INVALID_INPUT at render time.
+        """
+        color: dict[str, Any] = {"white_balance": {"r": 0.0, "g": 1.0, "b": 1.0}}
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._validate(color)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_zero_gain_wb_all_zeros_raises_invalid_input(self) -> None:
+        """white_balance r=g=b=0.0 (old colorbalance neutral) -> INVALID_INPUT (SR M-1).
+
+        The old colorbalance-format OTIO written by clipwright-color pre-redesign stored
+        neutral white-balance as {r:0.0, g:0.0, b:0.0}.  After migration to
+        colorchannelmixer, that dict maps to rr=gg=bb=0 -> completely black video,
+        ok=True, no warning.  gt=0.0 makes this silent corruption detectable.
+        """
+        color: dict[str, Any] = {"white_balance": {"r": 0.0, "g": 0.0, "b": 0.0}}
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._validate(color)
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+
+    def test_zero_gain_wb_error_no_value_leak(self) -> None:
+        """INVALID_INPUT for zero-gain WB must not expose the offending value (CWE-209 / SR M-1)."""
+        color: dict[str, Any] = {"white_balance": {"r": 0.0, "g": 1.0, "b": 1.0}}
+        with pytest.raises(ClipwrightError) as exc_info:
+            self._validate(color)
+        assert "0.0" not in exc_info.value.message
+        assert exc_info.value.__cause__ is None
 
     def test_wb_error_message_no_input_value(self) -> None:
         """INVALID_INPUT message for WB must not expose the raw value (CWE-209)."""
@@ -346,7 +407,11 @@ class TestValidateColorGrade:
         assert exc_info.value.__cause__ is None
 
     def test_wb_hint_mentions_per_channel_gain_and_range(self) -> None:
-        """INVALID_INPUT hint for WB must mention per-channel gain and [0.0, 4.0] (§2.2)."""
+        """INVALID_INPUT hint for WB must mention per-channel gain and (0.0, 4.0] (§2.2).
+
+        Range notation: gt=0.0 lower bound -> open parenthesis '(0.0, 4.0]'.
+        CWE-209: hint must not expose the offending user-supplied value.
+        """
         color: dict[str, Any] = {"white_balance": {"r": 5.0, "g": 1.0, "b": 1.0}}
         with pytest.raises(ClipwrightError) as exc_info:
             self._validate(color)
@@ -355,7 +420,7 @@ class TestValidateColorGrade:
             f"hint must mention 'per-channel gain': {hint!r}"
         )
         assert "neutral=1.0" in hint, f"hint must mention 'neutral=1.0': {hint!r}"
-        assert "[0.0, 4.0]" in hint, f"hint must mention '[0.0, 4.0]': {hint!r}"
+        assert "(0.0, 4.0]" in hint, f"hint must mention '(0.0, 4.0]': {hint!r}"
 
     def test_valid_lut_path_populates_lut(self, tmp_path: Path) -> None:
         """Valid absolute .cube path -> grade.lut is set (resolved path)."""
@@ -1172,3 +1237,61 @@ class TestLutOtioDirFallback:
         # Pass Path(".") to simulate the no-OTIO-path scenario used in build_plan.
         grade = _validate_color_grade(color, Path("."))
         assert grade.lut is not None
+
+
+# ===========================================================================
+# Aspect CG-12: SR-L-1 / CR-L-1 — cross-package WB schema sync CI lock
+# ===========================================================================
+
+
+class TestWbSchemaBoundsSync:
+    """SR-L-1 / CR-L-1: WhiteBalanceParams (writer) and _RenderWhiteBalance (reader) must stay in sync.
+
+    Both packages independently declare r/g/b field bounds (ADR-CO-3 re-declaration).
+    This cross-package test asserts that the Pydantic field metadata is identical,
+    providing a CI lock that prevents silent writer/reader drift.
+
+    Requires clipwright-color to be installed in the render test env (uv workspace).
+    """
+
+    def test_wb_schema_bounds_match_writer(self) -> None:
+        """_RenderWhiteBalance field bounds must match WhiteBalanceParams (ADR-CO-3 sync).
+
+        Asserts that r/g/b field metadata (bounds) is identical between the writer
+        (clipwright-color WhiteBalanceParams) and the reader (_RenderWhiteBalance in
+        clipwright-render). A mismatch means one package would accept a value the other
+        rejects, causing either silent acceptance of out-of-range gains or spurious
+        INVALID_INPUT errors for valid OTIO directives (SR-L-1 / CR-L-1).
+        """
+        from clipwright_color.schemas import WhiteBalanceParams  # type: ignore[import-not-found]
+
+        from clipwright_render.plan import _RenderWhiteBalance  # type: ignore[attr-defined]
+
+        for ch in ("r", "g", "b"):
+            w_meta = WhiteBalanceParams.model_fields[ch].metadata
+            r_meta = _RenderWhiteBalance.model_fields[ch].metadata
+            assert w_meta == r_meta, (
+                f"ADR-CO-3 sync: {ch!r} field metadata mismatch — "
+                f"writer={w_meta!r} reader={r_meta!r}. "
+                f"Update both packages together (see SR-L-1 / CR-L-1)."
+            )
+
+    def test_wb_schema_defaults_match_writer(self) -> None:
+        """_RenderWhiteBalance defaults must equal WhiteBalanceParams defaults (ADR-CO-3 sync).
+
+        Neutral gain (1.0) must be the default in both packages so that an all-default
+        instance produces an identity WB operation in both the writer and the reader.
+        """
+        from clipwright_color.schemas import WhiteBalanceParams  # type: ignore[import-not-found]
+
+        from clipwright_render.plan import _RenderWhiteBalance  # type: ignore[attr-defined]
+
+        assert WhiteBalanceParams().r == _RenderWhiteBalance().r == 1.0, (
+            "ADR-CO-3 sync: default r must be 1.0 in both packages"
+        )
+        assert WhiteBalanceParams().g == _RenderWhiteBalance().g == 1.0, (
+            "ADR-CO-3 sync: default g must be 1.0 in both packages"
+        )
+        assert WhiteBalanceParams().b == _RenderWhiteBalance().b == 1.0, (
+            "ADR-CO-3 sync: default b must be 1.0 in both packages"
+        )

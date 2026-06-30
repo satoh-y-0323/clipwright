@@ -724,6 +724,39 @@ def _fake_measured_with_chroma(
 
 
 # ===========================================================================
+# WB module constants CI lock (SR L-1 / CR L-1 / ADR-CO-7)
+# ===========================================================================
+
+
+def test_wb_module_constants_locked() -> None:
+    """CI lock: WB module constants must not drift from ADR-CO-7 specified values.
+
+    Imports the constants directly from clipwright_color.color and asserts their
+    exact expected values.  Any change to these constants changes the WB gain model
+    behaviour and must be an explicit, reviewed decision.
+
+    Constants:
+      _AVG_FLOOR: minimum denominator for per-channel gain (prevents div-by-zero).
+      WB_GAIN_MIN / WB_GAIN_MAX: output clamp band for von Kries gains.
+      WB_AXIS_SPAN: half-range of the temperature/tint → gain linear map (§4.3).
+      WB_STRENGTH: gain interpolation weight toward full correction (1.0 = full).
+    """
+    from clipwright_color.color import (  # type: ignore[import-not-found]
+        _AVG_FLOOR,
+        WB_AXIS_SPAN,
+        WB_GAIN_MAX,
+        WB_GAIN_MIN,
+        WB_STRENGTH,
+    )
+
+    assert _AVG_FLOOR == 1.0
+    assert WB_GAIN_MIN == 0.5
+    assert WB_GAIN_MAX == 2.0
+    assert WB_AXIS_SPAN == 0.5
+    assert WB_STRENGTH == 1.0
+
+
+# ===========================================================================
 # Auto WB derivation (§4.2, AC-2, FR-2)
 # ===========================================================================
 
@@ -752,8 +785,11 @@ class TestAutoWhiteBalance:
           r_gain = gray/r_avg ≈ 1.446 > 1.0
           b_gain = gray/b_avg ≈ 0.675 < 1.0
         """
-        from clipwright_color.color import (
-            detect_color,  # type: ignore[import-not-found]
+        from clipwright_color.color import (  # type: ignore[import-not-found]
+            _AVG_FLOOR,
+            WB_GAIN_MAX,
+            WB_GAIN_MIN,
+            detect_color,
         )
 
         media = tmp_path / "video.mp4"
@@ -768,12 +804,10 @@ class TestAutoWhiteBalance:
         g_avg = yavg - 0.344136 * dU - 0.714136 * dV
         b_avg = yavg + 1.772 * dU
         gray = (r_avg + g_avg + b_avg) / 3.0
-        _AVG_FLOOR = 1.0
-        _WB_GAIN_MIN, _WB_GAIN_MAX = 0.5, 2.0
 
         def _expected_gain(ch_avg: float) -> float:
             raw = gray / max(ch_avg, _AVG_FLOOR)
-            return max(_WB_GAIN_MIN, min(_WB_GAIN_MAX, raw))
+            return max(WB_GAIN_MIN, min(WB_GAIN_MAX, raw))
 
         expected_r = _expected_gain(r_avg)
         expected_g = _expected_gain(g_avg)
@@ -905,6 +939,38 @@ class TestAutoWhiteBalance:
         assert wb is None, (
             "§3.3: white_balance must be omitted when all gains are exactly 1.0 "
             f"(neutral chroma, uavg=vavg=128). Got: {wb!r}"
+        )
+
+    def test_derive_auto_wb_pathological_yuv_bounded(self) -> None:
+        """Pathological/synthetic YUV (yavg=uavg=vavg=0) produces gains bounded within [WB_GAIN_MIN, WB_GAIN_MAX].
+
+        CR L-3 / SR L-2: when gray <= 0 (all channel averages near-zero or negative),
+        _wb_gain clamps every gain to WB_GAIN_MIN=0.5 via _AVG_FLOOR protection.
+        The function must not raise an exception and must return a valid WhiteBalanceParams
+        with all gains in [WB_GAIN_MIN, WB_GAIN_MAX].
+
+        Derivation for yavg=uavg=vavg=0 (BT.601):
+          dU = -128, dV = -128
+          r_avg = 0 + 1.402*(-128) = -179.456  → floor=1.0 → raw gain = gray/1.0 < 0 → clamp to 0.5
+          g_avg = 0 + 0.344136*128 - 0.714136*(-128) ≈ 135.46 → raw = gray/135.46 < 0 → clamp to 0.5
+          b_avg = 0 + 1.772*(-128) = -226.816  → floor=1.0 → raw < 0 → clamp to 0.5
+        All three channels clamp to WB_GAIN_MIN (bounded degradation, not exception).
+        """
+        from clipwright_color.color import (  # type: ignore[import-not-found]
+            WB_GAIN_MAX,
+            WB_GAIN_MIN,
+            _derive_auto_wb,
+        )
+
+        wb = _derive_auto_wb(yavg=0.0, uavg=0.0, vavg=0.0)
+        assert WB_GAIN_MIN <= wb.r <= WB_GAIN_MAX, (
+            f"r must be bounded to [{WB_GAIN_MIN}, {WB_GAIN_MAX}] for pathological YUV, got {wb.r}"
+        )
+        assert WB_GAIN_MIN <= wb.g <= WB_GAIN_MAX, (
+            f"g must be bounded to [{WB_GAIN_MIN}, {WB_GAIN_MAX}] for pathological YUV, got {wb.g}"
+        )
+        assert WB_GAIN_MIN <= wb.b <= WB_GAIN_MAX, (
+            f"b must be bounded to [{WB_GAIN_MIN}, {WB_GAIN_MAX}] for pathological YUV, got {wb.b}"
         )
 
 
