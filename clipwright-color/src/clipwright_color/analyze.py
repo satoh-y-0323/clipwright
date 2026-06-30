@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from statistics import median
 from typing import Any
 
 from clipwright.errors import ClipwrightError
@@ -32,6 +33,9 @@ _TIMEOUT_SECONDS: float = 300.0
 _YAVG_RE = re.compile(r"lavfi\.signalstats\.YAVG=(-?\d+\.?\d*)")
 _YMIN_RE = re.compile(r"lavfi\.signalstats\.YMIN=(-?\d+\.?\d*)")
 _YMAX_RE = re.compile(r"lavfi\.signalstats\.YMAX=(-?\d+\.?\d*)")
+# ADR-CO-9 / FR-2: chroma-cast channels; same single signalstats pass as YAVG.
+_UAVG_RE = re.compile(r"lavfi\.signalstats\.UAVG=(-?\d+\.?\d*)")
+_VAVG_RE = re.compile(r"lavfi\.signalstats\.VAVG=(-?\d+\.?\d*)")
 
 
 def _parse_signalstats(text: str) -> dict[str, Any] | None:
@@ -54,12 +58,18 @@ def _parse_signalstats(text: str) -> dict[str, Any] | None:
     yavg = sum(yavg_vals) / len(yavg_vals)
     ymin_vals = [float(m) for m in _YMIN_RE.findall(text)]
     ymax_vals = [float(m) for m in _YMAX_RE.findall(text)]
+    # ADR-CO-9 / FR-2: chroma uses median (outlier robustness).
+    # Only populate when lines present; absent => None (FR-4 finer-grained degradation).
+    uavg_vals = [float(m) for m in _UAVG_RE.findall(text)]
+    vavg_vals = [float(m) for m in _VAVG_RE.findall(text)]
 
     raw: dict[str, Any] = {
         "yavg": yavg,
         "ymin": min(ymin_vals) if ymin_vals else None,
         "ymax": max(ymax_vals) if ymax_vals else None,
         "sampled_frames": len(yavg_vals),
+        "uavg": median(uavg_vals) if uavg_vals else None,
+        "vavg": median(vavg_vals) if vavg_vals else None,
     }
 
     try:

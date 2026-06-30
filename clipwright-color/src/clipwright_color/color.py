@@ -5,7 +5,7 @@ Flow (7 steps):
   2. inspect_media: require video stream (audio NOT required; FR-2 Constraint)
   3. Timeline resolution (None -> create new / path -> load + validate)
   4. measure_brightness
-  5. Derive brightness offset and annotate ColorDirective
+  5. Derive brightness offset, WB, eq, LUT and annotate ColorDirective
      (measured=None -> skip directive + warning, U-1)
   6. save_timeline (atomic)
   7. ok_result with summary / data / artifacts
@@ -20,6 +20,15 @@ Design decisions:
   files regardless of directory; relative traversal rejected (CWE-22).
 - measured=None: skip directive, still save timeline + return warning (U-1 parity).
 - brightness = clamp((target_luma - yavg) / 255.0, -1.0, 1.0).
+- Auto WB (§4.2): BT.601 gray-world inverse-cast from uavg/vavg; WB_STRENGTH
+  module constant scales correction strength (default 1.0 = full correction).
+- Caller WB override (§4.3): temperature/tint normalised [-1,1] axes take
+  precedence over auto derivation when either is supplied.
+- FR-4 degradation: measured present but uavg/vavg absent → directive written
+  WITH brightness+eq, white_balance omitted (None), WB warning appended.
+- eq population (FR-1): saturation/contrast/gamma from options; neutral defaults.
+- .cube validation (§5.1): validate_source_file (CWE-59) + media_ref_for_otio
+  storage. Errors wrapped from None (no path in message, CWE-209 / ADR-CO-10).
 - Mirrors loudness.py helper structure (_add_full_clip / _load_and_validate_timeline).
 """
 
@@ -44,6 +53,7 @@ from clipwright.pathpolicy import (
     check_output_not_source,
     check_timeline_source_matches,
     media_ref_for_otio,
+    validate_source_file,
 )
 from clipwright.schemas import RationalTimeModel, ToolResult
 from pydantic import ValidationError
@@ -55,7 +65,12 @@ from clipwright_color.schemas import (
     ColorDirective,
     DetectColorOptions,
     EqParams,
+    WhiteBalanceParams,
 )
+
+# Module constant: WB correction strength multiplier applied to gray-world shifts.
+# 1.0 = full correction; lower values bias toward retaining the original look.
+WB_STRENGTH = 1.0
 
 
 def detect_color(
@@ -159,11 +174,14 @@ def _detect_color_inner(
     measured_raw: dict[str, Any] | None = analysis["measured"]
     warnings: list[str] = list(analysis["warnings"])
 
-    # --- 5. Derive brightness offset and annotate ColorDirective ---
+    # --- 5. Derive brightness offset, WB, eq, LUT and annotate ColorDirective ---
     # (U-1: skip when measured is None)
 
     final_luma: float | None = None
     final_brightness: float | None = None
+    final_contrast: float = 1.0
+    final_saturation: float = 1.0
+    final_gamma: float = 1.0
     final_frames: int = 0
     summary: str
 
@@ -192,13 +210,63 @@ def _detect_color_inner(
             (options.target_luma - measured_obj.yavg) / 255.0, -1.0, 1.0
         )
 
+        # WB derivation: caller override takes precedence over auto gray-world
+        # (§4.3 / §4.2)
+        has_caller_wb = options.temperature is not None or options.tint is not None
+        white_balance: WhiteBalanceParams | None
+        if has_caller_wb:
+            # Caller override: discard auto result regardless of chroma (§4.3)
+            white_balance = _derive_caller_wb(options.temperature, options.tint)
+        elif measured_obj.uavg is not None and measured_obj.vavg is not None:
+            # Auto gray-world derivation from available chroma (§4.2)
+            white_balance = _derive_auto_wb(measured_obj.uavg, measured_obj.vavg)
+        else:
+            # FR-4: chroma absent — omit white_balance and emit diagnostic warning
+            white_balance = None
+            warnings.append(
+                "White balance could not be derived: chroma values (uavg/vavg)"
+                " were not available in the measurement (FR-4)."
+                " white_balance will not be written to the directive."
+            )
+
+        # EqParams population (FR-1): use caller-supplied values or neutral defaults
+        final_saturation = options.saturation if options.saturation is not None else 1.0
+        final_contrast = options.contrast if options.contrast is not None else 1.0
+        final_gamma = options.gamma if options.gamma is not None else 1.0
+        eq = EqParams(
+            brightness=brightness,
+            saturation=final_saturation,
+            contrast=final_contrast,
+            gamma=final_gamma,
+        )
+
+        # LUT validation (§5.1 / ADR-CO-10 / CWE-59 / CWE-209)
+        lut_stored: str | None = None
+        if options.lut is not None:
+            try:
+                validate_source_file(options.lut)
+            except ClipwrightError as exc:
+                # Wrap to strip the path from the error message (CWE-209 / ADR-CO-10).
+                # validate_source_file leaks the full path in FILE_NOT_FOUND messages.
+                raise ClipwrightError(
+                    code=exc.code,
+                    message="LUT (.cube) file is not accessible.",
+                    hint=(
+                        "Check that the .cube file exists, is a regular file,"
+                        " and is not a symbolic link."
+                    ),
+                ) from None
+            lut_stored = media_ref_for_otio(options.lut, otio_dir)
+
         directive = ColorDirective(
             tool="clipwright-color",
             version=clipwright_color.__version__,
             kind="color",
             target_luma=options.target_luma,
             measured=measured_obj,
-            eq=EqParams(brightness=brightness),  # contrast/saturation/gamma neutral
+            eq=eq,
+            white_balance=white_balance,
+            lut=lut_stored,
         )
 
         existing_meta = get_clipwright_metadata(tl)
@@ -226,9 +294,9 @@ def _detect_color_inner(
         data={
             "measured_luma": final_luma,
             "brightness": final_brightness,
-            "contrast": 1.0,
-            "saturation": 1.0,
-            "gamma": 1.0,
+            "contrast": final_contrast,
+            "saturation": final_saturation,
+            "gamma": final_gamma,
             "target_luma": options.target_luma,
             "sampled_frames": final_frames,
         },
@@ -240,6 +308,53 @@ def _detect_color_inner(
 def _clamp(value: float, lo: float, hi: float) -> float:
     """Clamp value to [lo, hi] range."""
     return max(lo, min(hi, value))
+
+
+def _derive_auto_wb(uavg: float, vavg: float) -> WhiteBalanceParams:
+    """Derive colorbalance midtone shifts from BT.601 gray-world inverse-cast (§4.2).
+
+    Neutral chroma in 8-bit YUV is 128. Offsets dU (Cb / blue-difference) and
+    dV (Cr / red-difference) are mapped to RGB midtone correction shifts and
+    normalised to [-1,1] by dividing by 255, then scaled by WB_STRENGTH.
+
+    Args:
+        uavg: Median Cb (blue-difference) value across sampled frames [0, 255].
+        vavg: Median Cr (red-difference) value across sampled frames [0, 255].
+
+    Returns:
+        WhiteBalanceParams with r/g/b midtone shifts clamped to [-1, 1].
+    """
+    dU = uavg - 128.0  # Cb offset (blue-difference channel)
+    dV = vavg - 128.0  # Cr offset (red-difference channel)
+    r = _clamp(-1.402 * dV / 255.0 * WB_STRENGTH, -1.0, 1.0)
+    g = _clamp((0.344 * dU + 0.714 * dV) / 255.0 * WB_STRENGTH, -1.0, 1.0)
+    b = _clamp(-1.772 * dU / 255.0 * WB_STRENGTH, -1.0, 1.0)
+    return WhiteBalanceParams(r=r, g=g, b=b)
+
+
+def _derive_caller_wb(
+    temperature: float | None,
+    tint: float | None,
+) -> WhiteBalanceParams:
+    """Compute colorbalance shifts from caller temperature/tint normalised axes (§4.3).
+
+    temperature maps to the red/blue axis: +warm adds red and removes blue, -cool
+    does the inverse.  tint maps to the green axis (inverted): +magenta reduces
+    green, -green adds green.  A missing axis stays at 0 (neutral for that channel).
+
+    Args:
+        temperature: Warm/cool shift in [-1, 1]; None treated as 0.0.
+        tint: Magenta/green shift in [-1, 1]; None treated as 0.0.
+
+    Returns:
+        WhiteBalanceParams with r/g/b midtone shifts clamped to [-1, 1].
+    """
+    t = temperature or 0.0
+    n = tint or 0.0
+    r = _clamp(+t, -1.0, 1.0)
+    b = _clamp(-t, -1.0, 1.0)
+    g = _clamp(-n, -1.0, 1.0)
+    return WhiteBalanceParams(r=r, g=g, b=b)
 
 
 def _add_full_clip(

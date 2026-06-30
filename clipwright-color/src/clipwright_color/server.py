@@ -54,8 +54,14 @@ def clipwright_detect_color(
         DetectColorOptions | None,
         Field(
             description=(
-                "Color detection options (target_luma / sample_interval_sec)."
-                " Defaults to target_luma=128 / sample_interval_sec=1.0 when omitted."
+                "Color detection options. Defaults applied when omitted."
+                " target_luma (0-255, default 128): target average luma."
+                " sample_interval_sec (default 1.0): ffmpeg frame-sampling interval."
+                " saturation/contrast/gamma: eq override in caller-supplied range."
+                " temperature/tint: white-balance override as normalised [-1,1] axes"
+                " (NOT Kelvin); temperature +1=warm/red, -1=cool/blue;"
+                " tint +1=magenta, -1=green."
+                " lut: path to a .cube 3D-LUT file to embed in the directive."
             )
         ),
     ] = None,
@@ -73,9 +79,19 @@ def clipwright_detect_color(
     """Analyze video brightness and generate an OTIO timeline with a color directive.
 
     The input media file is never modified (non-destructive, readOnly).
-    Measures average luma with ffmpeg signalstats and writes a color directive
-    to timeline-level metadata["clipwright"]["color"].
+    Measures average luma (and chroma when available) with ffmpeg signalstats
+    and writes a color directive to timeline-level metadata["clipwright"]["color"].
     Returns the path of the resulting timeline.otio in artifacts.
+
+    White-balance override: temperature and tint are normalised [-1, 1] axes
+    (colorbalance midtone shifts, NOT a colour temperature scale).
+    temperature +1 = warm/red, -1 = cool/blue.
+    tint +1 = magenta, -1 = green.
+    When neither is supplied, white balance is derived automatically from
+    measured chroma (gray-world correction, §4.2).
+
+    eq options (saturation/contrast/gamma) populate the ffmpeg eq filter
+    directive. lut specifies a .cube 3D-LUT file to apply at render time.
 
     Delegates business logic to color.detect_color.
     Uses default DetectColorOptions() when options is None.
