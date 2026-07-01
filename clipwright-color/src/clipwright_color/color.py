@@ -82,6 +82,12 @@ WB_GAIN_MAX = 2.0
 _AVG_FLOOR = 1.0
 WB_AXIS_SPAN = 0.5
 
+# Characters forbidden in LUT paths to prevent ffmpeg filtergraph injection (CWE-78).
+# Mirrors render plan._CONTROL_CHARS: 0x00-0x1F (C0 controls) and 0x7F (DEL).
+_CONTROL_CHARS: frozenset[str] = frozenset(
+    chr(c) for c in range(0x00, 0x20)
+) | frozenset({chr(0x7F)})
+
 
 def detect_color(
     media: str,
@@ -264,6 +270,18 @@ def _detect_color_inner(
         # LUT validation (§5.1 / ADR-CO-10 / CWE-59 / CWE-209)
         lut_stored: str | None = None
         if options.lut is not None:
+            # Injection guard (SR-INJ-002 / CWE-78): reject single quotes and control
+            # characters before the path reaches ffmpeg filtergraph construction.
+            # Fixed wording suppresses the path value (CWE-209).
+            if "'" in options.lut or any(ch in _CONTROL_CHARS for ch in options.lut):
+                raise ClipwrightError(
+                    code=ErrorCode.INVALID_INPUT,
+                    message="LUT path contains an invalid character.",
+                    hint=(
+                        "Remove single quotes and control characters"
+                        " from the .cube path."
+                    ),
+                )
             try:
                 validate_source_file(options.lut)
             except ClipwrightError as exc:

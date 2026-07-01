@@ -21,6 +21,7 @@ import opentimelineio as otio
 import pytest
 from clipwright.errors import ErrorCode
 from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo
+
 from clipwright_color.schemas import (  # type: ignore[import-not-found]
     DetectColorOptions,
 )

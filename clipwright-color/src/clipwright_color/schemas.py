@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 
 class DetectColorOptions(BaseModel):
@@ -63,26 +63,6 @@ class DetectColorOptions(BaseModel):
 
     # FR-5 — caller-provided 3D-LUT path (.cube)
     lut: Annotated[str, Field(min_length=1, max_length=4096)] | None = None
-
-    @field_validator("lut")
-    @classmethod
-    def _validate_lut_no_injection_chars(cls, v: str | None) -> str | None:
-        """Validate that lut path contains no single quote or control character.
-
-        ffmpeg filtergraph syntax wraps .cube paths in single quotes; a path
-        containing a single quote would break the quoting and allow injection
-        (CWE-78).  Control characters (< \\x20) are similarly unsafe and are
-        rejected here before the path reaches validate_source_file.
-        Fixed wording does not echo the path value (CWE-209).
-        """
-        if v is None:
-            return v
-        if "'" in v or any(c < "\x20" or c == "\x7f" for c in v):
-            raise ValueError(
-                "lut must not contain a single quote or control character"
-                " (prevents ffmpeg argument injection; CWE-78)."
-            )
-        return v
 
 
 class BrightnessMeasured(BaseModel):
