@@ -146,6 +146,19 @@ def _detect_color_inner(
         _sources.append(timeline)
     check_output_not_source(output_path, _sources)
 
+    # --- 1b. LUT injection guard (SR-INJ-002 / CWE-78) ---
+    # Validate before inspect_media/measure_brightness so the guard fires
+    # regardless of whether measurement succeeds (U-1 path).
+    # Fixed wording suppresses the path value (CWE-209).
+    if options.lut is not None and (
+        "'" in options.lut or any(ch in _CONTROL_CHARS for ch in options.lut)
+    ):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message="LUT path contains an invalid character.",
+            hint="Remove single quotes and control characters from the .cube path.",
+        )
+
     # --- 2. inspect_media: video required, audio NOT required ---
 
     if not media_path.exists():
@@ -268,20 +281,10 @@ def _detect_color_inner(
         )
 
         # LUT validation (§5.1 / ADR-CO-10 / CWE-59 / CWE-209)
+        # Injection guard already executed in step 1b; only file-existence and
+        # symlink validation remain here.
         lut_stored: str | None = None
         if options.lut is not None:
-            # Injection guard (SR-INJ-002 / CWE-78): reject single quotes and control
-            # characters before the path reaches ffmpeg filtergraph construction.
-            # Fixed wording suppresses the path value (CWE-209).
-            if "'" in options.lut or any(ch in _CONTROL_CHARS for ch in options.lut):
-                raise ClipwrightError(
-                    code=ErrorCode.INVALID_INPUT,
-                    message="LUT path contains an invalid character.",
-                    hint=(
-                        "Remove single quotes and control characters"
-                        " from the .cube path."
-                    ),
-                )
             try:
                 validate_source_file(options.lut)
             except ClipwrightError as exc:
