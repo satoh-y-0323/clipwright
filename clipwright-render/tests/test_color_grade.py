@@ -1295,3 +1295,71 @@ class TestWbSchemaBoundsSync:
         assert WhiteBalanceParams().b == _RenderWhiteBalance().b == 1.0, (
             "ADR-CO-3 sync: default b must be 1.0 in both packages"
         )
+
+
+# ===========================================================================
+# Aspect CG-13: F-2 — _CONTROL_CHARS cross-package sync lock (CWE-78)
+# ===========================================================================
+
+
+class TestControlCharsSyncLock:
+    """F-2: _CONTROL_CHARS in clipwright-color and clipwright-render must stay in sync.
+
+    Both packages independently copy the same injection-guard set (0x00-0x1F + 0x7F).
+    This cross-package test detects any divergence between the two independent copies
+    before it can become a silent security regression (CWE-78 / SR-INJ-002).
+    """
+
+    def test_control_chars_sets_equal(self) -> None:
+        """_CONTROL_CHARS in color.py and plan.py must be equal (sync lock).
+
+        If one package adds or removes a character without updating the other,
+        this assertion fails, making the drift visible in CI before it reaches
+        production (F-2 / CWE-78 / SR-INJ-002).
+        """
+        from clipwright_color.color import _CONTROL_CHARS as COLOR_CC  # type: ignore[import-not-found]
+
+        from clipwright_render.plan import _CONTROL_CHARS as RENDER_CC  # type: ignore[attr-defined]
+
+        assert COLOR_CC == RENDER_CC, (
+            "F-2 sync lock: _CONTROL_CHARS in clipwright-color and clipwright-render "
+            "have diverged. Update both packages together to maintain injection guard "
+            "parity (CWE-78 / SR-INJ-002). "
+            f"color-only={COLOR_CC - RENDER_CC!r}, render-only={RENDER_CC - COLOR_CC!r}"
+        )
+
+    def test_control_chars_contains_c0_controls(self) -> None:
+        """Both _CONTROL_CHARS sets must contain all C0 control characters 0x00-0x1F.
+
+        Regression guard: if either set drops any C0 character, filtergraph injection
+        via that control code becomes possible (CWE-78 / SR-INJ-002).
+        """
+        from clipwright_color.color import _CONTROL_CHARS as COLOR_CC  # type: ignore[import-not-found]
+
+        from clipwright_render.plan import _CONTROL_CHARS as RENDER_CC  # type: ignore[attr-defined]
+
+        expected_c0 = frozenset(chr(c) for c in range(0x00, 0x20))
+        assert expected_c0 <= COLOR_CC, (
+            f"color._CONTROL_CHARS is missing C0 controls: {expected_c0 - COLOR_CC!r}"
+        )
+        assert expected_c0 <= RENDER_CC, (
+            f"plan._CONTROL_CHARS is missing C0 controls: {expected_c0 - RENDER_CC!r}"
+        )
+
+    def test_control_chars_contains_del(self) -> None:
+        """Both _CONTROL_CHARS sets must contain DEL (0x7F).
+
+        Regression guard: 0x7F was explicitly added to guard against DEL-based
+        injection; if either package removes it, this test turns red (SR-L-1).
+        """
+        from clipwright_color.color import _CONTROL_CHARS as COLOR_CC  # type: ignore[import-not-found]
+
+        from clipwright_render.plan import _CONTROL_CHARS as RENDER_CC  # type: ignore[attr-defined]
+
+        del_char = chr(0x7F)
+        assert del_char in COLOR_CC, (
+            "color._CONTROL_CHARS must contain DEL (0x7F) — SR-L-1 regression guard"
+        )
+        assert del_char in RENDER_CC, (
+            "plan._CONTROL_CHARS must contain DEL (0x7F) — SR-L-1 regression guard"
+        )

@@ -22,6 +22,9 @@ import pytest
 from clipwright.errors import ErrorCode
 from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo
 
+from clipwright_color.color import (  # type: ignore[import-not-found]
+    detect_color,
+)
 from clipwright_color.schemas import (  # type: ignore[import-not-found]
     DetectColorOptions,
 )
@@ -876,6 +879,8 @@ class TestDetectColorOptionsLutInjection:
 
     Mirrors the injection guard on SubtitleOptions.path / image_path / font_path
     but implemented at the function-body level rather than the schema level.
+
+    Module-level import of detect_color is used (L-1 / CR-M-001).
     """
 
     # -------------------------------------------------------------------------
@@ -897,10 +902,6 @@ class TestDetectColorOptionsLutInjection:
 
     def test_single_quote_in_lut_path_rejected(self, tmp_path: Path) -> None:
         """lut path with single-quote causes detect_color to return ok=False / INVALID_INPUT."""
-        from clipwright_color.color import (  # type: ignore[import-not-found]
-            detect_color,
-        )
-
         media = tmp_path / "video.mp4"
         media.write_bytes(b"dummy")
         output = tmp_path / "out.otio"
@@ -921,6 +922,8 @@ class TestDetectColorOptionsLutInjection:
 
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        # F-1 [SR-R-001]: positive assertion on fixed error message wording.
+        assert result["error"]["message"] == "LUT path contains an invalid character."
         msg = result["error"].get("message", "")
         hint = result["error"].get("hint", "")
         # CWE-209: offending path fragments must not appear in error text
@@ -929,10 +932,6 @@ class TestDetectColorOptionsLutInjection:
 
     def test_single_quote_error_does_not_echo_path(self, tmp_path: Path) -> None:
         """CWE-209: INVALID_INPUT for single-quote lut must not expose the offending path value."""
-        from clipwright_color.color import (  # type: ignore[import-not-found]
-            detect_color,
-        )
-
         media = tmp_path / "video.mp4"
         media.write_bytes(b"dummy")
         output = tmp_path / "out.otio"
@@ -966,10 +965,6 @@ class TestDetectColorOptionsLutInjection:
 
     def test_null_byte_in_lut_path_rejected(self, tmp_path: Path) -> None:
         """lut path with null byte (\\x00) causes detect_color to return ok=False / INVALID_INPUT."""
-        from clipwright_color.color import (  # type: ignore[import-not-found]
-            detect_color,
-        )
-
         media = tmp_path / "video.mp4"
         media.write_bytes(b"dummy")
         output = tmp_path / "out.otio"
@@ -990,13 +985,11 @@ class TestDetectColorOptionsLutInjection:
 
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        # F-1 [SR-R-001]: positive assertion on fixed error message wording.
+        assert result["error"]["message"] == "LUT path contains an invalid character."
 
     def test_newline_in_lut_path_rejected(self, tmp_path: Path) -> None:
         """lut path with newline (\\n) causes detect_color to return ok=False / INVALID_INPUT."""
-        from clipwright_color.color import (  # type: ignore[import-not-found]
-            detect_color,
-        )
-
         media = tmp_path / "video.mp4"
         media.write_bytes(b"dummy")
         output = tmp_path / "out.otio"
@@ -1017,6 +1010,8 @@ class TestDetectColorOptionsLutInjection:
 
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        # F-1 [SR-R-001]: positive assertion on fixed error message wording.
+        assert result["error"]["message"] == "LUT path contains an invalid character."
 
     # -------------------------------------------------------------------------
     # SR-L-1-new: DEL (0x7F) control-char parity with reader-side _CONTROL_CHARS
@@ -1028,10 +1023,6 @@ class TestDetectColorOptionsLutInjection:
         SR-L-1-new: the function body rejects c < '\\x20' (0x00-0x1F) AND 0x7F (DEL),
         matching the reader-side _CONTROL_CHARS in clipwright-render plan.py.
         """
-        from clipwright_color.color import (  # type: ignore[import-not-found]
-            detect_color,
-        )
-
         media = tmp_path / "video.mp4"
         media.write_bytes(b"dummy")
         output = tmp_path / "out.otio"
@@ -1052,16 +1043,15 @@ class TestDetectColorOptionsLutInjection:
 
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        # F-1 [SR-R-001]: positive assertion on fixed error message wording.
+        assert result["error"]["message"] == "LUT path contains an invalid character."
 
     def test_del_char_error_does_not_echo_path(self, tmp_path: Path) -> None:
         """CWE-209: INVALID_INPUT for DEL-bearing lut must not expose the path value.
 
         SR-L-1-new / CWE-209: confirms path value is suppressed for the 0x7F (DEL) case.
+        L-2 [CR-T-001]: identifier tokens from the path must not appear in error text.
         """
-        from clipwright_color.color import (  # type: ignore[import-not-found]
-            detect_color,
-        )
-
         media = tmp_path / "video.mp4"
         media.write_bytes(b"dummy")
         output = tmp_path / "out.otio"
@@ -1092,6 +1082,19 @@ class TestDetectColorOptionsLutInjection:
             "CWE-209: path fragment '/luts/' must not appear in error text."
             f" Got: {err_text!r}"
         )
+        # L-2 [CR-T-001]: individual identifier tokens from the sentinel path must not leak.
+        assert "grade" not in err_text, (
+            "CWE-209/L-2: token 'grade' from lut path must not appear in error text."
+            f" Got: {err_text!r}"
+        )
+        assert "test" not in err_text, (
+            "CWE-209/L-2: token 'test' from lut path must not appear in error text."
+            f" Got: {err_text!r}"
+        )
+        assert "luts" not in err_text, (
+            "CWE-209/L-2: token 'luts' from lut path must not appear in error text."
+            f" Got: {err_text!r}"
+        )
 
     # -------------------------------------------------------------------------
     # Parity sanity: tilde (0x7E) is NOT in the rejection set
@@ -1106,3 +1109,51 @@ class TestDetectColorOptionsLutInjection:
         """
         opts = DetectColorOptions(lut="/luts/grade~test.cube")
         assert opts.lut == "/luts/grade~test.cube"
+
+    # -------------------------------------------------------------------------
+    # M-1 [CR-E-001]: U-1 path (measured=None) must not bypass the injection guard
+    # -------------------------------------------------------------------------
+
+    def test_u1_bypass_injection_guard_still_fires(self, tmp_path: Path) -> None:
+        """M-1 [CR-E-001]: injection guard fires even when measure_brightness returns None.
+
+        The lut injection check must execute regardless of whether measure_brightness
+        returns a valid measurement or None (U-1 path). Passing an injection character
+        in lut while measure_brightness is mocked to return measured=None must still
+        yield ok=False / INVALID_INPUT with the fixed error message.
+
+        Regression guard: the guard must not be confined to the else branch of the
+        measured_raw is None check.
+        """
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "out.otio"
+        # Single-quote is an injection character (SR-INJ-002)
+        opts = DetectColorOptions(lut="/luts/a'inject.cube")
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(
+                "clipwright_color.color.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            # U-1: measure_brightness returns None measured
+            mp.setattr(
+                "clipwright_color.color.measure_brightness",
+                lambda media_path, options: {"measured": None, "warnings": []},
+            )
+            result = detect_color(
+                media=str(media), output=str(output), options=opts, timeline=None
+            )
+
+        assert result["ok"] is False, (
+            "CR-E-001: lut injection guard must fire on the U-1 path (measured=None)."
+            " Got ok=True — guard is incorrectly placed inside the else branch."
+            f" result={result!r}"
+        )
+        assert result["error"]["code"] == ErrorCode.INVALID_INPUT, (
+            f"CR-E-001: expected INVALID_INPUT, got {result['error']['code']!r}"
+        )
+        assert result["error"]["message"] == "LUT path contains an invalid character.", (
+            "CR-E-001: fixed error message mismatch."
+            f" Got: {result['error']['message']!r}"
+        )
