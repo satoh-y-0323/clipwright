@@ -21,8 +21,6 @@ import opentimelineio as otio
 import pytest
 from clipwright.errors import ErrorCode
 from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo
-from pydantic import ValidationError
-
 from clipwright_color.schemas import (  # type: ignore[import-not-found]
     DetectColorOptions,
 )
@@ -863,89 +861,246 @@ class TestLutCubePathpolicy:
 
 
 # ===========================================================================
-# SR-INJ-002: DetectColorOptions.lut single-quote / control-char rejection
+# SR-INJ-002: detect_color lut injection-char rejection (function-body contract)
 # ===========================================================================
 
 
 class TestDetectColorOptionsLutInjection:
-    """SR-INJ-002: DetectColorOptions.lut must reject paths containing injection chars.
+    """SR-INJ-002: detect_color must reject lut paths containing injection chars.
 
-    Mirrors the _validate_path_no_single_quote field validator used on
-    SubtitleOptions.path / image_path / font_path.  A lut path that contains a
-    single-quote or a control character (\\x00, \\n) can escape ffmpeg argument
-    quoting in filter-graph strings and must be rejected at the schema level.
-    The CWE-209 test verifies that the validation error does not echo the offending path value.
+    The schema layer (DetectColorOptions) accepts any non-empty str for lut;
+    injection char validation (single quote, control chars 0x00-0x1F, DEL 0x7F)
+    is performed inside detect_color and returned as ok=False / INVALID_INPUT.
+    CWE-209: the offending path value must not be echoed in error message or hint.
+
+    Mirrors the injection guard on SubtitleOptions.path / image_path / font_path
+    but implemented at the function-body level rather than the schema level.
     """
 
-    def test_single_quote_in_lut_path_rejected(self) -> None:
-        """lut path containing single-quote must raise ValidationError (injection guard)."""
-        with pytest.raises(ValidationError):
-            DetectColorOptions(lut="/luts/a'b.cube")
+    # -------------------------------------------------------------------------
+    # Schema-level contract: DetectColorOptions accepts injection chars as str
+    # -------------------------------------------------------------------------
 
-    def test_null_byte_in_lut_path_rejected(self) -> None:
-        """lut path containing null byte (\\x00) must raise ValidationError (injection guard)."""
-        with pytest.raises(ValidationError):
-            DetectColorOptions(lut="/luts/\x00grade.cube")
+    def test_schema_accepts_single_quote_in_lut(self) -> None:
+        """DetectColorOptions.lut with single-quote must be accepted by the schema.
 
-    def test_newline_in_lut_path_rejected(self) -> None:
-        """lut path containing newline character (\\n) must raise ValidationError."""
-        with pytest.raises(ValidationError):
-            DetectColorOptions(lut="/luts/\ngrade.cube")
+        Injection validation is delegated to the detect_color function body.
+        The schema only enforces str type, min_length=1, and max_length=4096.
+        """
+        opts = DetectColorOptions(lut="/luts/a'b.cube")
+        assert opts.lut == "/luts/a'b.cube"
 
-    def test_single_quote_error_does_not_echo_path(self) -> None:
-        """CWE-209: ValidationError for single-quote lut must not expose the offending path value."""
-        _SENTINEL = "unique_sentinel_xzy987_lutpath"
-        with pytest.raises(ValidationError) as exc_info:
-            DetectColorOptions(lut=f"/luts/{_SENTINEL}'.cube")
-        # The validation error text must not echo the path value (CWE-209; hide_input_in_errors).
-        assert _SENTINEL not in str(exc_info.value), (
-            f"CWE-209: offending path value must not appear in the ValidationError text."
-            f" Got: {str(exc_info.value)!r}"
+    # -------------------------------------------------------------------------
+    # Function-body injection rejection: single-quote
+    # -------------------------------------------------------------------------
+
+    def test_single_quote_in_lut_path_rejected(self, tmp_path: Path) -> None:
+        """lut path with single-quote causes detect_color to return ok=False / INVALID_INPUT."""
+        from clipwright_color.color import (  # type: ignore[import-not-found]
+            detect_color,
         )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "out.otio"
+        opts = DetectColorOptions(lut="/luts/a'b.cube")
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(
+                "clipwright_color.color.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_color.color.measure_brightness",
+                lambda media_path, options: _fake_measured(yavg=100.0),
+            )
+            result = detect_color(
+                media=str(media), output=str(output), options=opts, timeline=None
+            )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        msg = result["error"].get("message", "")
+        hint = result["error"].get("hint", "")
+        # CWE-209: offending path fragments must not appear in error text
+        assert "a'b" not in msg
+        assert "a'b" not in hint
+
+    def test_single_quote_error_does_not_echo_path(self, tmp_path: Path) -> None:
+        """CWE-209: INVALID_INPUT for single-quote lut must not expose the offending path value."""
+        from clipwright_color.color import (  # type: ignore[import-not-found]
+            detect_color,
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "out.otio"
+        _SENTINEL = "unique_sentinel_xzy987_lutpath"
+        opts = DetectColorOptions(lut=f"/luts/{_SENTINEL}'.cube")
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(
+                "clipwright_color.color.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_color.color.measure_brightness",
+                lambda media_path, options: _fake_measured(yavg=100.0),
+            )
+            result = detect_color(
+                media=str(media), output=str(output), options=opts, timeline=None
+            )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        err_text = result["error"].get("message", "") + result["error"].get("hint", "")
+        assert _SENTINEL not in err_text, (
+            "CWE-209: offending path value must not appear in the error text."
+            f" Got: {err_text!r}"
+        )
+
+    # -------------------------------------------------------------------------
+    # Function-body injection rejection: control chars (0x00-0x1F)
+    # -------------------------------------------------------------------------
+
+    def test_null_byte_in_lut_path_rejected(self, tmp_path: Path) -> None:
+        """lut path with null byte (\\x00) causes detect_color to return ok=False / INVALID_INPUT."""
+        from clipwright_color.color import (  # type: ignore[import-not-found]
+            detect_color,
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "out.otio"
+        opts = DetectColorOptions(lut="/luts/\x00grade.cube")
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(
+                "clipwright_color.color.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_color.color.measure_brightness",
+                lambda media_path, options: _fake_measured(yavg=100.0),
+            )
+            result = detect_color(
+                media=str(media), output=str(output), options=opts, timeline=None
+            )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+
+    def test_newline_in_lut_path_rejected(self, tmp_path: Path) -> None:
+        """lut path with newline (\\n) causes detect_color to return ok=False / INVALID_INPUT."""
+        from clipwright_color.color import (  # type: ignore[import-not-found]
+            detect_color,
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "out.otio"
+        opts = DetectColorOptions(lut="/luts/\ngrade.cube")
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(
+                "clipwright_color.color.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_color.color.measure_brightness",
+                lambda media_path, options: _fake_measured(yavg=100.0),
+            )
+            result = detect_color(
+                media=str(media), output=str(output), options=opts, timeline=None
+            )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
 
     # -------------------------------------------------------------------------
     # SR-L-1-new: DEL (0x7F) control-char parity with reader-side _CONTROL_CHARS
     # -------------------------------------------------------------------------
 
-    def test_del_char_in_lut_path_rejected(self) -> None:
-        """lut path containing DEL (\\x7f / U+007F) must raise ValidationError.
+    def test_del_char_in_lut_path_rejected(self, tmp_path: Path) -> None:
+        """lut path with DEL (\\x7f) causes detect_color to return ok=False / INVALID_INPUT.
 
-        SR-L-1-new: the writer-side validator rejects c < '\\x20' (0x00-0x1F) AND
-        0x7F (DEL), matching the reader-side _CONTROL_CHARS in clipwright-render plan.py
-        which rejects 0x00-0x1F PLUS 0x7F. _validate_lut_no_injection_chars includes
-        `or c == "\\x7f"` to maintain symmetry.
+        SR-L-1-new: the function body rejects c < '\\x20' (0x00-0x1F) AND 0x7F (DEL),
+        matching the reader-side _CONTROL_CHARS in clipwright-render plan.py.
         """
-        with pytest.raises(ValidationError):
-            DetectColorOptions(lut="/luts/grade\x7ftest.cube")
-
-    def test_del_char_error_does_not_echo_path(self) -> None:
-        """CWE-209: ValidationError for DEL-bearing lut must not expose the path value.
-
-        SR-L-1-new / CWE-209: model_config hide_input_in_errors=True is present;
-        confirms it suppresses the path value for the 0x7F (DEL) case too.
-        """
-        _SENTINEL = "grade_del_sentinel_7f"
-        with pytest.raises(ValidationError) as exc_info:
-            DetectColorOptions(lut=f"/luts/{_SENTINEL}\x7ftest.cube")
-        err_text = str(exc_info.value)
-        assert _SENTINEL not in err_text, (
-            "CWE-209: DEL-path value must not appear in the ValidationError text."
-            f" Got: {err_text!r}"
+        from clipwright_color.color import (  # type: ignore[import-not-found]
+            detect_color,
         )
-        assert "test" not in err_text, (
-            "CWE-209: path fragment 'test' must not appear in ValidationError."
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "out.otio"
+        opts = DetectColorOptions(lut="/luts/grade\x7ftest.cube")
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(
+                "clipwright_color.color.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_color.color.measure_brightness",
+                lambda media_path, options: _fake_measured(yavg=100.0),
+            )
+            result = detect_color(
+                media=str(media), output=str(output), options=opts, timeline=None
+            )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+
+    def test_del_char_error_does_not_echo_path(self, tmp_path: Path) -> None:
+        """CWE-209: INVALID_INPUT for DEL-bearing lut must not expose the path value.
+
+        SR-L-1-new / CWE-209: confirms path value is suppressed for the 0x7F (DEL) case.
+        """
+        from clipwright_color.color import (  # type: ignore[import-not-found]
+            detect_color,
+        )
+
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy")
+        output = tmp_path / "out.otio"
+        _SENTINEL = "grade_del_sentinel_7f"
+        opts = DetectColorOptions(lut=f"/luts/{_SENTINEL}\x7ftest.cube")
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(
+                "clipwright_color.color.inspect_media",
+                lambda p: _make_media_info(str(p)),
+            )
+            mp.setattr(
+                "clipwright_color.color.measure_brightness",
+                lambda media_path, options: _fake_measured(yavg=100.0),
+            )
+            result = detect_color(
+                media=str(media), output=str(output), options=opts, timeline=None
+            )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+        err_text = result["error"].get("message", "") + result["error"].get("hint", "")
+        assert _SENTINEL not in err_text, (
+            "CWE-209: DEL-path value must not appear in the error text."
             f" Got: {err_text!r}"
         )
         assert "/luts/" not in err_text, (
-            "CWE-209: path fragment '/luts/' must not appear in ValidationError."
+            "CWE-209: path fragment '/luts/' must not appear in error text."
             f" Got: {err_text!r}"
         )
+
+    # -------------------------------------------------------------------------
+    # Parity sanity: tilde (0x7E) is NOT in the rejection set
+    # -------------------------------------------------------------------------
 
     def test_tilde_char_in_lut_path_not_rejected(self) -> None:
         """lut path containing '~' (chr(0x7E)) must NOT be rejected by the control-char rule.
 
-        Parity sanity (C): only 0x00-0x1F and 0x7F are in the rejection set;
-        0x7E '~' is valid printable ASCII and must be accepted.
+        Parity sanity: only 0x00-0x1F and 0x7F are in the rejection set;
+        0x7E '~' is valid printable ASCII and must be accepted at schema level.
         Pins the exact upper boundary of the rejection set.
         """
         opts = DetectColorOptions(lut="/luts/grade~test.cube")
