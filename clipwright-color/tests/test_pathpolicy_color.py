@@ -997,6 +997,15 @@ class TestDetectColorOptionsLutInjection:
         assert result["error"]["hint"] == (
             "Remove single quotes and control characters from the .cube path."
         )
+        msg = result["error"].get("message", "")
+        hint = result["error"].get("hint", "")
+        # SR-R-001 / CWE-209: hint must not contain the path identifier token.
+        assert "/luts/" not in hint, (
+            f"CWE-209: path fragment '/luts/' must not appear in hint. Got: {hint!r}"
+        )
+        assert "/luts/" not in msg, (
+            f"CWE-209: path fragment '/luts/' must not appear in message. Got: {msg!r}"
+        )
 
     def test_newline_in_lut_path_rejected(self, tmp_path: Path) -> None:
         """lut path with newline (\\n) causes detect_color to return ok=False / INVALID_INPUT."""
@@ -1025,6 +1034,15 @@ class TestDetectColorOptionsLutInjection:
         # SR-R-001: positive assertion on fixed hint wording.
         assert result["error"]["hint"] == (
             "Remove single quotes and control characters from the .cube path."
+        )
+        msg = result["error"].get("message", "")
+        hint = result["error"].get("hint", "")
+        # SR-R-001 / CWE-209: hint must not contain the path identifier token.
+        assert "/luts/" not in hint, (
+            f"CWE-209: path fragment '/luts/' must not appear in hint. Got: {hint!r}"
+        )
+        assert "/luts/" not in msg, (
+            f"CWE-209: path fragment '/luts/' must not appear in message. Got: {msg!r}"
         )
 
     # -------------------------------------------------------------------------
@@ -1062,6 +1080,15 @@ class TestDetectColorOptionsLutInjection:
         # SR-R-001: positive assertion on fixed hint wording.
         assert result["error"]["hint"] == (
             "Remove single quotes and control characters from the .cube path."
+        )
+        msg = result["error"].get("message", "")
+        hint = result["error"].get("hint", "")
+        # SR-R-001 / CWE-209: hint must not contain the path identifier token.
+        assert "/luts/" not in hint, (
+            f"CWE-209: path fragment '/luts/' must not appear in hint. Got: {hint!r}"
+        )
+        assert "/luts/" not in msg, (
+            f"CWE-209: path fragment '/luts/' must not appear in message. Got: {msg!r}"
         )
 
     def test_del_char_error_does_not_echo_path(self, tmp_path: Path) -> None:
@@ -1183,4 +1210,13 @@ class TestDetectColorOptionsLutInjection:
         ), (
             "SR-R-001: fixed hint wording mismatch."
             f" Got: {result['error'].get('hint')!r}"
+        )
+        msg = result["error"].get("message", "")
+        hint = result["error"].get("hint", "")
+        # SR-R-001 / CWE-209: hint must not contain the path identifier token.
+        assert "/luts/" not in hint, (
+            f"CWE-209: path fragment '/luts/' must not appear in hint. Got: {hint!r}"
+        )
+        assert "/luts/" not in msg, (
+            f"CWE-209: path fragment '/luts/' must not appear in message. Got: {msg!r}"
         )
