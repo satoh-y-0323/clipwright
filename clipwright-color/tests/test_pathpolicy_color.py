@@ -864,6 +864,29 @@ class TestLutCubePathpolicy:
         )
 
 
+def _assert_lut_injection_rejected(result: dict[str, Any], sentinel_token: str) -> None:
+    """Assert that detect_color rejected a lut path containing an injection character.
+
+    Checks that result carries ok=False / INVALID_INPUT with the fixed error wording,
+    and that both message and hint do not contain sentinel_token (CWE-209).
+    """
+    assert result["ok"] is False
+    assert result["error"]["code"] == ErrorCode.INVALID_INPUT
+    assert result["error"]["message"] == "LUT path contains an invalid character."
+    assert result["error"]["hint"] == (
+        "Remove single quotes and control characters from the .cube path."
+    )
+    message = result["error"].get("message", "")
+    hint = result["error"].get("hint", "")
+    # CWE-209: sentinel token must not appear in message or hint (both directions).
+    assert sentinel_token not in message, (
+        f"CWE-209: {sentinel_token!r} must not appear in message. Got: {message!r}"
+    )
+    assert sentinel_token not in hint, (
+        f"CWE-209: {sentinel_token!r} must not appear in hint. Got: {hint!r}"
+    )
+
+
 # ===========================================================================
 # SR-INJ-002: detect_color lut injection-char rejection (function-body contract)
 # ===========================================================================
@@ -920,21 +943,12 @@ class TestDetectColorOptionsLutInjection:
                 media=str(media), output=str(output), options=opts, timeline=None
             )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
-        # F-1 [SR-R-001]: positive assertion on fixed error message wording.
-        assert result["error"]["message"] == "LUT path contains an invalid character."
-        # SR-R-001: positive assertion on fixed hint wording.
-        assert result["error"]["hint"] == (
-            "Remove single quotes and control characters from the .cube path."
-        )
-        msg = result["error"].get("message", "")
+        _assert_lut_injection_rejected(result, "/luts/")
+        message = result["error"].get("message", "")
         hint = result["error"].get("hint", "")
-        # CWE-209: offending path fragments must not appear in error text
-        assert "a'b" not in msg
+        # CWE-209: offending character sequence must not appear in error text.
+        assert "a'b" not in message
         assert "a'b" not in hint
-        # SR-R-001: hint must not contain the offending path value.
-        assert "/luts/" not in hint
 
     def test_single_quote_error_does_not_echo_path(self, tmp_path: Path) -> None:
         """CWE-209: INVALID_INPUT for single-quote lut must not expose the offending path value."""
@@ -989,23 +1003,7 @@ class TestDetectColorOptionsLutInjection:
                 media=str(media), output=str(output), options=opts, timeline=None
             )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
-        # F-1 [SR-R-001]: positive assertion on fixed error message wording.
-        assert result["error"]["message"] == "LUT path contains an invalid character."
-        # SR-R-001: positive assertion on fixed hint wording.
-        assert result["error"]["hint"] == (
-            "Remove single quotes and control characters from the .cube path."
-        )
-        msg = result["error"].get("message", "")
-        hint = result["error"].get("hint", "")
-        # SR-R-001 / CWE-209: hint must not contain the path identifier token.
-        assert "/luts/" not in hint, (
-            f"CWE-209: path fragment '/luts/' must not appear in hint. Got: {hint!r}"
-        )
-        assert "/luts/" not in msg, (
-            f"CWE-209: path fragment '/luts/' must not appear in message. Got: {msg!r}"
-        )
+        _assert_lut_injection_rejected(result, "/luts/")
 
     def test_newline_in_lut_path_rejected(self, tmp_path: Path) -> None:
         """lut path with newline (\\n) causes detect_color to return ok=False / INVALID_INPUT."""
@@ -1027,23 +1025,7 @@ class TestDetectColorOptionsLutInjection:
                 media=str(media), output=str(output), options=opts, timeline=None
             )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
-        # F-1 [SR-R-001]: positive assertion on fixed error message wording.
-        assert result["error"]["message"] == "LUT path contains an invalid character."
-        # SR-R-001: positive assertion on fixed hint wording.
-        assert result["error"]["hint"] == (
-            "Remove single quotes and control characters from the .cube path."
-        )
-        msg = result["error"].get("message", "")
-        hint = result["error"].get("hint", "")
-        # SR-R-001 / CWE-209: hint must not contain the path identifier token.
-        assert "/luts/" not in hint, (
-            f"CWE-209: path fragment '/luts/' must not appear in hint. Got: {hint!r}"
-        )
-        assert "/luts/" not in msg, (
-            f"CWE-209: path fragment '/luts/' must not appear in message. Got: {msg!r}"
-        )
+        _assert_lut_injection_rejected(result, "/luts/")
 
     # -------------------------------------------------------------------------
     # SR-L-1-new: DEL (0x7F) control-char parity with reader-side _CONTROL_CHARS
@@ -1073,23 +1055,7 @@ class TestDetectColorOptionsLutInjection:
                 media=str(media), output=str(output), options=opts, timeline=None
             )
 
-        assert result["ok"] is False
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT
-        # F-1 [SR-R-001]: positive assertion on fixed error message wording.
-        assert result["error"]["message"] == "LUT path contains an invalid character."
-        # SR-R-001: positive assertion on fixed hint wording.
-        assert result["error"]["hint"] == (
-            "Remove single quotes and control characters from the .cube path."
-        )
-        msg = result["error"].get("message", "")
-        hint = result["error"].get("hint", "")
-        # SR-R-001 / CWE-209: hint must not contain the path identifier token.
-        assert "/luts/" not in hint, (
-            f"CWE-209: path fragment '/luts/' must not appear in hint. Got: {hint!r}"
-        )
-        assert "/luts/" not in msg, (
-            f"CWE-209: path fragment '/luts/' must not appear in message. Got: {msg!r}"
-        )
+        _assert_lut_injection_rejected(result, "/luts/")
 
     def test_del_char_error_does_not_echo_path(self, tmp_path: Path) -> None:
         """CWE-209: INVALID_INPUT for DEL-bearing lut must not expose the path value.
@@ -1190,33 +1156,5 @@ class TestDetectColorOptionsLutInjection:
                 media=str(media), output=str(output), options=opts, timeline=None
             )
 
-        assert result["ok"] is False, (
-            "CR-E-001: lut injection guard must fire on the U-1 path (measured=None)."
-            " Got ok=True — guard is incorrectly placed inside the else branch."
-            f" result={result!r}"
-        )
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT, (
-            f"CR-E-001: expected INVALID_INPUT, got {result['error']['code']!r}"
-        )
-        assert (
-            result["error"]["message"] == "LUT path contains an invalid character."
-        ), (
-            "CR-E-001: fixed error message mismatch."
-            f" Got: {result['error']['message']!r}"
-        )
-        # SR-R-001: positive assertion on fixed hint wording.
-        assert result["error"]["hint"] == (
-            "Remove single quotes and control characters from the .cube path."
-        ), (
-            "SR-R-001: fixed hint wording mismatch."
-            f" Got: {result['error'].get('hint')!r}"
-        )
-        msg = result["error"].get("message", "")
-        hint = result["error"].get("hint", "")
-        # SR-R-001 / CWE-209: hint must not contain the path identifier token.
-        assert "/luts/" not in hint, (
-            f"CWE-209: path fragment '/luts/' must not appear in hint. Got: {hint!r}"
-        )
-        assert "/luts/" not in msg, (
-            f"CWE-209: path fragment '/luts/' must not appear in message. Got: {msg!r}"
-        )
+        # CR-E-001: injection guard must fire on the U-1 path (measured=None).
+        _assert_lut_injection_rejected(result, "/luts/")
