@@ -924,11 +924,17 @@ class TestDetectColorOptionsLutInjection:
         assert result["error"]["code"] == ErrorCode.INVALID_INPUT
         # F-1 [SR-R-001]: positive assertion on fixed error message wording.
         assert result["error"]["message"] == "LUT path contains an invalid character."
+        # SR-R-001: positive assertion on fixed hint wording.
+        assert result["error"]["hint"] == (
+            "Remove single quotes and control characters from the .cube path."
+        )
         msg = result["error"].get("message", "")
         hint = result["error"].get("hint", "")
         # CWE-209: offending path fragments must not appear in error text
         assert "a'b" not in msg
         assert "a'b" not in hint
+        # SR-R-001: hint must not contain the offending path value.
+        assert "/luts/" not in hint
 
     def test_single_quote_error_does_not_echo_path(self, tmp_path: Path) -> None:
         """CWE-209: INVALID_INPUT for single-quote lut must not expose the offending path value."""
@@ -987,6 +993,10 @@ class TestDetectColorOptionsLutInjection:
         assert result["error"]["code"] == ErrorCode.INVALID_INPUT
         # F-1 [SR-R-001]: positive assertion on fixed error message wording.
         assert result["error"]["message"] == "LUT path contains an invalid character."
+        # SR-R-001: positive assertion on fixed hint wording.
+        assert result["error"]["hint"] == (
+            "Remove single quotes and control characters from the .cube path."
+        )
 
     def test_newline_in_lut_path_rejected(self, tmp_path: Path) -> None:
         """lut path with newline (\\n) causes detect_color to return ok=False / INVALID_INPUT."""
@@ -1012,6 +1022,10 @@ class TestDetectColorOptionsLutInjection:
         assert result["error"]["code"] == ErrorCode.INVALID_INPUT
         # F-1 [SR-R-001]: positive assertion on fixed error message wording.
         assert result["error"]["message"] == "LUT path contains an invalid character."
+        # SR-R-001: positive assertion on fixed hint wording.
+        assert result["error"]["hint"] == (
+            "Remove single quotes and control characters from the .cube path."
+        )
 
     # -------------------------------------------------------------------------
     # SR-L-1-new: DEL (0x7F) control-char parity with reader-side _CONTROL_CHARS
@@ -1045,6 +1059,10 @@ class TestDetectColorOptionsLutInjection:
         assert result["error"]["code"] == ErrorCode.INVALID_INPUT
         # F-1 [SR-R-001]: positive assertion on fixed error message wording.
         assert result["error"]["message"] == "LUT path contains an invalid character."
+        # SR-R-001: positive assertion on fixed hint wording.
+        assert result["error"]["hint"] == (
+            "Remove single quotes and control characters from the .cube path."
+        )
 
     def test_del_char_error_does_not_echo_path(self, tmp_path: Path) -> None:
         """CWE-209: INVALID_INPUT for DEL-bearing lut must not expose the path value.
@@ -1153,7 +1171,16 @@ class TestDetectColorOptionsLutInjection:
         assert result["error"]["code"] == ErrorCode.INVALID_INPUT, (
             f"CR-E-001: expected INVALID_INPUT, got {result['error']['code']!r}"
         )
-        assert result["error"]["message"] == "LUT path contains an invalid character.", (
+        assert (
+            result["error"]["message"] == "LUT path contains an invalid character."
+        ), (
             "CR-E-001: fixed error message mismatch."
             f" Got: {result['error']['message']!r}"
+        )
+        # SR-R-001: positive assertion on fixed hint wording.
+        assert result["error"]["hint"] == (
+            "Remove single quotes and control characters from the .cube path."
+        ), (
+            "SR-R-001: fixed hint wording mismatch."
+            f" Got: {result['error'].get('hint')!r}"
         )
