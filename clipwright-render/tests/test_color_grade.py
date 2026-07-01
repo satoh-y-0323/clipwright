@@ -57,7 +57,7 @@ _COLOR_DICT_BASE: dict[str, Any] = {
 }
 
 # Typical WB correction values (warm-biased scene: r gain above neutral, b gain below).
-# Per-channel gains for colorchannelmixer: neutral = 1.0, range [0.0, 4.0].
+# Per-channel gains for colorchannelmixer: neutral = 1.0, range (0.0, 4.0].
 _WB_PARAMS: dict[str, float] = {"r": 1.4, "g": 0.9, "b": 0.6}
 
 # Color dict with white_balance present (no lut); used in most ordering tests.
@@ -173,7 +173,7 @@ class TestColorGradeSchema:
         assert _RenderWhiteBalance is not None
 
     def test_wb_model_r_g_b_fields(self) -> None:
-        """_RenderWhiteBalance accepts r, g, b float gains in [0.0, 4.0]."""
+        """_RenderWhiteBalance accepts r, g, b float gains in (0.0, 4.0]."""
         from clipwright_render.plan import _RenderWhiteBalance  # type: ignore[attr-defined]
 
         wb = _RenderWhiteBalance(r=1.4, g=0.9, b=0.6)

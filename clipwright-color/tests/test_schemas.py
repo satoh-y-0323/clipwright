@@ -700,8 +700,9 @@ class TestWhiteBalanceParams:
     """WhiteBalanceParams is a Pydantic model for colorchannelmixer per-channel gains.
 
     Maps 1:1 to ffmpeg colorchannelmixer rr/gg/bb diagonal gains (linear per-channel
-    multipliers). Neutral = all 1.0 (identity gain). Range [0.0, 4.0] per channel
-    (non-negative multipliers only; negative gains invert a channel and are rejected).
+    multipliers). Neutral = all 1.0 (identity gain). Range (0.0, 4.0] per channel
+    (strictly positive multipliers; neutral = 1.0. Zero collapses a channel to black
+    and negative gains are rejected).
     extra=forbid; allow_inf_nan=False.
     """
 
@@ -795,7 +796,7 @@ class TestWhiteBalanceParams:
         assert wb.b == pytest.approx(4.0)
 
     def test_r_negative_rejected(self) -> None:
-        """r=-0.1 must raise ValidationError (ge=0.0 violated — negative gain inverts channel)."""
+        """r=-0.1 must raise ValidationError (gt=0.0 violated — negative gain inverts channel)."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
 
         with pytest.raises(ValidationError):
@@ -809,7 +810,7 @@ class TestWhiteBalanceParams:
             WhiteBalanceParams(r=4.1)
 
     def test_g_negative_rejected(self) -> None:
-        """g=-0.1 must raise ValidationError (ge=0.0 violated)."""
+        """g=-0.1 must raise ValidationError (gt=0.0 violated)."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
 
         with pytest.raises(ValidationError):
@@ -823,7 +824,7 @@ class TestWhiteBalanceParams:
             WhiteBalanceParams(g=4.1)
 
     def test_b_negative_rejected(self) -> None:
-        """b=-0.1 must raise ValidationError (ge=0.0 violated)."""
+        """b=-0.1 must raise ValidationError (gt=0.0 violated)."""
         from clipwright_color.schemas import WhiteBalanceParams  # noqa: F401
 
         with pytest.raises(ValidationError):
