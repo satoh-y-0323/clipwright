@@ -172,7 +172,7 @@ class TestTwoLayerBoundary:
     def test_add_overlay_never_raises_on_error(self) -> None:
         """add_overlay converts ClipwrightError to error_result; never raises."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -193,7 +193,7 @@ class TestTwoLayerBoundary:
     def test_add_overlay_returns_tool_result_type(self) -> None:
         """add_overlay must return a ToolResult dict on success."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -219,7 +219,7 @@ class TestHappyPath:
     def test_happy_path_ok_result(self) -> None:
         """Valid call returns ok=True."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -235,7 +235,7 @@ class TestHappyPath:
     def test_happy_path_marker_name_image_0(self) -> None:
         """First marker name must be 'image_0' on the V1 track."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -257,7 +257,7 @@ class TestHappyPath:
     def test_happy_path_metadata_fields(self) -> None:
         """marker.metadata['clipwright'] must contain all required fields."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -311,7 +311,7 @@ class TestHappyPath:
         the 'outside -> absolute' branch.
         """
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -361,7 +361,7 @@ class TestEnvelopeData:
     def test_envelope_data_fields(self) -> None:
         """data must contain applied, overlay_count, start_sec, duration_sec."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -382,7 +382,7 @@ class TestEnvelopeData:
     def test_envelope_summary_contains_basename_and_count(self) -> None:
         """summary must contain image basename, duration, count, and out.name."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -409,7 +409,7 @@ class TestEnvelopeData:
     def test_envelope_summary_no_full_path(self) -> None:
         """summary must NOT contain the full directory path (CWE-209)."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -430,7 +430,7 @@ class TestEnvelopeData:
     def test_envelope_data_no_full_path(self) -> None:
         """data must NOT contain the full directory path (CWE-209)."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -452,7 +452,7 @@ class TestEnvelopeData:
     def test_envelope_artifacts_timeline_entry(self) -> None:
         """artifacts must contain one entry with role='timeline' and format='otio'."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -505,7 +505,7 @@ class TestValidationOrder:
     def test_value_range_checked_before_image_path(self) -> None:
         """Value-range violation must be caught before image_path validation."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -532,7 +532,7 @@ class TestValidationOrder:
         NOT exist should yield INVALID_INPUT (safety), not FILE_NOT_FOUND.
         """
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -558,7 +558,7 @@ class TestValidationOrder:
     def test_existence_checked_before_extension(self) -> None:
         """Existence check must fire before extension check."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -580,7 +580,7 @@ class TestValidationOrder:
     def test_extension_checked_before_path_safety(self) -> None:
         """Extension check must fire before path safety check."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -626,7 +626,7 @@ class TestValueRangeViolations:
     ) -> None:
         """Out-of-range field must return INVALID_INPUT with non-empty hint."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -647,7 +647,7 @@ class TestValueRangeViolations:
     def test_fade_sum_exceeds_duration(self) -> None:
         """fade_in_sec + fade_out_sec > duration_sec must return INVALID_INPUT."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -668,7 +668,7 @@ class TestValueRangeViolations:
     def test_fade_sum_exactly_equals_duration_ok(self) -> None:
         """fade_in_sec + fade_out_sec == duration_sec must be accepted (boundary)."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -693,7 +693,7 @@ class TestValueRangeViolations:
         before image_path validation, so no real image file is required).
         """
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -727,7 +727,7 @@ class TestValueRangeViolations:
         in overlay.py _validate_overlay_fields is exercised.
         """
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -761,7 +761,7 @@ class TestValueRangeViolations:
         in overlay.py _validate_overlay_fields is exercised.
         """
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -792,7 +792,7 @@ class TestValueRangeViolations:
     def test_scale_exactly_8_is_valid(self) -> None:
         """scale == 8.0 must be accepted (upper boundary of (0, 8])."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -827,7 +827,7 @@ class TestImagePathValidation:
         directory is allowed and stored as an absolute path via media_ref_for_otio.
         """
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             proj = tmp / "proj"
             elsewhere = tmp / "elsewhere"
             proj.mkdir()
@@ -852,7 +852,7 @@ class TestImagePathValidation:
     def test_colocation_recursive_subdir_allowed(self) -> None:
         """Image in recursive subdir under output parent must be allowed."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             subdir = tmp / "images" / "logos"
             subdir.mkdir(parents=True)
 
@@ -873,7 +873,7 @@ class TestImagePathValidation:
     def test_existence_nonexistent_file_not_found(self) -> None:
         """Non-existent image within output parent -> FILE_NOT_FOUND with basename only."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -899,7 +899,7 @@ class TestImagePathValidation:
     def test_extension_not_in_allowlist_invalid_input(self, ext: str) -> None:
         """Extensions not in allowlist (.gif, .bmp) -> INVALID_INPUT."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -921,7 +921,7 @@ class TestImagePathValidation:
     def test_extension_in_allowlist_accepted(self, ext: str) -> None:
         """Extensions in allowlist (.png, .jpg, .jpeg, .webp) must be accepted."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -939,7 +939,7 @@ class TestImagePathValidation:
     def test_extension_case_insensitive(self) -> None:
         """Extension check must be case-insensitive (e.g., .PNG accepted)."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -957,7 +957,7 @@ class TestImagePathValidation:
     def test_path_safety_single_quote_invalid_input(self) -> None:
         """image_path containing single-quote -> INVALID_INPUT."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -983,7 +983,7 @@ class TestImagePathValidation:
     def test_path_safety_control_char_invalid_input(self) -> None:
         """image_path containing control char -> INVALID_INPUT."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -1012,7 +1012,7 @@ class TestImagePathValidation:
         absolute path instead of a '../'-prefixed relative path (no traversal stored).
         """
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             proj = tmp / "proj"
             sibling = tmp / "sibling"
             proj.mkdir()
@@ -1064,7 +1064,7 @@ class TestXYAllowlist:
     def test_invalid_xy_returns_invalid_input(self, field: str, bad_value: str) -> None:
         """x/y with forbidden chars must return INVALID_INPUT."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -1100,7 +1100,7 @@ class TestXYAllowlist:
     def test_valid_xy_accepted(self, field: str, good_value: str) -> None:
         """Valid x/y expressions must be accepted."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -1128,7 +1128,7 @@ class TestNoVideoTrack:
     def test_audio_only_timeline_returns_unsupported(self) -> None:
         """Audio-only timeline (no V1) must return UNSUPPORTED_OPERATION."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_audio_only_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -1159,7 +1159,7 @@ class TestInputEqualsOutput:
     def test_output_equals_input_returns_path_not_allowed(self) -> None:
         """Same path for timeline and output must return PATH_NOT_ALLOWED (check_output_not_source)."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             _write_timeline(tl, inp)
@@ -1190,7 +1190,7 @@ class TestIdempotency:
     def test_idempotent_call_returns_applied_zero(self) -> None:
         """Identical re-application must return applied=0."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             mid = tmp / "mid.otio"
@@ -1218,7 +1218,7 @@ class TestIdempotency:
     def test_idempotent_call_emits_warning(self) -> None:
         """Duplicate call must include a non-empty warning message."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             mid = tmp / "mid.otio"
@@ -1238,7 +1238,7 @@ class TestIdempotency:
     def test_idempotent_call_no_duplicate_marker(self) -> None:
         """After idempotent no-op, output must have same marker count as input."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             mid = tmp / "mid.otio"
@@ -1265,7 +1265,7 @@ class TestIdempotency:
     def test_idempotent_call_output_timeline_written(self) -> None:
         """Output timeline file must be written even for no-op (idempotency)."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             mid = tmp / "mid.otio"
@@ -1288,7 +1288,7 @@ class TestIdempotency:
         as duplicate based on the relative path string comparison.
         """
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             mid = tmp / "mid.otio"
@@ -1321,7 +1321,7 @@ class TestAccumulation:
     def test_two_distinct_overlays_accumulate(self) -> None:
         """Two calls with different images produce image_0 and image_1."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             mid = tmp / "mid.otio"
@@ -1364,7 +1364,7 @@ class TestMaxOverlaysCap:
     def test_65th_overlay_returns_invalid_input(self) -> None:
         """When 64 image_overlay markers are already present, adding one more must fail."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             img = tmp / "logo.png"
             _write_dummy_png(img)
 
@@ -1424,7 +1424,7 @@ class TestRateResolution:
     def test_rate_from_first_clip_source_range(self) -> None:
         """Rate must come from the first clip's source_range when available."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             rate = 30.0
             tl = _make_v1_timeline(rate=rate)
             inp = tmp / "in.otio"
@@ -1449,7 +1449,7 @@ class TestRateResolution:
         """When no clips and no existing image_overlay markers, fallback rate 1000.0
         must be used and a warning must be returned."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             # Timeline with V1 track but no clips
             tl = _make_no_clip_v1_timeline()
             inp = tmp / "in.otio"

@@ -201,7 +201,7 @@ class TestOutputOutsideTimelineDir:
     def test_output_in_separate_dir_returns_ok(self) -> None:
         """output in a dir outside the timeline dir must return ok=True."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             proj = tmp / "proj"
             work = tmp / "work"
             proj.mkdir()
@@ -229,7 +229,7 @@ class TestOutputOutsideTimelineDir:
     def test_output_in_separate_dir_marker_written(self) -> None:
         """Marker is added to the output timeline even when output is outside proj dir."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             proj = tmp / "proj"
             work = tmp / "work"
             proj.mkdir()
@@ -256,7 +256,7 @@ class TestOutputOutsideTimelineDir:
     def test_output_in_separate_dir_artifact_path_correct(self) -> None:
         """artifacts[role=timeline].path must equal the resolved output path."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             proj = tmp / "proj"
             work = tmp / "work"
             proj.mkdir()
@@ -324,7 +324,7 @@ class TestImageReferenceStorage:
         impl-overlay replaces _overlay_metadata_dict with media_ref_for_otio.
         """
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -359,7 +359,7 @@ class TestImageReferenceStorage:
         GREEN (regression guard): behaviour-preserving for deep subdir images.
         """
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             subdir = tmp / "assets" / "logos"
             subdir.mkdir(parents=True)
 
@@ -394,7 +394,7 @@ class TestImageReferenceStorage:
         media_ref_for_otio rule: image outside otio_dir -> absolute path (no '../' stored).
         """
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             proj = tmp / "proj"
             media = tmp / "media"
             proj.mkdir()
@@ -439,7 +439,7 @@ class TestImageReferenceStorage:
         the absolute path instead of computing a '../'-prefixed relative path.
         """
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             proj = tmp / "proj"
             images = tmp / "images"
             proj.mkdir()
@@ -491,7 +491,7 @@ class TestOutputEqualsSourceRejected:
     def test_output_equals_timeline_returns_path_not_allowed(self) -> None:
         """output path same as input timeline -> PATH_NOT_ALLOWED."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             _write_timeline(tl, inp)
@@ -529,7 +529,7 @@ class TestMixedRefRoundTrip:
     def test_relative_clip_refs_preserved_after_adding_external_image(self) -> None:
         """Existing relative clip target_urls are preserved in load->save round-trip."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             proj = tmp / "proj"
             media = tmp / "media"
             proj.mkdir()
@@ -587,7 +587,7 @@ class TestMixedRefRoundTrip:
         The two refs must be distinct (no aliasing or corruption).
         """
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             proj = tmp / "proj"
             ext = tmp / "ext"
             proj.mkdir()
@@ -655,7 +655,7 @@ class TestImagePathSymlinkRejected:
     def test_image_path_leaf_symlink_rejected(self) -> None:
         """A leaf symlink pointing at a real image -> PATH_NOT_ALLOWED."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -697,7 +697,7 @@ class TestImagePathSymlinkRejected:
         ADR-PP-2: all path components are checked, not just the leaf.
         """
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -750,7 +750,7 @@ class TestImagePathMissingBasenameOnly:
     def test_missing_image_path_returns_file_not_found_basename_only(self) -> None:
         """Missing image_path -> FILE_NOT_FOUND with exact basename-only message."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             inp = tmp / "in.otio"
             out = tmp / "out.otio"
@@ -804,7 +804,7 @@ class TestTimelineSymlinkRejected:
     def test_symlinked_timeline_returns_path_not_allowed(self) -> None:
         """A timeline path that is a symlink to a real .otio file must be rejected."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             tl = _make_v1_timeline()
             real_timeline = tmp / "real_timeline.otio"
             _write_timeline(tl, real_timeline)
@@ -852,7 +852,7 @@ class TestTimelineMissingBasenameOnly:
     def test_missing_timeline_returns_file_not_found_basename_only(self) -> None:
         """Missing timeline -> FILE_NOT_FOUND with exact basename-only message."""
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             missing = tmp / "does_not_exist.otio"
 
             img = tmp / "logo.png"
@@ -940,7 +940,7 @@ class TestCauseChainSeveredOnFileNotFoundReraise:
         cause-chain severance against regressions.
         """
         with tempfile.TemporaryDirectory() as tmpd:
-            tmp = Path(tmpd)
+            tmp = Path(tmpd).resolve()
             missing = tmp / "does_not_exist.otio"
             img = tmp / "logo.png"
             _write_dummy_png(img)
