@@ -898,6 +898,45 @@ sits at Low.
 
 ---
 
+### DRY the `validate_source_file` + `FILE_NOT_FOUND`→basename re-wrap into a core helper  *Low (maintainability)*  *(core / pathpolicy)*
+
+Surfaced by code review during the D7 fix. The idiom
+
+```python
+try:
+    validate_source_file(src)
+except ClipwrightError as exc:
+    if exc.code == ErrorCode.FILE_NOT_FOUND:
+        raise ClipwrightError(FILE_NOT_FOUND, f"{Kind} file not found: {name}", hint) from None
+    raise  # PATH_NOT_ALLOWED propagates
+```
+
+is now copy-pasted across **5 sites** (`wrap` input ×1, `bgm` timeline/bgm ×2, `overlay`
+image/timeline ×2), plus a sibling variant in `frames` that re-wraps to `INVALID_INPUT`.
+project-conventions requires path validation to live in `clipwright.pathpolicy` and not be
+re-implemented per tool, so the re-wrap boilerplate is a candidate for a shared helper
+(e.g. `pathpolicy.validate_source_or_basename(path, *, message, hint)` returning None and
+re-raising the basename-safe `FILE_NOT_FOUND`, with `PATH_NOT_ALLOWED` propagating).
+
+**Why deferred (not folded into D7):** the fix is maintainability-only (no behaviour change,
+no correctness/security defect), and a proper DRY pass must touch **core (a version bump) plus
+the already-shipped `wrap.py`** to retrofit all five sites symmetrically — a cross-cutting
+refactor that should not enlarge the blast radius of a Low security patch. Do it as its own
+scoped task (core helper + retrofit `wrap`/`bgm`/`overlay`, evaluate the `frames` INVALID_INPUT
+variant) with its own review/CI cycle. *Low (maintainability)*: pure de-duplication.
+
+### `transform` tools validate their timeline input with plain `.exists()` — symlink components followed (CWE-59)  *Low*  *(transition / speed / text …)*
+
+Flagged by security review during D7. The D7 fix covered the **accumulate** tools' source inputs
+(bgm, overlay). The **transform** tools (`transition`, `speed`, `text`, and any other OTIO→OTIO
+tool) still validate their input timeline with a plain `.exists()` that follows symlinks — the
+same CWE-59 class. Route their timeline input through `validate_source_file` with the same
+basename re-wrap (naturally combines with the core-helper backlog item above). *Low*: same threat
+model (single local stdio process) and priority as D7; a consistency hardening across the
+remaining tool category.
+
+---
+
 ## Out of scope / environmental (not gaps)
 
 | Item | Reason |

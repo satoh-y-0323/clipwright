@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-07-03
+
+### Security
+
+- `timeline` and `bgm` source inputs are now validated through the shared
+  `clipwright.pathpolicy.validate_source_file` guard, rejecting symlinked
+  paths (CWE-59).
+
 ## [0.3.1] - 2026-07-02
 
 ### Security
@@ -59,7 +67,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - BgmOptions schema (volume_db / fade_in_sec / fade_out_sec / ducking).
 - MCP annotations: `readOnlyHint=False` / `destructiveHint=False` / `idempotentHint=True` / `openWorldHint=False`.
 
-[Unreleased]: https://github.com/satoh-y-0323/clipwright/compare/clipwright-bgm-v0.3.0...HEAD
+[Unreleased]: https://github.com/satoh-y-0323/clipwright/compare/clipwright-bgm-v0.3.2...HEAD
+[0.3.2]: https://github.com/satoh-y-0323/clipwright/compare/clipwright-bgm-v0.3.1...clipwright-bgm-v0.3.2
+[0.3.1]: https://github.com/satoh-y-0323/clipwright/compare/clipwright-bgm-v0.3.0...clipwright-bgm-v0.3.1
 [0.3.0]: https://github.com/satoh-y-0323/clipwright/compare/clipwright-bgm-v0.2.0...clipwright-bgm-v0.3.0
 [0.2.0]: https://github.com/satoh-y-0323/clipwright/compare/clipwright-bgm-v0.1.1...clipwright-bgm-v0.2.0
 [0.1.1]: https://github.com/satoh-y-0323/clipwright/compare/clipwright-bgm-v0.1.0...clipwright-bgm-v0.1.1

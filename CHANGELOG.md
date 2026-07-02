@@ -5,6 +5,18 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.33.0] - 2026-07-03
+
+Path-boundary hardening follow-up for `clipwright-bgm` and `clipwright-overlay` (CWE-59).
+
+### Security
+
+- **`clipwright-bgm` v0.3.2** — `timeline` and `bgm` accumulate-type source inputs are now
+  validated through the shared `clipwright.pathpolicy.validate_source_file` guard, closing a
+  path-boundary bypass where a symlinked source file could point outside the intended source tree.
+- **`clipwright-overlay` v0.2.2** — `timeline` and `image_path` accumulate-type source inputs are
+  now validated through the same shared guard, closing the same class of path-boundary bypass.
+
 ## [0.32.0] - 2026-07-02
 
 `except Exception` internal-error boundary guards were rolled out across 13 tools so unexpected

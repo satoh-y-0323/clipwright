@@ -21,6 +21,8 @@ from typing import Any
 from unittest.mock import patch
 
 import opentimelineio as otio
+import pytest
+from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.otio_utils import load_timeline, save_timeline
 
 from clipwright_bgm.bgm import add_bgm
@@ -43,6 +45,47 @@ def _make_simple_timeline() -> otio.schema.Timeline:
 
 def _write_timeline(tl: otio.schema.Timeline, path: Path) -> None:
     save_timeline(tl, str(path))
+
+
+def _probe_symlink_support() -> bool:
+    """Return True when the runtime environment allows symlink creation.
+
+    Executed once at module import (collection) time so pytest.mark.skipif
+    can reference the result.  Mirrors core tests/test_pathpolicy.py.
+    """
+    import tempfile
+
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            real = base / "_probe_real.txt"
+            real.write_bytes(b"probe")
+            link = base / "_probe_link.txt"
+            link.symlink_to(real)
+        return True
+    except OSError:
+        return False
+
+
+_SYMLINK_SUPPORTED: bool = _probe_symlink_support()
+_SKIP_SYMLINK_REASON = (
+    "Symlink creation requires elevated privileges on this system (WinError 1314)."
+    " Enable Windows Developer Mode or run as Administrator."
+)
+_skip_no_symlinks = pytest.mark.skipif(
+    not _SYMLINK_SUPPORTED,
+    reason=_SKIP_SYMLINK_REASON,
+)
+
+
+def _try_symlink(link: Path, target: Path) -> None:
+    """Create a symlink; skip the test if the OS refuses (Windows privilege)."""
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip(
+            "Cannot create symlinks on this system (requires elevated privileges)"
+        )
 
 
 def _bgm_target_url(output_path: Path) -> str:
@@ -408,3 +451,278 @@ class TestOutputBgmCollision:
         assert result["error"]["code"] in ("INVALID_INPUT", "PATH_NOT_ALLOWED"), (
             f"output == timeline must be rejected. Got: {result['error']['code']!r}"
         )
+
+
+# ===========================================================================
+# 5. symlink source inputs are rejected (spec5 D7, CWE-59, ADR-PP-2)
+# ===========================================================================
+#
+# Regression guard: add_bgm delegates source validation to
+# clipwright.pathpolicy.validate_source_file (islink-before-resolve) rather
+# than a raw Path.exists() check, so a symlinked timeline/bgm is rejected
+# with PATH_NOT_ALLOWED instead of being silently followed and accepted.
+
+
+class TestSymlinkSourceRejected:
+    """timeline_path / bgm_path must be rejected with PATH_NOT_ALLOWED when they
+    are (or contain) a symlink component, mirroring core validate_source_file /
+    ADR-PP-2 and the wrap.py reference pattern (clipwright-wrap wrap.py L164-179).
+    """
+
+    @_skip_no_symlinks
+    def test_symlinked_timeline_returns_path_not_allowed(
+        self,
+        tmp_path: Path,
+        media_info_bgm: Any,
+    ) -> None:
+        """A timeline path that is a symlink to a real .otio file must be rejected."""
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+
+        bgm_file = project_dir / "bgm.mp3"
+        bgm_file.write_bytes(b"dummy bgm")
+
+        real_timeline_path = project_dir / "real_timeline.otio"
+        tl = _make_simple_timeline()
+        _write_timeline(tl, real_timeline_path)
+
+        symlinked_timeline_path = project_dir / "timeline_link.otio"
+        _try_symlink(symlinked_timeline_path, real_timeline_path)
+
+        output_path = project_dir / "output.otio"
+
+        with patch("clipwright_bgm.bgm.inspect_media", return_value=media_info_bgm):
+            result = add_bgm(
+                timeline=str(symlinked_timeline_path),
+                bgm=str(bgm_file),
+                output=str(output_path),
+                options=BgmOptions(volume_db=-6.0),
+            )
+
+        assert result["ok"] is False, (
+            "A symlinked timeline must be rejected, not silently followed. "
+            f"Got: {result}"
+        )
+        assert result["error"]["code"] == "PATH_NOT_ALLOWED", (
+            "Symlinked timeline must return PATH_NOT_ALLOWED (core pathpolicy "
+            f"contract, ADR-PP-2). Got: {result['error']['code']!r}"
+        )
+        assert str(project_dir) not in result["error"]["message"], (
+            "Symlinked-timeline error message must not expose the full "
+            f"directory path (CWE-209). Got: {result['error']['message']!r}"
+        )
+
+    @_skip_no_symlinks
+    def test_symlinked_bgm_returns_path_not_allowed(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """A bgm path that is a symlink to a real audio file must be rejected."""
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+
+        real_bgm_path = project_dir / "real_bgm.m4a"
+        real_bgm_path.write_bytes(b"dummy bgm audio")
+
+        symlinked_bgm_path = project_dir / "bgm_link.m4a"
+        _try_symlink(symlinked_bgm_path, real_bgm_path)
+
+        tl = _make_simple_timeline()
+        timeline_path = project_dir / "timeline.otio"
+        _write_timeline(tl, timeline_path)
+        output_path = project_dir / "output.otio"
+
+        result = add_bgm(
+            timeline=str(timeline_path),
+            bgm=str(symlinked_bgm_path),
+            output=str(output_path),
+            options=BgmOptions(volume_db=-6.0),
+        )
+
+        assert result["ok"] is False, (
+            "A symlinked bgm file must be rejected, not silently followed. "
+            f"Got: {result}"
+        )
+        assert result["error"]["code"] == "PATH_NOT_ALLOWED", (
+            "Symlinked bgm must return PATH_NOT_ALLOWED (core pathpolicy "
+            f"contract, ADR-PP-2). Got: {result['error']['code']!r}"
+        )
+        assert str(project_dir) not in result["error"]["message"], (
+            "Symlinked-bgm error message must not expose the full "
+            f"directory path (CWE-209). Got: {result['error']['message']!r}"
+        )
+
+
+# ===========================================================================
+# 6. Missing-source basename-only regression (spec5 D7, CWE-209)
+# ===========================================================================
+#
+# These pin down the exact FILE_NOT_FOUND message wording that must survive
+# the switch to validate_source_file (basename-only re-wrap, no full path
+# exposure). They act as regression guards for the impl-bgm Green step.
+
+
+class TestMissingSourceBasenameMessage:
+    """FILE_NOT_FOUND messages for missing timeline/bgm must stay basename-only."""
+
+    def test_missing_timeline_returns_file_not_found_with_basename_message(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """timeline missing → FILE_NOT_FOUND / "Timeline file not found: <basename>"."""
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+
+        bgm_file = project_dir / "bgm.mp3"
+        bgm_file.write_bytes(b"dummy bgm")
+        missing_timeline_path = project_dir / "no_such_timeline.otio"
+        output_path = project_dir / "output.otio"
+
+        result = add_bgm(
+            timeline=str(missing_timeline_path),
+            bgm=str(bgm_file),
+            output=str(output_path),
+            options=BgmOptions(volume_db=-6.0),
+        )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == "FILE_NOT_FOUND"
+        assert (
+            result["error"]["message"]
+            == f"Timeline file not found: {missing_timeline_path.name}"
+        ), f"Got: {result['error']['message']!r}"
+        assert str(project_dir) not in result["error"]["message"], (
+            "Timeline missing message must not expose the full directory path "
+            f"(CWE-209). Got: {result['error']['message']!r}"
+        )
+
+    def test_missing_bgm_returns_file_not_found_with_basename_message(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """bgm missing → FILE_NOT_FOUND / "BGM file not found: <basename>"."""
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+
+        tl = _make_simple_timeline()
+        timeline_path = project_dir / "timeline.otio"
+        _write_timeline(tl, timeline_path)
+        missing_bgm_path = project_dir / "no_such_bgm.mp3"
+        output_path = project_dir / "output.otio"
+
+        result = add_bgm(
+            timeline=str(timeline_path),
+            bgm=str(missing_bgm_path),
+            output=str(output_path),
+            options=BgmOptions(volume_db=-6.0),
+        )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == "FILE_NOT_FOUND"
+        assert (
+            result["error"]["message"] == f"BGM file not found: {missing_bgm_path.name}"
+        ), f"Got: {result['error']['message']!r}"
+        assert str(project_dir) not in result["error"]["message"], (
+            "BGM missing message must not expose the full directory path "
+            f"(CWE-209). Got: {result['error']['message']!r}"
+        )
+
+
+# ===========================================================================
+# 7. FILE_NOT_FOUND re-wrap must use 'from None' (spec5 D7, CWE-209)
+# ===========================================================================
+#
+# security-review-report-20260703-014001.md F-2: message-only assertions
+# cannot detect a regression from 'raise ... from None' to 'raise ... from
+# exc', which would leak the original core ClipwrightError (containing the
+# full caller-supplied path) via __cause__ to a future outer handler. These
+# tests directly assert __cause__ is None, mirroring the established
+# frames/wrap pattern (TestInputFileNotFoundCauseIsNone).
+
+
+class TestFileNotFoundCauseIsNone:
+    """The FILE_NOT_FOUND re-wrap for timeline/bgm in _add_bgm_inner must use
+    'raise ... from None' so __cause__ is None (CWE-209).
+    """
+
+    def test_timeline_file_not_found_cause_is_none(
+        self,
+        tmp_path: Path,
+        mocker: Any,
+    ) -> None:
+        """_add_bgm_inner must raise FILE_NOT_FOUND with __cause__ == None
+        for a missing timeline.
+
+        Regression guard: changing 'from None' to 'from exc' would fail this test.
+        """
+        from clipwright_bgm.bgm import _add_bgm_inner
+
+        bgm_file = tmp_path / "bgm.mp3"
+        bgm_file.write_bytes(b"dummy bgm")
+        timeline_path = tmp_path / "timeline.otio"
+        output_path = tmp_path / "output.otio"
+
+        # Original exception simulates core's FILE_NOT_FOUND leaking a full path.
+        original_exc = ClipwrightError(
+            code=ErrorCode.FILE_NOT_FOUND,
+            message="File not found: C:\\secret\\full\\path\\timeline.otio",
+            hint="Specify a valid path.",
+        )
+        mocker.patch(
+            "clipwright_bgm.bgm.validate_source_file",
+            side_effect=original_exc,
+        )
+
+        try:
+            _add_bgm_inner(str(timeline_path), str(bgm_file), str(output_path), None)
+        except ClipwrightError as exc:
+            assert exc.code == ErrorCode.FILE_NOT_FOUND
+            assert exc.__cause__ is None, (
+                "_add_bgm_inner must use 'raise ... from None' for the "
+                f"timeline FILE_NOT_FOUND re-wrap; __cause__ is {exc.__cause__!r}"
+            )
+            assert "C:\\secret\\full\\path\\timeline.otio" not in exc.message
+        else:
+            pytest.fail("Expected ClipwrightError was not raised")
+
+    def test_bgm_file_not_found_cause_is_none(
+        self,
+        tmp_path: Path,
+        mocker: Any,
+    ) -> None:
+        """_add_bgm_inner must raise FILE_NOT_FOUND with __cause__ == None
+        for a missing bgm file (the timeline check must pass first, so the
+        mock only raises on the second validate_source_file call).
+
+        Regression guard: changing 'from None' to 'from exc' would fail this test.
+        """
+        from clipwright_bgm.bgm import _add_bgm_inner
+
+        timeline_path = tmp_path / "timeline.otio"
+        tl = _make_simple_timeline()
+        _write_timeline(tl, timeline_path)
+        bgm_path = tmp_path / "bgm.mp3"
+        output_path = tmp_path / "output.otio"
+
+        # Original exception simulates core's FILE_NOT_FOUND leaking a full path.
+        original_exc = ClipwrightError(
+            code=ErrorCode.FILE_NOT_FOUND,
+            message="File not found: C:\\secret\\full\\path\\bgm.mp3",
+            hint="Specify a valid path.",
+        )
+        mocker.patch(
+            "clipwright_bgm.bgm.validate_source_file",
+            side_effect=[None, original_exc],
+        )
+
+        try:
+            _add_bgm_inner(str(timeline_path), str(bgm_path), str(output_path), None)
+        except ClipwrightError as exc:
+            assert exc.code == ErrorCode.FILE_NOT_FOUND
+            assert exc.__cause__ is None, (
+                "_add_bgm_inner must use 'raise ... from None' for the "
+                f"bgm FILE_NOT_FOUND re-wrap; __cause__ is {exc.__cause__!r}"
+            )
+            assert "C:\\secret\\full\\path\\bgm.mp3" not in exc.message
+        else:
+            pytest.fail("Expected ClipwrightError was not raised")

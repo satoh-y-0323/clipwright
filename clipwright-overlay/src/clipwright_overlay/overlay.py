@@ -33,7 +33,11 @@ import opentimelineio as otio
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.otio_utils import add_marker, get_markers, load_timeline, save_timeline
-from clipwright.pathpolicy import check_output_not_source, media_ref_for_otio
+from clipwright.pathpolicy import (
+    check_output_not_source,
+    media_ref_for_otio,
+    validate_source_file,
+)
 from clipwright.schemas import RationalTimeModel, TimeRangeModel, ToolResult
 
 from clipwright_overlay import __version__
@@ -80,7 +84,9 @@ def _validate_overlay_fields(options: AddOverlayOptions, output: str) -> None:
          a. path safety: single-quote or control char (INVALID_INPUT)
             — checked before resolve() to prevent ValueError from control chars
               and to ensure safety always precedes existence/extension checks
-         b. existence (FILE_NOT_FOUND, basename only)
+         b. existence + symlink rejection, via validate_source_file
+            (FILE_NOT_FOUND basename-only / PATH_NOT_ALLOWED for symlinks,
+            ADR-PP-2 / CWE-59)
          c. extension allowlist (INVALID_INPUT)
       3. x/y allowlist (INVALID_INPUT) (V2-5)
 
@@ -173,15 +179,27 @@ def _validate_overlay_fields(options: AddOverlayOptions, output: str) -> None:
             hint="Remove control characters from the image file path.",
         )
 
-    resolved = Path(options.image_path).resolve()
+    # 2b. existence + symlink rejection (ADR-PP-2 / CWE-59): delegates to the
+    # shared core guard instead of Path.resolve().exists(), which would follow
+    # a symlink before the leaf/intermediate symlink components can be checked.
+    try:
+        validate_source_file(options.image_path)
+    except ClipwrightError as exc:
+        if exc.code == ErrorCode.FILE_NOT_FOUND:
+            # Re-wrap to keep overlay's basename-only message contract:
+            # core's FILE_NOT_FOUND message embeds the full caller-supplied
+            # path, which would leak directory structure (CWE-209). __cause__
+            # is dropped via `from None` so the core message never surfaces.
+            raise ClipwrightError(
+                code=ErrorCode.FILE_NOT_FOUND,
+                message=f"Image file not found: {Path(options.image_path).name}",
+                hint="Verify the image path and ensure the file exists.",
+            ) from None
+        # PATH_NOT_ALLOWED (symlink) and any other core error propagate as-is;
+        # core's message/hint are not overridden here.
+        raise
 
-    # 2b. existence
-    if not resolved.exists():
-        raise ClipwrightError(
-            code=ErrorCode.FILE_NOT_FOUND,
-            message=f"Image file not found: {Path(options.image_path).name}",
-            hint="Verify the image path and ensure the file exists.",
-        )
+    resolved = Path(options.image_path).resolve()
 
     # 2c. extension allowlist
     if resolved.suffix.lower() not in _ALLOWED_IMAGE_EXTENSIONS:
@@ -380,7 +398,8 @@ def _add_overlay_inner(
       2. output parent directory exists
       3. output != timeline
       4. field validation (_validate_overlay_fields, including image_path 3-stage)
-      5. load timeline (FILE_NOT_FOUND / OTIO_ERROR propagate)
+      5. timeline existence + symlink rejection (validate_source_file), then load
+         timeline (OTIO_ERROR propagates)
       6. first TrackKind.Video track exists
       7. rate determination
       8. _MAX_IMAGE_OVERLAYS cap check (V2-9)
@@ -429,13 +448,23 @@ def _add_overlay_inner(
     # --- Step 4: field validation (value ranges + image_path 3-stage + x/y) ---
     _validate_overlay_fields(options, output)
 
-    # --- Step 5: load timeline ---
-    if not inp.exists():
-        raise ClipwrightError(
-            code=ErrorCode.FILE_NOT_FOUND,
-            message=f"Timeline file not found: {inp.name}",
-            hint="Verify the timeline path and ensure the file exists.",
-        )
+    # --- Step 5: timeline existence + symlink rejection (ADR-PP-2 / CWE-59) ---
+    try:
+        validate_source_file(timeline)
+    except ClipwrightError as exc:
+        if exc.code == ErrorCode.FILE_NOT_FOUND:
+            # Re-wrap to keep overlay's basename-only message contract:
+            # core's FILE_NOT_FOUND message embeds the full caller-supplied
+            # path, which would leak directory structure (CWE-209). __cause__
+            # is dropped via `from None` so the core message never surfaces.
+            raise ClipwrightError(
+                code=ErrorCode.FILE_NOT_FOUND,
+                message=f"Timeline file not found: {inp.name}",
+                hint="Verify the timeline path and ensure the file exists.",
+            ) from None
+        # PATH_NOT_ALLOWED (symlink) and any other core error propagate as-is;
+        # core's message/hint are not overridden here.
+        raise
     timeline_obj = load_timeline(timeline)
 
     # --- Step 6: find first Video track ---

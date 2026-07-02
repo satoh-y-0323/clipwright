@@ -8,6 +8,19 @@ Covers the boundary contract for overlay (accumulate type):
   P-3  output == timeline -> PATH_NOT_ALLOWED (CR-M-5 unified code)
   P-4  DC-AM-003: existing relative media refs + external absolute image
        survive a load->save round-trip intact.
+  P-5  spec5 D7 (CWE-59): image_path via a symlink component (leaf or
+       intermediate directory) must be rejected with PATH_NOT_ALLOWED.
+       image_path missing (no symlink involved) must keep the existing
+       FILE_NOT_FOUND / basename-only contract (regression guard).
+  P-6  spec5 D7 follow-up (SR F-1 / CWE-59): overlay's own `timeline` input
+       (not just image_path) via a symlink component must be rejected with
+       PATH_NOT_ALLOWED. _add_overlay_inner Step 5 delegates to
+       validate_source_file (mirrors bgm's own-timeline guard); this locks
+       that behaviour against regressions.
+  P-7  spec5 D7 follow-up (SR F-2 / CWE-209): the `from None` cause-chain
+       severance on FILE_NOT_FOUND re-wrap must be locked directly via
+       `exc.__cause__ is None`, not just via message assertions (message
+       alone cannot detect an accidental `from exc` regression).
 """
 
 from __future__ import annotations
@@ -15,11 +28,18 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import opentimelineio as otio
+import pytest
 from _imgbytes import DUMMY_PNG_BYTES as _DUMMY_PNG_BYTES
+from clipwright.errors import ClipwrightError, ErrorCode
 
-from clipwright_overlay.overlay import add_overlay
+from clipwright_overlay.overlay import (
+    _add_overlay_inner,
+    _validate_overlay_fields,
+    add_overlay,
+)
 from clipwright_overlay.schemas import AddOverlayOptions
 
 # ---------------------------------------------------------------------------
@@ -110,6 +130,50 @@ def _default_opts(image_path: str, **overrides: object) -> AddOverlayOptions:
     }
     base.update(overrides)
     return AddOverlayOptions(**base)  # type: ignore[arg-type]
+
+
+def _try_symlink(link: Path, target: Path) -> None:
+    """Create a symlink; skip the test if the OS refuses (Windows privilege).
+
+    Same fallback as core tests/test_pathpolicy.py L51-58: local Windows dev
+    machines lack symlink-creation privilege (WinError 1314) so this SKIPs
+    locally; CI (3 OS) actually exercises the symlink-rejection branch.
+    """
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip(
+            "Cannot create symlinks on this system (requires elevated privileges)"
+        )
+
+
+def _probe_symlink_support() -> bool:
+    """Return True when the runtime environment allows symlink creation.
+
+    Executed once at module import (collection) time so pytest.mark.skipif
+    can reference the result. Mirrors core tests/test_pathpolicy.py L66-84.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        real = base / "_probe_real.txt"
+        real.write_bytes(b"probe")
+        link = base / "_probe_link.txt"
+        try:
+            link.symlink_to(real)
+        except OSError:
+            return False
+    return True
+
+
+_SYMLINK_SUPPORTED: bool = _probe_symlink_support()
+_SKIP_SYMLINK_REASON = (
+    "Symlink creation requires elevated privileges on this system (WinError 1314)."
+    " Enable Windows Developer Mode or run as Administrator."
+)
+_skip_no_symlinks = pytest.mark.skipif(
+    not _SYMLINK_SUPPORTED,
+    reason=_SKIP_SYMLINK_REASON,
+)
 
 
 def _get_image_overlay_markers(tl: otio.schema.Timeline) -> list[otio.schema.Marker]:
@@ -563,3 +627,332 @@ class TestMixedRefRoundTrip:
             assert clip_url != image_path, (
                 "clip target_url and image marker path must not be equal"
             )
+
+
+# ===========================================================================
+# P-5: spec5 D7 — image_path symlink rejection (CWE-59) + missing regression
+# ===========================================================================
+
+
+class TestImagePathSymlinkRejected:
+    """image_path containing a symlink component must be rejected.
+
+    Regression guard (spec5 D7): _validate_overlay_fields delegates
+    image_path existence/symlink checks to
+    clipwright.pathpolicy.validate_source_file (ADR-PP-2:
+    islink-before-resolve), which raises PATH_NOT_ALLOWED for any symlink
+    path component, checked leaf-to-root before resolve(). This locks that
+    behaviour against regressions (e.g. a future switch back to a bare
+    Path(image_path).resolve() + resolved.exists() check, which would
+    follow the symlink before the original component is visible).
+
+    Local Windows dev machines lack the privilege to create symlinks
+    (WinError 1314) -> SKIP locally; CI (3 OS) exercises these branches
+    (symlink-test-local-skip-vs-ci).
+    """
+
+    @_skip_no_symlinks
+    def test_image_path_leaf_symlink_rejected(self) -> None:
+        """A leaf symlink pointing at a real image -> PATH_NOT_ALLOWED."""
+        with tempfile.TemporaryDirectory() as tmpd:
+            tmp = Path(tmpd)
+            tl = _make_v1_timeline()
+            inp = tmp / "in.otio"
+            out = tmp / "out.otio"
+            _write_timeline(tl, inp)
+
+            real_img = tmp / "real_logo.png"
+            _write_dummy_png(real_img)
+            link_img = tmp / "link_logo.png"
+            _try_symlink(link_img, real_img)
+
+            opts = _default_opts(str(link_img))
+            result = add_overlay(str(inp), str(out), opts)
+
+            assert result["ok"] is False, (
+                f"symlinked image_path must be rejected; got ok=True, "
+                f"data={result.get('data')!r}"
+            )
+            error = result.get("error") or {}
+            assert error.get("code") == "PATH_NOT_ALLOWED", (
+                f"symlinked image_path must return PATH_NOT_ALLOWED; "
+                f"got {error.get('code')!r}"
+            )
+            # F-3: message must be the fixed core wording with basename only.
+            assert error.get("message") == (
+                f"Symbolic links are not accepted: {link_img.name}"
+            ), (
+                f"message must be the fixed basename-only wording; "
+                f"got {error.get('message')!r}"
+            )
+            assert str(tmp) not in (error.get("message") or ""), (
+                f"message must not expose the directory path; "
+                f"got {error.get('message')!r}"
+            )
+
+    @_skip_no_symlinks
+    def test_image_path_intermediate_dir_symlink_rejected(self) -> None:
+        """A symlinked intermediate directory component -> PATH_NOT_ALLOWED.
+
+        ADR-PP-2: all path components are checked, not just the leaf.
+        """
+        with tempfile.TemporaryDirectory() as tmpd:
+            tmp = Path(tmpd)
+            tl = _make_v1_timeline()
+            inp = tmp / "in.otio"
+            out = tmp / "out.otio"
+            _write_timeline(tl, inp)
+
+            real_dir = tmp / "real_assets"
+            real_dir.mkdir()
+            real_img = real_dir / "logo.png"
+            _write_dummy_png(real_img)
+
+            sym_dir = tmp / "sym_assets"
+            _try_symlink(sym_dir, real_dir)
+
+            opts = _default_opts(str(sym_dir / "logo.png"))
+            result = add_overlay(str(inp), str(out), opts)
+
+            assert result["ok"] is False, (
+                f"image_path through a symlinked directory must be rejected; "
+                f"got ok=True, data={result.get('data')!r}"
+            )
+            error = result.get("error") or {}
+            assert error.get("code") == "PATH_NOT_ALLOWED", (
+                f"symlinked intermediate dir must return PATH_NOT_ALLOWED; "
+                f"got {error.get('code')!r}"
+            )
+            # F-3: message must be the fixed core wording with basename only
+            # (basename of the passed leaf path, "logo.png" -- not the
+            # symlinked directory name).
+            assert (
+                error.get("message") == "Symbolic links are not accepted: logo.png"
+            ), (
+                f"message must be the fixed basename-only wording; "
+                f"got {error.get('message')!r}"
+            )
+            assert str(tmp) not in (error.get("message") or ""), (
+                f"message must not expose the directory path; "
+                f"got {error.get('message')!r}"
+            )
+
+
+class TestImagePathMissingBasenameOnly:
+    """image_path missing (no symlink) keeps the existing FILE_NOT_FOUND contract.
+
+    GREEN (regression guard): must continue to pass unchanged after
+    impl-overlay switches to validate_source_file -- FILE_NOT_FOUND is
+    re-wrapped with the same basename-only message (ADR-D7-2 / ADR-D7-3),
+    so this observable contract must not change (CWE-209).
+    """
+
+    def test_missing_image_path_returns_file_not_found_basename_only(self) -> None:
+        """Missing image_path -> FILE_NOT_FOUND with exact basename-only message."""
+        with tempfile.TemporaryDirectory() as tmpd:
+            tmp = Path(tmpd)
+            tl = _make_v1_timeline()
+            inp = tmp / "in.otio"
+            out = tmp / "out.otio"
+            _write_timeline(tl, inp)
+
+            missing = tmp / "does_not_exist.png"
+
+            opts = _default_opts(str(missing))
+            result = add_overlay(str(inp), str(out), opts)
+
+            assert result["ok"] is False
+            error = result.get("error") or {}
+            assert error.get("code") == "FILE_NOT_FOUND", (
+                f"missing image_path must return FILE_NOT_FOUND; "
+                f"got {error.get('code')!r}"
+            )
+            assert error.get("message") == f"Image file not found: {missing.name}", (
+                f"message must be the fixed basename-only wording; "
+                f"got {error.get('message')!r}"
+            )
+            # CWE-209: full path must never appear in the message
+            assert str(tmp) not in (error.get("message") or ""), (
+                f"message must not expose the directory path; "
+                f"got {error.get('message')!r}"
+            )
+
+
+# ===========================================================================
+# P-6: SR F-1 follow-up — overlay's own `timeline` input symlink rejection
+# ===========================================================================
+
+
+class TestTimelineSymlinkRejected:
+    """timeline (overlay's own input, not image_path) containing a symlink
+    component must be rejected with PATH_NOT_ALLOWED.
+
+    Regression guard (spec5 D7 follow-up, security-review F-1 / CWE-59):
+    _add_overlay_inner Step 5 validates the timeline input via
+    clipwright.pathpolicy.validate_source_file (ADR-PP-2:
+    islink-before-resolve), so a symlinked timeline is rejected instead of
+    being silently loaded.  This is the same class of guard that P-5
+    (TestImagePathSymlinkRejected) already covers for image_path, and
+    mirrors bgm's own `timeline` argument guard (clipwright-bgm bgm.py).
+
+    Local Windows dev machines lack the privilege to create symlinks
+    (WinError 1314) -> SKIP locally; CI (3 OS) exercises this branch
+    (symlink-test-local-skip-vs-ci).
+    """
+
+    @_skip_no_symlinks
+    def test_symlinked_timeline_returns_path_not_allowed(self) -> None:
+        """A timeline path that is a symlink to a real .otio file must be rejected."""
+        with tempfile.TemporaryDirectory() as tmpd:
+            tmp = Path(tmpd)
+            tl = _make_v1_timeline()
+            real_timeline = tmp / "real_timeline.otio"
+            _write_timeline(tl, real_timeline)
+
+            link_timeline = tmp / "timeline_link.otio"
+            _try_symlink(link_timeline, real_timeline)
+
+            img = tmp / "logo.png"
+            _write_dummy_png(img)
+            out = tmp / "out.otio"
+
+            opts = _default_opts(str(img))
+            result = add_overlay(str(link_timeline), str(out), opts)
+
+            assert result["ok"] is False, (
+                f"A symlinked timeline must be rejected, not silently followed. "
+                f"Got: {result}"
+            )
+            error = result.get("error") or {}
+            assert error.get("code") == "PATH_NOT_ALLOWED", (
+                f"Symlinked timeline must return PATH_NOT_ALLOWED (core "
+                f"pathpolicy contract, ADR-PP-2). Got: {error.get('code')!r}"
+            )
+            assert error.get("message") == (
+                f"Symbolic links are not accepted: {link_timeline.name}"
+            ), (
+                f"message must be the fixed basename-only wording; "
+                f"got {error.get('message')!r}"
+            )
+            assert str(tmp) not in (error.get("message") or ""), (
+                f"message must not expose the directory path; "
+                f"got {error.get('message')!r}"
+            )
+
+
+class TestTimelineMissingBasenameOnly:
+    """timeline path missing (no symlink) keeps the existing FILE_NOT_FOUND contract.
+
+    GREEN (regression guard): must continue to pass unchanged now that
+    _add_overlay_inner Step 5 uses validate_source_file -- the
+    FILE_NOT_FOUND message must stay basename-only (CWE-209), matching the
+    existing "Timeline file not found: {name}" wording.
+    """
+
+    def test_missing_timeline_returns_file_not_found_basename_only(self) -> None:
+        """Missing timeline -> FILE_NOT_FOUND with exact basename-only message."""
+        with tempfile.TemporaryDirectory() as tmpd:
+            tmp = Path(tmpd)
+            missing = tmp / "does_not_exist.otio"
+
+            img = tmp / "logo.png"
+            _write_dummy_png(img)
+            out = tmp / "out.otio"
+
+            opts = _default_opts(str(img))
+            result = add_overlay(str(missing), str(out), opts)
+
+            assert result["ok"] is False
+            error = result.get("error") or {}
+            assert error.get("code") == "FILE_NOT_FOUND", (
+                f"missing timeline must return FILE_NOT_FOUND; "
+                f"got {error.get('code')!r}"
+            )
+            assert error.get("message") == f"Timeline file not found: {missing.name}", (
+                f"message must be the fixed basename-only wording; "
+                f"got {error.get('message')!r}"
+            )
+            # CWE-209: full path must never appear in the message
+            assert str(tmp) not in (error.get("message") or ""), (
+                f"message must not expose the directory path; "
+                f"got {error.get('message')!r}"
+            )
+
+
+# ===========================================================================
+# P-7: SR F-2 follow-up — __cause__ is None lock on FILE_NOT_FOUND re-wraps
+# ===========================================================================
+
+
+class TestCauseChainSeveredOnFileNotFoundReraise:
+    """FILE_NOT_FOUND re-wraps for image_path/timeline must sever __cause__.
+
+    Regression guard (spec5 D7 follow-up, security-review F-2 / CWE-209):
+    message assertions alone (as used by TestImagePathMissingBasenameOnly /
+    TestTimelineMissingBasenameOnly above) cannot detect an accidental
+    ``raise ... from exc`` regression, because ClipwrightError.message is
+    unaffected by the exception chain -- only ``__cause__`` is. This
+    mirrors the established frames/wrap pattern (MEMORY.md
+    "__cause__ is None 回帰テストは内部関数を直接叩く"): call the internal
+    (raising) implementation function directly rather than the public
+    dict-returning wrapper, since add_overlay() catches ClipwrightError
+    and converts it to an envelope, discarding the exception object itself.
+    """
+
+    def test_image_path_reraise_severs_cause_chain(self) -> None:
+        """image_path FILE_NOT_FOUND re-wrap keeps `from None` (CWE-209).
+
+        Mocks validate_source_file to simulate core surfacing a message that
+        embeds a full (sensitive) path; overlay's re-wrap must both (a) use
+        `from None` so __cause__ is severed, and (b) never let the mocked
+        full path leak into its own basename-only message.
+        """
+        secret_path = "C:\\secret\\full\\path\\x.png"
+        with patch(
+            "clipwright_overlay.overlay.validate_source_file",
+            side_effect=ClipwrightError(
+                code=ErrorCode.FILE_NOT_FOUND,
+                message=f"File not found: {secret_path}",
+                hint="Check that the path is correct and the file exists.",
+            ),
+        ):
+            opts = _default_opts("whatever_image.png")
+            with pytest.raises(ClipwrightError) as exc_info:
+                _validate_overlay_fields(opts, "out.otio")
+
+        exc = exc_info.value
+        assert exc.code == ErrorCode.FILE_NOT_FOUND
+        assert exc.__cause__ is None, (
+            f"image_path FILE_NOT_FOUND re-wrap must use `from None` "
+            f"(CWE-209 cause-chain severance); got __cause__={exc.__cause__!r}"
+        )
+        assert "secret" not in exc.message and "full" not in exc.message, (
+            f"re-wrapped message must not leak the mocked full path; "
+            f"got {exc.message!r}"
+        )
+
+    def test_missing_timeline_raise_has_no_cause_chain(self) -> None:
+        """timeline FILE_NOT_FOUND (Step 5, validate_source_file) has no
+        chained __cause__.
+
+        Regression guard: Step 5 delegates to validate_source_file (F-1),
+        which raises with `from None` semantics; this locks that
+        cause-chain severance against regressions.
+        """
+        with tempfile.TemporaryDirectory() as tmpd:
+            tmp = Path(tmpd)
+            missing = tmp / "does_not_exist.otio"
+            img = tmp / "logo.png"
+            _write_dummy_png(img)
+            out = tmp / "out.otio"
+
+            opts = _default_opts(str(img))
+            with pytest.raises(ClipwrightError) as exc_info:
+                _add_overlay_inner(str(missing), str(out), opts)
+
+        exc = exc_info.value
+        assert exc.code == ErrorCode.FILE_NOT_FOUND
+        assert exc.__cause__ is None, (
+            f"timeline FILE_NOT_FOUND must not chain __cause__; "
+            f"got __cause__={exc.__cause__!r}"
+        )
