@@ -316,7 +316,7 @@ dev = [
 
 [[package]]
 name = "clipwright-frames"
-version = "0.3.1"
+version = "0.3.2"
 source = { editable = "clipwright-frames" }
 dependencies = [
     { name = "clipwright" },
@@ -894,7 +894,7 @@ dev = [
 
 [[package]]
 name = "clipwright-wrap"
-version = "0.3.0"
+version = "0.3.1"
 source = { editable = "clipwright-wrap" }
 dependencies = [
     { name = "budoux" },

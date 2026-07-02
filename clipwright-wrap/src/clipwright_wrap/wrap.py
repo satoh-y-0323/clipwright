@@ -33,6 +33,7 @@ from typing import Any
 
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
+from clipwright.pathpolicy import validate_source_file
 from clipwright.process import SUBPROCESS_SAFE_MESSAGE
 from clipwright.schemas import ToolResult
 
@@ -81,6 +82,15 @@ def wrap_captions(
         return _wrap_inner(input, output, options)
     except ClipwrightError as exc:
         return error_result(exc.code, exc.message, exc.hint)
+    except Exception:
+        # SR-R-001 / F-1: catch unexpected exceptions (e.g. OSError from
+        # read_text/write_text, UnicodeDecodeError) with fixed wording to
+        # prevent internal path exposure via FastMCP's str(exc) (CWE-209).
+        return error_result(
+            ErrorCode.INTERNAL,
+            "Caption wrapping failed due to an internal error.",
+            "Retry after verifying that the input/output paths are accessible.",
+        )
 
 
 def _wrap_inner(
@@ -101,14 +111,16 @@ def _wrap_inner(
     if input_ext not in (".srt", ".vtt"):
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message=f"Unsupported subtitle format: {input_ext!r}",
+            # Fixed message (SR-R-001 / CWE-209): caller-supplied extension is
+            # not echoed back into the error text.
+            message="Unsupported input subtitle extension (expected .srt or .vtt).",
             hint="Set the input file extension to .srt or .vtt.",
         )
 
     if output_ext not in (".srt", ".vtt"):
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message=f"Unsupported output extension: {output_ext!r}",
+            message="Unsupported output subtitle extension (expected .srt or .vtt).",
             hint="Set the output file extension to .srt or .vtt.",
         )
 
@@ -116,10 +128,7 @@ def _wrap_inner(
     if input_ext != output_ext:
         raise ClipwrightError(
             code=ErrorCode.INVALID_INPUT,
-            message=(
-                f"Input and output extensions do not match"
-                f" (input: {input_ext!r} / output: {output_ext!r})."
-            ),
+            message="Input and output subtitle extensions do not match.",
             hint="Specify an output path with the same extension as the input.",
         )
 
@@ -148,13 +157,26 @@ def _wrap_inner(
             ) from None
 
     # --- 2. Input existence check (WR-AD-09; FILE_NOT_FOUND uses basename only) ---
+    # Delegates to the shared core guard (validate_source_file) so symlinked
+    # inputs are rejected with PATH_NOT_ALLOWED (ADR-PP-2 / CWE-59), instead of
+    # re-implementing the symlink check locally.
 
-    if not input_path.exists():
-        raise ClipwrightError(
-            code=ErrorCode.FILE_NOT_FOUND,
-            message=f"File not found: {input_path.name}",
-            hint="Check that the input file path is correct.",
-        )
+    try:
+        validate_source_file(str(input_path))
+    except ClipwrightError as exc:
+        if exc.code == ErrorCode.FILE_NOT_FOUND:
+            # Re-wrap to keep wrap's basename-only message contract (WR-AD-09):
+            # core's FILE_NOT_FOUND message embeds the full caller-supplied path,
+            # which would leak directory structure (CWE-209). __cause__ is
+            # dropped via `from None` so the core message never surfaces.
+            raise ClipwrightError(
+                code=ErrorCode.FILE_NOT_FOUND,
+                message=f"File not found: {input_path.name}",
+                hint="Check that the input file path is correct.",
+            ) from None
+        # PATH_NOT_ALLOWED (symlink) and any other core error propagate as-is;
+        # core's message/hint are not overridden here.
+        raise
 
     # --- 3. Read input ---
 

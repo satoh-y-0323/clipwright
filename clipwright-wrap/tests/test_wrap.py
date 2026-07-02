@@ -35,6 +35,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from clipwright.errors import ClipwrightError, ErrorCode
 
 from clipwright_wrap.schemas import WrapCaptionsOptions
 
@@ -105,6 +106,59 @@ def _make_input_vtt(tmp_path: Path, content: str | None = None) -> str:
 
 
 # ===========================================================================
+# Symlink availability detection (for pytest.mark.skipif at collection time)
+#
+# Mirrors the canonical probe/skipif pattern in clipwright/tests/test_pathpolicy.py
+# (L66-95): symlink support is probed once at module import (collection) time so
+# pytest.mark.skipif can act declaratively (Windows without Developer Mode/admin
+# privileges cannot create symlinks; WinError 1314). _try_symlink is a runtime
+# fallback for environments where the probe passes but a specific creation fails.
+# ===========================================================================
+
+
+def _probe_symlink_support() -> bool:
+    """Return True when the runtime environment allows symlink creation.
+
+    Executed once at module import (collection) time so pytest.mark.skipif
+    can reference the result. Uses a TemporaryDirectory that is cleaned up
+    before any test runs.
+    """
+    import tempfile
+
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            real = base / "_probe_real.txt"
+            real.write_bytes(b"probe")
+            link = base / "_probe_link.txt"
+            link.symlink_to(real)
+        return True
+    except OSError:
+        return False
+
+
+_SYMLINK_SUPPORTED: bool = _probe_symlink_support()
+_SKIP_SYMLINK_REASON = (
+    "Symlink creation requires elevated privileges on this system (WinError 1314)."
+    " Enable Windows Developer Mode or run as Administrator."
+)
+_skip_no_symlinks = pytest.mark.skipif(
+    not _SYMLINK_SUPPORTED,
+    reason=_SKIP_SYMLINK_REASON,
+)
+
+
+def _try_symlink(link: Path, target: Path) -> None:
+    """Create a symlink; skip the test if the OS refuses (Windows privilege)."""
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip(
+            "Cannot create symlinks on this system (requires elevated privileges)"
+        )
+
+
+# ===========================================================================
 # Import wrap_captions
 # ===========================================================================
 
@@ -155,25 +209,49 @@ class TestOutputValidation:
         assert result["ok"] is True
 
     def test_srt_input_vtt_output_rejected(self, tmp_path: Path) -> None:
-        """SRT input + VTT output is rejected with INVALID_INPUT due to extension mismatch (WR-AD-08)."""
+        """SRT input + VTT output is rejected with INVALID_INPUT due to extension mismatch (WR-AD-08).
+
+        SR-R-001: message is the fixed mismatch string; the actual extension values
+        (.srt / .vtt) supplied by the caller must not be echoed into message.
+        """
         wrap_captions = _import_wrap_captions()
         inp = _make_input_srt(tmp_path)
         out = str(tmp_path / "output.vtt")
         result: dict[str, Any] = wrap_captions(inp, out, _opts())
         assert result["ok"] is False
         assert result["error"]["code"] == "INVALID_INPUT"
+        assert (
+            result["error"]["message"]
+            == "Input and output subtitle extensions do not match."
+        )
+        assert ".srt" not in result["error"]["message"]
+        assert ".vtt" not in result["error"]["message"]
 
     def test_vtt_input_srt_output_rejected(self, tmp_path: Path) -> None:
-        """VTT input + SRT output is rejected with INVALID_INPUT due to extension mismatch (WR-AD-08)."""
+        """VTT input + SRT output is rejected with INVALID_INPUT due to extension mismatch (WR-AD-08).
+
+        SR-R-001: message is the fixed mismatch string; the actual extension values
+        (.vtt / .srt) supplied by the caller must not be echoed into message.
+        """
         wrap_captions = _import_wrap_captions()
         inp = _make_input_vtt(tmp_path)
         out = str(tmp_path / "output.srt")
         result: dict[str, Any] = wrap_captions(inp, out, _opts())
         assert result["ok"] is False
         assert result["error"]["code"] == "INVALID_INPUT"
+        assert (
+            result["error"]["message"]
+            == "Input and output subtitle extensions do not match."
+        )
+        assert ".srt" not in result["error"]["message"]
+        assert ".vtt" not in result["error"]["message"]
 
     def test_unsupported_extension_rejected(self, tmp_path: Path) -> None:
-        """Input with an unsupported extension such as .ass is rejected with INVALID_INPUT (WR-AD-07)."""
+        """Input with an unsupported extension such as .ass is rejected with INVALID_INPUT (WR-AD-07).
+
+        SR-R-001: message is the fixed input-extension string; the caller-supplied
+        extension (.ass) must not be echoed into message.
+        """
         wrap_captions = _import_wrap_captions()
         inp = tmp_path / "input.ass"
         inp.write_text("some content", encoding="utf-8")
@@ -181,6 +259,30 @@ class TestOutputValidation:
         result: dict[str, Any] = wrap_captions(str(inp), out, _opts())
         assert result["ok"] is False
         assert result["error"]["code"] == "INVALID_INPUT"
+        assert (
+            result["error"]["message"]
+            == "Unsupported input subtitle extension (expected .srt or .vtt)."
+        )
+        assert ".ass" not in result["error"]["message"]
+
+    def test_unsupported_output_extension_rejected(self, tmp_path: Path) -> None:
+        """Output with an unsupported extension such as .ass is rejected with INVALID_INPUT (WR-AD-07).
+
+        SR-R-001: message is the fixed output-extension string; the caller-supplied
+        extension (.ass) must not be echoed into message. Input extension is valid
+        (.srt) so the output-extension branch is reached before the mismatch branch.
+        """
+        wrap_captions = _import_wrap_captions()
+        inp = _make_input_srt(tmp_path)
+        out = str(tmp_path / "output.ass")
+        result: dict[str, Any] = wrap_captions(inp, out, _opts())
+        assert result["ok"] is False
+        assert result["error"]["code"] == "INVALID_INPUT"
+        assert (
+            result["error"]["message"]
+            == "Unsupported output subtitle extension (expected .srt or .vtt)."
+        )
+        assert ".ass" not in result["error"]["message"]
 
     def test_missing_parent_dir_rejected(self, tmp_path: Path) -> None:
         """Missing output parent directory results in INVALID_INPUT (WR-AD-07)."""
@@ -254,6 +356,58 @@ class TestInputValidation:
         result: dict[str, Any] = wrap_captions(str(inp), out, _opts())
         assert result["ok"] is False
         assert result["error"]["code"] == "INVALID_INPUT"
+
+    def test_file_not_found_exact_message_format(self, tmp_path: Path) -> None:
+        """Regression: non-existent input keeps error.code == FILE_NOT_FOUND (WR-AD-09)
+        and error.message == 'File not found: <basename>' exactly (no full path exposure).
+
+        Guards against a future change accidentally widening FILE_NOT_FOUND to
+        INVALID_INPUT (frames uses INVALID_INPUT for missing input; wrap does not).
+        """
+        wrap_captions = _import_wrap_captions()
+        inp = tmp_path / "secret_dir" / "nonexistent.srt"
+        out = str(tmp_path / "output.srt")
+        result: dict[str, Any] = wrap_captions(str(inp), out, _opts())
+        assert result["ok"] is False
+        assert result["error"]["code"] == "FILE_NOT_FOUND"
+        assert result["error"]["message"] == "File not found: nonexistent.srt"
+
+
+# ===========================================================================
+# ②b Input symlink rejection (PATH_NOT_ALLOWED; ADR-PP-2)
+# ===========================================================================
+
+
+class TestInputSymlinkRejection:
+    """A symlinked input subtitle file is rejected with PATH_NOT_ALLOWED.
+
+    Regression guard: wrap.py's input existence check delegates to
+    clipwright.pathpolicy.validate_source_file (ADR-PP-2), the same canonical
+    guard core tools use, so a symlinked input is rejected with PATH_NOT_ALLOWED
+    instead of being silently followed.
+
+    core's PATH_NOT_ALLOWED message/hint text is not overridden by wrap.py; only
+    the error code contract (PATH_NOT_ALLOWED, not FILE_NOT_FOUND/INVALID_INPUT)
+    is asserted here.
+    """
+
+    @_skip_no_symlinks
+    def test_symlinked_input_rejected_with_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """A symlink as the input subtitle path is rejected with ok=False, PATH_NOT_ALLOWED.
+
+        language='en' is used so the in-process Latin path is exercised (no
+        subprocess mock needed); the symlink guard must fire before segmentation.
+        """
+        wrap_captions = _import_wrap_captions()
+        real = _make_input_srt(tmp_path, _srt_1cue("hello world"))
+        link = tmp_path / "link.srt"
+        _try_symlink(link, Path(real))
+        out = str(tmp_path / "output.srt")
+        result: dict[str, Any] = wrap_captions(str(link), out, _opts(language="en"))
+        assert result["ok"] is False
+        assert result["error"]["code"] == "PATH_NOT_ALLOWED"
 
 
 # ===========================================================================
@@ -1763,3 +1917,128 @@ class TestDefensiveLanguageGuard:
         path_component = tmp_path.name
         assert path_component not in error.get("message", "")
         assert path_component not in error.get("hint", "")
+
+
+# ===========================================================================
+# F-1 (security-review-report-20260702-100008.md): wrap_captions() must have a
+# tool-boundary `except Exception` guard, so an unexpected non-ClipwrightError
+# exception (OSError from read_text/write_text, UnicodeDecodeError, etc.) is
+# never left to propagate uncaught. FastMCP's lowlevel server catches
+# `Exception` at its own boundary and returns `str(exc)` verbatim to the MCP
+# client (CallToolResult), which would leak the full input/output path
+# (CWE-209). extract_frames() in clipwright-frames has a symmetric
+# `except Exception -> INTERNAL` guard; wrap_captions() mirrors it.
+# ===========================================================================
+
+
+class TestInternalExceptionGuard:
+    """F-1: unexpected non-ClipwrightError exceptions must be converted to
+    ErrorCode.INTERNAL with a fixed, path-free message at the wrap_captions()
+    tool boundary (mirrors clipwright_frames.extract.extract_frames()'s
+    `except Exception` guard).
+
+    Regression guard: wrap_captions() must convert unexpected exceptions to
+    INTERNAL with fixed wording so that internal paths are never exposed via
+    FastMCP's str(exc) (CWE-209).
+    """
+
+    def test_write_text_oserror_returns_internal_without_full_path(
+        self, tmp_path: Path, mocker: Any
+    ) -> None:
+        """output_path.write_text() raising OSError(full path) must not leak the
+        path and must surface as ErrorCode.INTERNAL (F-1).
+
+        language='en' exercises the in-process Latin path so no subprocess mock
+        is needed; the OSError is raised at the final write step (step 7).
+        """
+        wrap_captions = _import_wrap_captions()
+        inp = _make_input_srt(tmp_path, _srt_1cue("hello world"))
+        out = str(tmp_path / "output.srt")
+        secret_fragment = str(tmp_path)
+        mocker.patch(
+            "pathlib.Path.write_text",
+            side_effect=OSError(f"[Errno 13] Permission denied: '{out}'"),
+        )
+        result: dict[str, Any] = wrap_captions(inp, out, _opts(language="en"))
+        assert result["ok"] is False
+        assert result["error"]["code"] == "INTERNAL"
+        assert secret_fragment not in result["error"].get("message", "")
+        assert secret_fragment not in result["error"].get("hint", "")
+
+    def test_read_text_oserror_returns_internal_without_full_path(
+        self, tmp_path: Path, mocker: Any
+    ) -> None:
+        """input_path.read_text() raising OSError(full path) must not leak the
+        path and must surface as ErrorCode.INTERNAL (F-1).
+
+        Raised after validate_source_file() succeeds (step 3), simulating a
+        TOCTOU-style permission/encoding failure between the existence check
+        and the actual read.
+        """
+        wrap_captions = _import_wrap_captions()
+        inp = _make_input_srt(tmp_path, _srt_1cue("hello world"))
+        out = str(tmp_path / "output.srt")
+        secret_fragment = str(tmp_path)
+        mocker.patch(
+            "pathlib.Path.read_text",
+            side_effect=OSError(f"[Errno 13] Permission denied: '{inp}'"),
+        )
+        result: dict[str, Any] = wrap_captions(inp, out, _opts(language="en"))
+        assert result["ok"] is False
+        assert result["error"]["code"] == "INTERNAL"
+        assert secret_fragment not in result["error"].get("message", "")
+        assert secret_fragment not in result["error"].get("hint", "")
+
+
+# ===========================================================================
+# F-3 (security-review-report-20260702-100008.md): wrap.py's input
+# FILE_NOT_FOUND re-wrap lacks a CI-locked `__cause__ is None` regression test
+# (mirrors clipwright-frames' TestFileNotFoundCauseIsNone for the analogous
+# scene_timeline re-wrap). Implementation already uses `from None` (confirmed
+# by code-review-report-20260702-095930.md), so this is expected to be GREEN.
+# ===========================================================================
+
+
+class TestInputFileNotFoundCauseIsNone:
+    """F-3: the FILE_NOT_FOUND re-wrap in _wrap_inner must use
+    'raise ... from None' so __cause__ is None (CWE-209).
+
+    Prevents regression where 'from exc' would leak the original core
+    ClipwrightError (containing the full caller-supplied path) via __cause__
+    to a future outer handler.
+    """
+
+    def test_input_file_not_found_cause_is_none(
+        self, tmp_path: Path, mocker: Any
+    ) -> None:
+        """_wrap_inner must raise FILE_NOT_FOUND with __cause__ == None.
+
+        Regression guard: changing 'from None' to 'from exc' would fail this test.
+        """
+        from clipwright_wrap.wrap import _wrap_inner
+
+        inp = str(tmp_path / "secret_dir" / "nonexistent.srt")
+        out = str(tmp_path / "output.srt")
+
+        # Original exception simulates core's FILE_NOT_FOUND leaking a full path.
+        original_exc = ClipwrightError(
+            code=ErrorCode.FILE_NOT_FOUND,
+            message="File not found: /secret/full/path/nonexistent.srt",
+            hint="Specify a valid path.",
+        )
+        mocker.patch(
+            "clipwright_wrap.wrap.validate_source_file",
+            side_effect=original_exc,
+        )
+
+        try:
+            _wrap_inner(inp, out, _opts())
+        except ClipwrightError as exc:
+            assert exc.code == ErrorCode.FILE_NOT_FOUND
+            assert exc.__cause__ is None, (
+                "_wrap_inner must use 'raise ... from None' for FILE_NOT_FOUND; "
+                f"__cause__ is {exc.__cause__!r}"
+            )
+            assert "/secret/full/path/nonexistent.srt" not in exc.message
+        else:
+            pytest.fail("Expected ClipwrightError was not raised")

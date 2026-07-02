@@ -5,6 +5,18 @@ All notable changes to `clipwright-wrap` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-07-02
+
+### Security
+
+- **`input` now rejects symbolic links (CWE-59)** — subtitle `input` is validated through the
+  shared `clipwright.pathpolicy.validate_source_file` guard, closing a path-boundary bypass
+  where a symlinked subtitle file could point outside the intended source tree.
+- **Extension-error messages no longer echo caller-supplied extensions (CWE-209)** — the
+  "unsupported extension" errors for `input`/`output` now use a fixed message instead of
+  interpolating the caller-supplied path/extension, and an internal-error boundary guard
+  prevents unexpected exceptions from disclosing filesystem paths.
+
 ## [0.3.0] - 2026-06-29
 
 ### Added

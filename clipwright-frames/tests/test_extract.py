@@ -154,6 +154,53 @@ def _make_scene_timeline_with_markers(
     return scene_path
 
 
+# ---------------------------------------------------------------------------
+# Symlink availability detection (for pytest.mark.skipif at collection time)
+# ---------------------------------------------------------------------------
+#
+# Mirrors the canonical pattern in tests/test_pathpolicy.py (core package):
+# probe symlink creation once at collection time so tests that require a
+# symlink SKIP on hosts without the privilege (e.g. local Windows without
+# Developer Mode) instead of failing, while still running on CI (3 OS).
+
+
+def _probe_symlink_support() -> bool:
+    """Return True when the runtime environment allows symlink creation."""
+    import tempfile
+
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            real = base / "_probe_real.txt"
+            real.write_bytes(b"probe")
+            link = base / "_probe_link.txt"
+            link.symlink_to(real)
+        return True
+    except OSError:
+        return False
+
+
+_SYMLINK_SUPPORTED: bool = _probe_symlink_support()
+_SKIP_SYMLINK_REASON = (
+    "Symlink creation requires elevated privileges on this system (WinError 1314)."
+    " Enable Windows Developer Mode or run as Administrator."
+)
+_skip_no_symlinks = pytest.mark.skipif(
+    not _SYMLINK_SUPPORTED,
+    reason=_SKIP_SYMLINK_REASON,
+)
+
+
+def _try_symlink(link: Path, target: Path) -> None:
+    """Create a symlink; skip the test if the OS refuses (Windows privilege)."""
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip(
+            "Cannot create symlinks on this system (requires elevated privileges)"
+        )
+
+
 # ===========================================================================
 # (1) No video stream -> UNSUPPORTED_OPERATION
 # ===========================================================================
@@ -302,7 +349,12 @@ class TestSceneTimelineValidation:
     def test_scene_mode_with_nonexistent_scene_timeline_returns_invalid_input(
         self, tmp_path: Path
     ) -> None:
-        """mode='scene' with scene_timeline pointing to missing file -> INVALID_INPUT."""
+        """mode='scene' with scene_timeline pointing to missing file -> INVALID_INPUT.
+
+        Regression (contract preserved after validate_source_file adoption):
+        message must remain exactly "scene_timeline file not found: <basename>"
+        (basename only, no full path exposure — CWE-209).
+        """
         from clipwright_frames.extract import extract_frames
 
         media = str(tmp_path / "video.mp4")
@@ -320,6 +372,8 @@ class TestSceneTimelineValidation:
         assert result.ok is False
         assert result.error is not None
         assert result.error.code == ErrorCode.INVALID_INPUT
+        assert result.error.message == "scene_timeline file not found: missing.otio"
+        assert str(tmp_path) not in result.error.message
 
     def test_scene_mode_with_non_otio_extension_returns_invalid_input(
         self, tmp_path: Path
@@ -351,6 +405,219 @@ class TestSceneTimelineValidation:
         assert result.error.message == "scene_timeline must have a .otio extension."
         assert "'.json'" not in result.error.message
         assert ".json" not in result.error.message
+
+    @_skip_no_symlinks
+    def test_scene_mode_wrong_extension_precedes_symlink_check(
+        self, tmp_path: Path
+    ) -> None:
+        """Extension validation must run BEFORE the symlink/existence check.
+
+        A symlink with a non-.otio extension must be rejected as INVALID_INPUT
+        (extension error), not PATH_NOT_ALLOWED — the .otio suffix check
+        (step 2 in the validation order) happens strictly before
+        validate_source_file (step 3, which would raise PATH_NOT_ALLOWED for
+        the symlink). Verifies the order documented in the architecture
+        report is preserved when the symlink guard is introduced.
+        """
+        from clipwright_frames.extract import extract_frames
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        real_otio = tmp_path / "real_scene.otio"
+        real_otio.write_text("dummy")
+        wrong_ext_link = tmp_path / "scene_link.json"
+        _try_symlink(wrong_ext_link, real_otio)
+
+        with patch("clipwright_frames.extract.inspect_media", return_value=media_info):
+            result = extract_frames(
+                media,
+                str(tmp_path),
+                _opts(mode="scene", scene_timeline=str(wrong_ext_link)),
+            )
+
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.INVALID_INPUT
+        assert result.error.message == "scene_timeline must have a .otio extension."
+
+
+# ===========================================================================
+# (SR-V-001) Scene mode: scene_timeline symlink -> PATH_NOT_ALLOWED (CWE-59)
+# ===========================================================================
+
+
+class TestSceneTimelineSymlinkRejected:
+    """scene_timeline resolving through a symlink must be rejected.
+
+    Regression guard: scene_timeline must reject symlinks via
+    clipwright.pathpolicy.validate_source_file (SR-V-001, applied after the
+    .otio extension check and before load_timeline).
+    """
+
+    @_skip_no_symlinks
+    def test_scene_timeline_symlink_returns_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """scene_timeline as a symlink to a real .otio file -> PATH_NOT_ALLOWED."""
+        from clipwright_frames.extract import extract_frames
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        real_otio = _make_scene_timeline_with_markers(tmp_path, [2.0, 5.0])
+        scene_link = tmp_path / "scene_link.otio"
+        _try_symlink(scene_link, Path(real_otio))
+
+        with patch("clipwright_frames.extract.inspect_media", return_value=media_info):
+            result = extract_frames(
+                media,
+                str(tmp_path),
+                _opts(mode="scene", scene_timeline=str(scene_link)),
+            )
+
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.PATH_NOT_ALLOWED
+        # core's fixed message (tool must not overwrite it — architecture-report §3.1)
+        assert (
+            result.error.message == "Symbolic links are not accepted: scene_link.otio"
+        )
+
+    @_skip_no_symlinks
+    def test_scene_timeline_symlink_intermediate_dir_returns_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """scene_timeline inside a symlinked intermediate directory -> PATH_NOT_ALLOWED.
+
+        ADR-PP-2: symlink component check covers the full path, not only the
+        leaf file — a symlinked parent directory must also be rejected.
+        """
+        from clipwright_frames.extract import extract_frames
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+
+        real_dir = tmp_path / "real_scene_dir"
+        real_dir.mkdir()
+        real_otio = _make_scene_timeline_with_markers(real_dir, [2.0])
+        linked_dir = tmp_path / "linked_scene_dir"
+        _try_symlink(linked_dir, real_dir)
+        scene_via_link = linked_dir / Path(real_otio).name
+
+        with patch("clipwright_frames.extract.inspect_media", return_value=media_info):
+            result = extract_frames(
+                media,
+                str(tmp_path),
+                _opts(mode="scene", scene_timeline=str(scene_via_link)),
+            )
+
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.PATH_NOT_ALLOWED
+
+
+# ===========================================================================
+# F-2: scene_timeline FILE_NOT_FOUND re-wrap __cause__ regression guard
+# ===========================================================================
+
+
+class TestSceneTimelineFileNotFoundCauseIsNone:
+    """F-2 / SR-R-001: scene_timeline FILE_NOT_FOUND re-wrap must use 'from None'.
+
+    Mirrors TestFileNotFoundCauseIsNone (media path). Prevents a regression
+    where 'from exc' would leak the original validate_source_file
+    ClipwrightError (which carries a full-path message) via __cause__
+    (CWE-209 path disclosure).
+    """
+
+    def test_scene_timeline_file_not_found_cause_is_none(self, tmp_path: Path) -> None:
+        """_extract_frames_inner must raise INVALID_INPUT with __cause__ == None.
+
+        SR-R-001: uses 'raise ClipwrightError(...) from None' so the original
+        validate_source_file exception (full path in message) cannot be
+        accessed through __cause__ by any outer catch scope.
+        Regression guard: changing 'from None' to 'from exc' would fail this test.
+        """
+        from clipwright_frames.extract import _extract_frames_inner
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+        scene_timeline = str(tmp_path / "secret_dir" / "x.otio")
+
+        original_exc = ClipwrightError(
+            code=ErrorCode.FILE_NOT_FOUND,
+            message=f"File not found: {scene_timeline}",
+            hint="Specify a valid .otio timeline file path.",
+        )
+
+        with (
+            patch("clipwright_frames.extract.inspect_media", return_value=media_info),
+            patch(
+                "clipwright_frames.extract.validate_source_file",
+                side_effect=original_exc,
+            ),
+        ):
+            try:
+                _extract_frames_inner(
+                    media,
+                    str(tmp_path),
+                    _opts(mode="scene", scene_timeline=scene_timeline),
+                )
+            except ClipwrightError as exc:
+                assert exc.code == ErrorCode.INVALID_INPUT
+                assert exc.message == "scene_timeline file not found: x.otio"
+                assert exc.__cause__ is None, (
+                    "_extract_frames_inner must use 'raise ... from None' for "
+                    f"scene_timeline FILE_NOT_FOUND; __cause__ is {exc.__cause__!r}"
+                )
+            else:
+                pytest.fail("Expected ClipwrightError was not raised")
+
+    def test_scene_timeline_file_not_found_via_extract_frames_returns_invalid_input(
+        self, tmp_path: Path
+    ) -> None:
+        """extract_frames() envelope: INVALID_INPUT with basename-only message.
+
+        Confirms the outer extract_frames() catch converts the re-wrapped
+        ClipwrightError into an envelope without exposing the full path
+        supplied to validate_source_file.
+        """
+        from clipwright_frames.extract import extract_frames
+
+        media = str(tmp_path / "video.mp4")
+        Path(media).touch()
+        media_info = _make_media_info(path=media, duration_sec=10.0)
+        scene_timeline = str(tmp_path / "secret_dir" / "x.otio")
+
+        original_exc = ClipwrightError(
+            code=ErrorCode.FILE_NOT_FOUND,
+            message=f"File not found: {scene_timeline}",
+            hint="Specify a valid .otio timeline file path.",
+        )
+
+        with (
+            patch("clipwright_frames.extract.inspect_media", return_value=media_info),
+            patch(
+                "clipwright_frames.extract.validate_source_file",
+                side_effect=original_exc,
+            ),
+        ):
+            result = extract_frames(
+                media,
+                str(tmp_path),
+                _opts(mode="scene", scene_timeline=scene_timeline),
+            )
+
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.INVALID_INPUT
+        assert result.error.message == "scene_timeline file not found: x.otio"
+        assert str(tmp_path) not in result.error.message
 
 
 # ===========================================================================

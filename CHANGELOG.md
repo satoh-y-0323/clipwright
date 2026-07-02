@@ -5,6 +5,27 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.31.0] - 2026-07-02
+
+Path-boundary hardening follow-up for `clipwright-frames` and `clipwright-wrap` (CWE-59 / CWE-209).
+
+### Security (`clipwright-frames` v0.3.2)
+
+- **`scene_timeline` input now rejects symbolic links (CWE-59)** — `mode="scene"` validates the
+  caller-supplied scene-timeline OTIO path through the shared
+  `clipwright.pathpolicy.validate_source_file` guard, closing a path-boundary bypass where a
+  symlinked timeline file could point outside the intended source tree.
+
+### Security (`clipwright-wrap` v0.3.1)
+
+- **`input` now rejects symbolic links (CWE-59)** — subtitle `input` is validated through the
+  shared `clipwright.pathpolicy.validate_source_file` guard, closing the same class of
+  path-boundary bypass.
+- **Extension-error messages no longer echo caller-supplied extensions (CWE-209)** — the
+  "unsupported extension" errors for `input`/`output` now use a fixed message instead of
+  interpolating the caller-supplied path/extension, and an internal-error boundary guard
+  prevents unexpected exceptions from disclosing filesystem paths.
+
 ## [0.30.0] - 2026-07-01
 
 Color grading depth — white balance, saturation/contrast/gamma, and 3D-LUT (spec5 Medium-reach entry RESOLVED).
