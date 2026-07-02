@@ -70,6 +70,14 @@ def detect_noise(
         return _detect_noise_inner(media, output, options, timeline)
     except ClipwrightError as exc:
         return error_result(exc.code, exc.message, exc.hint)
+    except Exception:
+        # SR-R-001 / CWE-209: catch unexpected exceptions with fixed wording to
+        # prevent internal path exposure.
+        return error_result(
+            ErrorCode.INTERNAL,
+            "Noise detection failed due to an internal error.",
+            "Retry after verifying that the input and output paths are accessible.",
+        )
 
 
 def _detect_noise_inner(

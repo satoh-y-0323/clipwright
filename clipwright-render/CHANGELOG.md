@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Added an internal-error boundary guard to the tool entry point so
+  unexpected exceptions no longer leak absolute paths in error messages
+  (CWE-209).
+
 ## [0.16.0] - 2026-06-30
 
 ### Added

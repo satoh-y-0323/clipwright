@@ -664,6 +664,15 @@ def render_timeline(
             "An internal schema error occurred during render.",
             "Please report with reproduction steps.",
         )
+    except Exception:
+        # SR-R-001 / CWE-209: catch unexpected exceptions with fixed wording to
+        # prevent internal path exposure.
+        return error_result(
+            ErrorCode.INTERNAL,
+            "Rendering the timeline failed due to an internal error.",
+            "Retry after verifying that the output directory is writable and "
+            "has free space.",
+        )
 
 
 def _render_inner(

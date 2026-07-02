@@ -1,6 +1,6 @@
 [project]
 name = "clipwright-silence"
-version = "0.3.0"
+version = "0.3.1"
 description = "MCP tool for silence detection and OTIO timeline generation. Detects silence with ffmpeg silencedetect and generates timeline.otio with clip sequence for regions to keep."
 readme = "README.md"
 license = { text = "MIT" }

@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1] — 2026-07-02
+
+### Security
+
+- Added an internal-error boundary guard to the tool entry point so
+  unexpected exceptions no longer leak absolute paths in error messages
+  (CWE-209).
+
 ## [0.3.0] — 2026-06-26
 
 ### Changed

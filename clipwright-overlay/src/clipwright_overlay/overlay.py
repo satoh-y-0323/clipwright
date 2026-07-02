@@ -610,3 +610,10 @@ def add_overlay(
         return _add_overlay_inner(timeline, output, options).model_dump()
     except ClipwrightError as exc:
         return error_result(exc.code, exc.message, exc.hint).model_dump()
+    except Exception:
+        # SR-R-001 / CWE-209: fixed wording, dict-returning boundary.
+        return error_result(
+            ErrorCode.INTERNAL,
+            "Adding the image overlay failed due to an internal error.",
+            "Retry after verifying that the output directory is writable.",
+        ).model_dump()

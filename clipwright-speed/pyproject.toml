@@ -1,6 +1,6 @@
 [project]
 name = "clipwright-speed"
-version = "0.2.0"
+version = "0.2.1"
 description = "MCP tool for applying time-warp speed changes to clips in an OTIO timeline."
 readme = "README.md"
 license = { text = "MIT" }

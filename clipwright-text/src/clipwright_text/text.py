@@ -530,3 +530,11 @@ def add_text(
         return _add_text_inner(timeline, output, options)
     except ClipwrightError as exc:
         return error_result(exc.code, exc.message, exc.hint)
+    except Exception:
+        # SR-R-001 / CWE-209: catch unexpected exceptions with fixed wording
+        # to prevent internal path exposure.
+        return error_result(
+            ErrorCode.INTERNAL,
+            "Adding the text overlay failed due to an internal error.",
+            "Retry after verifying that the output directory is writable.",
+        )

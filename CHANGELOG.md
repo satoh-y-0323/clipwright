@@ -5,6 +5,29 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.0] - 2026-07-02
+
+`except Exception` internal-error boundary guards were rolled out across 13 tools so unexpected
+exceptions no longer leak absolute paths in error messages (CWE-209), matching the guards already
+present in `clipwright-frames`, `clipwright-wrap`, `clipwright-scene`, `clipwright-transition`, and
+`clipwright-stabilize`.
+
+### Security
+
+- **`clipwright-bgm` v0.3.1**
+- **`clipwright-color` v0.3.1**
+- **`clipwright-loudness` v0.3.2**
+- **`clipwright-noise` v0.3.2**
+- **`clipwright-silence` v0.3.1**
+- **`clipwright-trim` v0.2.1**
+- **`clipwright-speed` v0.2.1**
+- **`clipwright-sequence` v0.2.1**
+- **`clipwright-text` v0.2.1**
+- **`clipwright-reframe` v0.3.1**
+- **`clipwright-transcribe` v0.5.1**
+- **`clipwright-overlay` v0.2.1**
+- **`clipwright-render` v0.17.1**
+
 ## [0.31.0] - 2026-07-02
 
 Path-boundary hardening follow-up for `clipwright-frames` and `clipwright-wrap` (CWE-59 / CWE-209).

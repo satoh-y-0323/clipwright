@@ -286,7 +286,7 @@ class TestClipMetadata:
             cw = clip.metadata.get("clipwright")
             assert cw is not None, "metadata['clipwright'] missing"
             assert cw["tool"] == "clipwright-trim"
-            assert cw["version"] == "0.2.0"
+            assert cw["version"] == "0.2.1"
             assert cw["kind"] == "keep"
             assert cw["mode"] == "keep"
 
