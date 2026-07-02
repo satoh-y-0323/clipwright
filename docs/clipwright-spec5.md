@@ -517,6 +517,48 @@ the §4 real-MCP e2e passes.
 
 ---
 
+### D7. `accumulate` tools validate their source media with plain `.exists()` — symlink components are followed, not rejected (CWE-59)  *Low*
+
+**Symptom / root cause**
+Surfaced while shipping the boundary-guard rollout (suite v0.32.0). The pathpolicy
+hardening in v0.31.0 routed `frames` `scene_timeline` and `wrap` `input` through
+`clipwright.pathpolicy.validate_source_file` (islink-before-resolve rejection over
+**all** path components, ADR-PP-2). The **accumulate**-type tools were not part of
+that pass and still validate their source inputs with a plain existence check that
+**follows** symlinks:
+- `clipwright-bgm/src/clipwright_bgm/bgm.py` (~L107/L115): `timeline_path.exists()`
+  and `bgm_path.exists()` only.
+- `clipwright-overlay/src/clipwright_overlay/overlay.py` (~L176–182):
+  `Path(options.image_path).resolve().exists()` — `resolve()` follows any symlink
+  before the existence check, so a symlinked image (or a symlink in an intermediate
+  directory) passes.
+
+A source path that is (or traverses) a symlink is therefore accepted at annotation
+time instead of being rejected with `PATH_NOT_ALLOWED`, inconsistent with the
+scene_timeline / wrap-input contract now shipped. Same CWE-59 class the maintainer
+chose to guard in v0.31.0.
+
+**Not a defect (recorded to avoid re-triage):** overlay accepting an image *outside*
+the OTIO tree is **intentional** per ADR-PP-1 (co-location restriction removed;
+`media_ref_for_otio` stores an absolute ref for outside-tree images, and `render`
+re-validates via `check_media_ref` at materialisation). The stale
+`overlay_e2e_smoke.py` Scenario 5 (which still expects `PATH_NOT_ALLOWED` for an
+outside-tree image) is an outdated **test expectation**, not a product bug — update
+the smoke, do not "fix" the behaviour.
+
+**Contained fix**
+Route accumulate-tool source inputs through `validate_source_file` (existence +
+regular-file + symlink-component rejection), catching `FILE_NOT_FOUND` and
+re-wrapping to each tool's existing basename-only message (CWE-209) the same way
+frames/wrap do. Audit both source inputs of `bgm` (existing OTIO `timeline_path` and
+new `bgm_path`) and overlay's `image_path`. Keep the outside-tree acceptance
+(ADR-PP-1) intact — this change only adds the symlink guard, it does not restrict
+location. *Low* — matches the threat model (single local stdio process) and the
+priority the scene_timeline / wrap-input backlog items carried; it is a consistency
+hardening, not an active-exploit fix.
+
+---
+
 ## Missing Features / Friction
 
 ### Caption line-wrapping for space-delimited (Latin) languages  *Medium*  *(wrap)* — **RESOLVED**
@@ -982,3 +1024,12 @@ directly for Latin captions).
 8. **D5 — render raw stderr in `SUBPROCESS_FAILED` (CWE-209)** (Low) · **two-pass
    `unsharp` pre-pass · residual libvidstab build crash · diarization · Ken Burns ·
    export presets** (Low–Medium): follow-ups.
+9. **D7 — accumulate tools (`bgm`, `overlay`) validate source media with plain
+   `.exists()`/`resolve().exists()`, so symlink components are followed not rejected
+   (CWE-59)** (Low) — surfaced during the v0.32.0 boundary-guard rollout; the
+   v0.31.0 pathpolicy hardening (frames `scene_timeline` / wrap `input` →
+   `validate_source_file`) did not cover the accumulate-type source inputs. Route
+   `bgm` (`timeline_path` + `bgm_path`) and overlay (`image_path`) through
+   `validate_source_file`, keeping ADR-PP-1 outside-tree acceptance intact. (The
+   stale `overlay_e2e_smoke.py` Scenario 5 that still expects `PATH_NOT_ALLOWED` for
+   an outside-tree image is a test-expectation bug, not a product defect.)
