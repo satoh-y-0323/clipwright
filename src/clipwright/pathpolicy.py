@@ -120,6 +120,53 @@ def validate_source_file(path: str) -> None:
         )
 
 
+def validate_source_or_basename(
+    path: str | Path,
+    *,
+    message: str,
+    hint: str,
+    error_code: ErrorCode = ErrorCode.FILE_NOT_FOUND,
+) -> None:
+    """Validate a source file, re-raising FILE_NOT_FOUND with caller-chosen wording.
+
+    Delegates to validate_source_file (existence + regular-file + ADR-PP-2
+    symlink-component rejection). validate_source_file's own FILE_NOT_FOUND
+    message embeds the full input path (CWE-209); when that happens, this
+    re-raises using the caller-supplied basename-only message/hint and
+    error_code, with __cause__ dropped via `from None` so the core message
+    never reaches the MCP error envelope.
+
+    PATH_NOT_ALLOWED (symlink) is not re-wrapped: core's own message/hint
+    are already basename-only and propagate unchanged.
+
+    Consolidates the try/except validate_source_file + re-wrap idiom
+    duplicated across wrap/bgm/overlay/frames/transition/speed/text call
+    sites (CR-M-001). error_code defaults to FILE_NOT_FOUND; frames'
+    scene_timeline call site overrides it to INVALID_INPUT to preserve its
+    pre-existing contract.
+
+    Args:
+        path: Input file path (str or Path).
+        message: Basename-only message substituted for core's full-path
+            FILE_NOT_FOUND message. Caller must pre-format this (e.g.
+            f"Timeline file not found: {inp.name}") before calling.
+        hint: Hint text to accompany message.
+        error_code: ErrorCode to raise instead of FILE_NOT_FOUND when the
+            file is missing. Defaults to FILE_NOT_FOUND.
+
+    Raises:
+        ClipwrightError: error_code (with message/hint) when the file does
+            not exist. PATH_NOT_ALLOWED (unmodified) when any path
+            component is a symlink.
+    """
+    try:
+        validate_source_file(str(path))
+    except ClipwrightError as exc:
+        if exc.code == ErrorCode.FILE_NOT_FOUND:
+            raise ClipwrightError(code=error_code, message=message, hint=hint) from None
+        raise
+
+
 def check_output_not_source(output: Path, sources: Iterable[str]) -> None:
     """Raise PATH_NOT_ALLOWED when output resolves equal to any source path.
 
