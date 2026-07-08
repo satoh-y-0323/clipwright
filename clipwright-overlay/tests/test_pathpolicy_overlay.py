@@ -943,10 +943,10 @@ class TestCauseChainSeveredOnFileNotFoundReraise:
             )
 
     def test_missing_timeline_raise_has_no_cause_chain(self) -> None:
-        """timeline FILE_NOT_FOUND (Step 5, validate_source_file) has no
+        """timeline FILE_NOT_FOUND (Step 5, validate_source_or_basename) has no
         chained __cause__.
 
-        Regression guard: Step 5 delegates to validate_source_file (F-1),
+        Regression guard: Step 5 delegates to validate_source_or_basename (F-1),
         which raises with `from None` semantics; this locks that
         cause-chain severance against regressions.
         """

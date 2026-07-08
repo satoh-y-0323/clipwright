@@ -84,7 +84,7 @@ def _validate_overlay_fields(options: AddOverlayOptions, output: str) -> None:
          a. path safety: single-quote or control char (INVALID_INPUT)
             — checked before resolve() to prevent ValueError from control chars
               and to ensure safety always precedes existence/extension checks
-         b. existence + symlink rejection, via validate_source_file
+         b. existence + symlink rejection, via validate_source_or_basename
             (FILE_NOT_FOUND basename-only / PATH_NOT_ALLOWED for symlinks,
             ADR-PP-2 / CWE-59)
          c. extension allowlist (INVALID_INPUT)
@@ -387,7 +387,7 @@ def _add_overlay_inner(
       2. output parent directory exists
       3. output != timeline
       4. field validation (_validate_overlay_fields, including image_path 3-stage)
-      5. timeline existence + symlink rejection (validate_source_file), then load
+      5. timeline existence + symlink rejection (validate_source_or_basename), then load
          timeline (OTIO_ERROR propagates)
       6. first TrackKind.Video track exists
       7. rate determination
