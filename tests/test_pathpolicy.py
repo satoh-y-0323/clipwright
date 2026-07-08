@@ -16,6 +16,10 @@ Test groups:
   F. ADR-PP-2 ordering: islink-before-resolve for leaf and intermediate symlinks
   G. check_media_ref relative symlink (SR-M-2): within-boundary leaf /
      outside-boundary / intermediate-dir symlink
+  I. validate_source_or_basename: existing file / missing (caller message+hint) /
+     CWE-209 basename-only + no cause chain / error_code override /
+     symlink (leaf + intermediate) propagates core's own PATH_NOT_ALLOWED unmodified /
+     str and Path input
 """
 
 from __future__ import annotations
@@ -34,6 +38,7 @@ from clipwright.pathpolicy import (
     check_within_boundary,
     media_ref_for_otio,
     validate_source_file,
+    validate_source_or_basename,
 )
 
 # ---------------------------------------------------------------------------
@@ -825,3 +830,139 @@ class TestCheckTimelineSourceMatches:
 
         # absolute target_url equal to media_path → absolute() fallback gives same string
         check_timeline_source_matches(str(media), media, otio_dir)
+
+
+# ===========================================================================
+# I. validate_source_or_basename
+# ===========================================================================
+
+
+class TestValidateSourceOrBasename:
+    """validate_source_or_basename(path, *, message, hint, error_code=FILE_NOT_FOUND) -> None
+
+    Thin wrapper around validate_source_file that lets the caller supply its own
+    message/hint for the "missing file" case (so tool-specific guidance replaces
+    core's generic FILE_NOT_FOUND text), while symlink rejection (PATH_NOT_ALLOWED)
+    from validate_source_file is propagated unmodified — the caller does not get
+    to override that path since core's own basename-only message already satisfies
+    CWE-209 (SR-L-1).
+    """
+
+    def test_existing_regular_file_ok(self, tmp_path: Path) -> None:
+        """An existing regular file passes without raising."""
+        f = _write_file(tmp_path / "video.mp4")
+
+        # Should not raise
+        validate_source_or_basename(
+            str(f), message="unused message", hint="unused hint"
+        )
+
+    def test_missing_file_raises_with_caller_message_and_hint(
+        self, tmp_path: Path
+    ) -> None:
+        """A missing path raises FILE_NOT_FOUND using the CALLER's message/hint.
+
+        Core's own full-path FILE_NOT_FOUND message must NOT be used here — the
+        caller-supplied text replaces it entirely.
+        """
+        nonexistent = str(tmp_path / "no_such_file.mp4")
+        caller_message = "custom missing-bgm-file message"
+        caller_hint = "custom missing-bgm-file hint"
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            validate_source_or_basename(
+                nonexistent, message=caller_message, hint=caller_hint
+            )
+
+        assert exc_info.value.code == ErrorCode.FILE_NOT_FOUND
+        assert exc_info.value.message == caller_message
+        assert exc_info.value.hint == caller_hint
+
+    def test_missing_file_message_excludes_directory_cwe_209(
+        self, tmp_path: Path
+    ) -> None:
+        """CWE-209: the caller's message must not contain any directory component.
+
+        Also asserts the raised error has no chained cause (raised via `from None`),
+        so a traceback inspection of __cause__ cannot recover the original path.
+        """
+        nested = tmp_path / "sensitive_dir" / "no_such_file.mp4"
+        caller_message = "media file could not be located"
+        caller_hint = "check the path and try again"
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            validate_source_or_basename(
+                str(nested), message=caller_message, hint=caller_hint
+            )
+
+        assert str(tmp_path) not in exc_info.value.message
+        assert "sensitive_dir" not in exc_info.value.message
+        assert exc_info.value.__cause__ is None
+
+    def test_missing_file_error_code_override(self, tmp_path: Path) -> None:
+        """error_code override: a missing file can raise INVALID_INPUT instead of FILE_NOT_FOUND."""
+        nonexistent = str(tmp_path / "no_such_file.mp4")
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            validate_source_or_basename(
+                nonexistent,
+                message="overridden code message",
+                hint="overridden code hint",
+                error_code=ErrorCode.INVALID_INPUT,
+            )
+
+        assert exc_info.value.code == ErrorCode.INVALID_INPUT
+        assert exc_info.value.code != ErrorCode.FILE_NOT_FOUND
+
+    def test_leaf_symlink_propagates_core_path_not_allowed_unmodified(
+        self, tmp_path: Path
+    ) -> None:
+        """A leaf symlink propagates validate_source_file's own PATH_NOT_ALLOWED as-is.
+
+        The caller's message/hint are NOT substituted in for the symlink case —
+        core's basename-only message (already CWE-209-safe) passes through unchanged.
+        """
+        real_file = _write_file(tmp_path / "real.mp4")
+        link = tmp_path / "link.mp4"
+        _try_symlink(link, real_file)
+        caller_message = "caller message that must NOT appear"
+        caller_hint = "caller hint that must NOT appear"
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            validate_source_or_basename(
+                str(link), message=caller_message, hint=caller_hint
+            )
+
+        assert exc_info.value.code == ErrorCode.PATH_NOT_ALLOWED
+        assert exc_info.value.message != caller_message
+        assert exc_info.value.hint != caller_hint
+        # Core's own basename-only message is preserved
+        assert link.name in exc_info.value.message
+        assert str(link) not in exc_info.value.message
+
+    def test_intermediate_dir_symlink_propagates_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """ADR-PP-2: a symlinked intermediate directory also propagates PATH_NOT_ALLOWED."""
+        real_dir = tmp_path / "real_dir"
+        real_dir.mkdir()
+        real_file = _write_file(real_dir / "video.mp4")
+
+        sym_dir = tmp_path / "sym_dir"
+        _try_symlink(sym_dir, real_dir)
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            validate_source_or_basename(
+                str(sym_dir / real_file.name),
+                message="caller message that must NOT appear",
+                hint="caller hint that must NOT appear",
+            )
+
+        assert exc_info.value.code == ErrorCode.PATH_NOT_ALLOWED
+
+    def test_accepts_path_object_as_well_as_str(self, tmp_path: Path) -> None:
+        """The path argument accepts a Path object, not just a str."""
+        f = _write_file(tmp_path / "video.mp4")
+
+        # Should not raise when given a Path instance directly
+        validate_source_or_basename(f, message="unused message", hint="unused hint")

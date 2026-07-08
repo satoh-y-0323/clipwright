@@ -20,9 +20,56 @@ from __future__ import annotations
 from pathlib import Path
 
 import opentimelineio as otio
+import pytest
 
 from clipwright_transition.schemas import AddTransitionOptions, TransitionSpec
 from clipwright_transition.transition import add_transition
+
+# ---------------------------------------------------------------------------
+# Symlink availability detection (for pytest.mark.skipif at collection time)
+# ---------------------------------------------------------------------------
+#
+# Mirrors the canonical pattern in tests/test_pathpolicy.py (core package):
+# probe symlink creation once at collection time so tests that require a
+# symlink SKIP on hosts without the privilege (e.g. local Windows without
+# Developer Mode) instead of failing, while still running on CI (3 OS).
+
+
+def _probe_symlink_support() -> bool:
+    """Return True when the runtime environment allows symlink creation."""
+    import tempfile
+
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            real = base / "_probe_real.txt"
+            real.write_bytes(b"probe")
+            link = base / "_probe_link.txt"
+            link.symlink_to(real)
+        return True
+    except OSError:
+        return False
+
+
+_SYMLINK_SUPPORTED: bool = _probe_symlink_support()
+_SKIP_SYMLINK_REASON = (
+    "Symlink creation requires elevated privileges on this system (WinError 1314)."
+    " Enable Windows Developer Mode or run as Administrator."
+)
+_skip_no_symlinks = pytest.mark.skipif(
+    not _SYMLINK_SUPPORTED,
+    reason=_SKIP_SYMLINK_REASON,
+)
+
+
+def _try_symlink(link: Path, target: Path) -> None:
+    """Create a symlink; skip the test if the OS refuses (Windows privilege)."""
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip(
+            "Cannot create symlinks on this system (requires elevated privileges)"
+        )
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -422,3 +469,31 @@ class TestPreservedPathChecks:
 
         assert result["ok"] is False
         assert (result.get("error") or {}).get("code") == "FILE_NOT_FOUND"
+
+
+# ===========================================================================
+# E. Symlinked input timeline must be rejected (CWE-59)
+# ===========================================================================
+
+
+class TestInputTimelineSymlinkRejection:
+    """A symlinked input timeline is rejected with PATH_NOT_ALLOWED (CWE-59)."""
+
+    @_skip_no_symlinks
+    def test_symlinked_timeline_rejected_with_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        tl = _make_two_clip_timeline()
+        real_path = tmp_path / "real.otio"
+        _write_timeline(tl, real_path)
+        link = tmp_path / "link.otio"
+        _try_symlink(link, real_path)
+
+        result = add_transition(
+            timeline=str(link),
+            output=str(tmp_path / "out.otio"),
+            options=_uniform_opts(),
+        )
+
+        assert result["ok"] is False
+        assert (result.get("error") or {}).get("code") == "PATH_NOT_ALLOWED"
