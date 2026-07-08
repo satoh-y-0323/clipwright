@@ -1,6 +1,6 @@
 [project]
 name = "clipwright-frames"
-version = "0.3.2"
+version = "0.3.3"
 description = "MCP tool for still-frame extraction from video into images, OTIO markers, and a JSON manifest."
 readme = "README.md"
 license = { text = "MIT" }
@@ -9,7 +9,7 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "clipwright>=0.4.0",
+    "clipwright>=0.6.0",
     "mcp[cli]>=1.27.2",
     "opentimelineio>=0.18",
     "pydantic>=2",

@@ -28,7 +28,6 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
 
 import opentimelineio as otio
 import pytest
@@ -37,7 +36,6 @@ from clipwright.errors import ClipwrightError, ErrorCode
 
 from clipwright_overlay.overlay import (
     _add_overlay_inner,
-    _validate_overlay_fields,
     add_overlay,
 )
 from clipwright_overlay.schemas import AddOverlayOptions
@@ -902,34 +900,47 @@ class TestCauseChainSeveredOnFileNotFoundReraise:
     def test_image_path_reraise_severs_cause_chain(self) -> None:
         """image_path FILE_NOT_FOUND re-wrap keeps `from None` (CWE-209).
 
-        Mocks validate_source_file to simulate core surfacing a message that
-        embeds a full (sensitive) path; overlay's re-wrap must both (a) use
-        `from None` so __cause__ is severed, and (b) never let the mocked
-        full path leak into its own basename-only message.
+        Black-box integration check (retargeted from a white-box mock of
+        `clipwright_overlay.overlay.validate_source_file`, which no longer
+        exists in overlay.py's namespace now that image_path validation
+        delegates entirely to clipwright.pathpolicy.validate_source_or_basename;
+        patching that removed symbol raised AttributeError). Exercises
+        add_overlay() end-to-end with a genuinely missing image_path and
+        asserts on the resulting error envelope (code, exact basename-only
+        message, no full-path leak). The `__cause__ is None` severance itself
+        is not observable through the envelope -- add_overlay() catches
+        ClipwrightError and discards the exception object -- but it is
+        already locked directly (no mocking) by core's own
+        tests/test_pathpolicy.py::TestValidateSourceOrBasename
+        ::test_missing_file_message_does_not_leak_full_path.
         """
-        secret_path = "C:\\secret\\full\\path\\x.png"
-        with patch(
-            "clipwright_overlay.overlay.validate_source_file",
-            side_effect=ClipwrightError(
-                code=ErrorCode.FILE_NOT_FOUND,
-                message=f"File not found: {secret_path}",
-                hint="Check that the path is correct and the file exists.",
-            ),
-        ):
-            opts = _default_opts("whatever_image.png")
-            with pytest.raises(ClipwrightError) as exc_info:
-                _validate_overlay_fields(opts, "out.otio")
+        with tempfile.TemporaryDirectory() as tmpd:
+            tmp = Path(tmpd).resolve()
+            tl = _make_v1_timeline()
+            inp = tmp / "in.otio"
+            out = tmp / "out.otio"
+            _write_timeline(tl, inp)
 
-        exc = exc_info.value
-        assert exc.code == ErrorCode.FILE_NOT_FOUND
-        assert exc.__cause__ is None, (
-            f"image_path FILE_NOT_FOUND re-wrap must use `from None` "
-            f"(CWE-209 cause-chain severance); got __cause__={exc.__cause__!r}"
-        )
-        assert "secret" not in exc.message and "full" not in exc.message, (
-            f"re-wrapped message must not leak the mocked full path; "
-            f"got {exc.message!r}"
-        )
+            missing = tmp / "does_not_exist.png"
+
+            opts = _default_opts(str(missing))
+            result = add_overlay(str(inp), str(out), opts)
+
+            assert result["ok"] is False
+            error = result.get("error") or {}
+            assert error.get("code") == "FILE_NOT_FOUND", (
+                f"missing image_path must return FILE_NOT_FOUND; "
+                f"got {error.get('code')!r}"
+            )
+            assert error.get("message") == f"Image file not found: {missing.name}", (
+                f"message must be the fixed basename-only wording; "
+                f"got {error.get('message')!r}"
+            )
+            # CWE-209: full path must never appear in the message
+            assert str(tmp) not in (error.get("message") or ""), (
+                f"message must not expose the directory path; "
+                f"got {error.get('message')!r}"
+            )
 
     def test_missing_timeline_raise_has_no_cause_chain(self) -> None:
         """timeline FILE_NOT_FOUND (Step 5, validate_source_file) has no

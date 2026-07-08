@@ -31,7 +31,7 @@ from clipwright.otio_utils import (
     save_timeline,
     set_clipwright_metadata,
 )
-from clipwright.pathpolicy import check_output_not_source
+from clipwright.pathpolicy import check_output_not_source, validate_source_or_basename
 from clipwright.schemas import ToolResult
 
 from clipwright_speed import __version__
@@ -117,12 +117,11 @@ def _set_speed_inner(
 
     # --- Step 6: load timeline ---
     # ClipwrightError(FILE_NOT_FOUND / OTIO_ERROR) propagates to set_speed boundary.
-    if not inp.exists():
-        raise ClipwrightError(
-            code=ErrorCode.FILE_NOT_FOUND,
-            message=f"Timeline file not found: {inp.name}",
-            hint="Verify the timeline path and ensure the file exists.",
-        )
+    validate_source_or_basename(
+        timeline,
+        message=f"Timeline file not found: {inp.name}",
+        hint="Verify the timeline path and ensure the file exists.",
+    )
     timeline_obj = load_timeline(timeline)
 
     # --- Step 7: select first Video track ---

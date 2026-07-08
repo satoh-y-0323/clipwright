@@ -1,6 +1,6 @@
 [project]
 name = "clipwright-wrap"
-version = "0.3.1"
+version = "0.3.2"
 description = "MCP tool to insert subtitle (SRT/VTT) line breaks: phrase-boundary wrapping for CJK/Thai (BudouX) and word wrapping for space-delimited (Latin) languages."
 readme = "README.md"
 license = { text = "MIT" }
@@ -10,7 +10,7 @@ authors = [
 requires-python = ">=3.11"
 dependencies = [
     "budoux",
-    "clipwright>=0.2.0",
+    "clipwright>=0.6.0",
     "mcp[cli]>=1.27.2",
     "pydantic>=2",
 ]

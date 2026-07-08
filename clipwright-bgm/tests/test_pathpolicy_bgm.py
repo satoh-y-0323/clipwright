@@ -641,88 +641,79 @@ class TestMissingSourceBasenameMessage:
 
 
 class TestFileNotFoundCauseIsNone:
-    """The FILE_NOT_FOUND re-wrap for timeline/bgm in _add_bgm_inner must use
-    'raise ... from None' so __cause__ is None (CWE-209).
+    """The FILE_NOT_FOUND cause-severance guarantee (missing file ->
+    FILE_NOT_FOUND with caller-facing basename message, __cause__ is None,
+    no full path leaked) for timeline/bgm now lives entirely inside
+    clipwright.pathpolicy.validate_source_or_basename, which bgm.py delegates
+    to (bgm.py no longer has its own try/except re-wrap, so
+    clipwright_bgm.bgm.validate_source_file no longer exists to mock).
+
+    These tests exercise the real call chain black-box (no mocking) through
+    _add_bgm_inner with a genuinely missing timeline/bgm file, verifying the
+    same __cause__-is-None guarantee end-to-end. The underlying re-wrap logic
+    itself is additionally covered by core's own suite:
+    clipwright/tests/test_pathpolicy.py::TestValidateSourceOrBasename::
+    test_missing_file_message_does_not_leak_full_path.
     """
 
     def test_timeline_file_not_found_cause_is_none(
         self,
         tmp_path: Path,
-        mocker: Any,
     ) -> None:
         """_add_bgm_inner must raise FILE_NOT_FOUND with __cause__ == None
-        for a missing timeline.
+        for a genuinely missing timeline (no mocking).
 
-        Regression guard: changing 'from None' to 'from exc' would fail this test.
+        Regression guard: changing 'from None' to 'from exc' inside
+        validate_source_or_basename would fail this test.
         """
         from clipwright_bgm.bgm import _add_bgm_inner
 
         bgm_file = tmp_path / "bgm.mp3"
         bgm_file.write_bytes(b"dummy bgm")
-        timeline_path = tmp_path / "timeline.otio"
+        timeline_path = tmp_path / "no_such_timeline.otio"  # does not exist
         output_path = tmp_path / "output.otio"
-
-        # Original exception simulates core's FILE_NOT_FOUND leaking a full path.
-        original_exc = ClipwrightError(
-            code=ErrorCode.FILE_NOT_FOUND,
-            message="File not found: C:\\secret\\full\\path\\timeline.otio",
-            hint="Specify a valid path.",
-        )
-        mocker.patch(
-            "clipwright_bgm.bgm.validate_source_file",
-            side_effect=original_exc,
-        )
 
         try:
             _add_bgm_inner(str(timeline_path), str(bgm_file), str(output_path), None)
         except ClipwrightError as exc:
             assert exc.code == ErrorCode.FILE_NOT_FOUND
             assert exc.__cause__ is None, (
-                "_add_bgm_inner must use 'raise ... from None' for the "
-                f"timeline FILE_NOT_FOUND re-wrap; __cause__ is {exc.__cause__!r}"
+                "The timeline FILE_NOT_FOUND re-wrap must use 'raise ... from "
+                f"None'; __cause__ is {exc.__cause__!r}"
             )
-            assert "C:\\secret\\full\\path\\timeline.otio" not in exc.message
+            assert exc.message == f"Timeline file not found: {timeline_path.name}"
+            assert str(tmp_path) not in exc.message
         else:
             pytest.fail("Expected ClipwrightError was not raised")
 
     def test_bgm_file_not_found_cause_is_none(
         self,
         tmp_path: Path,
-        mocker: Any,
     ) -> None:
         """_add_bgm_inner must raise FILE_NOT_FOUND with __cause__ == None
-        for a missing bgm file (the timeline check must pass first, so the
-        mock only raises on the second validate_source_file call).
+        for a genuinely missing bgm file (no mocking; the timeline check
+        must pass first since a real timeline is written).
 
-        Regression guard: changing 'from None' to 'from exc' would fail this test.
+        Regression guard: changing 'from None' to 'from exc' inside
+        validate_source_or_basename would fail this test.
         """
         from clipwright_bgm.bgm import _add_bgm_inner
 
         timeline_path = tmp_path / "timeline.otio"
         tl = _make_simple_timeline()
         _write_timeline(tl, timeline_path)
-        bgm_path = tmp_path / "bgm.mp3"
+        bgm_path = tmp_path / "no_such_bgm.mp3"  # does not exist
         output_path = tmp_path / "output.otio"
-
-        # Original exception simulates core's FILE_NOT_FOUND leaking a full path.
-        original_exc = ClipwrightError(
-            code=ErrorCode.FILE_NOT_FOUND,
-            message="File not found: C:\\secret\\full\\path\\bgm.mp3",
-            hint="Specify a valid path.",
-        )
-        mocker.patch(
-            "clipwright_bgm.bgm.validate_source_file",
-            side_effect=[None, original_exc],
-        )
 
         try:
             _add_bgm_inner(str(timeline_path), str(bgm_path), str(output_path), None)
         except ClipwrightError as exc:
             assert exc.code == ErrorCode.FILE_NOT_FOUND
             assert exc.__cause__ is None, (
-                "_add_bgm_inner must use 'raise ... from None' for the "
-                f"bgm FILE_NOT_FOUND re-wrap; __cause__ is {exc.__cause__!r}"
+                "The bgm FILE_NOT_FOUND re-wrap must use 'raise ... from "
+                f"None'; __cause__ is {exc.__cause__!r}"
             )
-            assert "C:\\secret\\full\\path\\bgm.mp3" not in exc.message
+            assert exc.message == f"BGM file not found: {bgm_path.name}"
+            assert str(tmp_path) not in exc.message
         else:
             pytest.fail("Expected ClipwrightError was not raised")

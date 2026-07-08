@@ -39,7 +39,7 @@ from clipwright.otio_utils import load_timeline, save_timeline
 from clipwright.pathpolicy import (
     check_output_not_source,
     media_ref_for_otio,
-    validate_source_file,
+    validate_source_or_basename,
 )
 from clipwright.schemas import ToolResult
 
@@ -108,41 +108,23 @@ def _add_bgm_inner(
     # --- 1. Input validation ---
 
     # Check timeline exists. Delegates to the shared core guard
-    # (validate_source_file) so symlinked inputs are rejected with
-    # PATH_NOT_ALLOWED (ADR-PP-2 / CWE-59), instead of re-implementing the
+    # (validate_source_or_basename) so symlinked inputs are rejected with
+    # PATH_NOT_ALLOWED (ADR-PP-2 / CWE-59), while FILE_NOT_FOUND is re-wrapped
+    # with a basename-only message (CWE-209) instead of re-implementing the
     # symlink check locally.
-    try:
-        validate_source_file(timeline)
-    except ClipwrightError as exc:
-        if exc.code == ErrorCode.FILE_NOT_FOUND:
-            # Re-wrap to keep the basename-only message contract: core's
-            # FILE_NOT_FOUND message embeds the full caller-supplied path,
-            # which would leak directory structure (CWE-209). __cause__ is
-            # dropped via `from None` so the core message never surfaces.
-            raise ClipwrightError(
-                code=ErrorCode.FILE_NOT_FOUND,
-                message=f"Timeline file not found: {timeline_path.name}",
-                hint="Check that the input timeline file path is correct.",
-            ) from None
-        # PATH_NOT_ALLOWED (symlink) and any other core error propagate as-is;
-        # core's message/hint are not overridden here.
-        raise
+    validate_source_or_basename(
+        timeline,
+        message=f"Timeline file not found: {timeline_path.name}",
+        hint="Check that the input timeline file path is correct.",
+    )
 
     # Check bgm exists (existence check must come before extension check).
     # Same symlink-guard delegation as the timeline check above.
-    try:
-        validate_source_file(bgm)
-    except ClipwrightError as exc:
-        if exc.code == ErrorCode.FILE_NOT_FOUND:
-            # Re-wrap to keep the basename-only message contract (CWE-209);
-            # __cause__ is dropped via `from None`.
-            raise ClipwrightError(
-                code=ErrorCode.FILE_NOT_FOUND,
-                message=f"BGM file not found: {bgm_path.name}",
-                hint="Check that the BGM file path is correct.",
-            ) from None
-        # PATH_NOT_ALLOWED (symlink) and any other core error propagate as-is.
-        raise
+    validate_source_or_basename(
+        bgm,
+        message=f"BGM file not found: {bgm_path.name}",
+        hint="Check that the BGM file path is correct.",
+    )
 
     # BGM extension whitelist validation (DC-AM-007, ADR-B2-r3)
     bgm_ext = bgm_path.suffix.lstrip(".").lower()

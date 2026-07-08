@@ -35,7 +35,6 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from clipwright.errors import ClipwrightError, ErrorCode
 
 from clipwright_wrap.schemas import WrapCaptionsOptions
 
@@ -2000,45 +1999,40 @@ class TestInternalExceptionGuard:
 
 
 class TestInputFileNotFoundCauseIsNone:
-    """F-3: the FILE_NOT_FOUND re-wrap in _wrap_inner must use
-    'raise ... from None' so __cause__ is None (CWE-209).
+    """F-3: the FILE_NOT_FOUND re-wrap for a missing input must not leak the
+    full caller-supplied path (CWE-209).
 
-    Prevents regression where 'from exc' would leak the original core
-    ClipwrightError (containing the full caller-supplied path) via __cause__
-    to a future outer handler.
+    wrap.py delegates this entirely to clipwright.pathpolicy's shared
+    validate_source_or_basename (which performs the 'raise ... from None'
+    cause-severance internally), so wrap.py no longer has its own
+    try/except re-wrap block to white-box test here. The __cause__ is None
+    guarantee itself is covered end-to-end by clipwright core's
+    tests/test_pathpolicy.py::TestValidateSourceOrBasename
+    (test_missing_file_message_does_not_leak_full_path). This class instead
+    exercises the real call chain (wrap_captions -> validate_source_or_basename
+    -> validate_source_file) black-box, confirming the observable contract at
+    wrap's tool boundary: FILE_NOT_FOUND with a basename-only message.
     """
 
-    def test_input_file_not_found_cause_is_none(
-        self, tmp_path: Path, mocker: Any
+    def test_input_file_not_found_message_does_not_leak_full_path(
+        self, tmp_path: Path
     ) -> None:
-        """_wrap_inner must raise FILE_NOT_FOUND with __cause__ == None.
+        """A genuinely missing input file must surface as FILE_NOT_FOUND with
+        a basename-only message (no directory component, no full path).
 
-        Regression guard: changing 'from None' to 'from exc' would fail this test.
+        Regression guard: if the re-wrap cause-severance in core were ever
+        changed to 'from exc' and a future outer handler started rendering
+        __cause__, the parent directory name would leak here.
         """
-        from clipwright_wrap.wrap import _wrap_inner
+        wrap_captions = _import_wrap_captions()
 
         inp = str(tmp_path / "secret_dir" / "nonexistent.srt")
         out = str(tmp_path / "output.srt")
 
-        # Original exception simulates core's FILE_NOT_FOUND leaking a full path.
-        original_exc = ClipwrightError(
-            code=ErrorCode.FILE_NOT_FOUND,
-            message="File not found: /secret/full/path/nonexistent.srt",
-            hint="Specify a valid path.",
-        )
-        mocker.patch(
-            "clipwright_wrap.wrap.validate_source_file",
-            side_effect=original_exc,
-        )
+        result: dict[str, Any] = wrap_captions(inp, out, _opts())
 
-        try:
-            _wrap_inner(inp, out, _opts())
-        except ClipwrightError as exc:
-            assert exc.code == ErrorCode.FILE_NOT_FOUND
-            assert exc.__cause__ is None, (
-                "_wrap_inner must use 'raise ... from None' for FILE_NOT_FOUND; "
-                f"__cause__ is {exc.__cause__!r}"
-            )
-            assert "/secret/full/path/nonexistent.srt" not in exc.message
-        else:
-            pytest.fail("Expected ClipwrightError was not raised")
+        assert result["ok"] is False
+        assert result["error"]["code"] == "FILE_NOT_FOUND"
+        assert result["error"]["message"] == "File not found: nonexistent.srt"
+        assert "secret_dir" not in result["error"]["message"]
+        assert str(tmp_path) not in result["error"]["message"]

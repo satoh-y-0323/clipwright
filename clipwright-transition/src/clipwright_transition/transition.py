@@ -24,7 +24,7 @@ import opentimelineio as otio
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.otio_utils import load_timeline, save_timeline
-from clipwright.pathpolicy import check_output_not_source
+from clipwright.pathpolicy import check_output_not_source, validate_source_or_basename
 from clipwright.schemas import ToolResult
 
 import clipwright_transition
@@ -121,12 +121,11 @@ def _add_transition_inner(
     # ------------------------------------------------------------------
     # Pre-check for CWE-209: load_timeline may surface the full path in its
     # error message; intercept early and re-raise with basename only.
-    if not Path(timeline).exists():
-        raise ClipwrightError(
-            code=ErrorCode.FILE_NOT_FOUND,
-            message=f"File not found: {Path(timeline).name}",
-            hint="Check that the timeline path is correct and the file exists.",
-        )
+    validate_source_or_basename(
+        timeline,
+        message=f"File not found: {Path(timeline).name}",
+        hint="Check that the timeline path is correct and the file exists.",
+    )
 
     tl = load_timeline(timeline)
 

@@ -32,7 +32,7 @@ from clipwright.otio_utils import (
     new_timeline,
     save_timeline,
 )
-from clipwright.pathpolicy import check_within_boundary, validate_source_file
+from clipwright.pathpolicy import check_within_boundary, validate_source_or_basename
 from clipwright.process import resolve_tool, run, safe_subprocess_message
 from clipwright.schemas import RationalTimeModel, TimeRangeModel, ToolResult
 
@@ -309,19 +309,12 @@ def _extract_frames_inner(
                 message="scene_timeline must have a .otio extension.",
                 hint="Change the scene_timeline file path extension to .otio.",
             )
-        try:
-            validate_source_file(scene_timeline)
-        except ClipwrightError as exc:
-            if exc.code == ErrorCode.FILE_NOT_FOUND:
-                # Re-wrap with the pre-existing INVALID_INPUT basename-only message
-                # so the helper's full-path wording never reaches the MCP error
-                # envelope (CWE-209).
-                raise ClipwrightError(
-                    code=ErrorCode.INVALID_INPUT,
-                    message=f"scene_timeline file not found: {scene_path.name}",
-                    hint="Specify a valid .otio timeline file path.",
-                ) from None
-            raise
+        validate_source_or_basename(
+            scene_timeline,
+            message=f"scene_timeline file not found: {scene_path.name}",
+            hint="Specify a valid .otio timeline file path.",
+            error_code=ErrorCode.INVALID_INPUT,
+        )
 
         # Load OTIO (OTIO_ERROR propagated as-is).
         # scene_timeline is a read-only input; it is NOT required to be inside

@@ -33,7 +33,7 @@ from typing import Any
 
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
-from clipwright.pathpolicy import validate_source_file
+from clipwright.pathpolicy import validate_source_or_basename
 from clipwright.process import SUBPROCESS_SAFE_MESSAGE
 from clipwright.schemas import ToolResult
 
@@ -157,26 +157,16 @@ def _wrap_inner(
             ) from None
 
     # --- 2. Input existence check (WR-AD-09; FILE_NOT_FOUND uses basename only) ---
-    # Delegates to the shared core guard (validate_source_file) so symlinked
-    # inputs are rejected with PATH_NOT_ALLOWED (ADR-PP-2 / CWE-59), instead of
-    # re-implementing the symlink check locally.
+    # Delegates to the shared core guard (validate_source_or_basename) so
+    # symlinked inputs are rejected with PATH_NOT_ALLOWED (ADR-PP-2 / CWE-59),
+    # while FILE_NOT_FOUND keeps wrap's basename-only message contract
+    # (WR-AD-09): the full caller-supplied path is never surfaced (CWE-209).
 
-    try:
-        validate_source_file(str(input_path))
-    except ClipwrightError as exc:
-        if exc.code == ErrorCode.FILE_NOT_FOUND:
-            # Re-wrap to keep wrap's basename-only message contract (WR-AD-09):
-            # core's FILE_NOT_FOUND message embeds the full caller-supplied path,
-            # which would leak directory structure (CWE-209). __cause__ is
-            # dropped via `from None` so the core message never surfaces.
-            raise ClipwrightError(
-                code=ErrorCode.FILE_NOT_FOUND,
-                message=f"File not found: {input_path.name}",
-                hint="Check that the input file path is correct.",
-            ) from None
-        # PATH_NOT_ALLOWED (symlink) and any other core error propagate as-is;
-        # core's message/hint are not overridden here.
-        raise
+    validate_source_or_basename(
+        input_path,
+        message=f"File not found: {input_path.name}",
+        hint="Check that the input file path is correct.",
+    )
 
     # --- 3. Read input ---
 

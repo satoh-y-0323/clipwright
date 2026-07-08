@@ -532,15 +532,26 @@ class TestSceneTimelineFileNotFoundCauseIsNone:
     where 'from exc' would leak the original validate_source_file
     ClipwrightError (which carries a full-path message) via __cause__
     (CWE-209 path disclosure).
+
+    Retargeted to black-box checks (no mocking of validate_source_file):
+    extract.py now delegates this entire check to
+    clipwright.pathpolicy.validate_source_or_basename (error_code=INVALID_INPUT),
+    so that symbol no longer exists in extract.py's namespace. The
+    'from None' cause-severance guarantee for validate_source_or_basename
+    itself is covered by core's tests/test_pathpolicy.py::
+    TestValidateSourceOrBasename (test_missing_file_message_does_not_leak_full_path,
+    test_missing_file_custom_error_code); the tests below exercise the
+    integration contract at extract.py's call site end-to-end with a
+    genuinely missing file.
     """
 
     def test_scene_timeline_file_not_found_cause_is_none(self, tmp_path: Path) -> None:
         """_extract_frames_inner must raise INVALID_INPUT with __cause__ == None.
 
-        SR-R-001: uses 'raise ClipwrightError(...) from None' so the original
-        validate_source_file exception (full path in message) cannot be
-        accessed through __cause__ by any outer catch scope.
-        Regression guard: changing 'from None' to 'from exc' would fail this test.
+        Uses a genuinely missing scene_timeline path (no mocking) so the
+        real validate_source_or_basename() code path runs end-to-end.
+        Regression guard: changing 'from None' to 'from exc' inside
+        validate_source_or_basename would fail this test.
         """
         from clipwright_frames.extract import _extract_frames_inner
 
@@ -549,19 +560,7 @@ class TestSceneTimelineFileNotFoundCauseIsNone:
         media_info = _make_media_info(path=media, duration_sec=10.0)
         scene_timeline = str(tmp_path / "secret_dir" / "x.otio")
 
-        original_exc = ClipwrightError(
-            code=ErrorCode.FILE_NOT_FOUND,
-            message=f"File not found: {scene_timeline}",
-            hint="Specify a valid .otio timeline file path.",
-        )
-
-        with (
-            patch("clipwright_frames.extract.inspect_media", return_value=media_info),
-            patch(
-                "clipwright_frames.extract.validate_source_file",
-                side_effect=original_exc,
-            ),
-        ):
+        with patch("clipwright_frames.extract.inspect_media", return_value=media_info):
             try:
                 _extract_frames_inner(
                     media,
@@ -572,8 +571,8 @@ class TestSceneTimelineFileNotFoundCauseIsNone:
                 assert exc.code == ErrorCode.INVALID_INPUT
                 assert exc.message == "scene_timeline file not found: x.otio"
                 assert exc.__cause__ is None, (
-                    "_extract_frames_inner must use 'raise ... from None' for "
-                    f"scene_timeline FILE_NOT_FOUND; __cause__ is {exc.__cause__!r}"
+                    "scene_timeline FILE_NOT_FOUND re-wrap must use 'from None'; "
+                    f"__cause__ is {exc.__cause__!r}"
                 )
             else:
                 pytest.fail("Expected ClipwrightError was not raised")
@@ -585,7 +584,7 @@ class TestSceneTimelineFileNotFoundCauseIsNone:
 
         Confirms the outer extract_frames() catch converts the re-wrapped
         ClipwrightError into an envelope without exposing the full path
-        supplied to validate_source_file.
+        of a genuinely missing scene_timeline file (no mocking).
         """
         from clipwright_frames.extract import extract_frames
 
@@ -594,19 +593,7 @@ class TestSceneTimelineFileNotFoundCauseIsNone:
         media_info = _make_media_info(path=media, duration_sec=10.0)
         scene_timeline = str(tmp_path / "secret_dir" / "x.otio")
 
-        original_exc = ClipwrightError(
-            code=ErrorCode.FILE_NOT_FOUND,
-            message=f"File not found: {scene_timeline}",
-            hint="Specify a valid .otio timeline file path.",
-        )
-
-        with (
-            patch("clipwright_frames.extract.inspect_media", return_value=media_info),
-            patch(
-                "clipwright_frames.extract.validate_source_file",
-                side_effect=original_exc,
-            ),
-        ):
+        with patch("clipwright_frames.extract.inspect_media", return_value=media_info):
             result = extract_frames(
                 media,
                 str(tmp_path),

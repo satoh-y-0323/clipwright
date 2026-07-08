@@ -26,7 +26,7 @@ import opentimelineio as otio
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.otio_utils import add_marker, get_markers, load_timeline, save_timeline
-from clipwright.pathpolicy import check_output_not_source
+from clipwright.pathpolicy import check_output_not_source, validate_source_or_basename
 from clipwright.schemas import RationalTimeModel, TimeRangeModel, ToolResult
 
 from clipwright_text import __version__
@@ -382,12 +382,11 @@ def _add_text_inner(
     _validate_text_overlay_fields(options)
 
     # --- Step 6: load timeline ---
-    if not inp.exists():
-        raise ClipwrightError(
-            code=ErrorCode.FILE_NOT_FOUND,
-            message=f"Timeline file not found: {inp.name}",
-            hint="Verify the timeline path and ensure the file exists.",
-        )
+    validate_source_or_basename(
+        timeline,
+        message=f"Timeline file not found: {inp.name}",
+        hint="Verify the timeline path and ensure the file exists.",
+    )
     timeline_obj = load_timeline(timeline)
 
     # --- Step 7: find first Video track ---
