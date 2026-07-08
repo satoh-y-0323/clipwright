@@ -557,6 +557,21 @@ location. *Low* — matches the threat model (single local stdio process) and th
 priority the scene_timeline / wrap-input backlog items carried; it is a consistency
 hardening, not an active-exploit fix.
 
+**Resolution (shipped — suite v0.34.0)**
+D7's own text and fix (shipped in suite v0.33.0 per CHANGELOG) covered only the
+**accumulate**-category tools' source inputs — `bgm` (`timeline_path` + `bgm_path`) and
+`overlay` (`image_path`) — routing them through `validate_source_file` so a symlinked
+source component is rejected with `PATH_NOT_ALLOWED` instead of followed. This release
+(suite v0.34.0) completes the same CWE-59 guard for the **transform**-category counterpart:
+`clipwright-transition` (v0.2.1), `clipwright-speed` (v0.2.2), and `clipwright-text`
+(v0.2.2) now validate their input timeline through the shared guard instead of a plain
+`.exists()`, closing the full defect class across both tool categories. In the same pass
+the `validate_source_file` + `FILE_NOT_FOUND`→basename-rewrap idiom (previously copy-pasted
+across the accumulate call sites) was DRY-consolidated into the new core helper
+`clipwright.pathpolicy.validate_source_or_basename(path, *, message, hint,
+error_code=ErrorCode.FILE_NOT_FOUND)` (`clipwright` v0.6.0), with `PATH_NOT_ALLOWED`
+propagating unchanged. See the two Cross-cutting backlog resolutions below.
+
 ---
 
 ## Missing Features / Friction
@@ -925,6 +940,17 @@ refactor that should not enlarge the blast radius of a Low security patch. Do it
 scoped task (core helper + retrofit `wrap`/`bgm`/`overlay`, evaluate the `frames` INVALID_INPUT
 variant) with its own review/CI cycle. *Low (maintainability)*: pure de-duplication.
 
+**Resolution (shipped — suite v0.34.0)**
+The core helper `clipwright.pathpolicy.validate_source_or_basename(path, *, message, hint,
+error_code=ErrorCode.FILE_NOT_FOUND)` was added to `clipwright` v0.6.0. It runs
+`validate_source_file` and, on `FILE_NOT_FOUND`, re-raises a basename-only message (CWE-209)
+while letting `PATH_NOT_ALLOWED` (symlink) propagate unchanged. The idiom was retrofitted onto
+all **6** duplicated call sites — `wrap` input ×1, `bgm` (`timeline_path` + `bgm_path`) ×2, and
+`overlay` (`image_path` + `timeline`) ×2, plus `frames` — as a pure refactor with zero behaviour
+change. The `error_code` parameter accommodates the `frames` variant that re-wraps to a different
+code. Ships with `clipwright-wrap` v0.3.2, `clipwright-bgm` v0.3.3, `clipwright-overlay` v0.2.3,
+and `clipwright-frames` v0.3.3, all raising their `clipwright` dependency floor to `>=0.6.0`.
+
 ### `transform` tools validate their timeline input with plain `.exists()` — symlink components followed (CWE-59)  *Low*  *(transition / speed / text …)*
 
 Flagged by security review during D7. The D7 fix covered the **accumulate** tools' source inputs
@@ -934,6 +960,15 @@ same CWE-59 class. Route their timeline input through `validate_source_file` wit
 basename re-wrap (naturally combines with the core-helper backlog item above). *Low*: same threat
 model (single local stdio process) and priority as D7; a consistency hardening across the
 remaining tool category.
+
+**Resolution (shipped — suite v0.34.0)**
+`clipwright-transition` (v0.2.1), `clipwright-speed` (v0.2.2), and `clipwright-text` (v0.2.2)
+now validate their input timeline through the shared
+`clipwright.pathpolicy.validate_source_or_basename` helper (the core-helper backlog item above)
+instead of a plain `.exists()`. `PATH_NOT_ALLOWED` now fires correctly for a symlinked timeline
+input (or a symlink in any intermediate directory component), matching the accumulate-tool
+contract D7 established. This closes the CWE-59 class across the remaining `transform`-category
+tools with no behaviour change for existing valid inputs.
 
 ---
 
@@ -1072,3 +1107,6 @@ directly for Latin captions).
    `validate_source_file`, keeping ADR-PP-1 outside-tree acceptance intact. (The
    stale `overlay_e2e_smoke.py` Scenario 5 that still expects `PATH_NOT_ALLOWED` for
    an outside-tree image is a test-expectation bug, not a product defect.)
+   **Resolved in suite v0.34.0** — see D7 and the two backlog entries above (the
+   accumulate guard shipped in v0.33.0; v0.34.0 completes the transform-category
+   counterpart and DRY-consolidates the shared `validate_source_or_basename` helper).

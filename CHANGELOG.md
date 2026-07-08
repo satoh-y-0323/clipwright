@@ -5,6 +5,32 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.34.0] - 2026-07-08
+
+DRY consolidation of the `validate_source_file` + basename re-wrap idiom into a new
+shared core helper, plus the `transform`-category symlink guard deferred from D7 (CWE-59).
+
+### Added
+
+- **`clipwright` v0.6.0** — new `clipwright.pathpolicy.validate_source_or_basename(path, *,
+  message, hint, error_code=ErrorCode.FILE_NOT_FOUND)` helper. Consolidates the
+  `validate_source_file` + `FILE_NOT_FOUND`→basename-rewrap idiom that was duplicated across
+  6 call sites; `PATH_NOT_ALLOWED` (symlink) continues to propagate unchanged.
+
+### Security
+
+- **`clipwright-transition` v0.2.1**, **`clipwright-speed` v0.2.2**, **`clipwright-text` v0.2.2**
+  — the input timeline is now validated through the shared `validate_source_or_basename` guard
+  instead of a plain `.exists()`, closing the same path-boundary bypass fixed for `bgm`/`overlay`
+  in v0.33.0 (CWE-59) for the remaining `transform`-category tools.
+
+### Changed
+
+- **`clipwright-wrap` v0.3.2**, **`clipwright-bgm` v0.3.3**, **`clipwright-overlay` v0.2.3**,
+  **`clipwright-frames` v0.3.3** — retrofitted onto the new shared helper (pure refactor, no
+  behavior change). All 7 downstream packages' `clipwright` dependency floor is raised to
+  `>=0.6.0`.
+
 ## [0.33.0] - 2026-07-03
 
 Path-boundary hardening follow-up for `clipwright-bgm` and `clipwright-overlay` (CWE-59).
