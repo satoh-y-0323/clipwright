@@ -59,7 +59,7 @@ def _make_audio_only_timeline() -> otio.schema.Timeline:
 def tmp_dir() -> Generator[Path, None, None]:
     """Provide a temporary directory that is cleaned up after the test."""
     with tempfile.TemporaryDirectory() as d:
-        yield Path(d)
+        yield Path(d).resolve()
 
 
 @pytest.fixture
