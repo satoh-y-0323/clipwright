@@ -71,6 +71,7 @@ def _try_symlink(link: Path, target: Path) -> None:
             "Cannot create symlinks on this system (requires elevated privileges)"
         )
 
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
