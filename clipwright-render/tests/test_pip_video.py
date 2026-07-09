@@ -975,8 +975,13 @@ class TestBuildFfmpegInputsPipOrder:
             )
 
     def test_image_sources_still_have_loop_1_when_pip_present(self) -> None:
-        """image_sources retain -loop 1 even when pip_sources is also present
-        (regression guard for the extension not disturbing existing behaviour)."""
+        """image_sources retain their ORIGINAL -loop 1 -t X input-flag order
+        (pre-dating the PiP extension) even when pip_sources is also present
+        (regression guard for the extension not disturbing existing
+        behaviour; N-1 / code-review-report-pip.md: the PiP extension must
+        not reorder image_overlay's pre-existing -loop 1 -t X flags to
+        -t X -loop 1 — that reorder was an unrelated, undocumented scope
+        creep with no dedicated regression test of its own)."""
         from clipwright_render.render import (  # type: ignore[attr-defined]
             _build_ffmpeg_inputs,
         )
@@ -991,10 +996,20 @@ class TestBuildFfmpegInputsPipOrder:
 
         img_pos = inputs.index("/project/logo/a.png")
         assert inputs[img_pos - 1] == "-i"
-        assert inputs[img_pos - 2] == "1"
-        assert inputs[img_pos - 3] == "-loop", (
-            f"image_sources must still have -loop 1 when pip_sources present:"
-            f" {inputs!r}"
+        assert inputs[img_pos - 2] == "5", (
+            f"image duration value must immediately precede -i (original"
+            f" -loop 1 -t X order, N-1): {inputs!r}"
+        )
+        assert inputs[img_pos - 3] == "-t", (
+            f"-t must immediately precede the duration value (original"
+            f" -loop 1 -t X order, N-1): {inputs!r}"
+        )
+        assert inputs[img_pos - 4] == "1", (
+            f"-loop 1 must appear BEFORE -t X (original order, N-1): {inputs!r}"
+        )
+        assert inputs[img_pos - 5] == "-loop", (
+            f"image_sources must use the ORIGINAL -loop 1 -t X order, not the"
+            f" PiP-introduced -t X -loop 1 order (N-1): {inputs!r}"
         )
 
     def test_bgm_still_has_stream_loop_when_pip_present(self) -> None:
