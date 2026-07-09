@@ -38,6 +38,22 @@ Bugs under test (all reproduced against real ffmpeg 8.1.1 / Gyan build):
     execution time — dry_run's filter_complex string looks superficially
     fine).
 
+Bug 4 (High, CR-NEW from code-review-report-pip-ffmpeg-fix.md) — main audio +
+BGM + mix_audio=True PiP double-counts the combined main+BGM signal in amix.
+    `_append_pip_audio_pipe` (plan.py:4439) receives `audio_map_label` as
+    `[outa_bgm]` (already main+BGM-combined by `_append_bgm_pipe`) when both
+    `has_main_audio=True` and `bgm_present=True`. The "Add main audio" block
+    (plan.py:4543) correctly converts it into `main_pip_fmt`/`main_mix` for
+    the amix mix. But the independent "Add BGM" block (plan.py:4573,
+    `if bgm_present:`) unconditionally re-appends the bare `outa_bgm` label
+    as a SECOND, separate amix input — the same underlying signal is mixed
+    twice (once via `main_pip_fmt`, once directly as `outa_bgm`), inflating
+    the combined main+BGM amplitude relative to PiP audio. This does not
+    crash ffmpeg (`amix`/`normalize=0` accepts the duplicate reference
+    without error), so it is invisible to exit-code-only assertions.
+    Expected fix (plan.py:4573): `if bgm_present:` -> `if bgm_present and
+    not has_main_audio:`.
+
 Expected Red state (bugs 1-3 unfixed):
   - TestPipVideoCompositionExecution: render succeeds (exit 0) but the
     in-window pixel does NOT show the PiP source's color (Bug 1) —
@@ -49,6 +65,11 @@ Expected Red state (bugs 1-3 unfixed):
     proof of Bug 3), AND the real (dry_run=False) render also fails with
     SUBPROCESS_FAILED (Bug 2 + Bug 3 both apply to the ducking-enabled
     branch, since it shares the same buggy base_branch construction).
+  - TestOutaBgmDoubleReference / TestMainBgmPipMixExecution (Bug 4 /
+    CR-NEW): render succeeds (exit 0, no crash — kept as a passing
+    regression guard) but `[outa_bgm]` appears twice as an amix input and
+    `amix=inputs=N` is one higher than the correct value — the amix-input
+    count / `[outa_bgm]`-occurrence assertions fail.
 
 How to run (skipped when ffmpeg is absent — see conftest.py / CLIPWRIGHT_FFMPEG):
   uv run --package clipwright-render pytest -k pip_ffmpeg_execution
@@ -69,6 +90,11 @@ from typing import Any
 import opentimelineio as otio
 import pytest
 
+from clipwright_render.plan import (
+    PipDuckingDirective,
+    PipOverlay,
+    _append_pip_audio_pipe,
+)
 from clipwright_render.render import render_timeline
 from clipwright_render.schemas import RenderOptions
 
@@ -118,6 +144,14 @@ _MAIN_FREQ = 440
 _PIP_DUR = 3.0  # PiP source media duration (>= overlay window duration)
 _PIP_COLOR = "red"
 _PIP_FREQ = 880
+
+# BGM fixture: distinguishable frequency from both main (440 Hz) and PiP
+# (880 Hz), matches main clip duration to avoid loop/trim side effects
+# (kept simple — this file's Bug 4 tests only need main+BGM+PiP to co-exist
+# in the filtergraph, not exercise BGM loop/trim behavior; see test_e2e_bgm.py
+# for that coverage).
+_BGM_FREQ = 220
+_BGM_VOLUME_DB = -6.0
 
 # PiP overlay placement window: [1.0, 4.0) seconds on the main timeline.
 _PIP_START_SEC = 1.0
@@ -351,6 +385,122 @@ def _make_main_and_pip_fixtures(tmp_path: Path) -> tuple[Path, Path]:
     return main_src, pip_src
 
 
+def _make_bgm_audio_fixture(
+    ffmpeg: str, output: Path, duration: float, freq: int = _BGM_FREQ
+) -> None:
+    """Generate a BGM fixture (audio-only, wrapped in a minimal video stream
+    so the file is a valid media container — same pattern as
+    test_e2e_bgm.py's _make_bgm_audio, file-local copy per this codebase's
+    convention of no cross-test-file imports)."""
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"sine=frequency={freq}:sample_rate=48000:duration={duration}",
+        "-f",
+        "lavfi",
+        "-i",
+        f"testsrc=size=320x240:rate={int(_RATE)}:duration={duration}",
+        "-t",
+        str(duration),
+        "-shortest",
+        "-c:v",
+        "libx264",
+        "-c:a",
+        "aac",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-pix_fmt",
+        "yuv420p",
+        str(output),
+    ]
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=_E2E_TIMEOUT,
+    )
+    assert result.returncode == 0, (
+        f"BGM fixture generation failed: {result.stderr[:400]}"
+    )
+
+
+def _add_bgm_track(
+    timeline: otio.schema.Timeline,
+    bgm_path: Path,
+    bgm_duration_sec: float,
+    bgm_rate: float = 48000.0,
+    volume_db: float = _BGM_VOLUME_DB,
+    ducking_enabled: bool = False,
+    ducking_threshold: float = 0.05,
+    ducking_ratio: float = 4.0,
+) -> None:
+    """Add an A2 BGM track to the timeline (equivalent OTIO structure to what
+    clipwright-bgm's add_bgm writes; file-local copy of test_e2e_bgm.py's
+    _add_bgm_track, no cross-file import per this codebase's convention)."""
+    bgm_directive: dict[str, Any] = {
+        "tool": "clipwright-bgm",
+        "version": "0.1.0",
+        "kind": "bgm",
+        "volume_db": volume_db,
+        "fade_in_sec": 0.0,
+        "fade_out_sec": 0.0,
+        "ducking": {
+            "enabled": ducking_enabled,
+            "threshold": ducking_threshold,
+            "ratio": ducking_ratio,
+        },
+    }
+
+    ref = otio.schema.ExternalReference(target_url=str(bgm_path))
+    bgm_clip = otio.schema.Clip(
+        name=bgm_path.name,
+        media_reference=ref,
+        source_range=otio.opentime.TimeRange(
+            start_time=otio.opentime.RationalTime(0.0, bgm_rate),
+            duration=otio.opentime.RationalTime(bgm_duration_sec * bgm_rate, bgm_rate),
+        ),
+        metadata={"clipwright": bgm_directive},
+    )
+
+    a2 = otio.schema.Track(name="A2", kind=otio.schema.TrackKind.Audio)
+    a2.append(bgm_clip)
+    timeline.tracks.append(a2)
+
+
+def _make_default_pip_overlay(**overrides: Any) -> PipOverlay:
+    """Build a real PipOverlay for direct unit-level calls to
+    _append_pip_audio_pipe (mirrors the report's repro command in
+    code-review-report-pip-ffmpeg-fix.md)."""
+    ducking = overrides.pop("ducking", None)
+    if ducking is None:
+        ducking = PipDuckingDirective(enabled=False)
+    defaults: dict[str, Any] = dict(
+        media_path="pip.mp4",
+        media_start_s=0.0,
+        duration_s=_PIP_DURATION_SEC,
+        start_s=_PIP_START_SEC,
+        end_s=_PIP_START_SEC + _PIP_DURATION_SEC,
+        x="(W-w)/2",
+        y="(H-h)/2",
+        scale=0.3,
+        opacity=1.0,
+        fade_in_s=0.0,
+        fade_out_s=0.0,
+        input_index=1,
+        mix_audio=True,
+        audio_volume=1.0,
+        ducking=ducking,
+    )
+    defaults.update(overrides)
+    return PipOverlay(**defaults)
+
+
 # ===========================================================================
 # Test A: PiP video composition (Bug 1 — _append_pip_video_filter dead code)
 # ===========================================================================
@@ -540,4 +690,183 @@ class TestPipAudioDuckingExecution:
             " unconnected' — compounded by Bug 2's trim=/atrim= mismatch"
             f" on the same branch). render result: {result}"
         )
+
+
+# ===========================================================================
+# Test D: main audio + BGM + PiP audio mix (Bug 4 / CR-NEW —
+# code-review-report-pip-ffmpeg-fix.md — [outa_bgm] double-referenced)
+# ===========================================================================
+
+
+class TestOutaBgmDoubleReference:
+    """Direct unit-level repro of CR-NEW, calling _append_pip_audio_pipe the
+    same way the report's repro command does (no ffmpeg involved — this
+    isolates the filter_complex STRING defect from the "does ffmpeg crash"
+    question, which Bug 4 does NOT trigger)."""
+
+    def test_outa_bgm_referenced_exactly_once_no_ducking(self) -> None:
+        pip = _make_default_pip_overlay(input_index=1, mix_audio=True)
+        filter_parts: list[str] = []
+        _append_pip_audio_pipe(filter_parts, [pip], "[outa_bgm]", True, 10.0, True)
+        joined = ";".join(filter_parts)
+
+        assert joined.count("[outa_bgm]") == 1, (
+            "CR-NEW: [outa_bgm] (main audio already combined with BGM by"
+            " _append_bgm_pipe) must be referenced exactly once — as the"
+            " input converted into main_pip_fmt for the amix mix. The"
+            " current implementation ALSO re-appends a bare 'outa_bgm' as a"
+            " second, independent amix input (plan.py:4573 `if"
+            " bgm_present:` is missing an `and not has_main_audio` guard),"
+            " double-counting the same main+BGM signal and skewing the mix"
+            f" balance. filter_parts={joined!r}"
+        )
+        assert "amix=inputs=2:normalize=0" in joined, (
+            "Expected amix inputs = 1 (combined main+BGM signal) + 1 (the"
+            " single mix_audio=True PiP) = 2. Bug 4 currently produces"
+            f" amix=inputs=3 (main+BGM counted twice). filter_parts={joined!r}"
+        )
+
+    def test_outa_bgm_referenced_exactly_once_with_ducking(self) -> None:
+        pip = _make_default_pip_overlay(
+            input_index=1,
+            mix_audio=True,
+            ducking=PipDuckingDirective(enabled=True, threshold=0.3, ratio=4.0),
+        )
+        filter_parts: list[str] = []
+        _append_pip_audio_pipe(filter_parts, [pip], "[outa_bgm]", True, 10.0, True)
+        joined = ";".join(filter_parts)
+
+        assert joined.count("[outa_bgm]") == 1, (
+            "CR-NEW (ducking-enabled branch): same double-reference defect"
+            " as the non-ducking case — the sidechain correctly uses"
+            " main_pip_fmt/main_mix (derived from [outa_bgm]), but the BGM"
+            f" block still re-adds a bare 'outa_bgm' amix input."
+            f" filter_parts={joined!r}"
+        )
+        assert "amix=inputs=2:normalize=0" in joined, (
+            "Expected amix inputs = 1 (combined main+BGM signal, asplit into"
+            " main_mix + sidechain) + 1 (the single ducked PiP). Bug 4"
+            f" currently produces amix=inputs=3. filter_parts={joined!r}"
+        )
+
+
+@requires_ffmpeg
+class TestMainBgmPipMixExecution:
+    """Real-ffmpeg regression coverage for CR-NEW: main audio + BGM + a
+    mix_audio=True PiP must render successfully (kept as a crash-regression
+    guard — Bug 4 does NOT crash ffmpeg, since amix/normalize=0 silently
+    accepts the duplicate [outa_bgm] reference) AND the generated
+    filter_complex's amix input count must reflect ONE combined main+BGM
+    signal + ONE PiP signal, not two independent "main" and "bgm" entries."""
+
+    def _build_timeline(
+        self, tmp_path: Path, *, ducking: dict[str, Any] | None
+    ) -> Path:
+        main_src, pip_src = _make_main_and_pip_fixtures(tmp_path)
+        bgm_src = tmp_path / "bgm.mp4"
+        _make_bgm_audio_fixture(_FFMPEG, bgm_src, duration=_MAIN_DUR)  # type: ignore[arg-type]
+
+        timeline = _make_base_timeline(main_src)
+        _add_bgm_track(timeline, bgm_src, _MAIN_DUR)
+        _add_pip_overlay_marker(
+            timeline,
+            media_path=str(pip_src),
+            start_sec=_PIP_START_SEC,
+            duration_sec=_PIP_DURATION_SEC,
+            mix_audio=True,
+            audio_volume=1.0,
+            ducking=ducking
+            if ducking is not None
+            else {"enabled": False, "threshold": 0.05, "ratio": 4.0},
+        )
+        timeline_path = tmp_path / "timeline.otio"
+        _save_timeline(timeline, timeline_path)
+        return timeline_path
+
+    def test_main_bgm_pip_mix_no_ducking(self, tmp_path: Path) -> None:
+        assert _FFMPEG is not None
+        timeline_path = self._build_timeline(tmp_path, ducking=None)
+
+        # Crash-regression guard FIRST: real ffmpeg execution must still
+        # succeed (Bug 4 does not crash ffmpeg — amix/normalize=0 silently
+        # accepts the duplicate [outa_bgm] reference). This is expected to
+        # PASS even in the current (buggy) state.
+        out_path = tmp_path / "out.mp4"
+        result = render_timeline(
+            str(timeline_path), str(out_path), RenderOptions(), dry_run=False
+        )
+        assert result["ok"] is True, (
+            "real ffmpeg execution must succeed (Bug 4 does not crash"
+            f" ffmpeg — kept as a regression guard). render result: {result}"
+        )
         assert out_path.exists(), "Output file was not created"
+
+        # Mix-correctness check SECOND: this is the part that is expected
+        # to be Red until CR-NEW (plan.py:4573) is fixed.
+        dry = render_timeline(
+            str(timeline_path),
+            str(tmp_path / "out_dry.mp4"),
+            RenderOptions(),
+            dry_run=True,
+        )
+        assert dry["ok"] is True, f"dry_run failed unexpectedly: {dry}"
+        fc = dry["data"]["filter_complex"]
+
+        # [outa_bgm] is declared once (the amix output label of the earlier
+        # BGM stage from _append_bgm_pipe) plus consumed once (as the input
+        # converted into main_pip_fmt) = 2 total occurrences when Bug 4 is
+        # fixed. The buggy implementation re-adds a THIRD occurrence (a bare
+        # 'outa_bgm' amix input), so this fails at 3 today.
+        assert fc.count("[outa_bgm]") == 2, (
+            "CR-NEW: [outa_bgm] must occur exactly twice in the full"
+            " build_plan()-generated filter_complex (1 declaration as the"
+            " BGM amix output + 1 consumption as the input converted into"
+            " main_pip_fmt) — NOT a third time as an independent amix"
+            f" input. filter_complex={fc!r}"
+        )
+        assert "amix=inputs=2:normalize=0" in fc, (
+            "Expected amix inputs = 1 (main+BGM combined) + 1 (PiP audio) ="
+            f" 2. filter_complex={fc!r}"
+        )
+
+    def test_main_bgm_pip_mix_with_ducking(self, tmp_path: Path) -> None:
+        assert _FFMPEG is not None
+        timeline_path = self._build_timeline(
+            tmp_path,
+            ducking={"enabled": True, "threshold": 0.3, "ratio": 4.0},
+        )
+
+        # Crash-regression guard FIRST (see non-ducking variant above for
+        # rationale). Expected to PASS even in the current (buggy) state.
+        out_path = tmp_path / "out.mp4"
+        result = render_timeline(
+            str(timeline_path), str(out_path), RenderOptions(), dry_run=False
+        )
+        assert result["ok"] is True, (
+            "real ffmpeg execution must succeed (Bug 4 does not crash"
+            f" ffmpeg — kept as a regression guard). render result: {result}"
+        )
+        assert out_path.exists(), "Output file was not created"
+
+        # Mix-correctness check SECOND: this is the part that is expected
+        # to be Red until CR-NEW (plan.py:4573) is fixed.
+        dry = render_timeline(
+            str(timeline_path),
+            str(tmp_path / "out_dry.mp4"),
+            RenderOptions(),
+            dry_run=True,
+        )
+        assert dry["ok"] is True, f"dry_run failed unexpectedly: {dry}"
+        fc = dry["data"]["filter_complex"]
+
+        assert fc.count("[outa_bgm]") == 2, (
+            "CR-NEW (ducking-enabled branch): [outa_bgm] must occur exactly"
+            " twice (1 declaration as the BGM amix output + 1 consumption"
+            " as the input converted into main_pip_fmt) — NOT a third time"
+            f" as an independent amix input. filter_complex={fc!r}"
+        )
+        assert "amix=inputs=2:normalize=0" in fc, (
+            "Expected amix inputs = 1 (main+BGM combined, asplit for the"
+            " sidechain) + 1 (the single ducked PiP) = 2."
+            f" filter_complex={fc!r}"
+        )
