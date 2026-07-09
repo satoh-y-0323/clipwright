@@ -143,6 +143,7 @@ class StreamInfo(BaseModel):
     height: int | None = None
     sample_rate: int | None = None
     channels: int | None = None
+    nb_frames: int | None = None
 
 
 class MediaInfo(BaseModel):

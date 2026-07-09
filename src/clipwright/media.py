@@ -82,6 +82,50 @@ def _to_optional_int(val: object) -> int | None:
     return None
 
 
+def _resolve_video_duration(
+    video_stream: dict[str, object], rate: float
+) -> RationalTimeModel | None:
+    """Resolve a video stream's frame-count duration value (GitHub Issue #1).
+
+    Tries three sources in priority order and returns the first usable one:
+      (a) nb_frames > 0                          -> value = float(nb_frames)
+      (b) stream duration (seconds)              -> value = duration_sec * rate
+      (c) duration_ts (> 0) + time_base (num/den) -> value = duration_ts * (num/den)
+          * rate
+    Returns None when none of the three is usable; the caller then falls back to
+    format.duration (ADR-1 priority (d), unchanged existing behaviour).
+
+    Args:
+        video_stream: Raw ffprobe stream dict for the first video stream.
+        rate: Frame rate already determined by the existing rate-selection loop.
+
+    Returns:
+        RationalTimeModel with the resolved frame-count value, or None.
+    """
+    nb_frames = _to_optional_int(video_stream.get("nb_frames"))
+    if nb_frames is not None and nb_frames > 0:
+        return RationalTimeModel(value=float(nb_frames), rate=rate)
+
+    duration_raw = video_stream.get("duration")
+    if duration_raw is not None:
+        try:
+            video_duration_sec = float(str(duration_raw))
+            return RationalTimeModel(value=video_duration_sec * rate, rate=rate)
+        except (ValueError, TypeError):
+            pass
+
+    duration_ts = _to_optional_int(video_stream.get("duration_ts"))
+    if duration_ts is not None and duration_ts > 0:
+        time_base_raw = video_stream.get("time_base")
+        if time_base_raw:
+            seconds_per_tick = _parse_avg_frame_rate(str(time_base_raw))
+            if seconds_per_tick > 0.0:
+                video_duration_sec = duration_ts * seconds_per_tick
+                return RationalTimeModel(value=video_duration_sec * rate, rate=rate)
+
+    return None
+
+
 def _validate_existing_file(path: str) -> None:
     """Verify that a file exists at the given path.
 
@@ -177,6 +221,7 @@ def _parse_ffprobe_json(path: str, stdout: str) -> MediaInfo:
                 height=_to_optional_int(s.get("height")),
                 sample_rate=_to_optional_int(s.get("sample_rate")),
                 channels=_to_optional_int(s.get("channels")),
+                nb_frames=_to_optional_int(s.get("nb_frames")),
             )
         )
 
@@ -192,16 +237,26 @@ def _parse_ffprobe_json(path: str, stdout: str) -> MediaInfo:
                     rate = parsed_rate
                     break
 
-    # Represent duration as RationalTimeModel
+    # Represent duration as RationalTimeModel. The first video stream (independent
+    # of which stream supplied `rate` above) is preferred over format.duration,
+    # since format.duration can drift from the actual video duration on sources
+    # with audio-video length mismatches (GitHub Issue #1 / ADR-1, ADR-2).
+    first_video_stream = next(
+        (s for s in raw_streams if str(s.get("codec_type", "")) == "video"), None
+    )
     duration: RationalTimeModel | None = None
-    duration_raw = raw_format.get("duration")
-    if duration_raw is not None:
-        try:
-            duration_sec = float(str(duration_raw))
-            # value = seconds × rate (frame count equivalent)
-            duration = RationalTimeModel(value=duration_sec * rate, rate=rate)
-        except (ValueError, TypeError):
-            pass
+    if first_video_stream is not None:
+        duration = _resolve_video_duration(first_video_stream, rate)
+
+    if duration is None:
+        duration_raw = raw_format.get("duration")
+        if duration_raw is not None:
+            try:
+                duration_sec = float(str(duration_raw))
+                # value = seconds × rate (frame count equivalent)
+                duration = RationalTimeModel(value=duration_sec * rate, rate=rate)
+            except (ValueError, TypeError):
+                pass
 
     container = str(raw_format.get("format_name", "")) or None
 

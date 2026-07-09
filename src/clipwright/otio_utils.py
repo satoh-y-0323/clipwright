@@ -107,10 +107,17 @@ def add_clip(
 ) -> otio.schema.Clip:
     """Append a clip to a Track.
 
-    Sets the media target_url as an ExternalReference.
+    Sets the media target_url as an ExternalReference. When media.available_range
+    is set, it is also wired into ExternalReference.available_range (ADR-4);
+    when None, available_range is left unset (backward compatible).
     Returns the added Clip object.
     """
     ref = otio.schema.ExternalReference(target_url=media.target_url)
+    if media.available_range is not None:
+        ref.available_range = otio.opentime.TimeRange(
+            start_time=to_otio_time(media.available_range.start_time),
+            duration=to_otio_time(media.available_range.duration),
+        )
     sr = otio.opentime.TimeRange(
         start_time=to_otio_time(source_range.start_time),
         duration=to_otio_time(source_range.duration),
