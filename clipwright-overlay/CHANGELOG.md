@@ -5,6 +5,64 @@ All notable changes to `clipwright-overlay` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-07-09
+
+### Added
+
+- **New MCP tool `clipwright_add_pip`**: annotates an OTIO timeline with a
+  picture-in-picture (PiP) video overlay marker (`kind="pip_overlay"`) for
+  materialisation by `clipwright-render`.
+
+- **`AddPipOptions` schema**: Parameters -- `media_path`, `start_sec`,
+  `duration_sec` (required), `media_start_sec` (default `0.0`), `x`/`y`
+  (default centered), `scale` (default `0.3`, range `(0, 8]` -- note this
+  differs from `AddOverlayOptions.scale`'s `1.0` default), `opacity` (default
+  `1.0`), `fade_in_sec`/`fade_out_sec` (default `0.3`), `mix_audio` (default
+  `False`), `audio_volume` (default `1.0`, range `(0, 4]`), and `ducking`
+  (`PipDuckingOptions`, default disabled). `inf`/`nan` rejected at schema
+  boundary (`allow_inf_nan=False`).
+
+- **`PipDuckingOptions` schema**: `enabled`/`threshold`/`ratio`, a local
+  re-declaration of `clipwright-bgm`'s `DuckingOptions` shape (no
+  cross-satellite-package import; see architecture-report-20260709-093022.md
+  ADR-PIP-4).
+
+- **Validation pipeline** (`_validate_pip_fields`, first-failure order):
+  1. Value domain: `start_sec >= 0`, `duration_sec > 0`, `media_start_sec >= 0`,
+     `scale in (0, 8]`, `opacity in [0, 1]`, `fade_in/out_sec >= 0`,
+     `fade_in + fade_out <= duration`, `audio_volume in (0, 4]`.
+  2. `media_path` 4-stage validation: path safety (control chars /
+     single-quote) -> existence + symlink rejection (`FILE_NOT_FOUND` /
+     `PATH_NOT_ALLOWED`, CWE-59) -> extension allowlist (`.mp4`, `.mkv`,
+     `.mov`, `.webm`) -> video stream presence via `inspect_media`
+     (audio-only sources rejected with a hint pointing at
+     `clipwright_add_bgm`).
+  3. `x`/`y` allowlist (same pattern as `image_overlay`).
+
+- **Relative-path storage**: `media_path` is stored via `media_ref_for_otio`
+  (ADR-PP-1): relative POSIX path when co-located under the output OTIO's
+  parent directory tree, absolute path otherwise.
+
+- **Accumulate pattern**: Each call appends a new `pip_overlay` marker named
+  `pip_{n}` (0-indexed) to the first video track (V1). Maximum 4 markers per
+  timeline (`_MAX_PIP_OVERLAYS = 4`, a much lower cap than
+  `_MAX_IMAGE_OVERLAYS` since each PiP decodes a full video stream). V1
+  absent -> `UNSUPPORTED_OPERATION`.
+
+- **Idempotency**: Duplicate detection compares `media_path` (relative
+  string, exact), `x`, `y`, `mix_audio`, `ducking.enabled` (exact), and
+  numeric fields (including `ducking.threshold`/`ducking.ratio`) with
+  `<= 1e-6` tolerance. Identical PiP overlay -> `applied=0` + warning; no
+  duplicate marker written.
+
+- **Return envelope** (`ok_result`): `applied` (1 or 0), `pip_count`,
+  `start_sec`, `duration_sec` in `data`; `artifacts`:
+  `[{"role": "timeline", "path": "<output>", "format": "otio"}]`.
+
+- **MCP annotations**: `readOnlyHint=true` (writes only a new `.otio`; input
+  media and timeline are never modified), `destructiveHint=false`,
+  `idempotentHint=true`, `openWorldHint=false`.
+
 ## [0.2.2] - 2026-07-03
 
 ### Security

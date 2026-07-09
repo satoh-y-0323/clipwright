@@ -291,12 +291,15 @@ def _build_ffmpeg_inputs(
 ) -> list[str]:
     """Build the ffmpeg -i input list from a RenderPlan.
 
-    Order: input_sources → bgm (with -stream_loop -1) → image_sources.
+    Order: input_sources → bgm (with -stream_loop -1) → image_sources →
+    pip_sources (ADR-PIP-7).
     When hw_decode_value is set, prepend -hwaccel <value> before each source -i.
-    BGM and image inputs do NOT receive -hwaccel (mirrors existing behaviour).
+    BGM, image, and PiP inputs do NOT receive -hwaccel (mirrors existing
+    behaviour).
 
     Args:
-        plan: RenderPlan with input_sources, bgm_source, image_sources.
+        plan: RenderPlan with input_sources, bgm_source, image_sources,
+            pip_sources.
         hw_decode_value: hwaccel flag value (e.g. 'cuda', 'auto') or None.
 
     Returns:
@@ -314,19 +317,28 @@ def _build_ffmpeg_inputs(
     if plan.bgm_source is not None:
         inputs += ["-stream_loop", "-1", "-i", plan.bgm_source]
 
-    # Image overlays: -loop 1 -t {total_duration} -i <image_path>
+    # Image overlays: -t {total_duration} -loop 1 -i <image_path>
     # -loop 1 repeats the single-frame PNG so that its internal timestamps advance
     # with the output clock.  Without this, all PNG frames carry timestamp=0 and
     # fade=t=in:st=N:d=D:alpha=1 never fires because st>0 is never reached.
     # -t caps the loop at the output duration so ffmpeg does not run indefinitely
-    # (ADR-OV-5 / V2-1 fade fix).
+    # (ADR-OV-5 / V2-1 fade fix). -t and -loop are both input-level options that
+    # apply to the following -i regardless of their relative order; -t is placed
+    # first so that "-loop 1" sits immediately before "-i" (ADR-PIP-7 ordering
+    # contract exercised by test_pip_video.py).
     img_dur: str | None = (
         f"{plan.total_duration_seconds:g}" if plan.image_sources else None
     )
     for img in plan.image_sources:
         if img_dur is not None:
-            inputs += ["-loop", "1", "-t", img_dur]
+            inputs += ["-t", img_dur, "-loop", "1"]
         inputs += ["-i", img]
+
+    # PiP video overlays: plain -i <pip_source>, NO -loop 1 (ADR-PIP-7 — these
+    # are real video files with their own timestamps, unlike the still-image
+    # overlays above; the filtergraph re-bases them via trim+setpts instead).
+    for pip in plan.pip_sources:
+        inputs += ["-i", pip]
 
     return inputs
 

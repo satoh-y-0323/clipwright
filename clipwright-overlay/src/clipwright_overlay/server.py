@@ -14,8 +14,8 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from clipwright_overlay.overlay import add_overlay
-from clipwright_overlay.schemas import AddOverlayOptions
+from clipwright_overlay.overlay import add_overlay, add_pip
+from clipwright_overlay.schemas import AddOverlayOptions, AddPipOptions
 
 mcp = FastMCP("clipwright-overlay")
 
@@ -81,6 +81,75 @@ def clipwright_add_overlay(
             ),
         )
     result = add_overlay(timeline=timeline, output=output, options=options)
+    if isinstance(result, ToolResult):
+        return result
+    return ToolResult.model_validate(result)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
+def clipwright_add_pip(
+    timeline: Annotated[str, Field(description="Input OTIO timeline file path.")],
+    output: Annotated[
+        str,
+        Field(
+            description=(
+                "Output OTIO file path where the annotated timeline is written. "
+                "Must end in .otio and differ from the input timeline path. "
+                "May be placed anywhere (not constrained to the timeline's directory). "
+                "Accumulate pattern: pass the previous call's output as the next "
+                "call's timeline to build up multiple PiP overlays (pip_0, pip_1, ...)."
+            )
+        ),
+    ],
+    options: Annotated[
+        AddPipOptions | None,
+        Field(
+            description=(
+                "PiP (picture-in-picture) overlay options. media_path, start_sec, "
+                "and duration_sec are required; all other fields have sensible "
+                "defaults. media_path must be a video file (.mp4/.mkv/.mov/.webm) "
+                "containing at least one video stream; audio-only sources are "
+                "rejected (use clipwright_add_bgm instead). media_path may be "
+                "inside or outside the output OTIO's directory: "
+                "inside -> relative POSIX path stored; "
+                "outside -> absolute path stored."
+            )
+        ),
+    ] = None,
+) -> ToolResult:
+    """Add a pip_overlay marker (picture-in-picture video) to an OTIO timeline.
+
+    readOnlyHint=True: this tool writes only a new .otio output file; the input
+    media and the input timeline are never modified. The new-file write is outside
+    the readOnly scope per the MCP annotation contract -- readOnly refers to
+    existing resources, and the output is a freshly created file.
+
+    Accumulate pattern: each call appends one pip_overlay marker (pip_0, pip_1,
+    ...) to the first video track, up to 4 per timeline. Pass the previous output
+    as the next input to layer multiple PiP overlays. clipwright-render
+    materializes all markers as ffmpeg overlay filters in a single render pass.
+
+    Idempotent: calling with identical options on an already-annotated timeline
+    produces applied=0 with a warning rather than duplicating the marker.
+    """
+    if options is None:
+        return error_result(
+            "INVALID_INPUT",
+            "options is required but was not provided.",
+            (
+                "Pass options with at least media_path, start_sec, and duration_sec "
+                '(e.g., {"media_path": "/path/to/clip.mp4", "start_sec": 1.0, '
+                '"duration_sec": 3.0}).'
+            ),
+        )
+    result = add_pip(timeline=timeline, output=output, options=options)
     if isinstance(result, ToolResult):
         return result
     return ToolResult.model_validate(result)

@@ -425,7 +425,7 @@ dev = [
 
 [[package]]
 name = "clipwright-overlay"
-version = "0.2.3"
+version = "0.3.0"
 source = { editable = "clipwright-overlay" }
 dependencies = [
     { name = "clipwright" },

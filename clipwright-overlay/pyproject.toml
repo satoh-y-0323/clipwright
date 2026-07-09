@@ -1,6 +1,6 @@
 [project]
 name = "clipwright-overlay"
-version = "0.2.3"
+version = "0.3.0"
 description = "MCP tool for adding image overlays to an OTIO timeline."
 readme = "README.md"
 license = { text = "MIT" }

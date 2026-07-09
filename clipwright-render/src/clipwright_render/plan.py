@@ -745,6 +745,422 @@ def _append_overlay_filter(
     return video_map_label
 
 
+# ===========================================================================
+# PiP (Picture-in-Picture) video overlay constants and dataclass
+# (ADR-PIP-5 / ADR-PIP-6 / ADR-PIP-7 / ADR-PIP-8)
+# ===========================================================================
+
+# Allowed video file extensions for PiP inputs (ADR-PIP-5). Keep in sync with
+# render._ALLOWED_EXTENSIONS (cross-layer defence-in-depth; same set used by
+# clipwright-overlay's _ALLOWED_VIDEO_EXTENSIONS).
+_ALLOWED_PIP_VIDEO_EXTENSIONS: frozenset[str] = frozenset(
+    {".mp4", ".mkv", ".mov", ".webm"}
+)
+
+# Maximum number of pip_overlay markers per timeline (mirrors _MAX_IMAGE_OVERLAYS
+# defence-in-depth pattern; ADR-PIP-6 sets the annotate-side limit to 4, so this
+# render-side re-check is a low-cost second layer, not the primary enforcement).
+_MAX_PIP_OVERLAYS: int = 4
+
+
+@dataclass(frozen=True)
+class PipOverlay:
+    """Immutable value object representing a single PiP (video-in-video)
+    overlay instruction.
+
+    Constructed from an OTIO pip_overlay marker in _marker_to_pip_overlay.
+    All fields are validated on construction; invalid values raise INVALID_INPUT
+    before this dataclass is instantiated (multi-layer defence, mirrors
+    ImageOverlay / V2-3).
+
+    Video-relevant fields (used by _build_pip_video_segment, ADR-PIP-8):
+        media_path: reconstructed absolute path to the PiP source video file.
+        media_start_s: source read offset in seconds (trim start).
+        duration_s: trim duration in seconds = placement duration.
+        start_s: placement start time in seconds (program time).
+        end_s: placement end time in seconds (= start_s + duration_s).
+        x: ffmpeg overlay x= expression (allowlist-validated).
+        y: ffmpeg overlay y= expression (allowlist-validated).
+        scale: width scale factor relative to the PiP video's own width.
+        opacity: constant alpha channel multiplier 0.0-1.0.
+        fade_in_s: fade-in duration in seconds; 0 means no fade.
+        fade_out_s: fade-out duration in seconds; 0 means no fade.
+        input_index: ffmpeg stream index for this PiP video input (ADR-PIP-7).
+
+    Audio-relevant fields (consumed by a later task's _append_pip_audio_pipe,
+    ADR-PIP-9; kept here as typed fields so downstream tasks do not need to
+    thread a second parallel structure through _collect_pip_overlays):
+        mix_audio: whether this PiP's audio should be mixed into the output.
+        audio_volume: linear volume multiplier applied to the PiP's audio.
+        ducking: ducking directive for this PiP's audio, or None when ducking
+            is disabled/absent. Typed loosely (Any) because PipDuckingDirective
+            is defined by the audio-mixing task (ADR-PIP-9); this task only
+            needs a slot to carry the raw validated-or-unvalidated value through.
+    """
+
+    media_path: str
+    media_start_s: float
+    duration_s: float
+    start_s: float
+    end_s: float
+    x: str
+    y: str
+    scale: float
+    opacity: float
+    fade_in_s: float
+    fade_out_s: float
+    input_index: int
+    mix_audio: bool = False
+    audio_volume: float = 1.0
+    ducking: Any = None
+
+
+def _marker_to_pip_overlay(
+    marker: otio.schema.Marker,
+    timeline_path: str | None,
+    input_index: int,
+) -> PipOverlay:
+    """Convert an OTIO pip_overlay marker to a validated PipOverlay.
+
+    Re-validates all fields on the render side (multi-layer defence, mirrors
+    _marker_to_image_overlay / V2-3). When timeline_path is provided, the
+    absolute media path is reconstructed by resolving the marker's relative
+    media_path relative to the timeline directory. When timeline_path is
+    None, media_path is stored as-is.
+
+    Args:
+        marker: OTIO Marker with kind=="pip_overlay" in metadata["clipwright"].
+        timeline_path: absolute path to the OTIO timeline file, or None.
+        input_index: ffmpeg stream index for this PiP video input (ADR-PIP-7).
+
+    Returns:
+        Validated PipOverlay value object.
+
+    Raises:
+        ClipwrightError(INVALID_INPUT): when any field fails validation.
+    """
+    cw: Any = marker.metadata.get("clipwright", {})
+    if not isinstance(cw, Mapping):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains a pip_overlay marker with missing metadata."
+            ),
+            hint="Re-annotate with clipwright_add_pip.",
+        )
+
+    raw_media_path: str = str(cw.get("media_path", ""))
+    start_sec: float = float(cw.get("start_sec", 0.0))
+    duration_sec: float = float(cw.get("duration_sec", 1.0))
+    media_start_sec: float = float(cw.get("media_start_sec", 0.0))
+    x: str = str(cw.get("x", "(W-w)/2"))
+    y: str = str(cw.get("y", "(H-h)/2"))
+    scale: float = float(cw.get("scale", 0.3))
+    opacity: float = float(cw.get("opacity", 1.0))
+    fade_in_s: float = float(cw.get("fade_in_sec", 0.0))
+    fade_out_s: float = float(cw.get("fade_out_sec", 0.0))
+    mix_audio: bool = bool(cw.get("mix_audio", False))
+    audio_volume: float = float(cw.get("audio_volume", 1.0))
+    ducking: Any = cw.get("ducking")
+
+    # Reconstruct absolute path when timeline_path is available (mirrors
+    # _marker_to_image_overlay).
+    if timeline_path is not None:
+        reconstructed = (
+            Path(timeline_path).resolve().parent / raw_media_path
+        ).resolve()
+        media_path_abs = str(reconstructed)
+    else:
+        media_path_abs = raw_media_path
+
+    # Multi-layer re-validation (mirrors _marker_to_image_overlay / V2-3).
+
+    if not math.isfinite(start_sec):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an invalid PiP overlay: start_sec is not finite."
+            ),
+            hint="Re-annotate with a finite start_sec value.",
+        )
+    if not math.isfinite(duration_sec):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an invalid PiP overlay:"
+                " duration_sec is not finite."
+            ),
+            hint="Re-annotate with a finite duration_sec value.",
+        )
+    if not math.isfinite(media_start_sec):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an invalid PiP overlay:"
+                " media_start_sec is not finite."
+            ),
+            hint="Re-annotate with a finite media_start_sec value.",
+        )
+
+    if start_sec < 0:
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message="The timeline contains an invalid PiP overlay: start_sec < 0.",
+            hint="Re-annotate with a non-negative start_sec.",
+        )
+    if duration_sec <= 0:
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an invalid PiP overlay: duration_sec <= 0."
+            ),
+            hint="Re-annotate with a positive duration_sec.",
+        )
+    if media_start_sec < 0:
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an invalid PiP overlay: media_start_sec < 0."
+            ),
+            hint="Re-annotate with a non-negative media_start_sec.",
+        )
+    if not (0 < scale <= 8.0):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an invalid PiP overlay:"
+                " scale must be in (0, 8.0]."
+            ),
+            hint="Re-annotate with a scale value in the range (0, 8.0].",
+        )
+    if not (0 <= opacity <= 1):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an invalid PiP overlay:"
+                " opacity must be in [0, 1]."
+            ),
+            hint="Re-annotate with an opacity value in the range [0, 1].",
+        )
+    if fade_in_s + fade_out_s > (duration_sec + 1e-9):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an invalid PiP overlay:"
+                " fade_in_sec + fade_out_sec exceeds duration_sec."
+            ),
+            hint="Re-annotate so that fade_in_sec + fade_out_sec <= duration_sec.",
+        )
+
+    # x/y allowlist (mirrors V2-5 / CWE-78).
+    for xy_val in (x, y):
+        if not _XY_ALLOWLIST_RE.fullmatch(xy_val):
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message=(
+                    "The timeline contains an invalid PiP overlay:"
+                    " x or y contains a disallowed character."
+                ),
+                hint=(
+                    "x/y must contain only alphanumeric characters, parentheses,"
+                    " arithmetic operators (+,-,*,/,.), and spaces."
+                ),
+            )
+
+    # media_path safety: single-quote and control character check (CWE-78).
+    for ch in media_path_abs:
+        if ch == "'":
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message=(
+                    "The timeline contains an invalid PiP overlay:"
+                    " media_path contains a single quote."
+                ),
+                hint="media_path must not contain single quotes.",
+            )
+        if ch in _CONTROL_CHARS:
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message=(
+                    "The timeline contains an invalid PiP overlay:"
+                    " media_path contains a control character."
+                ),
+                hint="media_path must not contain control characters.",
+            )
+
+    end_s = start_sec + duration_sec
+
+    return PipOverlay(
+        media_path=media_path_abs,
+        media_start_s=media_start_sec,
+        duration_s=duration_sec,
+        start_s=start_sec,
+        end_s=end_s,
+        x=x,
+        y=y,
+        scale=scale,
+        opacity=opacity,
+        fade_in_s=fade_in_s,
+        fade_out_s=fade_out_s,
+        input_index=input_index,
+        mix_audio=mix_audio,
+        audio_volume=audio_volume,
+        ducking=ducking,
+    )
+
+
+def _collect_pip_overlays(
+    timeline: otio.schema.Timeline,
+    pip_index_base: int,
+    timeline_path: str | None = None,
+) -> list[PipOverlay]:
+    """Read pip_overlay markers from the timeline and convert to PipOverlay objects.
+
+    Mirrors _collect_image_overlays. Returns an empty list when there are no
+    pip_overlay markers (backward compat).
+
+    Args:
+        timeline: OTIO timeline object.
+        pip_index_base: ffmpeg stream index for the first PiP video input
+            (ADR-PIP-7). = len(input_sources) + (1 if bgm else 0)
+            + len(image_sources).
+        timeline_path: absolute path to the OTIO timeline file, or None.
+            When provided, relative media_paths are reconstructed to absolute.
+
+    Returns:
+        List of validated PipOverlay objects, or [].
+
+    Raises:
+        ClipwrightError(INVALID_INPUT): when more than _MAX_PIP_OVERLAYS markers
+            are present, or when any marker fails validation.
+    """
+    markers = get_markers(timeline, kind="pip_overlay")
+    if not markers:
+        return []
+
+    if len(markers) > _MAX_PIP_OVERLAYS:
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                f"The timeline contains more than {_MAX_PIP_OVERLAYS}"
+                " pip_overlay markers."
+            ),
+            hint=(
+                f"Reduce the number of pip_overlay markers to"
+                f" {_MAX_PIP_OVERLAYS} or fewer."
+            ),
+        )
+
+    overlays: list[PipOverlay] = []
+    for i, marker in enumerate(markers):
+        input_index = pip_index_base + i
+        overlays.append(_marker_to_pip_overlay(marker, timeline_path, input_index))
+    return overlays
+
+
+def _build_pip_video_segment(
+    o: PipOverlay,
+    base_label: str,
+    i: int,
+) -> tuple[list[str], str]:
+    """Build two filter segment strings for one PiP video overlay (ADR-PIP-8).
+
+    Segment 1: trim + re-base + scale + colorchannelmixer chain.
+        [{input_index}:v]
+        trim=start={media_start_s}:duration={duration_s},setpts=PTS-STARTPTS,
+        scale=iw*{scale}:-2,format=rgba,colorchannelmixer=aa={opacity}
+        [,fade=t=in:st=0:d={fade_in_s}:alpha=1]
+        [,fade=t=out:st={duration_s-fade_out_s}:d={fade_out_s}:alpha=1]
+        [pipv{i}]
+
+    Segment 2: overlay composition.
+        {base_label}[pipv{i}]overlay=x='{x}':y='{y}':enable='between(t,{start_s},{end_s})'
+        [outvpip{i}]
+
+    IMPORTANT (ADR-PIP-8 footgun): because segment 1 re-bases the trimmed input
+    to t=0 via setpts=PTS-STARTPTS, the fade st= values are TRIMMED-RELATIVE
+    (0 / duration_s-fade_out_s), NOT the absolute program time (start_s /
+    end_s-fade_out_s) that _build_overlay_segment (image_overlay) uses. The
+    enable='between(...)' gate in segment 2 still uses absolute program time
+    (start_s/end_s) because it operates on the composited output timeline, not
+    the trimmed input stream.
+
+    DO NOT pass d=0 fades to ffmpeg — omit fade stages entirely when d==0
+    (mirrors V2-1).
+
+    Args:
+        o: validated PipOverlay value object.
+        base_label: current terminal video label consumed as the background input.
+        i: PiP loop index (position in the pip overlays list) used for label
+            naming (pipv{i} / outvpip{i}). Must be passed explicitly by
+            _append_pip_video_filter; never defaults.
+
+    Returns:
+        (segments, new_label) where segments is a list of two filter strings and
+        new_label is '[outvpip{i}]'.
+    """
+    idx = i
+
+    seg1 = (
+        f"[{o.input_index}:v]"
+        f"trim=start={o.media_start_s:g}:duration={o.duration_s:g},"
+        f"setpts=PTS-STARTPTS,"
+        f"scale=iw*{o.scale:g}:-2,"
+        f"format=rgba,"
+        f"colorchannelmixer=aa={o.opacity:g}"
+    )
+    if o.fade_in_s > 0:
+        seg1 += f",fade=t=in:st=0:d={o.fade_in_s:g}:alpha=1"
+    if o.fade_out_s > 0:
+        fade_out_st = o.duration_s - o.fade_out_s
+        seg1 += f",fade=t=out:st={fade_out_st:g}:d={o.fade_out_s:g}:alpha=1"
+    seg1 += f"[pipv{idx}]"
+
+    seg2 = (
+        f"{base_label}"
+        f"[pipv{idx}]overlay="
+        f"x='{o.x}':y='{o.y}':"
+        f"enable='between(t,{o.start_s:g},{o.end_s:g})'"
+        f"[outvpip{idx}]"
+    )
+
+    return [seg1, seg2], f"[outvpip{idx}]"
+
+
+def _append_pip_video_filter(
+    filter_parts: list[str],
+    video_map_label: str,
+    pip_overlays: list[PipOverlay],
+) -> str:
+    """Append PiP video overlay stages to filter_parts and return the new
+    video label.
+
+    Mirrors _append_overlay_filter. No-op when pip_overlays is empty
+    (backward compatible — output byte-identical to existing render when no
+    pip_overlay markers are present).
+
+    PiP overlays are stacked sequentially: each overlay consumes the previous
+    output label as its base_label, so [outv] -> [outvpip0] -> [outvpip1] -> ...
+
+    Args:
+        filter_parts: mutable list of filter_complex segments.
+        video_map_label: current terminal video label.
+        pip_overlays: list of validated PipOverlay objects.
+
+    Returns:
+        New video_map_label (last '[outvpip{N}]') when pip_overlays is
+        non-empty; original video_map_label otherwise.
+    """
+    if not pip_overlays:
+        return video_map_label
+
+    for i, o in enumerate(pip_overlays):
+        segs, video_map_label = _build_pip_video_segment(o, video_map_label, i)
+        filter_parts.extend(segs)
+
+    return video_map_label
+
+
 @dataclass(frozen=True)
 class BgmClip:
     """Value object representing BGM clip information (ADR-B4-r2).
@@ -796,6 +1212,9 @@ class RenderPlan:
         enabled. None when stabilize is absent (backward compatible; §6-E).
     image_sources: ordered list of absolute image overlay paths (ADR-OV-5).
         Images are appended as -i after bgm. Empty by default (backward compat).
+    pip_sources: ordered list of absolute PiP (video-in-video) overlay paths
+        (ADR-PIP-7). Appended as -i after image_sources, WITHOUT -loop 1
+        (real video, unlike image_sources). Empty by default (backward compat).
     """
 
     filter_complex: str
@@ -808,6 +1227,7 @@ class RenderPlan:
     bgm_source: str | None = None
     stabilize_cwd: str | None = None
     image_sources: list[str] = field(default_factory=list)
+    pip_sources: list[str] = field(default_factory=list)
 
 
 # ===========================================================================
