@@ -312,7 +312,12 @@ def _add_full_clip(
         start_time=otio.opentime.RationalTime(0.0, rate),
         duration=otio.opentime.RationalTime(duration_sec * rate, rate),
     )
-    ref = otio.schema.ExternalReference(target_url=target_url)
+    # ADR-4: available_range mirrors source_range for a full-length keep clip
+    # (Pattern B: this module builds its own ExternalReference directly instead
+    # of routing through clipwright.otio_utils.append_clip).
+    ref = otio.schema.ExternalReference(
+        target_url=target_url, available_range=source_range
+    )
 
     # Add the same clip to V1 (index 0) and A1 (index 1)
     for track in tl.tracks:

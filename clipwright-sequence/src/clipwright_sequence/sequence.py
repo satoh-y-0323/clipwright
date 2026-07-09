@@ -302,12 +302,23 @@ def _build_sequence_inner(clips: list[SequenceClip], output: str) -> ToolResult:
                 value=(rc.end_sec - rc.start_sec) * rc.rate, rate=rc.rate
             ),
         )
+        # available_range: FULL duration of this clip's own source (ADR-3/ADR-4),
+        # looked up per-clip via rc.source -> probes to avoid cross-source
+        # mix-ups when multiple distinct sources are interleaved.
+        source_probe = probes[rc.source]
+        available_range = TimeRangeModel(
+            start_time=RationalTimeModel(value=0.0, rate=source_probe.rate),
+            duration=RationalTimeModel(
+                value=source_probe.duration_sec * source_probe.rate,
+                rate=source_probe.rate,
+            ),
+        )
         # target_url: relative POSIX path for internal sources (under otio_dir),
         # absolute path for external sources (media_ref_for_otio, ADR-SEQ-6).
         target_url = media_ref_for_otio(rc.source, otio_dir)
         add_clip(
             v1,
-            MediaRef(target_url=target_url),
+            MediaRef(target_url=target_url, available_range=available_range),
             source_range,
             name="sequence_clip",
             metadata={

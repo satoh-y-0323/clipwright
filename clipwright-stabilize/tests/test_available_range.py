@@ -23,8 +23,11 @@ Verification points:
   (2) available_range must describe the same full-length span as source_range
       (start_time == 0, duration == full media duration) — for the
       full-length clip, source_range and available_range coincide.
-  (3) source_range must be contained within available_range
-      (TimeRange.contains), the general invariant this field exists to encode.
+  (3) source_range must be contained within available_range (manual <=
+      comparison, mirroring clipwright-color's pattern; TimeRange.contains
+      uses a strict start_time inequality and is unsuitable for the
+      full-length case where start_time == 0 on both sides), the general
+      invariant this field exists to encode.
   (4) The same wiring must also hold on the timeline=<path with empty V1
       track> branch, which reuses _add_full_clip via
       _load_and_validate_timeline.
@@ -216,10 +219,13 @@ class TestAvailableRangeNewTimeline:
             "available_range must be set before the containment check can be"
             " meaningful."
         )
-        assert available_range.contains(clip.source_range), (
-            "source_range must be contained within available_range:"
-            f" source_range={clip.source_range}, available_range={available_range}"
+        assert available_range.start_time <= clip.source_range.start_time, (
+            "source_range start must not precede available_range start"
         )
+        assert (
+            clip.source_range.end_time_exclusive()
+            <= available_range.end_time_exclusive()
+        ), "source_range end must not exceed available_range end"
 
 
 # ===========================================================================

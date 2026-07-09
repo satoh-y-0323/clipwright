@@ -453,6 +453,15 @@ def _detect_inner(
     timeline = new_timeline(media_path.name)
     v1 = timeline.tracks[0]  # V1 (Video) track
 
+    # ADR-3/ADR-4: silence is a sub-range tool -- available_range must span the
+    # full media duration, not each clip's own (partial) source_range. Built
+    # once from media_info.duration and reused unchanged for every keep clip.
+    available_range = TimeRangeModel(
+        start_time=RationalTimeModel(value=0.0, rate=rate),
+        duration=RationalTimeModel(value=media_info.duration.value, rate=rate),
+    )
+    target_url = media_ref_for_otio(media_path, output_path.parent)
+
     for start_sec, end_sec in keep_ranges:
         start_value = start_sec * rate
         dur_value = (end_sec - start_sec) * rate
@@ -461,7 +470,8 @@ def _detect_inner(
             duration=RationalTimeModel(value=dur_value, rate=rate),
         )
         media_ref = MediaRef(
-            target_url=media_ref_for_otio(media_path, output_path.parent)
+            target_url=target_url,
+            available_range=available_range,
         )
         add_clip(
             v1,

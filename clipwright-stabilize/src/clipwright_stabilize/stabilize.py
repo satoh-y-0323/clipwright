@@ -263,6 +263,11 @@ def _add_full_clip(
     target_url follows media_ref_for_otio(): relative POSIX when media is inside
     otio_dir, absolute path when media is outside (DC-AM-004).
 
+    ExternalReference.available_range is set to the same TimeRange as
+    source_range: this clip covers the entire source duration, so the
+    available span and the used span coincide (ADR-4 parity with
+    clipwright.otio_utils.add_clip()).
+
     Args:
         duration_rt: Pydantic model RationalTimeModel (not OTIO RationalTime).
             Used to obtain the rate. Falls back to rate=1000.0 when None.
@@ -276,7 +281,9 @@ def _add_full_clip(
         start_time=otio.opentime.RationalTime(0.0, rate),
         duration=otio.opentime.RationalTime(duration_sec * rate, rate),
     )
-    ref = otio.schema.ExternalReference(target_url=target_url)
+    ref = otio.schema.ExternalReference(
+        target_url=target_url, available_range=source_range
+    )
 
     for track in tl.tracks:
         clip = otio.schema.Clip(

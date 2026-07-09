@@ -234,8 +234,12 @@ def _add_bgm_inner(
         ),
     )
 
+    # available_range is set to the full BGM media length, matching
+    # source_range above (full-length pattern, ADR-4 Pattern B: inline
+    # ExternalReference construction).
     ref = otio.schema.ExternalReference(
-        target_url=media_ref_for_otio(bgm_path, output_path.parent)
+        target_url=media_ref_for_otio(bgm_path, output_path.parent),
+        available_range=source_range,
     )
     bgm_clip = otio.schema.Clip(
         name=bgm_path.name,

@@ -245,7 +245,12 @@ def _add_full_clip(
         start_time=otio.opentime.RationalTime(0.0, rate),
         duration=otio.opentime.RationalTime(duration_sec * rate, rate),
     )
-    ref = otio.schema.ExternalReference(target_url=target_url)
+    # ADR-4 pattern B: _add_full_clip always creates a full-length keep clip,
+    # so the exact media duration is known here; wire it as available_range
+    # (identical to source_range) instead of leaving it unset (None).
+    ref = otio.schema.ExternalReference(
+        target_url=target_url, available_range=source_range
+    )
 
     # Append the same clip to V1 (index 0) and A1 (index 1)
     for track in tl.tracks:

@@ -464,7 +464,12 @@ def _add_full_clip(
         start_time=otio.opentime.RationalTime(0.0, rate),
         duration=otio.opentime.RationalTime(duration_sec * rate, rate),
     )
-    ref = otio.schema.ExternalReference(target_url=target_url)
+    # ADR-4: available_range mirrors source_range for a full-length keep clip
+    # (the whole media file is referenced), so downstream tools (trim/render/
+    # etc.) can see the full extent of the source media.
+    ref = otio.schema.ExternalReference(
+        target_url=target_url, available_range=source_range
+    )
 
     for track in tl.tracks:
         clip = otio.schema.Clip(

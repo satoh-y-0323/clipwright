@@ -432,7 +432,12 @@ def _add_full_clip(
         start_time=otio.opentime.RationalTime(0.0, rate),
         duration=otio.opentime.RationalTime(duration_sec * rate, rate),
     )
-    ref = otio.schema.ExternalReference(target_url=target_url)
+    # ADR-4 parity with core otio_utils.add_clip: available_range mirrors the
+    # full-clip source_range (the clip already spans [0, duration_sec)), so
+    # source_range ⊆ available_range trivially holds with equality.
+    ref = otio.schema.ExternalReference(
+        target_url=target_url, available_range=source_range
+    )
 
     for track in tl.tracks:
         if track.kind == otio.schema.TrackKind.Video or (

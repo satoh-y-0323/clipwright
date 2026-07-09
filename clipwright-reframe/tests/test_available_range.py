@@ -180,9 +180,7 @@ class TestVideoAvailableRange:
         clip = _video_clip(tl)
         available_range = clip.media_reference.available_range
         assert available_range is not None
-        assert available_range.start_time == otio.opentime.RationalTime(
-            0.0, _FPS
-        ), (
+        assert available_range.start_time == otio.opentime.RationalTime(0.0, _FPS), (
             f"available_range.start_time must be 0 at rate={_FPS},"
             f" got {available_range.start_time}"
         )

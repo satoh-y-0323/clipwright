@@ -143,6 +143,15 @@ def _trim_inner(media: str, output: str, options: TrimOptions) -> ToolResult:
     timeline = new_timeline(media_path.name)
     v1 = timeline.tracks[0]  # V1 (Video) track
 
+    # ADR-3: available_range describes the whole media asset (0..duration),
+    # never a keep clip's own source_range. Built once and reused for every
+    # clip so downstream tools (render/speed) see the correct headroom.
+    available_range = TimeRangeModel(
+        start_time=RationalTimeModel(value=0, rate=rate),
+        duration=RationalTimeModel(value=media_info.duration.value, rate=rate),
+    )
+    media_ref = MediaRef(target_url=abs_media, available_range=available_range)
+
     for start_sec, end_sec in keep_ranges:
         source_range = TimeRangeModel(
             start_time=RationalTimeModel(value=start_sec * rate, rate=rate),
@@ -150,7 +159,7 @@ def _trim_inner(media: str, output: str, options: TrimOptions) -> ToolResult:
         )
         add_clip(
             v1,
-            MediaRef(target_url=abs_media),
+            media_ref,
             source_range,
             name="keep",
             metadata={

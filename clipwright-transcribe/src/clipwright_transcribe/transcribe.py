@@ -631,7 +631,13 @@ def _transcribe_inner(
 
     add_clip(
         v1,
-        MediaRef(target_url=media_ref_for_otio(media_path, output_path.parent)),
+        MediaRef(
+            target_url=media_ref_for_otio(media_path, output_path.parent),
+            # transcribe is a full-length ("create") tool: source_range already spans
+            # the whole media (0..media_info.duration), so available_range can reuse
+            # the same full_source_range instance (ADR-4 pattern A).
+            available_range=full_source_range,
+        ),
         full_source_range,
         name=media_path.name,
         metadata=clip_metadata,
