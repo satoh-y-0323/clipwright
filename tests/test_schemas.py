@@ -263,6 +263,20 @@ class TestStreamInfo:
         assert s.sample_rate is None
         assert s.channels is None
 
+    def test_nb_frames_preserved(self) -> None:
+        """ADR-5: StreamInfo.nb_frames holds the ffprobe frame count when supplied.
+
+        architecture-report-20260709-191456.md ADR-5: new Optional[int] field for
+        observability (video/audio duration mismatch diagnosis).
+        """
+        s = StreamInfo(index=0, codec_type="video", nb_frames=530)
+        assert s.nb_frames == 530
+
+    def test_nb_frames_defaults_to_none(self) -> None:
+        """ADR-5: nb_frames is Optional with default None (backward compatible)."""
+        s = StreamInfo(index=0, codec_type="video")
+        assert s.nb_frames is None
+
 
 class TestMediaInfo:
     """Basic contract for MediaInfo."""

@@ -234,6 +234,96 @@ class TestAddClip:
             value=60.0, rate=30.0
         )
 
+    def test_available_range_set_when_media_ref_has_it(self) -> None:
+        """ADR-4: media.available_range is wired into the clip's
+        media_reference.available_range as a converted TimeRange."""
+        import opentimelineio as otio
+
+        from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
+
+        tl = new_timeline("available_range_test")
+        track = tl.tracks[0]
+        available_range = TimeRangeModel(
+            start_time=RationalTimeModel(value=0.0, rate=30.0),
+            duration=RationalTimeModel(value=300.0, rate=30.0),
+        )
+        media = MediaRef(
+            target_url="/path/to/video.mp4",
+            available_range=available_range,
+        )
+        source_range = TimeRangeModel(
+            start_time=RationalTimeModel(value=10.0, rate=30.0),
+            duration=RationalTimeModel(value=60.0, rate=30.0),
+        )
+        add_clip(track, media, source_range)
+        clip = track[0]
+        ref_available_range = clip.media_reference.available_range
+        assert ref_available_range is not None
+        assert ref_available_range.start_time == otio.opentime.RationalTime(
+            value=0.0, rate=30.0
+        )
+        assert ref_available_range.duration == otio.opentime.RationalTime(
+            value=300.0, rate=30.0
+        )
+
+    def test_available_range_none_when_media_ref_omits_it(self) -> None:
+        """Backward compatibility: media.available_range=None leaves the
+        ExternalReference.available_range unset (existing behaviour)."""
+        from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
+
+        tl = new_timeline("available_range_none_test")
+        track = tl.tracks[0]
+        media = MediaRef(target_url="/path/to/video.mp4")
+        source_range = TimeRangeModel(
+            start_time=RationalTimeModel(value=0.0, rate=30.0),
+            duration=RationalTimeModel(value=60.0, rate=30.0),
+        )
+        add_clip(track, media, source_range)
+        clip = track[0]
+        assert clip.media_reference.available_range is None
+
+    def test_available_range_independent_of_source_range(self) -> None:
+        """available_range and source_range are set independently; their
+        values need not match (available_range spans the whole source
+        media while source_range is the trimmed-in portion)."""
+        import opentimelineio as otio
+
+        from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
+
+        tl = new_timeline("available_range_independent_test")
+        track = tl.tracks[0]
+        available_range = TimeRangeModel(
+            start_time=RationalTimeModel(value=5.0, rate=25.0),
+            duration=RationalTimeModel(value=1000.0, rate=25.0),
+        )
+        media = MediaRef(
+            target_url="/path/to/video.mp4",
+            available_range=available_range,
+        )
+        source_range = TimeRangeModel(
+            start_time=RationalTimeModel(value=100.0, rate=25.0),
+            duration=RationalTimeModel(value=50.0, rate=25.0),
+        )
+        add_clip(track, media, source_range)
+        clip = track[0]
+
+        ref_available_range = clip.media_reference.available_range
+        assert ref_available_range is not None
+        assert ref_available_range.start_time == otio.opentime.RationalTime(
+            value=5.0, rate=25.0
+        )
+        assert ref_available_range.duration == otio.opentime.RationalTime(
+            value=1000.0, rate=25.0
+        )
+        assert ref_available_range.start_time != clip.source_range.start_time
+        assert ref_available_range.duration != clip.source_range.duration
+        assert clip.source_range.start_time == otio.opentime.RationalTime(
+            value=100.0, rate=25.0
+        )
+        assert clip.source_range.duration == otio.opentime.RationalTime(
+            value=50.0, rate=25.0
+        )
+
 
 # ===========================================================================
 # add_gap (§6 otio_utils)

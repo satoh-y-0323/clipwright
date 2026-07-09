@@ -1033,3 +1033,520 @@ class TestMediaInfoBitRate:
         result = inspect_media(str(media_file))
 
         assert result.bit_rate == expected
+
+
+# ===========================================================================
+# GitHub Issue #1: video-stream-based duration resolution
+# (architecture-report-20260709-191456.md ADR-1 / ADR-2 / ADR-5 / ADR-6)
+#
+# ADR-1: _resolve_video_duration resolves MediaInfo.duration.value with priority:
+#   (a) video stream nb_frames > 0             -> value = float(nb_frames)
+#   (b) video stream duration (seconds)         -> value = video_sec * rate
+#   (c) video stream duration_ts + time_base     -> value = video_sec * rate
+#       (duration_ts must be > 0; 0/negative/missing skips (c))
+#   (d) format.duration (existing fallback)      -> value = format_sec * rate
+# ADR-2: rate-selection loop is unchanged; the FIRST video stream (independent of
+#   which stream supplies the rate) is used for duration resolution. Multi-video-
+#   stream (a) rate mismatch is an accepted out-of-scope edge (architecture-report
+#   §8 #1) and is intentionally not tested here.
+# ADR-5: StreamInfo.nb_frames is a new Optional[int] field (observability only).
+# ADR-6: _resolve_video_duration(video_stream: dict, rate: float) -> RationalTimeModel | None
+# ===========================================================================
+
+
+def _resolve_video_duration_or_fail():  # type: ignore[no-untyped-def]
+    """Import clipwright.media._resolve_video_duration, failing the test if absent.
+
+    ADR-6: this private helper does not exist yet at Red phase.
+    """
+    try:
+        from clipwright.media import (
+            _resolve_video_duration,  # type: ignore[attr-defined]
+        )
+    except ImportError:
+        pytest.fail(
+            "_resolve_video_duration does not exist in clipwright.media. "
+            "ADR-1/ADR-2/ADR-6 implementation is required."
+        )
+    return _resolve_video_duration
+
+
+class TestResolveVideoDurationNbFrames:
+    """ADR-1 (a): video stream nb_frames > 0 is adopted as the duration value."""
+
+    def test_nb_frames_adopted_as_duration_value(self) -> None:
+        """nb_frames="530" -> duration.value == 530.0, rate is preserved.
+
+        duration / duration_ts / time_base are also present (audio-drifted values)
+        and must be ignored since (a) takes priority.
+        """
+        resolve_video_duration = _resolve_video_duration_or_fail()
+        video_stream = {
+            "nb_frames": "530",
+            "avg_frame_rate": "25/1",
+            "duration": "21.269000",
+            "duration_ts": 999999,
+            "time_base": "1/12800",
+        }
+
+        result = resolve_video_duration(video_stream, 25.0)
+
+        assert result is not None
+        assert result.value == pytest.approx(530.0)
+        assert result.rate == pytest.approx(25.0)
+
+    def test_nb_frames_zero_falls_back_to_duration(self) -> None:
+        """nb_frames="0" (<=0 guard) falls back to (b) stream duration."""
+        resolve_video_duration = _resolve_video_duration_or_fail()
+        video_stream = {"nb_frames": "0", "duration": "21.200000"}
+
+        result = resolve_video_duration(video_stream, 25.0)
+
+        assert result is not None
+        assert result.value == pytest.approx(530.0)  # 21.2 * 25
+
+    def test_nb_frames_negative_falls_back_to_duration(self) -> None:
+        """nb_frames="-5" (<=0 guard) falls back to (b) stream duration."""
+        resolve_video_duration = _resolve_video_duration_or_fail()
+        video_stream = {"nb_frames": "-5", "duration": "21.200000"}
+
+        result = resolve_video_duration(video_stream, 25.0)
+
+        assert result is not None
+        assert result.value == pytest.approx(530.0)
+
+
+class TestResolveVideoDurationStreamDurationFallback:
+    """ADR-1 (b): stream duration (seconds) * rate when nb_frames is unusable."""
+
+    def test_nb_frames_missing_falls_back_to_stream_duration(self) -> None:
+        """No nb_frames key -> uses stream duration seconds * rate."""
+        resolve_video_duration = _resolve_video_duration_or_fail()
+        video_stream = {"duration": "21.200000"}
+
+        result = resolve_video_duration(video_stream, 25.0)
+
+        assert result is not None
+        assert result.value == pytest.approx(530.0)
+
+    def test_nb_frames_na_falls_back_to_stream_duration(self) -> None:
+        """nb_frames="N/A" -> _to_optional_int returns None -> falls back to (b)."""
+        resolve_video_duration = _resolve_video_duration_or_fail()
+        video_stream = {"nb_frames": "N/A", "duration": "21.200000"}
+
+        result = resolve_video_duration(video_stream, 25.0)
+
+        assert result is not None
+        assert result.value == pytest.approx(530.0)
+
+    def test_nb_frames_decimal_string_falls_back_to_stream_duration(self) -> None:
+        """nb_frames="530.0" (decimal string) -> int("530.0") raises ValueError
+        inside _to_optional_int -> None -> falls back to (b)."""
+        resolve_video_duration = _resolve_video_duration_or_fail()
+        video_stream = {"nb_frames": "530.0", "duration": "21.200000"}
+
+        result = resolve_video_duration(video_stream, 25.0)
+
+        assert result is not None
+        assert result.value == pytest.approx(530.0)
+
+
+class TestResolveVideoDurationTimeBaseFallback:
+    """ADR-1 (c): duration_ts * time_base(num/den) * rate, guarded by duration_ts > 0."""
+
+    def test_duration_ts_and_time_base_used_when_duration_absent(self) -> None:
+        """No nb_frames/duration, but duration_ts + time_base -> seconds conversion."""
+        resolve_video_duration = _resolve_video_duration_or_fail()
+        video_stream = {"duration_ts": 530, "time_base": "1/25"}
+
+        result = resolve_video_duration(video_stream, 25.0)
+
+        assert result is not None
+        # video_sec = 530 * (1/25) = 21.2; value = 21.2 * 25 = 530.0
+        assert result.value == pytest.approx(530.0)
+
+    def test_duration_ts_zero_is_rejected(self) -> None:
+        """duration_ts=0 must not be used for (c); helper returns None
+        (caller falls through to (d))."""
+        resolve_video_duration = _resolve_video_duration_or_fail()
+        video_stream = {"duration_ts": 0, "time_base": "1/25"}
+
+        result = resolve_video_duration(video_stream, 25.0)
+
+        assert result is None
+
+    def test_duration_ts_negative_is_rejected(self) -> None:
+        """duration_ts=-10 must not be used for (c); helper returns None."""
+        resolve_video_duration = _resolve_video_duration_or_fail()
+        video_stream = {"duration_ts": -10, "time_base": "1/25"}
+
+        result = resolve_video_duration(video_stream, 25.0)
+
+        assert result is None
+
+    def test_duration_ts_missing_with_time_base_present_returns_none(self) -> None:
+        """duration_ts missing (only time_base present) -> (c) unusable -> None."""
+        resolve_video_duration = _resolve_video_duration_or_fail()
+        video_stream = {"time_base": "1/25"}
+
+        result = resolve_video_duration(video_stream, 25.0)
+
+        assert result is None
+
+
+class TestResolveVideoDurationAllSourcesUnavailable:
+    """All of (a)/(b)/(c) unusable -> helper returns None (caller falls to (d))."""
+
+    def test_returns_none_when_no_duration_source_available(self) -> None:
+        """Video stream with no nb_frames/duration/duration_ts -> None."""
+        resolve_video_duration = _resolve_video_duration_or_fail()
+        video_stream = {"index": 0, "codec_type": "video", "codec_name": "h264"}
+
+        result = resolve_video_duration(video_stream, 25.0)
+
+        assert result is None
+
+
+# ===========================================================================
+# Integration (via inspect_media / _parse_ffprobe_json): end-to-end duration flow
+# ===========================================================================
+
+
+class TestDurationResolutionIntegrationNbFrames:
+    """ADR-1 (a) end-to-end: MediaInfo.duration.value uses nb_frames via inspect_media."""
+
+    def test_nb_frames_wins_over_format_duration(
+        self, mocker: MagicMock, tmp_path
+    ) -> None:
+        """format.duration is audio-drifted (99.999s); nb_frames must win instead."""
+        media_file = tmp_path / "video.mp4"
+        media_file.write_bytes(b"dummy")
+
+        streams = [
+            {
+                "index": 0,
+                "codec_type": "video",
+                "codec_name": "h264",
+                "avg_frame_rate": "25/1",
+                "nb_frames": "530",
+                "duration": "21.200000",
+            }
+        ]
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch(
+            "clipwright.process.run",
+            return_value=_make_completed_process(
+                _make_ffprobe_json(streams=streams, duration="99.999000")
+            ),
+        )
+
+        result = inspect_media(str(media_file))
+
+        assert result.duration is not None
+        assert result.duration.value == pytest.approx(530.0)
+        assert result.duration.rate == pytest.approx(25.0)
+
+
+class TestDurationResolutionIntegrationStreamDuration:
+    """ADR-1 (b) end-to-end: stream duration used when nb_frames is unusable."""
+
+    def test_stream_duration_wins_over_format_duration(
+        self, mocker: MagicMock, tmp_path
+    ) -> None:
+        """No nb_frames; stream duration (21.2s) must win over drifted format.duration."""
+        media_file = tmp_path / "video.mp4"
+        media_file.write_bytes(b"dummy")
+
+        streams = [
+            {
+                "index": 0,
+                "codec_type": "video",
+                "codec_name": "h264",
+                "avg_frame_rate": "25/1",
+                "duration": "21.200000",
+            }
+        ]
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch(
+            "clipwright.process.run",
+            return_value=_make_completed_process(
+                _make_ffprobe_json(streams=streams, duration="99.999000")
+            ),
+        )
+
+        result = inspect_media(str(media_file))
+
+        assert result.duration is not None
+        assert result.duration.value == pytest.approx(530.0)  # 21.2 * 25
+
+
+class TestDurationResolutionIntegrationTimeBase:
+    """ADR-1 (c) end-to-end: duration_ts + time_base used as last resort."""
+
+    def test_duration_ts_and_time_base_win_over_format_duration(
+        self, mocker: MagicMock, tmp_path
+    ) -> None:
+        """No nb_frames/duration; duration_ts+time_base (21.2s) wins over format."""
+        media_file = tmp_path / "video.mp4"
+        media_file.write_bytes(b"dummy")
+
+        streams = [
+            {
+                "index": 0,
+                "codec_type": "video",
+                "codec_name": "h264",
+                "avg_frame_rate": "25/1",
+                "duration_ts": 530,
+                "time_base": "1/25",
+            }
+        ]
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch(
+            "clipwright.process.run",
+            return_value=_make_completed_process(
+                _make_ffprobe_json(streams=streams, duration="99.999000")
+            ),
+        )
+
+        result = inspect_media(str(media_file))
+
+        assert result.duration is not None
+        assert result.duration.value == pytest.approx(530.0)
+
+    def test_duration_ts_zero_guard_falls_back_to_format_duration(
+        self, mocker: MagicMock, tmp_path
+    ) -> None:
+        """duration_ts=0 must be rejected; falls through to (d) format.duration.
+
+        NOTE: this assertion coincides with current (pre-fix) behaviour because no
+        video-stream duration logic exists yet, so it already passes today. It is
+        kept as a regression guard against a naive "duration_ts is not None" guard
+        that would incorrectly treat 0 as valid (architecture-report ADR-1 edge case).
+        """
+        media_file = tmp_path / "video.mp4"
+        media_file.write_bytes(b"dummy")
+
+        streams = [
+            {
+                "index": 0,
+                "codec_type": "video",
+                "codec_name": "h264",
+                "avg_frame_rate": "25/1",
+                "duration_ts": 0,
+                "time_base": "1/25",
+            }
+        ]
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch(
+            "clipwright.process.run",
+            return_value=_make_completed_process(
+                _make_ffprobe_json(streams=streams, duration="99.999000")
+            ),
+        )
+
+        result = inspect_media(str(media_file))
+
+        assert result.duration is not None
+        assert result.duration.value == pytest.approx(99.999 * 25.0)
+
+
+class TestDurationResolutionIntegrationMultipleVideoStreams:
+    """ADR-2: duration resolution always uses the FIRST video stream, independent
+    of which stream's avg_frame_rate is selected for rate.
+
+    (a) rate-mismatch across streams (nb_frames from one stream combined with a
+    different stream's rate) is an accepted out-of-scope edge (architecture-report
+    §8 #1); only the (b)/(c) multi-stream path is covered here.
+    """
+
+    def test_first_stream_duration_used_even_when_its_rate_is_broken(
+        self, mocker: MagicMock, tmp_path
+    ) -> None:
+        """Stream 0 has broken avg_frame_rate but a usable duration (b); stream 1
+        supplies the rate (existing rate-loop behaviour, unchanged). Duration must
+        come from stream 0, not stream 1.
+        """
+        media_file = tmp_path / "video.mp4"
+        media_file.write_bytes(b"dummy")
+
+        streams = [
+            {
+                "index": 0,
+                "codec_type": "video",
+                "codec_name": "h264",
+                "avg_frame_rate": "0/0",  # broken -> rate loop skips this stream
+                "duration": "21.200000",
+            },
+            {
+                "index": 1,
+                "codec_type": "video",
+                "codec_name": "h264",
+                "avg_frame_rate": "25/1",  # rate loop adopts this stream's rate
+            },
+        ]
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch(
+            "clipwright.process.run",
+            return_value=_make_completed_process(
+                _make_ffprobe_json(streams=streams, duration="99.999000")
+            ),
+        )
+
+        result = inspect_media(str(media_file))
+
+        assert result.duration is not None
+        assert result.duration.rate == pytest.approx(25.0)
+        # stream 0 duration (21.2s) * rate (25.0) = 530.0, not derived from stream 1
+        assert result.duration.value == pytest.approx(530.0)
+
+
+class TestDurationResolutionIntegrationAudioOnlyUnaffected:
+    """Audio-only sources must not invoke _resolve_video_duration; behaviour is
+    unchanged (format.duration * rate=1000.0), even if the audio stream happens to
+    carry fields that look like nb_frames/duration_ts (architecture-report ADR-1).
+    """
+
+    def test_audio_stream_frame_like_fields_are_ignored(
+        self, mocker: MagicMock, tmp_path
+    ) -> None:
+        """Audio-only stream carrying nb_frames/duration_ts-like keys must not be
+        mistaken for a video-stream duration source.
+
+        NOTE: this assertion coincides with current (pre-fix) behaviour since only
+        video streams are eligible for ADR-1 resolution and none exist here. Kept as
+        a regression guard against a fix that iterates all streams instead of video
+        streams only.
+        """
+        media_file = tmp_path / "audio.mp4"
+        media_file.write_bytes(b"dummy")
+
+        streams = [
+            {
+                "index": 0,
+                "codec_type": "audio",
+                "codec_name": "aac",
+                "sample_rate": "44100",
+                "channels": 2,
+                "nb_frames": "999999",
+                "duration": "999.000000",
+                "duration_ts": 999,
+                "time_base": "1/1",
+            }
+        ]
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch(
+            "clipwright.process.run",
+            return_value=_make_completed_process(
+                _make_ffprobe_json(streams=streams, duration="5.000000")
+            ),
+        )
+
+        result = inspect_media(str(media_file))
+
+        assert result.duration is not None
+        assert result.duration.rate == 1000.0
+        assert result.duration.value == pytest.approx(5000.0)
+
+
+class TestDurationResolutionIntegrationBackwardCompatFormatFallback:
+    """ADR-1 (d): existing fixtures without stream-level duration info (nb_frames /
+    duration / duration_ts) must keep falling back to format.duration — the same
+    fixture shape used by the existing TestRateDecisionRule tests above.
+    """
+
+    def test_video_stream_without_frame_info_falls_back_to_format_duration(
+        self, mocker: MagicMock, tmp_path
+    ) -> None:
+        """A video stream carrying only avg_frame_rate (no duration-source fields)
+        falls back to (d) format.duration * rate — matches existing behaviour.
+
+        NOTE: this assertion coincides with current (pre-fix) behaviour and is
+        expected to remain green after ADR-1 is implemented (backward compatibility).
+        """
+        media_file = tmp_path / "video.mp4"
+        media_file.write_bytes(b"dummy")
+
+        streams = [
+            {
+                "index": 0,
+                "codec_type": "video",
+                "codec_name": "h264",
+                "avg_frame_rate": "25/1",
+            }
+        ]
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch(
+            "clipwright.process.run",
+            return_value=_make_completed_process(
+                _make_ffprobe_json(streams=streams, duration="21.269000")
+            ),
+        )
+
+        result = inspect_media(str(media_file))
+
+        assert result.duration is not None
+        assert result.duration.value == pytest.approx(21.269 * 25.0)
+
+
+# ===========================================================================
+# ADR-5: StreamInfo.nb_frames observability field, populated from ffprobe stream
+# ===========================================================================
+
+
+class TestStreamInfoNbFramesFromProbe:
+    """ADR-5: StreamInfo.nb_frames is populated from ffprobe stream nb_frames."""
+
+    def test_nb_frames_captured_from_probe(self, mocker: MagicMock, tmp_path) -> None:
+        """Video stream nb_frames="530" is parsed into StreamInfo.nb_frames == 530."""
+        media_file = tmp_path / "video.mp4"
+        media_file.write_bytes(b"dummy")
+
+        streams = [
+            {
+                "index": 0,
+                "codec_type": "video",
+                "codec_name": "h264",
+                "avg_frame_rate": "25/1",
+                "nb_frames": "530",
+            }
+        ]
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch(
+            "clipwright.process.run",
+            return_value=_make_completed_process(
+                _make_ffprobe_json(streams=streams, duration="21.200000")
+            ),
+        )
+
+        result = inspect_media(str(media_file))
+
+        video = result.streams[0]
+        assert video.nb_frames == 530  # type: ignore[attr-defined]
+
+    def test_nb_frames_defaults_to_none_when_probe_omits_it(
+        self, mocker: MagicMock, tmp_path
+    ) -> None:
+        """Missing nb_frames in probe JSON -> StreamInfo.nb_frames is None."""
+        media_file = tmp_path / "video.mp4"
+        media_file.write_bytes(b"dummy")
+
+        streams = [
+            {
+                "index": 0,
+                "codec_type": "video",
+                "codec_name": "h264",
+                "avg_frame_rate": "25/1",
+            }
+        ]
+        mocker.patch("clipwright.process.resolve_tool", return_value="/usr/bin/ffprobe")
+        mocker.patch(
+            "clipwright.process.run",
+            return_value=_make_completed_process(
+                _make_ffprobe_json(streams=streams, duration="21.200000")
+            ),
+        )
+
+        result = inspect_media(str(media_file))
+
+        video = result.streams[0]
+        assert video.nb_frames is None  # type: ignore[attr-defined]
