@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-07-09
+
+### Fixed
+
+- **`ExternalReference.available_range` is now populated on newly added BGM clips**
+  (GitHub Issue #1). The inline `ExternalReference` built when accumulating a BGM clip onto the
+  timeline now sets `available_range` equal to `source_range` (the full `0..media duration`
+  range), using `clipwright`'s corrected video-stream-based duration (see `clipwright` v0.6.1,
+  which no longer inflates `MediaInfo.duration` with audio drift). Only the newly added BGM clip
+  is affected; existing clips on the accumulated timeline are untouched.
+
 ## [0.3.2] - 2026-07-03
 
 ### Security

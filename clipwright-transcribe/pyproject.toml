@@ -1,6 +1,6 @@
 [project]
 name = "clipwright-transcribe"
-version = "0.5.1"
+version = "0.5.2"
 description = "MCP tool to transcribe audio/video files with whisper.cpp binary and generate SRT/VTT captions and OTIO timeline."
 readme = "README.md"
 license = { text = "MIT" }

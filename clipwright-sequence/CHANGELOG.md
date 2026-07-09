@@ -5,6 +5,17 @@ All notable changes to `clipwright-sequence` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-07-09
+
+### Fixed
+
+- **`available_range` now reflects each source's own full-media duration, not the excerpted
+  sub-range** (GitHub Issue #1). Every clip's `MediaRef.available_range` is now looked up
+  per-source (keyed off the same probe used for that clip's `source_range`) and set to
+  `TimeRange(0, that source's duration)`, using `clipwright`'s corrected video-stream-based
+  duration (see `clipwright` v0.6.1, which no longer inflates `MediaInfo.duration` with audio
+  drift). Multi-source sequences no longer risk mixing up one source's duration with another's.
+
 ## [0.2.1] - 2026-07-02
 
 ### Security

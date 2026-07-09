@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.2] — 2026-07-09
+
+### Fixed
+
+- **`ExternalReference.available_range` is now populated** (GitHub Issue #1). `_add_full_clip`
+  now sets `available_range` equal to `source_range` (the full `0..media duration` range), using
+  `clipwright`'s corrected video-stream-based duration (see `clipwright` v0.6.1, which no longer
+  inflates `MediaInfo.duration` with audio drift). The V1/A1 shared reference means both video and
+  audio clips carry the video-based duration, consistent with the existing `source_range` sharing.
+
 ## [0.3.1] — 2026-07-02
 
 ### Security

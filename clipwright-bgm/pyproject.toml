@@ -1,6 +1,6 @@
 [project]
 name = "clipwright-bgm"
-version = "0.3.3"
+version = "0.3.4"
 description = "MCP tool to write BGM placement annotations to OTIO timeline. Records BGM volume, fade, and ducking instructions as metadata on A2 Audio track clips, which clipwright-render realizes as a mix."
 readme = "README.md"
 license = { text = "MIT" }

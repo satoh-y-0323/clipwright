@@ -1,6 +1,6 @@
 [project]
 name = "clipwright-color"
-version = "0.3.1"
+version = "0.3.2"
 description = "MCP tool for video color analysis and OTIO color-directive generation: measures average luma and derives auto white balance via gray-world chroma (UAVG/VAVG), accepts caller saturation/contrast/gamma and temperature/tint overrides, and stores an optional caller-supplied .cube 3D-LUT path in the OTIO color directive."
 readme = "README.md"
 license = { text = "MIT" }

@@ -44,7 +44,7 @@ from clipwright_sequence.sequence import build_sequence
 
 FPS = 30.0
 DURATION_SEC = 10.0
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 
 # ===========================================================================
 # Helpers

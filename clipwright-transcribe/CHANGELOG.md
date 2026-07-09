@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] - 2026-07-09
+
+### Fixed
+
+- **`available_range` is now populated on the generated clip** (GitHub Issue #1). The full-length
+  source clip's `MediaRef.available_range` is now set to the same `0..media duration` range as
+  `source_range`, using `clipwright`'s corrected video-stream-based duration (see `clipwright`
+  v0.6.1, which no longer inflates `MediaInfo.duration` with audio drift). `words` OTIO metadata
+  `version` is bumped to `"0.5.2"` to match (drift guard).
+
 ## [0.5.1] - 2026-07-02
 
 ### Security

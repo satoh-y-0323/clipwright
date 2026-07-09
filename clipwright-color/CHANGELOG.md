@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-07-09
+
+### Fixed
+
+- **`ExternalReference.available_range` is now populated** (GitHub Issue #1). `_add_full_clip`
+  now sets `available_range` equal to `source_range` (the full `0..media duration` range), using
+  `clipwright`'s corrected video-stream-based duration (see `clipwright` v0.6.1, which no longer
+  inflates `MediaInfo.duration` with audio drift).
+
 ## [0.3.1] - 2026-07-02
 
 ### Security

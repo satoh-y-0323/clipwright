@@ -5,6 +5,43 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.36.0] - 2026-07-09
+
+Video/audio duration-drift fix (GitHub Issue #1) and `available_range` wiring across
+every timeline-generating tool.
+
+### Fixed (`clipwright` v0.6.1, `clipwright-trim` v0.2.2, `clipwright-silence` v0.3.2,
+`clipwright-transcribe` v0.5.2, `clipwright-sequence` v0.2.2, `clipwright-loudness` v0.3.3,
+`clipwright-color` v0.3.2, `clipwright-noise` v0.3.3, `clipwright-stabilize` v0.4.2,
+`clipwright-reframe` v0.3.2, `clipwright-bgm` v0.3.4)
+
+- **`inspect_media` no longer reports a container-level duration inflated by audio drift.**
+  Media files where the audio stream runs slightly longer than the video stream (e.g. some
+  DaVinci Resolve exports) previously had `MediaInfo.duration` computed from ffprobe's
+  `format.duration`, which reflects the longest stream in the container — the drifted audio
+  duration, not the video. Because nearly every tool that builds an OTIO `Clip`
+  (`trim`/`silence`/`transcribe`/`sequence`/`loudness`/`color`/`noise`/`stabilize`/`reframe`/`bgm`)
+  derives `source_range` from this value, the inflated duration propagated into every generated
+  `.otio` file. Importing the resulting timeline into an NLE (reported: DaVinci Resolve) produced
+  a "Media Offline" error because `source_range` extended past the video's actual frame range.
+  `clipwright.media._parse_ffprobe_json` now prefers the first video stream's own duration
+  information — `nb_frames` (converted with the resolved frame rate), then stream `duration`,
+  then `duration_ts`/`time_base` — before falling back to `format.duration` as before
+  (audio-only sources are unaffected, and every existing fallback path is preserved). `StreamInfo`
+  gained an `nb_frames` field so agents can see the raw ffprobe value.
+- **`MediaRef.available_range` is now wired through to the generated OTIO
+  `ExternalReference.available_range`.** `clipwright.otio_utils.add_clip` previously dropped
+  `available_range` on the floor; it is now set whenever the caller provides one (unset stays
+  `None`, fully backward-compatible). All ten satellite tools now populate it: sub-range tools
+  (`trim`, `silence`, `sequence`) set it to the full source-media duration (not the trimmed/kept
+  sub-range), so `source_range` is verifiably contained within it; full-length tools
+  (`transcribe`, `loudness`, `color`, `noise`, `stabilize`, `reframe`, `bgm`) set it equal to
+  `source_range`.
+
+Reported by [@in3omnia](https://github.com/in3omnia) in
+[#1](https://github.com/satoh-y-0323/clipwright/issues/1) — thank you for the detailed repro
+(video=21.200s/530 frames@25fps vs. audio=21.269s) that made this straightforward to track down.
+
 ## [0.35.0] - 2026-07-09
 
 Picture-in-Picture (PiP): compose a second video (webcam, reaction, B-roll inset) over the
