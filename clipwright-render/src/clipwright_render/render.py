@@ -73,6 +73,12 @@ _ALLOWED_IMAGE_EXTENSIONS: frozenset[str] = frozenset(
     {".png", ".jpg", ".jpeg", ".webp"}
 )
 
+# PiP video overlay file extension whitelist (ADR-PIP-5 / PiP video inputs).
+# Keep in sync with plan._ALLOWED_PIP_VIDEO_EXTENSIONS (cross-layer defence-in-depth).
+_ALLOWED_PIP_VIDEO_EXTENSIONS: frozenset[str] = frozenset(
+    {".mp4", ".mkv", ".mov", ".webm"}
+)
+
 # Maximum .srt file size accepted for re-timing (SR-L-2)
 _MAX_SRT_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB
 
@@ -331,7 +337,7 @@ def _build_ffmpeg_inputs(
     )
     for img in plan.image_sources:
         if img_dur is not None:
-            inputs += ["-t", img_dur, "-loop", "1"]
+            inputs += ["-loop", "1", "-t", img_dur]
         inputs += ["-i", img]
 
     # PiP video overlays: plain -i <pip_source>, NO -loop 1 (ADR-PIP-7 — these
@@ -1243,6 +1249,48 @@ def _render_inner(
             if _img_dur is not None:
                 inputs += ["-loop", "1", "-t", _img_dur]
             inputs += ["-i", img]
+
+        # PiP video overlays: appended AFTER image_sources (ADR-PIP-7).
+        # Plain -i <pip_source>, NO -loop 1 (these are real video files with their own
+        # timestamps, unlike the still-image overlays above; trim+setpts in the
+        # filtergraph re-bases them instead).
+        # Boundary, extension, and existence checks are applied here (defence-in-depth;
+        # OTIO is untrusted; second-layer validation mirrors image_sources).
+        for pip in plan.pip_sources:
+            _pip_p = Path(pip.replace("\\", "/"))
+            _pip_exists_p = (
+                (timeline_path.parent / _pip_p) if not _pip_p.is_absolute() else _pip_p
+            )
+            # Existence check (FILE_NOT_FOUND; basename only; CWE-209)
+            if not _pip_exists_p.exists():
+                raise ClipwrightError(
+                    code=ErrorCode.FILE_NOT_FOUND,
+                    message=f"PiP video file not found: {_pip_p.name}",
+                    hint=(
+                        "Place the PiP video file referenced in the OTIO timeline"
+                        " in the expected location."
+                    ),
+                )
+            # Extension allowlist (INVALID_INPUT; after existence check per ADR-OV-3)
+            _pip_ext = _pip_p.suffix.lower()
+            if _pip_ext not in _ALLOWED_PIP_VIDEO_EXTENSIONS:
+                raise ClipwrightError(
+                    code=ErrorCode.INVALID_INPUT,
+                    message=(f"PiP video file extension is not allowed: {_pip_ext!r}."),
+                    hint=(
+                        "Use a PiP video file with extension .mp4, .mkv, .mov,"
+                        " or .webm."
+                    ),
+                )
+            # Unified boundary/symlink check (ADR-PP-1): external absolute paths allowed
+            check_media_ref(pip, timeline_path.parent, "pip")
+            # Re-probe video stream (TOCTOU: check_media_ref covers symlink/path
+            # validation; re-probe ensures content is still valid at render time,
+            # unlike _verify_image_magic which only checks magic bytes).
+            inspect_media(pip)
+            # Check that output is not equal to pip source
+            check_output_not_source(output_path, [pip])
+            inputs += ["-i", pip]
 
         # F-4: When stabilize is enabled, output must be absolutised so that
         # changing cwd to the trf parent directory does not redirect the output

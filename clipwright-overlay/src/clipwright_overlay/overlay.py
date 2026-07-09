@@ -75,6 +75,10 @@ _ALLOWED_VIDEO_EXTENSIONS: frozenset[str] = frozenset({".mp4", ".mkv", ".mov", "
 
 # Maximum number of pip_overlay markers allowed per timeline (ADR-PIP-6). Much
 # lower than _MAX_IMAGE_OVERLAYS since each PiP decodes a full video stream.
+# NOTE: This constant is defined independently in both clipwright-overlay and
+# clipwright-render. When changing this value, both definitions must be updated
+# manually. Cross-package dependency is avoided per ADR-PIP-4; automatic sync tests
+# are not provided.
 _MAX_PIP_OVERLAYS: int = 4
 
 

@@ -180,6 +180,11 @@ def _write_full_timeline(path: Path, tl: otio.schema.Timeline) -> None:
 def _fake_run_capturing(captured_cmd: list[str]) -> Any:
     def _run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
         captured_cmd.extend(cmd)
+        # Create the output file (last argument to ffmpeg is typically the output)
+        # so that render_timeline's output existence check passes (mimics ffmpeg
+        # successfully writing the output file).
+        if cmd and not cmd[-1].startswith("-"):
+            Path(cmd[-1]).touch()
         return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
     return _run

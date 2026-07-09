@@ -829,6 +829,10 @@ _ALLOWED_PIP_VIDEO_EXTENSIONS: frozenset[str] = frozenset(
 # Maximum number of pip_overlay markers per timeline (mirrors _MAX_IMAGE_OVERLAYS
 # defence-in-depth pattern; ADR-PIP-6 sets the annotate-side limit to 4, so this
 # render-side re-check is a low-cost second layer, not the primary enforcement).
+# NOTE: This constant is defined independently in both clipwright-overlay and
+# clipwright-render. When changing this value, both definitions must be updated
+# manually. Cross-package dependency is avoided per ADR-PIP-4; automatic sync tests
+# are not provided.
 _MAX_PIP_OVERLAYS: int = 4
 
 
@@ -861,10 +865,9 @@ class PipOverlay:
     thread a second parallel structure through _collect_pip_overlays):
         mix_audio: whether this PiP's audio should be mixed into the output.
         audio_volume: linear volume multiplier applied to the PiP's audio.
-        ducking: ducking directive for this PiP's audio, or None when ducking
-            is disabled/absent. Typed loosely (Any) because PipDuckingDirective
-            is defined by the audio-mixing task (ADR-PIP-9); this task only
-            needs a slot to carry the raw validated-or-unvalidated value through.
+        ducking: PipDuckingDirective instance for this PiP's audio, or None when
+            ducking is disabled/absent. Validated and converted from marker metadata
+            in _marker_to_pip_overlay (mirrors BgmDirective validation pattern).
     """
 
     media_path: str
@@ -930,7 +933,23 @@ def _marker_to_pip_overlay(
     fade_out_s: float = float(cw.get("fade_out_sec", 0.0))
     mix_audio: bool = bool(cw.get("mix_audio", False))
     audio_volume: float = float(cw.get("audio_volume", 1.0))
-    ducking: Any = cw.get("ducking")
+    ducking_raw = cw.get("ducking")
+    ducking: PipDuckingDirective | None = None
+    if ducking_raw is not None:
+        try:
+            ducking = PipDuckingDirective(**dict(ducking_raw))
+        except (ValidationError, TypeError, ValueError) as exc:
+            raise ClipwrightError(
+                code=ErrorCode.INVALID_INPUT,
+                message=(
+                    "The timeline contains an invalid PiP overlay:"
+                    " ducking metadata validation failed."
+                ),
+                hint=(
+                    "Re-annotate with clipwright_add_pip; check"
+                    " ducking.threshold/ratio ranges."
+                ),
+            ) from exc
 
     # Reconstruct absolute path when timeline_path is available (mirrors
     # _marker_to_image_overlay).
@@ -5177,6 +5196,7 @@ def build_plan(
         bgm_source=bgm_source_out,
         stabilize_cwd=stabilize_cwd,
         image_sources=[o.image_path for o in _image_overlays],
+        pip_sources=[o.media_path for o in _pip_overlays],
     )
 
 
