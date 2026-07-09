@@ -4569,8 +4569,12 @@ def _append_pip_audio_pipe(
             # No ducking PiPs using main, use main directly
             amix_input_labels.append(main_fmt_label)
 
-    # Add BGM (already at correct sample rate from _append_bgm_pipe)
-    if bgm_present:
+    # Add BGM (already at correct sample rate from _append_bgm_pipe).
+    # Skip entirely when has_main_audio: in that case audio_map_label is
+    # already the main+BGM-combined [outa_bgm] signal, folded into
+    # main_pip_fmt/main_mix by the "Add main audio" block above — re-adding a
+    # bare outa_bgm here would mix the same signal twice (CR-NEW).
+    if bgm_present and not has_main_audio:
         if num_ducking_pips_with_bgm > 0 and not has_main_audio:
             # Similar asplit for BGM when ducking is enabled and no main audio
             asplit_outputs = ["bgm_mix"] + [
@@ -4597,14 +4601,15 @@ def _append_pip_audio_pipe(
         if threshold is not None:
             # Ducking enabled: apply sidechaincompress with the asplit sidechain
             duck_output = f"pip{i}_duck"
-            # Use the pre-computed sidechain label from the asplit above
-            sidechain_label = sidechain_for_pip.get(
-                i,
-                # Fallback (shouldn't reach here if logic is correct)
-                "main_pip_fmt"
-                if has_main_audio
-                else ("outa_bgm" if bgm_present else branch_label),
+            # Use the pre-computed sidechain label from the asplit above.
+            # Every ducking PiP is registered in sidechain_for_pip by the
+            # main/bgm asplit blocks above; reaching this without a mapping
+            # would mean those blocks and this loop have diverged (logic bug).
+            assert i in sidechain_for_pip, (
+                f"ducking PiP index {i} has no sidechain label — asplit"
+                " construction and the ducking loop are out of sync"
             )
+            sidechain_label = sidechain_for_pip[i]
 
             filter_parts.append(
                 f"[{branch_label}][{sidechain_label}]sidechaincompress="

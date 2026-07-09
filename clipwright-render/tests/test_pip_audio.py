@@ -355,14 +355,17 @@ class TestAudioVolumeApplied:
 class TestMultiPipAmixAlimiter:
     """Multiple mix_audio=True PiPs are combined in ONE amix stage with ONE
     trailing alimiter — never a per-pip amix/alimiter chain. N =
-    main(if has_main_audio) + bgm(if bgm_present) + count(mix_audio pips), per
-    the plan-report literal formula ("メイン + bgm(あれば) + 各 PiP の合計")."""
+    combined_main_bgm(1 if has_main_audio or bgm_present) + count(mix_audio
+    pips). When both has_main_audio and bgm_present are True the caller has
+    already folded BGM into the main signal ([outa_bgm]), so it counts as a
+    SINGLE amix input, not two (CR-NEW: previously double-counted)."""
 
     @pytest.mark.parametrize(
         "has_main_audio,bgm_present,n_pips,expected_n",
         [
             (True, False, 2, 3),
-            (True, True, 2, 4),
+            # main+BGM is one combined signal ([outa_bgm]) -> 1 + 2 pips = 3
+            (True, True, 2, 3),
             (False, True, 3, 4),
             (True, False, 1, 2),
         ],
