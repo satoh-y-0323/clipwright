@@ -5,6 +5,43 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.35.0] - 2026-07-09
+
+Picture-in-Picture (PiP): compose a second video (webcam, reaction, B-roll inset) over the
+main track at a position/size/time window, with optional audio mixing and sidechain ducking.
+
+### Added
+
+- **`clipwright-overlay` v0.3.0** — new MCP tool `clipwright_add_pip`. Accumulate-type: annotates
+  an OTIO timeline with a `pip_overlay` marker (`kind="pip_overlay"`) referencing a second video
+  source (`.mp4`/`.mkv`/`.mov`/`.webm`). Options: placement (`start_sec`/`duration_sec`/`x`/`y`,
+  default centered, default `scale=0.3` — distinct from `clipwright_add_overlay`'s `1.0` default
+  since PiP sources are typically already full-resolution), source trim (`media_start_sec`),
+  fade in/out, and audio mixing (`mix_audio`, `audio_volume`, `ducking.enabled`/`threshold`/
+  `ratio`). `media_path` must contain a video stream (probed via `inspect_media`); audio-only
+  sources are rejected with a hint pointing to `clipwright_add_bgm`. Up to 4 PiP overlays may be
+  accumulated per timeline. Reuses `clipwright.pathpolicy` (`validate_source_or_basename`,
+  `check_output_not_source`, `media_ref_for_otio`) and the `image_overlay` accumulate/idempotent
+  pattern; no new `clipwright` core dependency.
+- **`clipwright-render` v0.18.0** — materialises `pip_overlay` markers: composites the PiP video
+  (scale/trim/fade, topmost layer after image overlays) and, when `mix_audio=true`, mixes the PiP
+  audio into the program audio (time-windowed via `adelay`/`apad`/`atrim`, optional sidechain
+  ducking against main/BGM via `sidechaincompress`, mirroring the `clipwright-bgm` ducking
+  pattern). `_render_inner` applies the same second-layer defence as `image_overlay` sources
+  (existence check → extension allow-list → `check_media_ref` boundary/symlink re-check →
+  `inspect_media` content re-probe → `check_output_not_source`).
+
+### Fixed
+
+- Iterative hardening during development (pre-release, not user-visible in any prior tag):
+  wired the PiP video-compositing filter into both the single-source and multi-source
+  filter-graph builders (it was previously defined but never invoked); corrected the PiP audio
+  trim filter (`atrim` instead of the video-only `trim`); fixed the sidechain-ducking `asplit`
+  target (must split the main/BGM signal, not the PiP branch itself, mirroring
+  `clipwright-bgm`'s ducking pattern); fixed a double-counted `outa_bgm` input when both main
+  audio and BGM are present together with a `mix_audio=true` PiP. All four were caught by real
+  `stdio` MCP + FFmpeg execution end-to-end testing (CLAUDE.md §4), not by unit tests alone.
+
 ## [0.34.0] - 2026-07-08
 
 DRY consolidation of the `validate_source_file` + basename re-wrap idiom into a new
