@@ -1057,7 +1057,7 @@ class TestMediaInfoBitRate:
 def _resolve_video_duration_or_fail():  # type: ignore[no-untyped-def]
     """Import clipwright.media._resolve_video_duration, failing the test if absent.
 
-    ADR-6: this private helper does not exist yet at Red phase.
+    Import the private helper; fails the test if the helper has been removed/renamed.
     """
     try:
         from clipwright.media import (
