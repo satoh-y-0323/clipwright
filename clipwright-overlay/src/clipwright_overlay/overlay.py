@@ -71,6 +71,11 @@ _MAX_IMAGE_OVERLAYS: int = 64
 
 # Allowed video file extensions for PiP overlay (ADR-PIP-5). Same container set
 # as clipwright-render's _ALLOWED_EXTENSIONS.
+# NOTE: This set is defined independently in three places (this
+# _ALLOWED_VIDEO_EXTENSIONS, and clipwright-render's
+# plan._ALLOWED_PIP_VIDEO_EXTENSIONS and render._ALLOWED_PIP_VIDEO_EXTENSIONS).
+# When changing it, all three must be updated manually. Cross-package dependency
+# is avoided per ADR-PIP-4; automatic sync tests are not provided.
 _ALLOWED_VIDEO_EXTENSIONS: frozenset[str] = frozenset({".mp4", ".mkv", ".mov", ".webm"})
 
 # Maximum number of pip_overlay markers allowed per timeline (ADR-PIP-6). Much

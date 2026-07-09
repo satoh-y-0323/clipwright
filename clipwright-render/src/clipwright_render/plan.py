@@ -822,6 +822,11 @@ def _append_overlay_filter(
 # Allowed video file extensions for PiP inputs (ADR-PIP-5). Keep in sync with
 # render._ALLOWED_EXTENSIONS (cross-layer defence-in-depth; same set used by
 # clipwright-overlay's _ALLOWED_VIDEO_EXTENSIONS).
+# NOTE: This set is defined independently in three places (this
+# plan._ALLOWED_PIP_VIDEO_EXTENSIONS, render._ALLOWED_PIP_VIDEO_EXTENSIONS, and
+# clipwright-overlay's _ALLOWED_VIDEO_EXTENSIONS). When changing it, all three must
+# be updated manually. Cross-package dependency is avoided per ADR-PIP-4; automatic
+# sync tests are not provided.
 _ALLOWED_PIP_VIDEO_EXTENSIONS: frozenset[str] = frozenset(
     {".mp4", ".mkv", ".mov", ".webm"}
 )
@@ -938,7 +943,7 @@ def _marker_to_pip_overlay(
     if ducking_raw is not None:
         try:
             ducking = PipDuckingDirective(**dict(ducking_raw))
-        except (ValidationError, TypeError, ValueError) as exc:
+        except (ValidationError, TypeError, ValueError):
             raise ClipwrightError(
                 code=ErrorCode.INVALID_INPUT,
                 message=(
@@ -949,7 +954,7 @@ def _marker_to_pip_overlay(
                     "Re-annotate with clipwright_add_pip; check"
                     " ducking.threshold/ratio ranges."
                 ),
-            ) from exc
+            ) from None
 
     # Reconstruct absolute path when timeline_path is available (mirrors
     # _marker_to_image_overlay).

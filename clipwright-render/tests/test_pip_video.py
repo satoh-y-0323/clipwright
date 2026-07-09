@@ -1,7 +1,8 @@
 """test_pip_video.py — Red-phase tests for PiP (Picture-in-Picture) video
 compositing filtergraph in clipwright-render.
 
-Target symbols (NOT YET IMPLEMENTED — this suite is expected to be Red):
+Target symbols (now IMPLEMENTED; the xfail guard below self-disarms once the
+PiP video symbols are present, so this suite runs green):
   - PipOverlay (frozen dataclass in clipwright_render.plan)
   - _collect_pip_overlays(timeline, pip_index_base, timeline_path=None)
       -> list[PipOverlay]

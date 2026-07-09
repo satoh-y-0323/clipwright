@@ -75,6 +75,11 @@ _ALLOWED_IMAGE_EXTENSIONS: frozenset[str] = frozenset(
 
 # PiP video overlay file extension whitelist (ADR-PIP-5 / PiP video inputs).
 # Keep in sync with plan._ALLOWED_PIP_VIDEO_EXTENSIONS (cross-layer defence-in-depth).
+# NOTE: This set is defined independently in three places (this
+# render._ALLOWED_PIP_VIDEO_EXTENSIONS, plan._ALLOWED_PIP_VIDEO_EXTENSIONS, and
+# clipwright-overlay's _ALLOWED_VIDEO_EXTENSIONS). When changing it, all three must
+# be updated manually. Cross-package dependency is avoided per ADR-PIP-4; automatic
+# sync tests are not provided.
 _ALLOWED_PIP_VIDEO_EXTENSIONS: frozenset[str] = frozenset(
     {".mp4", ".mkv", ".mov", ".webm"}
 )
