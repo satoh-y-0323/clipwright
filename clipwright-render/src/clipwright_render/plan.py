@@ -3784,6 +3784,7 @@ def _build_filter_complex(
     stabilize_smoothing: int = _DEFAULT_STABILIZE_SMOOTHING,
     reframe: _RenderReframe | None = None,
     image_overlays: list[ImageOverlay] | None = None,
+    pip_overlays: list[PipOverlay] | None = None,
     transitions: list[_RenderTransition] | None = None,
     program_durations: list[float] | None = None,
 ) -> tuple[str, str, str, bool, bool, list[str], float]:
@@ -3988,6 +3989,13 @@ def _build_filter_complex(
             filter_parts, video_map_label, image_overlays
         )
 
+    # Inject PiP video overlay stage after image overlays (topmost layer; ADR-PIP-7).
+    # None or empty list is a no-op (backward compatible).
+    if pip_overlays:
+        video_map_label = _append_pip_video_filter(
+            filter_parts, video_map_label, pip_overlays
+        )
+
     filter_complex = ";".join(filter_parts)
 
     # Determine the audio map terminal label via cumulative pipe (ADR-L5b; DC-AM-001):
@@ -4190,6 +4198,7 @@ def _build_multi_source_filter_complex(
     text_overlays: list[TextOverlay] | None = None,
     color_grade: _RenderColorGrade | None = None,
     image_overlays: list[ImageOverlay] | None = None,
+    pip_overlays: list[PipOverlay] | None = None,
     transitions: list[_RenderTransition] | None = None,
     program_durations: list[float] | None = None,
 ) -> tuple[str, str, str, bool, bool, list[str], float]:
@@ -4304,6 +4313,13 @@ def _build_multi_source_filter_complex(
     if image_overlays:
         video_map_label = _append_overlay_filter(
             filter_parts, video_map_label, image_overlays
+        )
+
+    # Inject PiP video overlay stage after image overlays (topmost layer; ADR-PIP-7).
+    # None or empty list is a no-op (backward compatible).
+    if pip_overlays:
+        video_map_label = _append_pip_video_filter(
+            filter_parts, video_map_label, pip_overlays
         )
 
     filter_complex = ";".join(filter_parts)
@@ -4474,32 +4490,31 @@ def _append_pip_audio_pipe(
     pip_branch_labels: list[tuple[str, float | None, float | None]] = []
 
     for i, pip in enumerate(mixing_pips):
-        # Build the PiP branch: trim → asetpts → adelay → apad → atrim → volume
+        # Build the PiP branch: atrim → asetpts → adelay → apad → atrim → volume
         # (ADR-PIP-9 point 1, exact order required)
         base_branch = (
-            f"[{pip.input_index}:a]trim=start={pip.media_start_s:g}:duration={pip.duration_s:g},"
+            f"[{pip.input_index}:a]atrim=start={pip.media_start_s:g}:duration={pip.duration_s:g},"
             f"asetpts=PTS-STARTPTS,"
             f"adelay={int(pip.start_s * 1000)}|{int(pip.start_s * 1000)},"
             f"apad,atrim=0:{main_dur:g},"
             f"volume={pip.audio_volume:g}"
         )
 
-        # Apply ducking if enabled: asplit before sidechaincompress
+        # Append the PiP audio branch (same for both ducking and non-ducking cases)
+        # When ducking is enabled, sidechaincompress will route main/bgm sidechain
+        # into the compress stage; the PiP audio itself is not split (ADR-PIP-9).
+        branch_label = f"[pip{i}_audio]"
+        branch = f"{base_branch}{branch_label}"
+        filter_parts.append(branch)
+
         if pip.ducking is not None and pip.ducking.enabled:
-            # asplit the audio: one for mixing, one for sidechain input
-            branch_label = f"[pip{i}_audio]"
-            sc_input_label = f"[pip{i}_sc_in]"
-            branch = f"{base_branch},asplit{branch_label}{sc_input_label}"
-            filter_parts.append(branch)
-            # sidechaincompress will be wired later with main/bgm as sidechain
+            # Ducking enabled: sidechaincompress will be wired later with
+            # main/bgm as sidechain (no asplit needed on PiP audio)
             pip_branch_labels.append(
                 (f"pip{i}_audio", pip.ducking.threshold, pip.ducking.ratio)
             )
         else:
-            # No ducking: append the branch directly
-            branch_label = f"[pip{i}_audio]"
-            branch = f"{base_branch}{branch_label}"
-            filter_parts.append(branch)
+            # No ducking: PiP label is used directly in amix
             pip_branch_labels.append((f"pip{i}_audio", None, None))
 
     # Single source case: return the PiP label directly (no amix)
@@ -4510,32 +4525,86 @@ def _append_pip_audio_pipe(
     # Determine amix input labels in order: main (if any) + bgm (if any) + pips
     amix_input_labels: list[str] = []
 
+    # Count PiPs with ducking to determine if we need to asplit the sidechain
+    # (ADR-PIP-9: when ducking enabled, split sidechain signal, not the PiP audio)
+    num_ducking_pips_with_main = sum(
+        1 for _, t, _ in pip_branch_labels if t is not None and has_main_audio
+    )
+    num_ducking_pips_with_bgm = sum(
+        1
+        for _, t, _ in pip_branch_labels
+        if t is not None and bgm_present and not has_main_audio
+    )
+
+    # Track the sidechain labels for each ducking PiP index
+    sidechain_for_pip: dict[int, str] = {}
+
     # Add main audio (aformat to match BGM/PiP sample rate)
     if has_main_audio:
         main_fmt_label = "main_pip_fmt"
         filter_parts.append(
             f"{audio_map_label}aformat=sample_rates=48000:channel_layouts=stereo[{main_fmt_label}]"
         )
-        amix_input_labels.append(main_fmt_label)
+
+        # If there are ducking PiPs using main as sidechain, asplit main
+        # into (num_ducking_pips + 1) outputs: one for mixing, rest for sidechains
+        if num_ducking_pips_with_main > 0:
+            # Create asplit with (num_ducking_pips + 1) outputs:
+            # output 0: main_mix (for the main audio in amix)
+            # outputs 1+: main_sc_0, main_sc_1, ... (for each ducking PiP's sidechain)
+            asplit_outputs = ["main_mix"] + [
+                f"main_sc_{i}" for i in range(num_ducking_pips_with_main)
+            ]
+            asplit_str = "".join(f"[{label}]" for label in asplit_outputs)
+            filter_parts.append(f"[{main_fmt_label}]asplit{asplit_str}")
+            amix_input_labels.append("main_mix")
+
+            # Map each ducking PiP (that uses main) to its sidechain label
+            ducking_idx = 0
+            for i, (_, threshold, _) in enumerate(pip_branch_labels):
+                if threshold is not None:  # Ducking enabled
+                    sidechain_for_pip[i] = f"main_sc_{ducking_idx}"
+                    ducking_idx += 1
+        else:
+            # No ducking PiPs using main, use main directly
+            amix_input_labels.append(main_fmt_label)
 
     # Add BGM (already at correct sample rate from _append_bgm_pipe)
     if bgm_present:
-        amix_input_labels.append("outa_bgm")
+        if num_ducking_pips_with_bgm > 0 and not has_main_audio:
+            # Similar asplit for BGM when ducking is enabled and no main audio
+            asplit_outputs = ["bgm_mix"] + [
+                f"bgm_sc_{i}" for i in range(num_ducking_pips_with_bgm)
+            ]
+            asplit_str = "".join(f"[{label}]" for label in asplit_outputs)
+            filter_parts.append(f"[outa_bgm]asplit{asplit_str}")
+            amix_input_labels.append("bgm_mix")
+
+            # Map each ducking PiP (that uses bgm) to its sidechain label
+            ducking_idx = 0
+            for i, (_, threshold, _) in enumerate(pip_branch_labels):
+                if (
+                    threshold is not None and not has_main_audio
+                ):  # Ducking enabled, no main
+                    sidechain_for_pip[i] = f"bgm_sc_{ducking_idx}"
+                    ducking_idx += 1
+        else:
+            # No asplit needed for BGM
+            amix_input_labels.append("outa_bgm")
 
     # Add PiP branches, handling ducking sidechaining
     for i, (branch_label, threshold, ratio) in enumerate(pip_branch_labels):
         if threshold is not None:
-            # Ducking enabled: apply sidechaincompress with main/bgm as sidechain
+            # Ducking enabled: apply sidechaincompress with the asplit sidechain
             duck_output = f"pip{i}_duck"
-            # Determine sidechain source (first available: main or bgm)
-            if has_main_audio:
-                sidechain_label = "main_pip_fmt"
-            elif bgm_present:
-                sidechain_label = "outa_bgm"
-            else:
-                # Shouldn't happen; ducking requires a sidechain (main or bgm).
-                # Fallback: use the PiP itself (no effective ducking).
-                sidechain_label = branch_label
+            # Use the pre-computed sidechain label from the asplit above
+            sidechain_label = sidechain_for_pip.get(
+                i,
+                # Fallback (shouldn't reach here if logic is correct)
+                "main_pip_fmt"
+                if has_main_audio
+                else ("outa_bgm" if bgm_present else branch_label),
+            )
 
             filter_parts.append(
                 f"[{branch_label}][{sidechain_label}]sidechaincompress="
@@ -4945,6 +5014,7 @@ def build_plan(
             text_overlays=text_overlays,
             color_grade=color_grade,
             image_overlays=_image_overlays,
+            pip_overlays=_pip_overlays,
             transitions=transition_directive,
             program_durations=_program_durations,
         )
@@ -5001,6 +5071,7 @@ def build_plan(
             ),
             reframe=reframe_directive,
             image_overlays=_image_overlays,
+            pip_overlays=_pip_overlays,
             transitions=transition_directive,
             program_durations=_program_durations,
         )
