@@ -1,4 +1,4 @@
-"""test_available_range.py — TDD Red for clipwright_reframe._add_full_clip
+"""test_available_range.py — clipwright_reframe._add_full_clip
 media_reference.available_range wiring (core otio_utils ADR-4 parity).
 
 Context:
@@ -7,18 +7,18 @@ Context:
   tests/test_otio_utils.py::TestAvailableRangeWiring in the core package).
   clipwright_reframe.reframe._add_full_clip constructs an
   otio.schema.ExternalReference directly (it predates add_clip's
-  available_range support) and never sets .available_range, so it stays None
-  on every clip written by clipwright-reframe.
+  available_range support) and sets .available_range directly on every clip
+  written by clipwright-reframe.
 
   Since _add_full_clip always represents the *entire* source media (a
   full-length passthrough clip, not a trimmed excerpt), the correct wiring is
   available_range == source_range (same start_time/duration): the clip's
-  source_range already spans [0, duration_sec), so available_range should be
-  set to that same TimeRange.
+  source_range already spans [0, duration_sec), so available_range is set to
+  that same TimeRange.
 
 Verification points:
   A. Video clip (V1) available_range wiring
-     A-1: media_reference.available_range is not None (currently unset -> Red)
+     A-1: media_reference.available_range is not None
      A-2: available_range.start_time == RationalTime(0, rate)
      A-3: available_range.duration == source_range.duration (full media length)
      A-4: source_range is a subset of available_range (⊆): start_time and
@@ -38,11 +38,6 @@ Verification points:
 
   C. Non-audio media (has_audio=False)
      C-1: V1 available_range wiring still holds when no A1 clip exists.
-
-Red rationale: _add_full_clip never sets ExternalReference.available_range,
-so clip.media_reference.available_range is None for every assertion below
-that expects a non-None TimeRange. This is a feature-not-implemented failure,
-not a broken test (no typos/import errors expected).
 """
 
 from __future__ import annotations
@@ -170,8 +165,7 @@ class TestVideoAvailableRange:
         assert result["ok"] is True, f"Expected ok=True, got: {result}"
         clip = _video_clip(tl)
         assert clip.media_reference.available_range is not None, (
-            "_add_full_clip must wire media_reference.available_range"
-            " (currently unset — feature not implemented)."
+            "_add_full_clip must wire media_reference.available_range."
         )
 
     def test_available_range_start_time_is_zero(self, tmp_path: Path) -> None:
@@ -233,7 +227,7 @@ class TestAudioAvailableRange:
         clip = _audio_clip(tl)
         assert clip.media_reference.available_range is not None, (
             "_add_full_clip must wire media_reference.available_range"
-            " for the audio clip too (currently unset)."
+            " for the audio clip too."
         )
 
     def test_audio_available_range_reflects_video_based_duration(

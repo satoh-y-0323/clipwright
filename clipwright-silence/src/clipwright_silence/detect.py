@@ -38,7 +38,13 @@ from clipwright.media import inspect_media
 from clipwright.otio_utils import add_clip, new_timeline, save_timeline
 from clipwright.pathpolicy import check_output_not_source, media_ref_for_otio
 from clipwright.process import resolve_tool, run, safe_subprocess_message
-from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel, ToolResult
+from clipwright.schemas import (
+    MediaRef,
+    RationalTimeModel,
+    TimeRangeModel,
+    ToolResult,
+    full_media_range,
+)
 
 import clipwright_silence
 from clipwright_silence.plan import derive_keep_ranges
@@ -456,10 +462,7 @@ def _detect_inner(
     # ADR-3/ADR-4: silence is a sub-range tool -- available_range must span the
     # full media duration, not each clip's own (partial) source_range. Built
     # once from media_info.duration and reused unchanged for every keep clip.
-    available_range = TimeRangeModel(
-        start_time=RationalTimeModel(value=0.0, rate=rate),
-        duration=RationalTimeModel(value=media_info.duration.value, rate=rate),
-    )
+    available_range = full_media_range(media_info)
     target_url = media_ref_for_otio(media_path, output_path.parent)
 
     for start_sec, end_sec in keep_ranges:

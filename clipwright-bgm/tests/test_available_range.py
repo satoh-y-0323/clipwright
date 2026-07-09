@@ -1,12 +1,11 @@
-"""test_available_range.py — TDD Red for BGM clip ExternalReference.available_range wiring.
+"""test_available_range.py — BGM clip ExternalReference.available_range wiring contract.
 
 Context (GitHub Issue #1 / architecture-report ADR-4, plan-report task test-bgm):
   bgm is a full-length tool (inline ExternalReference construction, Pattern B).
-  available_range may equal source_range (both are the full BGM media length,
-  0..bgm_duration). Currently bgm.py builds the ExternalReference without
-  available_range, so it stays None and every assertion below fails (Red).
-  Only the newly-added BGM clip (kind=='bgm') is in scope; bgm is an
-  accumulate-style tool so pre-existing V1/A1 clips are untouched.
+  available_range equals source_range (both are the full BGM media length,
+  0..bgm_duration). bgm.py builds the ExternalReference with available_range
+  set directly. Only the newly-added BGM clip (kind=='bgm') is in scope; bgm
+  is an accumulate-style tool so pre-existing V1/A1 clips are untouched.
 
 Mocking policy mirrors test_bgm.py: inspect_media is monkeypatched so no real
 ffprobe subprocess is invoked.

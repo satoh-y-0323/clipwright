@@ -19,12 +19,11 @@ Mocking policy mirrors test_detect.py:
   - Patch clipwright_silence.detect.inspect_media to supply MediaInfo.
   - Patch clipwright_silence.detect.resolve_tool / run to avoid real ffmpeg.
 
-Red-phase note: detect.py currently builds
-  MediaRef(target_url=media_ref_for_otio(...))
-without available_range, so ExternalReference.available_range stays None
-(core add_clip only wires it when MediaRef.available_range is not None,
-see otio_utils.py ADR-4). All assertions below fail until detect.py is
-updated to pass a fixed full-duration available_range.
+Implementation note: detect.py builds
+  MediaRef(target_url=media_ref_for_otio(...), available_range=...)
+with a fixed full-duration TimeRange, so ExternalReference.available_range is
+wired by add_clip (core add_clip wires it when MediaRef.available_range is
+not None, see otio_utils.py ADR-4).
 """
 
 from __future__ import annotations

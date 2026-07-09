@@ -1,7 +1,7 @@
-"""test_available_range.py — Red tests for ADR-3: available_range wiring in trim output.
+"""test_available_range.py — ADR-3 available_range wiring contract for trim output.
 
 ★ADR-3 contract: trim carves out sub-ranges of a media file. Each keep Clip's
-media_reference.available_range MUST describe the *whole* media asset
+media_reference.available_range describes the *whole* media asset
 (TimeRange(start=0, duration=media_info.duration)), never the clip's own
 source_range. Downstream tools (e.g. clipwright-render, clipwright-speed) rely
 on available_range to know how much headroom exists around a given clip's
@@ -22,12 +22,10 @@ Verification aspects:
 Mocking policy mirrors test_trim.py: clipwright_trim.trim.inspect_media is
 patched with a synthetic MediaInfo; no real ffprobe binary is invoked.
 
-Status at authoring time: trim.py's _trim_inner constructs
-MediaRef(target_url=abs_media) without available_range, so
-add_clip() (see clipwright.otio_utils.add_clip) leaves
-ExternalReference.available_range unset (None). These tests are RED until
-trim.py is updated to pass MediaRef(..., available_range=TimeRangeModel(
-start_time=RationalTimeModel(value=0, rate=rate), duration=media_info.duration)).
+Implementation note: trim.py's _trim_inner passes MediaRef(..., available_range=
+TimeRangeModel(start_time=RationalTimeModel(value=0, rate=rate),
+duration=media_info.duration)) so add_clip() (see clipwright.otio_utils.add_clip)
+wires ExternalReference.available_range accordingly.
 """
 
 from __future__ import annotations

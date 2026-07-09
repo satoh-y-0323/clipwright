@@ -208,3 +208,24 @@ def from_otio_time(rt: otio.opentime.RationalTime) -> RationalTimeModel:
     Preserves rate as-is without normalising to a seconds float.
     """
     return RationalTimeModel(value=rt.value, rate=rt.rate)
+
+
+def full_media_range(media_info: MediaInfo) -> TimeRangeModel:
+    """Build a TimeRangeModel spanning the whole referenced media asset (0..duration).
+
+    This is the ``available_range`` semantics from ADR-3: it describes the full
+    extent of the source media that a MediaRef points to, not any individual
+    clip's own (possibly partial) source_range. Callers that build multiple
+    clips referencing the same media should construct this once and reuse it
+    for every clip.
+
+    Requires media_info.duration to be set; raises ValueError otherwise
+    (callers are expected to have already validated duration is not None).
+    """
+    duration = media_info.duration
+    if duration is None:
+        raise ValueError("media_info.duration must not be None")
+    return TimeRangeModel(
+        start_time=RationalTimeModel(value=0.0, rate=duration.rate),
+        duration=RationalTimeModel(value=duration.value, rate=duration.rate),
+    )

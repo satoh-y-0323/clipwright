@@ -1,15 +1,15 @@
-"""test_available_range.py — Red tests for ExternalReference.available_range wiring.
+"""test_available_range.py — ExternalReference.available_range wiring contract.
 
-Context (bug under test):
+Context:
   _add_full_clip() in stabilize.py builds an otio.schema.ExternalReference and
-  a full-length otio.schema.Clip, but never sets
-  ExternalReference.available_range. Sibling tools already wire this for the
-  accumulate case via clipwright.otio_utils.add_clip() (ADR-4), which sets
-  ref.available_range from MediaRef.available_range when present. stabilize's
-  full clip covers the entire source duration (source_range == the whole
-  media), so available_range should be present and describe that same full
-  span; downstream tools that trust available_range for extension/overlap
-  checks currently see None instead.
+  a full-length otio.schema.Clip, and sets
+  ExternalReference.available_range directly. Sibling tools already wire this
+  for the accumulate case via clipwright.otio_utils.add_clip() (ADR-4), which
+  sets ref.available_range from MediaRef.available_range when present.
+  stabilize's full clip covers the entire source duration (source_range ==
+  the whole media), so available_range is present and describes that same
+  full span; downstream tools rely on available_range for extension/overlap
+  checks.
 
 Mock policy (mirrors test_stabilize.py F-1):
   - Patch clipwright_stabilize.stabilize.inspect_media to inject stream/duration.
@@ -105,7 +105,7 @@ class TestAvailableRangeNewTimeline:
     full-length clip created when timeline=None."""
 
     def test_available_range_is_set(self, tmp_path: Path) -> None:
-        """ExternalReference.available_range must not be None (currently unset)."""
+        """ExternalReference.available_range must not be None."""
         from clipwright_stabilize.schemas import (  # type: ignore[import-not-found]
             DetectShakeOptions,
         )
@@ -138,7 +138,7 @@ class TestAvailableRangeNewTimeline:
         assert isinstance(ref, otio.schema.ExternalReference)
         assert ref.available_range is not None, (
             "ExternalReference.available_range must be set for the full-length"
-            " clip written by _add_full_clip; got None."
+            " clip written by _add_full_clip."
         )
 
     def test_available_range_matches_full_duration(self, tmp_path: Path) -> None:
@@ -282,5 +282,5 @@ class TestAvailableRangeExistingEmptyTimeline:
         assert isinstance(ref, otio.schema.ExternalReference)
         assert ref.available_range is not None, (
             "The empty-V1-track load path (_load_and_validate_timeline ->"
-            " _add_full_clip) must also wire available_range; got None."
+            " _add_full_clip) must also wire available_range."
         )

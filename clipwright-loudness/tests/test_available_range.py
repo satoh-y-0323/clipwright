@@ -117,8 +117,7 @@ class TestAvailableRangeWiring:
         assert isinstance(ref, otio.schema.ExternalReference)
         assert ref.available_range is not None, (
             "ADR-4: ExternalReference.available_range must be wired for the"
-            " full-length keep clip, but it is None (loudness.py._add_full_clip"
-            " not yet updated)."
+            " full-length keep clip (loudness.py._add_full_clip)."
         )
 
     def test_a1_clip_available_range_is_set(self, tmp_path: Path) -> None:

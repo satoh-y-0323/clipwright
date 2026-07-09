@@ -25,7 +25,13 @@ from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.media import inspect_media
 from clipwright.otio_utils import add_clip, new_timeline, save_timeline
 from clipwright.pathpolicy import check_output_not_source, media_ref_for_otio
-from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel, ToolResult
+from clipwright.schemas import (
+    MediaRef,
+    RationalTimeModel,
+    TimeRangeModel,
+    ToolResult,
+    full_media_range,
+)
 
 import clipwright_trim
 from clipwright_trim.plan import derive_keep_ranges
@@ -146,10 +152,7 @@ def _trim_inner(media: str, output: str, options: TrimOptions) -> ToolResult:
     # ADR-3: available_range describes the whole media asset (0..duration),
     # never a keep clip's own source_range. Built once and reused for every
     # clip so downstream tools (render/speed) see the correct headroom.
-    available_range = TimeRangeModel(
-        start_time=RationalTimeModel(value=0, rate=rate),
-        duration=RationalTimeModel(value=media_info.duration.value, rate=rate),
-    )
+    available_range = full_media_range(media_info)
     media_ref = MediaRef(target_url=abs_media, available_range=available_range)
 
     for start_sec, end_sec in keep_ranges:

@@ -25,6 +25,7 @@ from clipwright.schemas import (
     ToolResult,
     ValidationReport,
     from_otio_time,
+    full_media_range,
     to_otio_time,
 )
 
@@ -435,3 +436,52 @@ class TestOtioTimeConversion:
         assert back.rate == 24.0
         # Must not have been normalised to 30.0
         assert back.value == 720.0
+
+
+# ===========================================================================
+# full_media_range (§13.1 CR-M-001 DRY extraction; ADR-3 available_range)
+# ===========================================================================
+
+
+class TestFullMediaRange:
+    """Contract for full_media_range: builds the whole-asset (0..duration) range."""
+
+    def test_start_time_is_zero(self) -> None:
+        """start_time is always 0, at the duration's rate."""
+        dur = RationalTimeModel(value=900.0, rate=30.0)
+        mi = MediaInfo(path="/v.mp4", container="mp4", duration=dur, streams=[])
+        rng = full_media_range(mi)
+        assert rng.start_time.value == 0.0
+        assert rng.start_time.rate == 30.0
+
+    def test_duration_matches_media_info_duration(self) -> None:
+        """duration value/rate equal media_info.duration exactly (no rescaling)."""
+        dur = RationalTimeModel(value=1234.5, rate=24.0)
+        mi = MediaInfo(path="/v.mp4", container="mp4", duration=dur, streams=[])
+        rng = full_media_range(mi)
+        assert rng.duration.value == dur.value
+        assert rng.duration.rate == dur.rate
+
+    @pytest.mark.parametrize(
+        "value, rate",
+        [
+            (0.0, 30.0),
+            (90.0, 29.97),
+            (48000.0, 1000.0),  # rate for audio-only sources
+        ],
+    )
+    def test_various_rates(self, value: float, rate: float) -> None:
+        """Works for representative fps/rate values, including audio-only 1000 rate."""
+        dur = RationalTimeModel(value=value, rate=rate)
+        mi = MediaInfo(path="/v.mp4", container="mp4", duration=dur, streams=[])
+        rng = full_media_range(mi)
+        assert rng.start_time.value == 0.0
+        assert rng.start_time.rate == rate
+        assert rng.duration.value == value
+        assert rng.duration.rate == rate
+
+    def test_raises_value_error_when_duration_is_none(self) -> None:
+        """Callers must validate duration is not None before calling this helper."""
+        mi = MediaInfo(path="/v.mp4", container="mp4", duration=None, streams=[])
+        with pytest.raises(ValueError):
+            full_media_range(mi)

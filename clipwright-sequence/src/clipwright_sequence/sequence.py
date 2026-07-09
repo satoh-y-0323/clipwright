@@ -206,8 +206,9 @@ def _build_sequence_inner(clips: list[SequenceClip], output: str) -> ToolResult:
                 ),
             )
 
-        duration_sec = info.duration.value / info.duration.rate
+        duration_value = info.duration.value
         rate = info.duration.rate
+        duration_sec = duration_value / rate
 
         # (3) Rate sentinel: video stream reported avg_frame_rate=0/0 or N/A
         #     (§V2.4 DC-AS-004). Sentinel rate means fps is undetermined.
@@ -252,6 +253,7 @@ def _build_sequence_inner(clips: list[SequenceClip], output: str) -> ToolResult:
         probes[abs_path] = SourceProbe(
             abs_path=abs_path,
             duration_sec=duration_sec,
+            duration_value=duration_value,
             rate=rate,
             has_video=has_video,
         )
@@ -305,11 +307,16 @@ def _build_sequence_inner(clips: list[SequenceClip], output: str) -> ToolResult:
         # available_range: FULL duration of this clip's own source (ADR-3/ADR-4),
         # looked up per-clip via rc.source -> probes to avoid cross-source
         # mix-ups when multiple distinct sources are interleaved.
+        # Use available_duration_value (the probe's original RationalTime value)
+        # rather than `duration_sec * rate`, which would round-trip through a
+        # division (duration_sec = duration_value / rate) and could reintroduce
+        # floating-point error at the source_range <= available_range boundary
+        # (CR-NEW low, precision).
         source_probe = probes[rc.source]
         available_range = TimeRangeModel(
             start_time=RationalTimeModel(value=0.0, rate=source_probe.rate),
             duration=RationalTimeModel(
-                value=source_probe.duration_sec * source_probe.rate,
+                value=source_probe.available_duration_value,
                 rate=source_probe.rate,
             ),
         )

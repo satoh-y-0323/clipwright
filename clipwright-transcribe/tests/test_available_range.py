@@ -19,15 +19,10 @@ that:
 Mock strategy mirrors test_transcribe.py TestOtioConstruction: patch inspect_media
 and _run_whisper, no real ffmpeg/whisper binaries are invoked.
 
-Red-phase status (expected at authoring time):
-  transcribe.py builds `MediaRef(target_url=...)` without `available_range=` when
-  calling add_clip (see _transcribe_inner). Because MediaRef.available_range
-  defaults to None, otio_utils.add_clip leaves ExternalReference.available_range
-  unset, so the round-tripped clip.media_reference.available_range is None.
-  This test therefore fails at `assert available_range is not None`
-  (AssertionError), which is the correct Red reason: the wiring is simply
-  missing, not a broken import/typo. It will pass once transcribe.py is updated
-  to pass `available_range=full_source_range` (or equivalent) into MediaRef.
+Implementation note:
+  transcribe.py builds `MediaRef(target_url=..., available_range=full_source_range)`
+  when calling add_clip (see _transcribe_inner), so otio_utils.add_clip wires
+  ExternalReference.available_range accordingly on the round-tripped clip.
 """
 
 from __future__ import annotations

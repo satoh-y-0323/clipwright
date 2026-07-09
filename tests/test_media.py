@@ -1208,6 +1208,110 @@ class TestResolveVideoDurationAllSourcesUnavailable:
 
 
 # ===========================================================================
+# CR-NEW (Medium): (b) must reject zero/negative/non-finite stream duration and
+# fall through to (c)/(d) instead of returning a bogus zero/negative/inf value.
+# SR-V-001 (Low): (c) must reject a non-finite duration_ts * time_base product
+# (huge-value overflow) and fall through to (d) instead of returning inf.
+# Reproduction: code-review-report / security-review-report (CR-NEW / SR-V-001),
+# reported against the pre-fix _resolve_video_duration (b)/(c) branches, which
+# currently adopt float(duration_raw) / duration_ts * seconds_per_tick verbatim
+# without a math.isfinite / > 0 guard.
+# ===========================================================================
+
+
+class TestResolveVideoDurationStreamDurationZeroOrNegativeRejected:
+    """CR-NEW Medium: (b) stream duration <= 0 must not be adopted."""
+
+    @pytest.mark.parametrize(
+        "duration_value",
+        ["0", "0.0", "0.000000", "-1.0"],
+        ids=["zero_int_string", "zero_float", "zero_padded", "negative"],
+    )
+    def test_zero_or_negative_stream_duration_falls_back_past_b(
+        self, duration_value: str
+    ) -> None:
+        """(b) duration <= 0 must be rejected; with no (c) source, result is None.
+
+        Bug reproduction: the current implementation parses `duration_value` with
+        float() and returns it unconditionally (no > 0 guard), so e.g. "0.0"
+        currently yields value=0.0 instead of falling through to (c)/(d).
+        """
+        resolve_video_duration = _resolve_video_duration_or_fail()
+        video_stream = {"duration": duration_value}
+
+        result = resolve_video_duration(video_stream, 25.0)
+
+        assert result is None
+
+    def test_cr_new_reproduction_case_falls_back_to_duration_ts(self) -> None:
+        """CR-NEW repro case: duration="0.0" with duration_ts/time_base present
+        must skip (b) and adopt (c) instead, yielding value=530.0 (not 0.0).
+        """
+        resolve_video_duration = _resolve_video_duration_or_fail()
+        video_stream = {
+            "duration": "0.0",
+            "duration_ts": 530,
+            "time_base": "1/25",
+        }
+
+        result = resolve_video_duration(video_stream, 25.0)
+
+        assert result is not None
+        assert result.value == pytest.approx(530.0)
+        assert result.rate == pytest.approx(25.0)
+
+
+class TestResolveVideoDurationStreamDurationNonFiniteRejected:
+    """CR-NEW Medium: (b) stream duration must be finite (math.isfinite guard)."""
+
+    @pytest.mark.parametrize(
+        "duration_value",
+        ["inf", "1e309", "nan"],
+        ids=["explicit_inf", "overflow_to_inf", "nan"],
+    )
+    def test_non_finite_stream_duration_falls_back_past_b(
+        self, duration_value: str
+    ) -> None:
+        """(b) duration that parses to inf/nan must be rejected; with no (c)
+        source, result is None.
+
+        Bug reproduction: float("1e309") silently overflows to inf in Python
+        (no exception raised), so the current unconditional float() adoption
+        returns a RationalTimeModel carrying an infinite/NaN value.
+        """
+        resolve_video_duration = _resolve_video_duration_or_fail()
+        video_stream = {"duration": duration_value}
+
+        result = resolve_video_duration(video_stream, 25.0)
+
+        assert result is None
+
+
+class TestResolveVideoDurationTimeBaseOverflowRejected:
+    """SR-V-001 Low: (c) duration_ts * time_base overflow to inf must be rejected."""
+
+    def test_overflowing_duration_ts_time_base_product_falls_back_past_c(
+        self,
+    ) -> None:
+        """A huge duration_ts combined with a huge time_base numerator makes
+        duration_ts * seconds_per_tick overflow to inf. (c) must reject this
+        and fall through (result None, since no other source is present).
+
+        Bug reproduction: the current (c) branch has no math.isfinite guard on
+        `video_duration_sec`, so it returns a RationalTimeModel carrying inf.
+        """
+        resolve_video_duration = _resolve_video_duration_or_fail()
+        video_stream = {
+            "duration_ts": 10**300,
+            "time_base": "100000000000000000000/1",
+        }
+
+        result = resolve_video_duration(video_stream, 25.0)
+
+        assert result is None
+
+
+# ===========================================================================
 # Integration (via inspect_media / _parse_ffprobe_json): end-to-end duration flow
 # ===========================================================================
 
@@ -1521,7 +1625,7 @@ class TestStreamInfoNbFramesFromProbe:
         result = inspect_media(str(media_file))
 
         video = result.streams[0]
-        assert video.nb_frames == 530  # type: ignore[attr-defined]
+        assert video.nb_frames == 530
 
     def test_nb_frames_defaults_to_none_when_probe_omits_it(
         self, mocker: MagicMock, tmp_path
@@ -1549,4 +1653,4 @@ class TestStreamInfoNbFramesFromProbe:
         result = inspect_media(str(media_file))
 
         video = result.streams[0]
-        assert video.nb_frames is None  # type: ignore[attr-defined]
+        assert video.nb_frames is None

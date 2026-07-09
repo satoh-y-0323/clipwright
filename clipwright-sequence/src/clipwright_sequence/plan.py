@@ -15,7 +15,7 @@ Design decisions (ADR-SEQ-3):
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from clipwright.errors import ClipwrightError, ErrorCode
 
@@ -33,12 +33,38 @@ class SourceProbe:
     rate is frames-per-second (video). Audio-only sources never reach plan.py —
     they are rejected by sequence.py before resolve_clip_specs is called.
     The sentinel check (rate >= 1000.0) is performed by sequence.py.
+
+    duration_value carries the source probe's original RationalTime value
+    (frame count at `rate`) as reported by inspect_media, alongside the
+    derived duration_sec (seconds, used for start/end arithmetic in this
+    module). sequence.py's available_range construction must read
+    available_duration_value rather than recomputing the value as
+    `duration_sec * rate`, which would round-trip through a division and
+    reintroduce floating-point error (CR-NEW low, precision).
+    duration_value defaults to None (callers that only exercise
+    resolve_clip_specs, e.g. tests, need not supply it); available_duration_value
+    falls back to duration_sec * rate in that case, preserving the original
+    round-trip behaviour for callers that don't care about the
+    available_range precision edge case.
     """
 
     abs_path: str
     duration_sec: float
     rate: float
     has_video: bool
+    duration_value: float | None = field(default=None)
+
+    @property
+    def available_duration_value(self) -> float:
+        """Resolved duration value (frame count at `rate`) for available_range.
+
+        Prefers the raw probe value (duration_value) to avoid a
+        divide-then-multiply round-trip through duration_sec; falls back to
+        duration_sec * rate when duration_value wasn't supplied.
+        """
+        if self.duration_value is not None:
+            return self.duration_value
+        return self.duration_sec * self.rate
 
 
 @dataclass(frozen=True)

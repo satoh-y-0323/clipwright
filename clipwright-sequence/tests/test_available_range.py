@@ -1,4 +1,4 @@
-"""test_available_range.py — Red tests for available_range wiring in build_sequence.
+"""test_available_range.py — available_range wiring contract for build_sequence.
 
 ADR-3 contract: sequence is create + sub-range + multi-source.  Each clip's
 ExternalReference.available_range must describe the FULL media duration of
@@ -8,13 +8,10 @@ each clip must look up its OWN source's available_range (no cross-source
 mix-up), and every clip's source_range must be contained within its
 available_range (start_time >= 0, end <= available_range.duration).
 
-sequence.py (as of this test's authoring) constructs MediaRef(target_url=...)
-without available_range, so ExternalReference.available_range stays None
-after add_clip (core otio_utils.add_clip already supports available_range
-via ADR-4; the wiring on the sequence.py caller side is what's missing).
-This is the expected Red: available_range is None instead of the full-source
-TimeRange, i.e. the *feature* (available_range population) is not implemented
-yet — not a broken test (no typo/import errors).
+sequence.py constructs MediaRef(target_url=..., available_range=...) with the
+per-source full-duration TimeRange looked up from probes[rc.source], which
+add_clip (core otio_utils.add_clip, ADR-4) wires into
+ExternalReference.available_range.
 
 Mocking policy: patch clipwright_sequence.sequence.inspect_media; no real
 ffprobe binary is called (mirrors test_sequence.py).
@@ -102,9 +99,7 @@ class TestSingleSourceAvailableRange:
         ref = v1_clips[0].media_reference
         available_range = ref.available_range
         assert available_range is not None, (
-            "available_range must be set from the source's full media duration "
-            "(ADR-3); found None — the MediaRef built in sequence.py does not "
-            "pass available_range to add_clip yet."
+            "available_range must be set from the source's full media duration (ADR-3)."
         )
         assert available_range.start_time == otio.opentime.RationalTime(
             value=0.0, rate=rate

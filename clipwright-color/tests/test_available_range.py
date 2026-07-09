@@ -1,4 +1,4 @@
-"""test_available_range.py — TDD Red: ADR-4 available_range wiring for clipwright-color.
+"""test_available_range.py — ADR-4 available_range wiring contract for clipwright-color.
 
 clipwright-color creates a full-length keep clip (_add_full_clip) when writing a
 new timeline. Per otio_utils.add_clip's ADR-4 contract (see
@@ -8,12 +8,10 @@ ExternalReference.available_range so downstream tools (trim/render/etc.) know
 the full extent of the source media, not just the portion currently referenced
 by source_range.
 
-color.py's _add_full_clip currently builds the Clip/ExternalReference manually
-(otio.schema.ExternalReference(target_url=target_url)) WITHOUT setting
-available_range, so this test is expected to fail (Red) until color.py is
-updated to populate it — either by reusing otio_utils.add_clip with a MediaRef
-carrying available_range, or by setting
-ExternalReference.available_range directly.
+color.py's _add_full_clip builds the Clip/ExternalReference manually
+(otio.schema.ExternalReference(target_url=target_url)) and sets
+available_range directly (equal to the full-length source_range), since it
+predates otio_utils.add_clip's available_range support.
 
 Verification points:
   (1) ExternalReference.available_range must be set (not None) on the clip
@@ -144,7 +142,7 @@ class TestAvailableRangeSet:
         assert isinstance(ref, otio.schema.ExternalReference)
         assert ref.available_range is not None, (
             "ADR-4: ExternalReference.available_range must be set on the clip"
-            " written by _add_full_clip; got None (feature not implemented)."
+            " written by _add_full_clip."
         )
 
 
