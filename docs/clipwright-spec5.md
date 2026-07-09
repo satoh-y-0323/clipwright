@@ -703,7 +703,29 @@ None — extend `clipwright_detect_color` (or a sibling `apply_look`) to annotat
 
 ---
 
-### Picture-in-picture / video-on-video overlay  *Medium*  *(overlay extension)*
+### Picture-in-picture / video-on-video overlay  *Medium*  *(overlay extension)*  — **RESOLVED**
+
+**Resolution (shipped — `clipwright-overlay` v0.3.0 / `clipwright-render` v0.18.0 /
+suite v0.35.0):** New MCP tool `clipwright_add_pip` (accumulate type) annotates an
+OTIO timeline with a `pip_overlay` marker referencing a second video source
+(`.mp4`/`.mkv`/`.mov`/`.webm`, must contain a video stream). Options mirror
+`clipwright_add_overlay`'s placement vocabulary (`start_sec`/`duration_sec`/`x`/`y`/
+`opacity`/`fade_in_sec`/`fade_out_sec`) plus PiP-specific fields: `media_start_sec`
+(source trim offset — playback length is always the placement `duration_sec`, no
+separate source-duration field), default `scale=0.3` (distinct from
+`clipwright_add_overlay`'s `1.0`, since PiP sources are typically already
+full-resolution), and optional audio mixing (`mix_audio`, `audio_volume`,
+`ducking.enabled`/`threshold`/`ratio` — sidechain-compresses the main/BGM track
+against the PiP audio, mirroring `clipwright_place_bgm`'s ducking). Up to 4 PiP
+overlays may be accumulated per timeline. `clipwright-render` composites the PiP
+video (topmost layer, after image overlays) and, when audio mixing is requested,
+time-windows the PiP audio (`adelay`/`apad`/`atrim`) into the program mix. Reuses
+`clipwright.pathpolicy` path-boundary/symlink validation and the `image_overlay`
+accumulate/idempotent pattern; no new `clipwright` core dependency. Verified via
+real stdio MCP + FFmpeg execution end-to-end (not unit tests alone — several
+filter-graph wiring bugs were only caught by this real-execution testing).
+
+*Original entry (retained for reference):*
 
 **What it does**
 Composites a **second video** (webcam, reaction, B-roll inset) over the main
