@@ -7,6 +7,7 @@ Delegates ffprobe invocation to process.run, following subprocess discipline (§
 from __future__ import annotations
 
 import json
+import math
 
 import clipwright.process as _process_module
 from clipwright.errors import ClipwrightError, ErrorCode
@@ -110,7 +111,10 @@ def _resolve_video_duration(
     if duration_raw is not None:
         try:
             video_duration_sec = float(str(duration_raw))
-            return RationalTimeModel(value=video_duration_sec * rate, rate=rate)
+            if math.isfinite(video_duration_sec) and video_duration_sec > 0.0:
+                value = video_duration_sec * rate
+                if math.isfinite(value):
+                    return RationalTimeModel(value=value, rate=rate)
         except (ValueError, TypeError):
             pass
 
@@ -121,7 +125,10 @@ def _resolve_video_duration(
             seconds_per_tick = _parse_avg_frame_rate(str(time_base_raw))
             if seconds_per_tick > 0.0:
                 video_duration_sec = duration_ts * seconds_per_tick
-                return RationalTimeModel(value=video_duration_sec * rate, rate=rate)
+                if math.isfinite(video_duration_sec):
+                    value = video_duration_sec * rate
+                    if math.isfinite(value):
+                        return RationalTimeModel(value=value, rate=rate)
 
     return None
 
