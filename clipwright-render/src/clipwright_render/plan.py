@@ -286,6 +286,27 @@ class DuckingDirective(BaseModel):
     ratio: Annotated[float, Field(ge=1.0, le=20.0)]
 
 
+class PipDuckingDirective(BaseModel):
+    """Validation model for PiP audio ducking settings (ADR-PIP-4/ADR-PIP-9).
+
+    Mirrors DuckingDirective (BGM ducking) with identical range constraints.
+    Defined locally to preserve independence between satellite tools
+    (clipwright-overlay does not import from clipwright-bgm; ADR-PIP-4).
+
+    enabled: when True, injects sidechaincompress to duck PiP audio under main.
+    threshold: sidechaincompress threshold parameter. ffmpeg accepted range:
+      0.000976563–1.0.
+    ratio: sidechaincompress ratio parameter. ffmpeg accepted range: 1.0–20.0.
+    SR M-1: allow_inf_nan=False rejects inf/nan originating from OTIO.
+    """
+
+    model_config = {"extra": "forbid", "allow_inf_nan": False}
+
+    enabled: bool = False
+    threshold: Annotated[float, Field(gt=0.0, le=1.0)] = 0.05
+    ratio: Annotated[float, Field(ge=1.0, le=20.0)] = 4.0
+
+
 class BgmDirective(BaseModel):
     """Validation model for BGM clip metadata["clipwright"] (ADR-B9-r2/B9-r3).
 
@@ -653,6 +674,54 @@ def _collect_image_overlays(
     return overlays
 
 
+def _collect_pip_overlays(
+    timeline: otio.schema.Timeline,
+    pip_index_base: int,
+    timeline_path: str | None = None,
+) -> list[PipOverlay]:
+    """Read pip_overlay markers from the timeline and convert to PipOverlay objects.
+
+    Called by build_plan when a KeptRangeList with an attached timeline is received.
+    Returns an empty list when there are no pip_overlay markers (backward compat).
+
+    Args:
+        timeline: OTIO timeline object.
+        pip_index_base: ffmpeg stream index for the first PiP input (ADR-PIP-7).
+            = len(input_sources) + (1 if bgm else 0) + len(image_sources).
+        timeline_path: absolute path to the OTIO timeline file, or None.
+            When provided, relative pip media_paths are reconstructed to absolute.
+
+    Returns:
+        List of validated PipOverlay objects, or [].
+
+    Raises:
+        ClipwrightError(INVALID_INPUT): when more than _MAX_PIP_OVERLAYS markers
+            are present, or when any marker fails validation (ADR-PIP-6).
+    """
+    markers = get_markers(timeline, kind="pip_overlay")
+    if not markers:
+        return []
+
+    if len(markers) > _MAX_PIP_OVERLAYS:
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                f"The timeline contains more than {_MAX_PIP_OVERLAYS}"
+                " pip_overlay markers."
+            ),
+            hint=(
+                f"Reduce the number of pip_overlay markers to"
+                f" {_MAX_PIP_OVERLAYS} or fewer."
+            ),
+        )
+
+    overlays: list[PipOverlay] = []
+    for i, marker in enumerate(markers):
+        input_index = pip_index_base + i
+        overlays.append(_marker_to_pip_overlay(marker, timeline_path, input_index))
+    return overlays
+
+
 def _build_overlay_segment(
     o: ImageOverlay,
     base_label: str,
@@ -812,7 +881,7 @@ class PipOverlay:
     input_index: int
     mix_audio: bool = False
     audio_volume: float = 1.0
-    ducking: Any = None
+    ducking: PipDuckingDirective | None = None
 
 
 def _marker_to_pip_overlay(
@@ -1007,55 +1076,6 @@ def _marker_to_pip_overlay(
         audio_volume=audio_volume,
         ducking=ducking,
     )
-
-
-def _collect_pip_overlays(
-    timeline: otio.schema.Timeline,
-    pip_index_base: int,
-    timeline_path: str | None = None,
-) -> list[PipOverlay]:
-    """Read pip_overlay markers from the timeline and convert to PipOverlay objects.
-
-    Mirrors _collect_image_overlays. Returns an empty list when there are no
-    pip_overlay markers (backward compat).
-
-    Args:
-        timeline: OTIO timeline object.
-        pip_index_base: ffmpeg stream index for the first PiP video input
-            (ADR-PIP-7). = len(input_sources) + (1 if bgm else 0)
-            + len(image_sources).
-        timeline_path: absolute path to the OTIO timeline file, or None.
-            When provided, relative media_paths are reconstructed to absolute.
-
-    Returns:
-        List of validated PipOverlay objects, or [].
-
-    Raises:
-        ClipwrightError(INVALID_INPUT): when more than _MAX_PIP_OVERLAYS markers
-            are present, or when any marker fails validation.
-    """
-    markers = get_markers(timeline, kind="pip_overlay")
-    if not markers:
-        return []
-
-    if len(markers) > _MAX_PIP_OVERLAYS:
-        raise ClipwrightError(
-            code=ErrorCode.INVALID_INPUT,
-            message=(
-                f"The timeline contains more than {_MAX_PIP_OVERLAYS}"
-                " pip_overlay markers."
-            ),
-            hint=(
-                f"Reduce the number of pip_overlay markers to"
-                f" {_MAX_PIP_OVERLAYS} or fewer."
-            ),
-        )
-
-    overlays: list[PipOverlay] = []
-    for i, marker in enumerate(markers):
-        input_index = pip_index_base + i
-        overlays.append(_marker_to_pip_overlay(marker, timeline_path, input_index))
-    return overlays
 
 
 def _build_pip_video_segment(
@@ -4376,6 +4396,142 @@ def _append_bgm_pipe(
     return "[outa_bgm]"
 
 
+def _append_pip_audio_pipe(
+    filter_parts: list[str],
+    pip_overlays: list[PipOverlay],
+    audio_map_label: str,
+    has_main_audio: bool,
+    main_dur: float,
+    bgm_present: bool,
+) -> str:
+    """Append the PiP audio chain to filter_parts and return the new
+    audio_map_label (ADR-PIP-9).
+
+    Processes only mix_audio=True PiP overlays; mix_audio=False overlays are
+    ignored entirely (no-op at all stages).
+
+    Each PiP audio branch is individually trimmed/delayed to its placement
+    window (start_s .. start_s+duration_s), then combined with other audio
+    sources (main/bgm/other PiPs) via amix. ducking.enabled=True PiPs have
+    per-branch sidechaincompress applied before amix.
+
+    When N=1 (only one audio source: e.g., single PiP + no main + no BGM),
+    amix/alimiter are skipped and the PiP branch label is returned directly
+    (mirroring _append_bgm_pipe's standalone path; ADR-PIP-9 point 2).
+
+    Args:
+        filter_parts: list to append filter chain strings into.
+        pip_overlays: list of PipOverlay objects (from _collect_pip_overlays).
+        audio_map_label: current audio terminal label (input to PiP stage).
+            Typically [outa] / [outa_dn] / [outa_ln] or [outa_bgm].
+        has_main_audio: whether main track has audio (after concat).
+        main_dur: main content duration in seconds.
+        bgm_present: whether BGM has been added (indicates [outa_bgm] was
+            returned from _append_bgm_pipe).
+
+    Returns:
+        New audio map label ([outa_pip] when amix applied; or the single
+        mix_audio=True branch label when N=1).
+        When all PiPs have mix_audio=False, returns audio_map_label unchanged
+        (true no-op; backward compatible).
+    """
+    # Filter to mix_audio=True PiPs only
+    mixing_pips = [p for p in pip_overlays if p.mix_audio]
+    if not mixing_pips:
+        # All PiPs are mix_audio=False → no-op
+        return audio_map_label
+
+    # Compute N = number of audio sources feeding amix (ADR-PIP-9 point 2)
+    n_sources = int(has_main_audio) + int(bgm_present) + len(mixing_pips)
+
+    # Build individual PiP audio branches (each fully independent)
+    # Each element is (label, threshold, ratio) where threshold/ratio are None
+    # if ducking is disabled, or float if enabled.
+    pip_branch_labels: list[tuple[str, float | None, float | None]] = []
+
+    for i, pip in enumerate(mixing_pips):
+        # Build the PiP branch: trim → asetpts → adelay → apad → atrim → volume
+        # (ADR-PIP-9 point 1, exact order required)
+        base_branch = (
+            f"[{pip.input_index}:a]trim=start={pip.media_start_s:g}:duration={pip.duration_s:g},"
+            f"asetpts=PTS-STARTPTS,"
+            f"adelay={int(pip.start_s * 1000)}|{int(pip.start_s * 1000)},"
+            f"apad,atrim=0:{main_dur:g},"
+            f"volume={pip.audio_volume:g}"
+        )
+
+        # Apply ducking if enabled: asplit before sidechaincompress
+        if pip.ducking is not None and pip.ducking.enabled:
+            # asplit the audio: one for mixing, one for sidechain input
+            branch_label = f"[pip{i}_audio]"
+            sc_input_label = f"[pip{i}_sc_in]"
+            branch = f"{base_branch},asplit{branch_label}{sc_input_label}"
+            filter_parts.append(branch)
+            # sidechaincompress will be wired later with main/bgm as sidechain
+            pip_branch_labels.append(
+                (f"pip{i}_audio", pip.ducking.threshold, pip.ducking.ratio)
+            )
+        else:
+            # No ducking: append the branch directly
+            branch_label = f"[pip{i}_audio]"
+            branch = f"{base_branch}{branch_label}"
+            filter_parts.append(branch)
+            pip_branch_labels.append((f"pip{i}_audio", None, None))
+
+    # Single source case: return the PiP label directly (no amix)
+    if n_sources == 1:
+        return f"[{pip_branch_labels[0][0]}]"
+
+    # Multiple sources: build amix with all inputs
+    # Determine amix input labels in order: main (if any) + bgm (if any) + pips
+    amix_input_labels: list[str] = []
+
+    # Add main audio (aformat to match BGM/PiP sample rate)
+    if has_main_audio:
+        main_fmt_label = "main_pip_fmt"
+        filter_parts.append(
+            f"{audio_map_label}aformat=sample_rates=48000:channel_layouts=stereo[{main_fmt_label}]"
+        )
+        amix_input_labels.append(main_fmt_label)
+
+    # Add BGM (already at correct sample rate from _append_bgm_pipe)
+    if bgm_present:
+        amix_input_labels.append("outa_bgm")
+
+    # Add PiP branches, handling ducking sidechaining
+    for i, (branch_label, threshold, ratio) in enumerate(pip_branch_labels):
+        if threshold is not None:
+            # Ducking enabled: apply sidechaincompress with main/bgm as sidechain
+            duck_output = f"pip{i}_duck"
+            # Determine sidechain source (first available: main or bgm)
+            if has_main_audio:
+                sidechain_label = "main_pip_fmt"
+            elif bgm_present:
+                sidechain_label = "outa_bgm"
+            else:
+                # Shouldn't happen; ducking requires a sidechain (main or bgm).
+                # Fallback: use the PiP itself (no effective ducking).
+                sidechain_label = branch_label
+
+            filter_parts.append(
+                f"[{branch_label}][{sidechain_label}]sidechaincompress="
+                f"threshold={threshold:g}:ratio={ratio:g}[{duck_output}]"
+            )
+            amix_input_labels.append(duck_output)
+        else:
+            # No ducking: add the PiP label directly
+            amix_input_labels.append(branch_label)
+
+    # Build the amix filter with all inputs
+    amix_input_str = "".join(f"[{label}]" for label in amix_input_labels)
+    n_inputs = len(amix_input_labels)
+    filter_parts.append(
+        f"{amix_input_str}amix=inputs={n_inputs}:normalize=0,alimiter=limit=1.0[outa_pip]"
+    )
+
+    return "[outa_pip]"
+
+
 def _build_ffmpeg_args(
     filter_complex: str,
     video_map_label: str,
@@ -4640,6 +4796,21 @@ def build_plan(
     else:
         _image_overlays = []
 
+    # Collect pip_overlays from the attached timeline (ADR-PIP-7).
+    # pip_index_base = len(input_sources) + (1 if bgm else 0) + len(image_sources).
+    _tl_ref_pip: otio.schema.Timeline | None = getattr(ranges, "_timeline", None)
+    _tl_path_pip: str | None = getattr(ranges, "_timeline_path", None)
+    _pip_index_base = _image_index_base + len(_image_overlays)
+    _pip_overlays: list[PipOverlay] = (
+        _collect_pip_overlays(
+            _tl_ref_pip,
+            pip_index_base=_pip_index_base,
+            timeline_path=_tl_path_pip,
+        )
+        if _tl_ref_pip is not None
+        else []
+    )
+
     # Branch on source count (ADR-C3)
     use_multi_source = source_probes is not None and len(input_sources) >= 2
 
@@ -4848,6 +5019,25 @@ def build_plan(
             True  # BGM present means the final output has audio (has_audio_output=True)
         )
         bgm_source_out = bgm.source
+
+    # ---------- Append PiP audio stage (ADR-PIP-9) ----------
+    # Only append if there are mix_audio=True PiP overlays and has_audio=True
+    # (PiP audio mixing requires a main audio track or BGM to mix into).
+    if _pip_overlays and has_audio:
+        # Compute the total duration for PiP padding/trimming
+        total_duration_for_pips = sum(_program_durations) - _sum_clamped_d
+
+        # Expand filter_complex into filter_parts list and append the PiP stage
+        filter_parts_pip = filter_complex.split(";")
+        audio_map_label = _append_pip_audio_pipe(
+            filter_parts_pip,
+            _pip_overlays,
+            audio_map_label,
+            has_main_audio,
+            total_duration_for_pips,
+            bgm is not None,
+        )
+        filter_complex = ";".join(filter_parts_pip)
 
     # ---------- Build ffmpeg_args ----------
     ffmpeg_args = _build_ffmpeg_args(

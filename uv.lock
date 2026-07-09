@@ -504,7 +504,7 @@ dev = [
 
 [[package]]
 name = "clipwright-render"
-version = "0.17.1"
+version = "0.18.0"
 source = { editable = "clipwright-render" }
 dependencies = [
     { name = "clipwright" },

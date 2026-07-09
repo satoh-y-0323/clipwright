@@ -13,6 +13,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unexpected exceptions no longer leak absolute paths in error messages
   (CWE-209).
 
+## [0.18.0] - 2026-07-09
+
+### Added
+
+- **PiP (Picture-in-Picture) audio mixing (ADR-PIP-9)**: When
+  `clipwright_add_pip` places a video overlay with `mix_audio=true`, the
+  `clipwright_render` tool can now mix the PiP's audio into the output. Each
+  PiP audio branch is independently trimmed to its placement window
+  (start_sec .. start_sec + duration_sec), delayed to sound at its placement
+  time, and volume-adjusted. Multiple PiP sources are combined via a single
+  `amix` stage with `alimiter` to prevent clipping.
+- **PiP audio ducking (ADR-PIP-9)**: When a PiP's `ducking.enabled=true`,
+  the PiP audio is ducked (reduced) under the main audio or background music
+  via `sidechaincompress`. Ducking parameters (threshold, ratio) follow the
+  same range constraints as background music ducking: threshold ∈ (0, 1],
+  ratio ∈ [1, 20].
+- **`PipDuckingDirective` model**: Defined locally in `plan.py` to maintain
+  satellite tool independence (ADR-PIP-4); mirrors the `DuckingDirective`
+  vocabulary from `clipwright-bgm` but does not import from it.
+
+## [0.17.1] - 2026-06-30
+
 ## [0.16.0] - 2026-06-30
 
 ### Added
