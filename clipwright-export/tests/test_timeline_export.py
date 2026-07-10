@@ -1,6 +1,6 @@
 """test_timeline_export.py — Tests for timeline_export.py (clipwright_export_timeline).
 
-Target functions (not yet implemented — TDD Red):
+Target functions:
   - export_timeline(timeline, output, options) -> ToolResult   (boundary)
   - _loss_report(tl) -> list[str]                              (raising, pure)
 
@@ -10,9 +10,13 @@ Spec source of truth:
     (§13 ADR-EX-10/ADR-EX-11 overrides §8.3 wherever they disagree).
   - requirements-report-20260710-161944.md FR-2, AC-1/AC-2/AC-3/AC-4/AC-5/AC-12.
 
-TDD Red: clipwright_export.timeline_export does not exist yet (only
-schemas.py has landed so far), so every test in this module fails at
-collection time with ModuleNotFoundError. This is the expected Red state.
+History: at authoring time clipwright_export.timeline_export did not exist yet
+(only schemas.py had landed), so every test in this module initially failed
+at collection with ModuleNotFoundError (the expected TDD Red state). That Red
+phase has since been resolved by the implementation; the classes below now
+exercise the implemented functions, plus follow-up regression/verification
+tests added from code-review and security-review findings (see the (H)/(I)/
+(J)/(K)/(L) sections below, each tagged with its finding ID).
 
 Verification aspects:
   (A) Round-trip in/out (AC-1/AC-2, architecture §13.4 items 1-4)
@@ -89,6 +93,38 @@ Verification aspects:
       (G-5) An unexpected (non-ClipwrightError) exception at any point is
             caught by the outer boundary and returned as INTERNAL with a
             fixed generic message; no input/output path leaks (AC-12).
+  (H) [SR-V-002] / [CR-T-001] Absolute media-reference symlink rejection
+      (H-1) A clip whose media_reference.target_url is an absolute path with
+            a symlink component is rejected with PATH_NOT_ALLOWED and no
+            output file is produced. Exercises the local re-implementation
+            (_normalize_ref/_has_symlink_component) that the absolute branch
+            of _absolutize_media_refs uses in place of check_media_ref
+            (CWE-59). Skipped locally when the OS refuses symlink creation
+            (Windows without elevated privileges); runs on CI's 3-OS matrix.
+  (I) [CR-T-001] DEPENDENCY_MISSING (ADR-EX-9 defensive branch)
+      (I-1) When otio.adapters.available_adapter_names() does not contain
+            the expected adapter name, _write_adapter raises
+            DEPENDENCY_MISSING instead of an unguarded AttributeError/
+            KeyError, and the error message/hint do not leak the timeline/
+            output paths.
+  (J) [CR-E-004] _write_adapter hint must match the requested format
+      (J-1) A fcpxml write failure (OTIOError) must not surface the
+            EDL-specific hint text ("single video track" / "export to
+            FCPXML instead" is nonsensical when fcpxml was already
+            requested). Expected Red until _write_adapter's OTIOError
+            handler is made format-aware.
+  (K) [CR-NEW] _representative_rate must prefer the Video track's rate
+      (K-1) When an Audio track is enumerated before the Video track in
+            tl.tracks (Stack order is not kind-sorted), the EDL rate warning
+            must still name the Video track's rate, not whichever clip
+            _iter_clips happens to yield first. Expected Red until
+            _representative_rate is made track-kind-aware.
+  (L) [SR-V-001] _loss_report unknown-kind length bound (CWE-400)
+      (L-1) An unbounded-length unknown marker kind string must not be
+            echoed verbatim into the aggregated warning; the embedded kind
+            text must be truncated to a small fixed upper bound (<=64
+            chars). Expected Red until _loss_report truncates the kind
+            string.
 """
 
 from __future__ import annotations
@@ -99,14 +135,66 @@ from typing import Any
 import opentimelineio as otio
 import pytest
 from clipwright.errors import ErrorCode
-from clipwright.otio_utils import add_clip, load_timeline, new_timeline, save_timeline
+from clipwright.otio_utils import (
+    add_clip,
+    add_marker,
+    load_timeline,
+    new_timeline,
+    save_timeline,
+)
 from clipwright.pathpolicy import media_ref_for_otio
 from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
-from clipwright_export.timeline_export import _loss_report, export_timeline
 
 from clipwright_export.schemas import ExportTimelineOptions
+from clipwright_export.timeline_export import _loss_report, export_timeline
 
 from .conftest import LossyFixture, RoundtripFixture
+
+# ===========================================================================
+# Symlink availability detection (for pytest.mark.skipif at collection time)
+#
+# Mirrors tests/test_pathpolicy.py and clipwright-bgm/tests/test_pathpolicy_
+# bgm.py (see agent-memory symlink-test-local-skip-vs-ci): symlink creation
+# requires elevated privileges on Windows without Developer Mode, so this
+# probe lets [H] skip locally and run unattended on CI's 3-OS matrix.
+# ===========================================================================
+
+
+def _probe_symlink_support() -> bool:
+    import tempfile
+
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            real = base / "_probe_real.txt"
+            real.write_bytes(b"probe")
+            link = base / "_probe_link.txt"
+            link.symlink_to(real)
+        return True
+    except OSError:
+        return False
+
+
+_SYMLINK_SUPPORTED: bool = _probe_symlink_support()
+_SKIP_SYMLINK_REASON = (
+    "Symlink creation requires elevated privileges on this system (WinError 1314)."
+    " Enable Windows Developer Mode or run as Administrator."
+)
+_skip_no_symlinks = pytest.mark.skipif(
+    not _SYMLINK_SUPPORTED,
+    reason=_SKIP_SYMLINK_REASON,
+)
+
+
+def _try_symlink(link: Path, target: Path) -> None:
+    """Create a symlink; skip the test if the OS refuses (Windows privilege)."""
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip(
+            "Cannot create symlinks on this system (requires elevated privileges)"
+        )
+
 
 # ===========================================================================
 # Helpers
@@ -653,6 +741,82 @@ class TestEdlSpecific:
         assert result.error is not None
         assert result.error.code == ErrorCode.OTIO_ERROR
         assert not out.exists()
+        # CR-E-004 regression guard: the EDL-specific hint must stay in
+        # place for the case it was actually written for (contrast with the
+        # fcpxml case in TestWriteAdapterHintMatchesFormat below).
+        assert result.error.hint is not None
+        assert "single video track" in result.error.hint.lower()
+
+    def test_representative_rate_prefers_video_over_audio_track_order(
+        self, tmp_path: Path, make_media_file: Any
+    ) -> None:
+        """CR-NEW (K): _representative_rate must use the Video track's rate
+        even when an Audio track is enumerated first in tl.tracks (Stack
+        order is not kind-sorted). Uses distinct integer rates per track
+        kind so a wrong pick is observable in the EDL rate warning text.
+        Expected Red until _representative_rate is made track-kind-aware.
+        """
+        media = make_media_file("clip.mov")
+        ref_str = media_ref_for_otio(media, tmp_path)
+
+        audio_rate = 48.0
+        video_rate = 30.0
+
+        tl = otio.schema.Timeline(name="audio-first")
+
+        audio_track = otio.schema.Track(name="A1", kind=otio.schema.TrackKind.Audio)
+        tl.tracks.append(audio_track)
+        audio_ref = otio.schema.ExternalReference(target_url=ref_str)
+        audio_ref.available_range = otio.opentime.TimeRange(
+            start_time=otio.opentime.RationalTime(0.0, audio_rate),
+            duration=otio.opentime.RationalTime(3600.0 * audio_rate, audio_rate),
+        )
+        audio_track.append(
+            otio.schema.Clip(
+                name="audio_clip",
+                media_reference=audio_ref,
+                source_range=otio.opentime.TimeRange(
+                    start_time=otio.opentime.RationalTime(0.0, audio_rate),
+                    duration=otio.opentime.RationalTime(10.0 * audio_rate, audio_rate),
+                ),
+            )
+        )
+
+        video_track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
+        tl.tracks.append(video_track)
+        video_ref = otio.schema.ExternalReference(target_url=ref_str)
+        video_ref.available_range = otio.opentime.TimeRange(
+            start_time=otio.opentime.RationalTime(0.0, video_rate),
+            duration=otio.opentime.RationalTime(3600.0 * video_rate, video_rate),
+        )
+        video_track.append(
+            otio.schema.Clip(
+                name="video_clip",
+                media_reference=video_ref,
+                source_range=otio.opentime.TimeRange(
+                    start_time=otio.opentime.RationalTime(0.0, video_rate),
+                    duration=otio.opentime.RationalTime(10.0 * video_rate, video_rate),
+                ),
+            )
+        )
+
+        otio_path = tmp_path / "audio_first.otio"
+        save_timeline(tl, str(otio_path))
+
+        out = tmp_path / "audio_first.edl"
+        result = export_timeline(
+            timeline=str(otio_path),
+            output=str(out),
+            options=ExportTimelineOptions(format="edl"),
+        )
+        assert result.ok is True, result.error
+
+        joined = " ".join(result.warnings)
+        assert f"{int(video_rate)} fps" in joined, (
+            "expected the EDL rate warning to name the Video track's rate "
+            f"({int(video_rate)}), not the Audio track's ({int(audio_rate)}); "
+            f"got warnings: {result.warnings!r}"
+        )
 
     def test_rate_warning_mentions_representative_rate(
         self, roundtrip_timeline_factory: Any, tmp_path: Path
@@ -784,3 +948,188 @@ class TestErrors:
         assert Path(fixture.otio_path).name not in result.error.message
         assert Path(fixture.otio_path).name not in result.error.hint
         assert not out.exists()
+
+
+# ===========================================================================
+# (H) [SR-V-002] / [CR-T-001] Absolute media-reference symlink rejection
+# ===========================================================================
+
+
+class TestAbsoluteMediaRefSymlinkRejected:
+    """The absolute-reference branch of _absolutize_media_refs
+    (_normalize_ref/_has_symlink_component, timeline_export.py:120-134/
+    252-263) must reject a symlink the same way the relative branch (via
+    check_media_ref) already does — this local re-implementation exists
+    because check_media_ref's absolute branch fails a *missing* absolute
+    reference, which conflicts with ADR-EX-4's best-effort skip requirement,
+    so export.py cannot simply delegate to it.
+
+    Verified as a basic Green check: the implementation logic was inspected
+    against pathpolicy's leaf-to-root is_symlink() walk (ADR-PP-2) and found
+    equivalent; this test locks that in as a regression guard rather than
+    driving new implementation work.
+    """
+
+    @_skip_no_symlinks
+    def test_symlinked_absolute_media_ref_returns_path_not_allowed(
+        self, tmp_path: Path, make_media_file: Any
+    ) -> None:
+        real_media = make_media_file("real_clip.mov")
+        link_path = tmp_path / "link_clip.mov"
+        _try_symlink(link_path, real_media)
+
+        tl = _build_bare_clip_timeline(
+            tmp_path,
+            media=tmp_path / "unused.mov",
+            target_url=str(link_path),
+        )
+        otio_path = tmp_path / "symlink_abs.otio"
+        save_timeline(tl, str(otio_path))
+
+        out = tmp_path / "symlink_abs.fcpxml"
+        result = export_timeline(
+            timeline=str(otio_path),
+            output=str(out),
+            options=ExportTimelineOptions(format="fcpxml"),
+        )
+
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.PATH_NOT_ALLOWED
+        assert not out.exists(), (
+            "a symlinked absolute media reference must never produce an output file"
+        )
+
+
+# ===========================================================================
+# (I) [CR-T-001] DEPENDENCY_MISSING (ADR-EX-9 defensive branch)
+# ===========================================================================
+
+
+class TestDependencyMissing:
+    """Verified as a basic Green check: the defensive branch that guards
+    against the exchange adapter not being registered (a packaging/
+    installation failure that should not normally occur, per ADR-EX-9)."""
+
+    def test_missing_adapter_returns_dependency_missing(
+        self,
+        roundtrip_timeline_factory: Any,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        fixture: RoundtripFixture = roundtrip_timeline_factory(
+            rate=30.0, name="dep_missing"
+        )
+        out = tmp_path / "dep_missing.edl"
+
+        monkeypatch.setattr(otio.adapters, "available_adapter_names", lambda: [])
+
+        result = export_timeline(
+            timeline=fixture.otio_path,
+            output=str(out),
+            options=ExportTimelineOptions(format="edl"),
+        )
+
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.DEPENDENCY_MISSING
+        assert not out.exists()
+        # CWE-209: the missing-adapter message must not leak either path.
+        assert out.name not in result.error.message
+        assert Path(fixture.otio_path).name not in result.error.message
+        assert out.name not in result.error.hint
+        assert Path(fixture.otio_path).name not in result.error.hint
+
+
+# ===========================================================================
+# (J) [CR-E-004] _write_adapter hint must match the requested format
+# ===========================================================================
+
+
+class TestWriteAdapterHintMatchesFormat:
+    """Expected Red until _write_adapter's OTIOError handler picks its hint
+    text based on *fmt* instead of always returning the EDL-specific
+    wording (timeline_export.py:387-400)."""
+
+    def test_fcpxml_otio_error_hint_does_not_reference_edl(
+        self,
+        roundtrip_timeline_factory: Any,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        fixture: RoundtripFixture = roundtrip_timeline_factory(
+            rate=30.0, name="hint_fcpxml"
+        )
+        out = tmp_path / "hint_fcpxml.fcpxml"
+
+        def _boom(*args: object, **kwargs: object) -> None:
+            raise otio.exceptions.OTIOError("simulated fcpxml write failure")
+
+        monkeypatch.setattr(otio.adapters, "write_to_file", _boom)
+
+        result = export_timeline(
+            timeline=fixture.otio_path,
+            output=str(out),
+            options=ExportTimelineOptions(format="fcpxml"),
+        )
+
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.OTIO_ERROR
+        assert not out.exists()
+
+        hint_lower = result.error.hint.lower()
+        assert "edl" not in hint_lower, (
+            "a fcpxml write-failure hint must not reference EDL (the caller "
+            f"already requested fcpxml); got hint: {result.error.hint!r}"
+        )
+        assert "single video track" not in hint_lower
+
+
+# ===========================================================================
+# (L) [SR-V-001] _loss_report unknown-kind length bound (CWE-400)
+# ===========================================================================
+
+
+class TestLossReportUnknownKindLengthBound:
+    """Expected Red until _loss_report truncates an over-long unknown
+    marker kind string (timeline_export.py:338-339) to a small fixed upper
+    bound before embedding it in the aggregated warning sentence."""
+
+    def test_unknown_kind_is_truncated_to_length_limit(self) -> None:
+        tl = new_timeline(name="kind-overflow")
+        v1 = tl.tracks[0]
+        long_kind = "z" * 300
+        add_marker(
+            v1,
+            TimeRangeModel(
+                start_time=RationalTimeModel(value=0.0, rate=30.0),
+                duration=RationalTimeModel(value=0.0, rate=30.0),
+            ),
+            name="overflow_marker",
+            metadata={
+                "tool": "clipwright-test-fixture",
+                "version": "0.0.0",
+                "kind": long_kind,
+            },
+        )
+
+        result = _loss_report(tl)
+
+        assert result, "expected a loss entry for the unknown kind"
+        joined = " ".join(result)
+        assert long_kind not in joined, (
+            "the full 300-char kind string must not be echoed verbatim into "
+            "the warning (CWE-400 unbounded-size defence)"
+        )
+
+        marker = "kind="
+        idx = joined.find(marker)
+        assert idx != -1, f"expected a 'kind=' marker in the warning: {joined!r}"
+        tail = joined[idx + len(marker) :]
+        close = tail.find(")")
+        embedded = tail[:close] if close != -1 else tail
+        assert len(embedded) <= 64, (
+            "expected the embedded kind string truncated to <=64 chars, got "
+            f"{len(embedded)} chars: {embedded[:80]!r}..."
+        )

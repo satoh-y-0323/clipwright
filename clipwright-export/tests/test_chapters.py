@@ -12,15 +12,19 @@ Spec source of truth:
     (test_chapters.py item).
   - requirements-report-20260710-161944.md FR-3, AC-6/AC-7/AC-9.
 
-TDD Red: clipwright_export.chapters does not exist yet (implementation not
-started), so every test in this module fails at collection time with
-ModuleNotFoundError. This is the expected Red state; chapters.py is
-adapter-independent (no otio-cmx3600-adapter / otio-fcpx-xml-adapter
-dependency) so this Red test does not need to wait for the Wave 0 spike.
+chapters.py is adapter-independent (no otio-cmx3600-adapter /
+otio-fcpx-xml-adapter dependency), so this module's tests never needed to
+wait on the Wave 0 spike.
 
 Fixtures are defined inline in this file (no conftest.py dependency), per
 the task instruction to avoid a writes collision with the sibling
 test-timeline task.
+
+Fix-wave additions (code-review-report-export.md / security-review-report-
+export.md, 2026-07-10 second cycle) — see (G)/(H)/(I) below. Some of these
+are TDD Red for a src fix that has not landed yet (noted per-test); the
+rest are verification tests for existing behaviour that should already
+pass.
 
 Verification aspects:
   (A) _collect_chapters
@@ -91,6 +95,55 @@ Verification aspects:
             (confirm-export §5 gap: chapters.py side was previously
             untested even though timeline_export.py's equivalent boundary
             was).
+  (G) export_chapters — full-orchestration error taxonomy (CR-T-001)
+      (G-1) [CR-NEW, Red] output == timeline should raise PATH_NOT_ALLOWED
+            via check_output_not_source, mirroring timeline_export.py's
+            TestErrors precedent. chapters.py currently checks the output
+            suffix (Step 1) before check_output_not_source (Step 3); since
+            no youtube/ffmetadata suffix ever matches a real timeline's
+            .otio suffix, this always short-circuits to INVALID_INPUT
+            before Step 3 is reached, so today it is Red.
+      (G-2) [verification] Output suffix mismatch (Step 1) -> INVALID_INPUT,
+            offending suffix not echoed (SR L-1 / CWE-209).
+      (G-3) [verification] Output parent directory missing (Step 2) ->
+            FILE_NOT_FOUND.
+      (G-4) [CR-N-004, Red] Timeline file does not exist (Step 4) ->
+            FILE_NOT_FOUND, matching FR-3's transform classification and
+            timeline_export.py's validate_source_or_basename default.
+            chapters.py currently passes error_code=ErrorCode.INVALID_INPUT
+            explicitly at Step 4, so today it is Red.
+      (G-5) [Red — implementation gap not called out in the review reports]
+            Structurally invalid OTIO file (Step 5) -> OTIO_ERROR is the
+            desired behaviour (matches timeline_export.py precedent), but
+            load_timeline's bare ValueError (malformed JSON) escapes
+            chapters.py's Step 5 uncaught, landing on the outer
+            except-Exception -> INTERNAL boundary instead of OTIO_ERROR.
+  (H) export_chapters — AC-9 zero markers via full orchestration (CR-T-001)
+      (H-1) [verification] youtube format: empty output file, chapter_count
+            0, two independent warnings (missing-markers notice +
+            fewer-than-3-chapters constraint), summary reflects both.
+      (H-2) [verification] ffmetadata format: header-only output file,
+            chapter_count 0, one warning (missing-markers notice only —
+            serialize_ffmetadata has no chapter-count constraint).
+  (I) artifacts[0].format reflects options.format, not the output suffix
+      (CR-M-002, Red)
+      (I-1) ffmetadata format written to a .txt path -> artifact format is
+            "ffmetadata", not "txt".
+      (I-2) youtube format written to a .txt path -> artifact format is
+            "youtube", not "txt".
+  (J) _sanitize_title covers bidi control chars and Unicode line/paragraph
+      separators, not just ASCII controls (SR-V-001, Red)
+      (J-1) Bidirectional control characters (e.g. U+202E RIGHT-TO-LEFT
+            OVERRIDE, U+2069 POP DIRECTIONAL ISOLATE) are stripped to a
+            single space so a marker name cannot spoof display order
+            ("Trojan Source") in an exported chapter title.
+      (J-2) U+2028 LINE SEPARATOR / U+2029 PARAGRAPH SEPARATOR are stripped
+            to a single space; unlike ASCII \\n/\\r these are not ASCII
+            control chars but can still be rendered as a line break by a
+            browser/editor displaying the exported YouTube chapter list.
+      (J-3) The ffmetadata pipeline shares _collect_chapters, so the same
+            sanitizing applies through the full export_chapters
+            orchestration, not just the pure helper.
 """
 
 from __future__ import annotations
@@ -584,3 +637,287 @@ class TestExportChaptersCwe209:
         assert str(otio_path) not in result.error.message
         assert str(otio_path) not in result.error.hint
         assert not out.exists()
+
+
+# ===========================================================================
+# (G) export_chapters — full-orchestration error taxonomy (CR-T-001)
+# ===========================================================================
+
+
+class TestExportChaptersErrorOrchestration:
+    """Full-orchestration (non-mocked) error paths for export_chapters(),
+    mirrored from timeline_export.py::TestErrors. Distinct from
+    TestExportChaptersCwe209 above, which only covers the uncaught-
+    exception boundary via a monkeypatched load_timeline.
+    """
+
+    def test_output_equals_timeline_returns_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """(G-1) [CR-NEW, Red] See module docstring (G-1): today this fails
+        because Step 1 (suffix check) fires INVALID_INPUT before Step 3
+        (check_output_not_source) is reached."""
+        tl = _build_timeline(markers=[(0.0, "A", "scene_boundary")])
+        otio_path = tmp_path / "same_path.otio"
+        save_timeline(tl, str(otio_path))
+
+        result = export_chapters(
+            timeline=str(otio_path),
+            output=str(otio_path),
+            options=ExportChaptersOptions(format="youtube"),
+        )
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.PATH_NOT_ALLOWED
+        # CWE-209 regression guard: once fixed, the path must still not leak.
+        assert otio_path.name not in result.error.message
+        assert otio_path.name not in result.error.hint
+        assert str(otio_path) not in result.error.message
+        assert str(otio_path) not in result.error.hint
+
+    @pytest.mark.parametrize(
+        "fmt,wrong_ext",
+        [("youtube", ".mp4"), ("youtube", ".otio"), ("ffmetadata", ".srt")],
+    )
+    def test_wrong_extension_rejected_without_suffix_in_message(
+        self, tmp_path: Path, fmt: str, wrong_ext: str
+    ) -> None:
+        """(G-2) [verification] Step 1 suffix mismatch -> INVALID_INPUT; the
+        offending suffix must not be echoed (SR L-1 / CWE-209)."""
+        tl = _build_timeline(markers=[(0.0, "A", "scene_boundary")])
+        otio_path = tmp_path / "source.otio"
+        save_timeline(tl, str(otio_path))
+        safe = f"{fmt}{wrong_ext}".replace(".", "_")
+        out = tmp_path / f"out_{safe}{wrong_ext}"
+
+        result = export_chapters(
+            timeline=str(otio_path),
+            output=str(out),
+            options=ExportChaptersOptions(format=fmt),
+        )
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.INVALID_INPUT
+        assert not out.exists()
+        assert wrong_ext not in result.error.message
+        assert wrong_ext not in result.error.hint
+
+    def test_output_parent_directory_missing_returns_file_not_found(
+        self, tmp_path: Path
+    ) -> None:
+        """(G-3) [verification] Step 2: output parent dir missing ->
+        FILE_NOT_FOUND."""
+        tl = _build_timeline(markers=[(0.0, "A", "scene_boundary")])
+        otio_path = tmp_path / "source.otio"
+        save_timeline(tl, str(otio_path))
+        out = tmp_path / "missing_dir" / "out.txt"
+
+        result = export_chapters(
+            timeline=str(otio_path),
+            output=str(out),
+            options=ExportChaptersOptions(format="youtube"),
+        )
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.FILE_NOT_FOUND
+        assert not out.exists()
+
+    def test_nonexistent_timeline_returns_file_not_found(self, tmp_path: Path) -> None:
+        """(G-4) [CR-N-004, Red] See module docstring (G-4): today this
+        fails because Step 4 passes error_code=ErrorCode.INVALID_INPUT
+        explicitly instead of using validate_source_or_basename's
+        FILE_NOT_FOUND default."""
+        missing = tmp_path / "does_not_exist.otio"
+        out = tmp_path / "out.txt"
+
+        result = export_chapters(
+            timeline=str(missing),
+            output=str(out),
+            options=ExportChaptersOptions(format="youtube"),
+        )
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.FILE_NOT_FOUND
+        assert not out.exists()
+
+    def test_invalid_otio_file_returns_otio_error(self, tmp_path: Path) -> None:
+        """(G-5) [Red — implementation gap discovered while writing this
+        test, not previously called out in code-review-report-export.md /
+        security-review-report-export.md] A structurally malformed .otio
+        (bad JSON) makes opentimelineio raise a bare ValueError, not
+        otio.exceptions.OTIOError, so load_timeline's own
+        `except otio.exceptions.OTIOError` does not catch it. In
+        timeline_export.py (timeline_export.py:466-479) this is handled by
+        an explicit local `except Exception -> OTIO_ERROR` wrapper around
+        the load_timeline call; chapters.py (_export_chapters_inner Step 5)
+        calls load_timeline directly with no equivalent wrapper, so the bare
+        ValueError escapes to export_chapters()'s outer
+        `except Exception -> INTERNAL` boundary instead. See test-report's
+        "implementation defect candidate" section."""
+        bad = tmp_path / "bad.otio"
+        bad.write_text("not a valid otio json", encoding="utf-8")
+        out = tmp_path / "out.txt"
+
+        result = export_chapters(
+            timeline=str(bad),
+            output=str(out),
+            options=ExportChaptersOptions(format="youtube"),
+        )
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.OTIO_ERROR
+        assert not out.exists()
+
+
+# ===========================================================================
+# (H) export_chapters — AC-9 zero markers via full orchestration (CR-T-001)
+# ===========================================================================
+
+
+class TestExportChaptersZeroMarkersOrchestration:
+    """AC-9 verified through the full export_chapters() orchestration, not
+    just the _collect_chapters/_youtube_warnings unit tests in (A)/(C)
+    above.
+    """
+
+    def test_ac9_zero_markers_writes_empty_youtube_file_with_warnings(
+        self, tmp_path: Path
+    ) -> None:
+        """(H-1) [verification] youtube: empty output text, two independent
+        warnings (missing-markers notice + fewer-than-3-chapters
+        constraint from serialize_youtube), summary reflects both."""
+        tl = _build_timeline(clip_duration_sec=20.0, markers=[])
+        otio_path = tmp_path / "empty.otio"
+        save_timeline(tl, str(otio_path))
+        out = tmp_path / "out.txt"
+
+        result = export_chapters(
+            timeline=str(otio_path),
+            output=str(out),
+            options=ExportChaptersOptions(format="youtube"),
+        )
+        assert result.ok is True, result.error
+        assert out.exists()
+        assert out.read_text(encoding="utf-8") == ""
+        assert result.data["chapter_count"] == 0
+        assert len(result.warnings) == 2
+        assert "scene_boundary" in result.warnings[0]
+        assert result.warnings[1] == _MSG_TOO_FEW
+        assert "Wrote 0 chapter(s)" in (result.summary or "")
+        assert "2 warning(s)" in (result.summary or "")
+
+    def test_ac9_zero_markers_writes_ffmetadata_header_only(
+        self, tmp_path: Path
+    ) -> None:
+        """(H-2) [verification] ffmetadata: header-only output, one warning
+        (missing-markers notice only)."""
+        tl = _build_timeline(clip_duration_sec=20.0, markers=[])
+        otio_path = tmp_path / "empty.otio"
+        save_timeline(tl, str(otio_path))
+        out = tmp_path / "out.ffmeta"
+
+        result = export_chapters(
+            timeline=str(otio_path),
+            output=str(out),
+            options=ExportChaptersOptions(format="ffmetadata"),
+        )
+        assert result.ok is True, result.error
+        assert out.read_text(encoding="utf-8") == ";FFMETADATA1\n"
+        assert result.data["chapter_count"] == 0
+        assert len(result.warnings) == 1
+        assert "scene_boundary" in result.warnings[0]
+
+
+# ===========================================================================
+# (I) artifacts[0].format reflects options.format (CR-M-002)
+# ===========================================================================
+
+
+class TestArtifactFormatUsesOptionsFormat:
+    """artifacts[0].format must equal options.format, not the output file's
+    suffix — Artifact.format's docstring (src/clipwright/schemas.py) defines
+    it as the file's logical format, and ADR-EX-3 allows multiple suffixes
+    per format (ffmetadata: .txt/.ffmeta/.ffmetadata).
+    """
+
+    def test_ffmetadata_txt_extension_reports_ffmetadata_format(
+        self, tmp_path: Path
+    ) -> None:
+        """(I-1) [Red] Current code uses out.suffix.lstrip(".").lower(),
+        which yields "txt" instead of "ffmetadata" for a .txt output."""
+        tl = _build_timeline(markers=[(0.0, "A", "scene_boundary")])
+        otio_path = tmp_path / "source.otio"
+        save_timeline(tl, str(otio_path))
+        out = tmp_path / "chapters.txt"
+
+        result = export_chapters(
+            timeline=str(otio_path),
+            output=str(out),
+            options=ExportChaptersOptions(format="ffmetadata"),
+        )
+        assert result.ok is True, result.error
+        assert result.artifacts[0].format == "ffmetadata"
+
+    def test_youtube_txt_extension_reports_youtube_format(self, tmp_path: Path) -> None:
+        """(I-2) [Red] Current code uses out.suffix.lstrip(".").lower(),
+        which yields "txt" instead of "youtube" for a .txt output."""
+        tl = _build_timeline(markers=[(0.0, "A", "scene_boundary")])
+        otio_path = tmp_path / "source.otio"
+        save_timeline(tl, str(otio_path))
+        out = tmp_path / "chapters.txt"
+
+        result = export_chapters(
+            timeline=str(otio_path),
+            output=str(out),
+            options=ExportChaptersOptions(format="youtube"),
+        )
+        assert result.ok is True, result.error
+        assert result.artifacts[0].format == "youtube"
+
+
+# ===========================================================================
+# (J) _sanitize_title — Unicode bidi controls and line/paragraph separators
+# (SR-V-001)
+# ===========================================================================
+
+
+class TestCollectChaptersUnicodeSanitize:
+    def test_sanitizes_bidi_control_chars(self) -> None:
+        """(J-1) [Red] Bidirectional control characters (U+202E RLO,
+        U+2069 PDI) are not in the current ASCII-only control-char range
+        (\\x00-\\x1f, \\x7f), so they pass through unsanitized today."""
+        tl = _build_timeline(markers=[(0.0, "Evil‮Trick⁩End", "scene_boundary")])
+        chapters, _duration_sec = _collect_chapters(tl, "scene_boundary")
+        assert "‮" not in chapters[0].title
+        assert "⁩" not in chapters[0].title
+        assert chapters[0].title == "Evil Trick End"
+
+    def test_sanitizes_unicode_line_and_paragraph_separators(self) -> None:
+        """(J-2) [Red] U+2028 LINE SEPARATOR / U+2029 PARAGRAPH SEPARATOR
+        are not ASCII \\n/\\r, so the current sanitizer does not catch
+        them, even though a renderer may treat them as line breaks."""
+        tl = _build_timeline(markers=[(0.0, "Line1 Line2 Line3", "scene_boundary")])
+        chapters, _duration_sec = _collect_chapters(tl, "scene_boundary")
+        assert " " not in chapters[0].title
+        assert " " not in chapters[0].title
+        assert chapters[0].title == "Line1 Line2 Line3"
+
+    def test_ffmetadata_output_also_sanitizes_bidi_and_separators(
+        self, tmp_path: Path
+    ) -> None:
+        """(J-3) [Red] The ffmetadata pipeline shares _collect_chapters, so
+        the full export_chapters orchestration must sanitize the same way."""
+        tl = _build_timeline(markers=[(0.0, "A‮B C", "scene_boundary")])
+        otio_path = tmp_path / "unicode.otio"
+        save_timeline(tl, str(otio_path))
+        out = tmp_path / "out.ffmeta"
+
+        result = export_chapters(
+            timeline=str(otio_path),
+            output=str(out),
+            options=ExportChaptersOptions(format="ffmetadata"),
+        )
+        assert result.ok is True, result.error
+        text = out.read_text(encoding="utf-8")
+        assert "‮" not in text
+        assert " " not in text
