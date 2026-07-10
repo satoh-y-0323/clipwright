@@ -67,15 +67,6 @@ disallow_any_generics = true
 module = "opentimelineio.*"
 ignore_missing_imports = true
 
-# otio-cmx3600-adapter / otio-fcpx-xml-adapter have no stubs
-[[tool.mypy.overrides]]
-module = "otio_cmx3600_adapter.*"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = "otio_fcpx_xml_adapter.*"
-ignore_missing_imports = true
-
 # --- pytest ---
 [tool.pytest.ini_options]
 testpaths = ["tests"]

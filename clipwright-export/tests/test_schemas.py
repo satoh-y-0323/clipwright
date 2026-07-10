@@ -2,10 +2,11 @@
 
 Contract surface (schemas) targets ~100% coverage (CONVENTIONS §test coverage).
 
-TDD Red: clipwright_export.schemas does not exist yet (implementation not
-started), so every test in this module fails at collection time with
-ModuleNotFoundError. This is the expected Red state per
-architecture-report-20260710-161944.md §3 (ADR-EX-2) / §9.1.
+These tests were written before clipwright_export.schemas existed (TDD Red,
+per architecture-report-20260710-161944.md §3 (ADR-EX-2) / §9.1, where every
+test in this module failed at collection time with ModuleNotFoundError).
+Now that schemas.py has landed, this module serves as the contract
+regression suite.
 """
 
 from __future__ import annotations

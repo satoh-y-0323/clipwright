@@ -1,11 +1,13 @@
 """test_server.py -- Tests for clipwright-export server.py (MCP wrapper).
 
-TDD Red: clipwright_export.server does not exist yet (only __init__.py and
-py.typed exist under src/clipwright_export/, per Wave 1 of plan). Every test
-in this module is therefore expected to fail via the xfail(strict=True) guard
-below -- ModuleNotFoundError on import, wrapped as an expected failure. Once
-server.py (and schemas.py / timeline_export.py / chapters.py) land in Wave 2,
-_SERVER_AVAILABLE flips to True and these tests must pass unmodified (Green).
+These tests were written before clipwright_export.server existed (TDD Red;
+only __init__.py and py.typed existed under src/clipwright_export/, per
+Wave 1 of plan). At that point every test in this module was expected to
+fail via the xfail(strict=True) guard below -- ModuleNotFoundError on
+import, wrapped as an expected failure. Now that server.py (and schemas.py /
+timeline_export.py / chapters.py) have landed in Wave 2, _SERVER_AVAILABLE
+is True and these tests pass unmodified (Green), serving as the contract
+regression suite.
 
 Architecture reference:
   - architecture-report-20260710-161944.md
