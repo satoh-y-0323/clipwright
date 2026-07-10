@@ -11,6 +11,7 @@ members = [
     "clipwright",
     "clipwright-bgm",
     "clipwright-color",
+    "clipwright-export",
     "clipwright-frames",
     "clipwright-loudness",
     "clipwright-noise",
@@ -302,6 +303,47 @@ dev = [
 requires-dist = [
     { name = "clipwright", editable = "." },
     { name = "mcp", extras = ["cli"], specifier = ">=1.27.2" },
+    { name = "pydantic", specifier = ">=2" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy", specifier = ">=2.1.0" },
+    { name = "pytest", specifier = ">=9.0.3" },
+    { name = "pytest-cov", specifier = ">=7.1.0" },
+    { name = "pytest-mock", specifier = ">=3.15.1" },
+    { name = "ruff", specifier = ">=0.15.16" },
+]
+
+[[package]]
+name = "clipwright-export"
+version = "0.1.0"
+source = { editable = "clipwright-export" }
+dependencies = [
+    { name = "clipwright" },
+    { name = "mcp", extra = ["cli"] },
+    { name = "opentimelineio" },
+    { name = "otio-cmx3600-adapter" },
+    { name = "otio-fcpx-xml-adapter" },
+    { name = "pydantic" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "pytest-mock" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "clipwright", editable = "." },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.27.2" },
+    { name = "opentimelineio", specifier = ">=0.18" },
+    { name = "otio-cmx3600-adapter", specifier = ">=1.0" },
+    { name = "otio-fcpx-xml-adapter", specifier = ">=1.0" },
     { name = "pydantic", specifier = ">=2" },
 ]
 
@@ -1881,6 +1923,30 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/cf/4c/06b6536319f2a5c1a99afaa834f1f7c9d572f48bacaf43d6cf4af9229401/opentimelineio-0.18.1-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:142235d2e9e57976be360f093a77e226698830d435a8ca63ddf0e73ee84c5e95", size = 775605, upload-time = "2025-11-09T16:38:44.94Z" },
     { url = "https://files.pythonhosted.org/packages/e7/a8/b1721da936e0405a3e317aacb1759a047db36eacd1efbd933feb3ead743e/opentimelineio-0.18.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:8740c18d2778d64d2128c3cb805cf381a71164ec8f7ff6b38477b60471ebe1a1", size = 843470, upload-time = "2025-11-09T16:38:46.322Z" },
     { url = "https://files.pythonhosted.org/packages/6c/ea/346d55de1348d80b5c37036fa4bc2a9e19e08121742369d51577de0d9562/opentimelineio-0.18.1-cp313-cp313-win_amd64.whl", hash = "sha256:af19134bf9cb2f3dd86b15004e0ca9a22c22d6e58a14465d4e5aeeb8329154ea", size = 608367, upload-time = "2025-11-09T16:38:47.554Z" },
+]
+
+[[package]]
+name = "otio-cmx3600-adapter"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentimelineio" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/20/5a/a65b817af6d70a3e8696c81dc0e43242967b2b3ae6100bf0f35f6330e91a/otio_cmx3600_adapter-1.0.0.tar.gz", hash = "sha256:a10cca794617795bbc147d784ec33e6381a57eb6157e87d2b74b65b02516b621", size = 46108, upload-time = "2023-07-07T21:53:12.952Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8f/b8/e48c78c703ad27d2c3748663717006a23509a15d62ba94689b88dd6bb336/otio_cmx3600_adapter-1.0.0-py3-none-any.whl", hash = "sha256:440ed9d862170d9d03d319a51bf77a19f917b162b73a578e3ebe9a79fa01625b", size = 24829, upload-time = "2023-07-07T21:53:11.399Z" },
+]
+
+[[package]]
+name = "otio-fcpx-xml-adapter"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentimelineio" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/bc/df/666dd35fc30afcda85cbe1d4b25b5ac75b9e58ab25fb96c38ce82efd6dac/otio_fcpx_xml_adapter-1.0.0.tar.gz", hash = "sha256:78919c194f078f57ce9a6464c1c607a494499aaab3d8c35159ce5e71d5fcd235", size = 22036, upload-time = "2023-07-07T21:59:50.99Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a8/1b/ebfc7b8280de2549e89431d78f0d59eeb8bc3e0333a73064492b13b3ac7a/otio_fcpx_xml_adapter-1.0.0-py3-none-any.whl", hash = "sha256:9891fcba190e1a2ebc339d2da42398ce98927dfb0055d57d8b37ea8769477f73", size = 18593, upload-time = "2023-07-07T21:59:49.652Z" },
 ]
 
 [[package]]

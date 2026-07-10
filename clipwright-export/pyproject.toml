@@ -1,7 +1,7 @@
 [project]
-name = "clipwright"
-version = "0.6.1"
-description = "MCP server group wrapping FFmpeg/OTIO. Provides primitives to manipulate video editing workflows from AI agents."
+name = "clipwright-export"
+version = "0.1.0"
+description = "MCP tools that export OTIO timelines to NLE exchange formats (EDL/FCPXML) and chapter sidecars (YouTube/ffmetadata)."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
@@ -9,13 +9,16 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
+    "clipwright>=0.6.0",
     "mcp[cli]>=1.27.2",
     "opentimelineio>=0.18",
+    "otio-cmx3600-adapter>=1.0",
+    "otio-fcpx-xml-adapter>=1.0",
     "pydantic>=2",
 ]
 
 [project.scripts]
-clipwright-mcp = "clipwright.server:main"
+clipwright-export = "clipwright_export.server:main"
 
 [build-system]
 requires = ["uv_build>=0.11.19,<0.12.0"]
@@ -30,20 +33,22 @@ dev = [
     "ruff>=0.15.16",
 ]
 
+# Resolve clipwright (core) within workspace by path reference.
+[tool.uv.sources]
+clipwright = { workspace = true }
+
 # --- Ruff ---
 [tool.ruff]
 target-version = "py311"
 line-length = 88
-# templates/ is a template containing placeholders (__TOOL__ etc). Excluded from lint/format.
-extend-exclude = ["templates"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
 ignore = []
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["E501"]
-"*/tests/**" = ["E501"]
+# Allow E501 for English docstrings/comments in test files
+"tests/*.py" = ["E501"]
 
 [tool.ruff.format]
 # Default ruff formatter is OK
@@ -56,12 +61,19 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 disallow_any_generics = true
-# templates/ is a template containing placeholders. Excluded from type checking.
-exclude = ["^templates/"]
 
 # opentimelineio has no stubs, ignored with mypy strict
 [[tool.mypy.overrides]]
 module = "opentimelineio.*"
+ignore_missing_imports = true
+
+# otio-cmx3600-adapter / otio-fcpx-xml-adapter have no stubs
+[[tool.mypy.overrides]]
+module = "otio_cmx3600_adapter.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "otio_fcpx_xml_adapter.*"
 ignore_missing_imports = true
 
 # --- pytest ---
@@ -75,13 +87,9 @@ markers = [
 
 # --- coverage ---
 [tool.coverage.run]
-source = ["clipwright"]
+source = ["clipwright_export"]
 omit = ["tests/*"]
 
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
-
-# --- uv workspace ---
-[tool.uv.workspace]
-members = ["clipwright-bgm", "clipwright-color", "clipwright-export", "clipwright-frames", "clipwright-loudness", "clipwright-noise", "clipwright-overlay", "clipwright-reframe", "clipwright-render", "clipwright-scene", "clipwright-sequence", "clipwright-silence", "clipwright-speed", "clipwright-stabilize", "clipwright-text", "clipwright-transcribe", "clipwright-transition", "clipwright-trim", "clipwright-wrap"]
