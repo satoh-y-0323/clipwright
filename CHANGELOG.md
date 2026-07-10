@@ -5,10 +5,22 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.36.0] - 2026-07-09
+## [0.36.1] - 2026-07-10
 
-Video/audio duration-drift fix (GitHub Issue #1) and `available_range` wiring across
-every timeline-generating tool.
+Picture-in-Picture (PiP) fade timing fix in `clipwright-render`.
+
+### Fixed (`clipwright-render` v0.18.1)
+
+- **PiP fade-out no longer fires `start_s` seconds early.** The PiP video branch was
+  faded on its own local timeline while it is composited onto the main track at an
+  absolute placement time (`start_s`), so a `fade=t=out` computed from the branch-local
+  clock triggered `start_s` seconds before the intended out-point. The branch is now
+  re-based to absolute time with `setpts=PTS-STARTPTS+start_s/TB` before the fade filter,
+  and both fade-in and fade-out `st=` offsets are expressed in that same absolute
+  timeline — matching how image overlays are already faded. As a side effect of the
+  missing re-base, the first `start_s` seconds of the PiP source were trimmed off and a
+  residual repeated-EOF alpha frame could linger past the placement window; both are
+  resolved by the same fix.
 
 ### Fixed (`clipwright` v0.6.1, `clipwright-trim` v0.2.2, `clipwright-silence` v0.3.2,
 `clipwright-transcribe` v0.5.2, `clipwright-sequence` v0.2.2, `clipwright-loudness` v0.3.3,

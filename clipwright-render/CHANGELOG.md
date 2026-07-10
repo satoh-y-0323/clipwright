@@ -5,15 +5,29 @@ All notable changes to `clipwright-render` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.18.1] - 2026-07-10
+
+### Fixed
+
+- **PiP fade timing fired `start_sec` seconds early**: the PiP video branch
+  was re-based to t=0 (`setpts=PTS-STARTPTS`) but never delayed to its
+  placement time, so `fade=out` started at `duration_sec - fade_out_sec` on
+  the program clock instead of the intended `end - fade_out_sec`. The branch
+  is now re-based to absolute program time
+  (`setpts=PTS-STARTPTS+start_sec/TB`) and both fades use absolute timestamps,
+  matching the image-overlay filter. This also fixes two side effects of the
+  same root cause: the first `start_sec` seconds of the PiP source were
+  skipped (trim semantics), and a residual ~11%-alpha ghost frame persisted
+  until the end of the placement window (overlay EOF repeat of the last
+  mid-fade frame).
+
+## [0.18.0] - 2026-07-09
 
 ### Security
 
 - Added an internal-error boundary guard to the tool entry point so
   unexpected exceptions no longer leak absolute paths in error messages
   (CWE-209).
-
-## [0.18.0] - 2026-07-09
 
 ### Added
 
