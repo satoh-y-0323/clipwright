@@ -167,9 +167,7 @@ def probe_roundtrip(rate: float, label: str) -> None:
         print(f"  [{adapter}] re-read clip ranges (kind,start,dur,rate):")
         in_ranges = [r for r in _clip_ranges(tl) if r[0] == otio.schema.TrackKind.Video]
         out_ranges = [
-            r
-            for r in _clip_ranges(back)
-            if r[0] == otio.schema.TrackKind.Video
+            r for r in _clip_ranges(back) if r[0] == otio.schema.TrackKind.Video
         ]
         for r in out_ranges:
             print("    ", r)
@@ -200,8 +198,7 @@ def probe_fcpxml_attrs(rate: float) -> None:
     for line in text.splitlines():
         s = line.strip()
         if any(
-            k in s
-            for k in ("<?xml", "<fcpxml", "<format", "frameDuration", "<asset ")
+            k in s for k in ("<?xml", "<fcpxml", "<format", "frameDuration", "<asset ")
         ):
             print("   |", s[:160])
 

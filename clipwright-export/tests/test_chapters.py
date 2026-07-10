@@ -90,7 +90,6 @@ from __future__ import annotations
 import opentimelineio as otio
 from clipwright.otio_utils import add_clip, add_marker, new_timeline
 from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
-
 from clipwright_export.chapters import (
     Chapter,
     _collect_chapters,
@@ -219,9 +218,7 @@ class TestCollectChapters:
 
     def test_sanitizes_newlines_and_control_chars(self) -> None:
         """(A-4) \\n and control chars each become a single space."""
-        tl = _build_timeline(
-            markers=[(0.0, "Hello\nWorld\x00Foo", "scene_boundary")]
-        )
+        tl = _build_timeline(markers=[(0.0, "Hello\nWorld\x00Foo", "scene_boundary")])
         chapters, _duration_sec = _collect_chapters(tl, "scene_boundary")
         assert chapters[0].title == "Hello World Foo"
 
