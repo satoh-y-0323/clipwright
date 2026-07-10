@@ -72,6 +72,21 @@ _ADAPTER_NAMES: dict[str, str] = {"edl": "cmx_3600", "fcpxml": "fcpx_xml"}
 # Output extension allow-list per format (architecture §3.3).
 _EXPECTED_SUFFIX: dict[str, str] = {"edl": ".edl", "fcpxml": ".fcpxml"}
 
+# CR-E-004: _write_adapter's OTIOError hint, chosen per-format so a fcpxml
+# write failure never tells the caller to "export to FCPXML instead" (the
+# caller already requested fcpxml).
+_WRITE_FAILURE_HINTS: dict[str, str] = {
+    "edl": (
+        "The EDL format supports only a single video track; review the "
+        "track layout, or export to FCPXML instead."
+    ),
+    "fcpxml": (
+        "Review the timeline for a track layout or structure the FCPXML "
+        "adapter cannot represent, or use clipwright-render to produce a "
+        "flat MP4 instead."
+    ),
+}
+
 # Loss-report label tables (architecture §5.1). Marker kinds map to a display
 # label; scene_boundary is excluded because both adapters transcribe marker
 # position (spike-report §7b). Directives live on timeline metadata, not the
@@ -109,6 +124,11 @@ _LABEL_ORDER: tuple[str, ...] = (
 # Non-integer rate detection threshold (ADR-EX-10 §13.1).
 _RATE_EPS = 1e-6
 
+# SR-V-001 (CWE-400): unknown marker-kind strings embedded in the aggregated
+# loss-report warning are truncated to this many characters.
+_UNKNOWN_KIND_MAX_LEN = 64
+_TRUNCATION_SUFFIX = "..."
+
 
 # ---------------------------------------------------------------------------
 # Local path helpers (core pathpolicy is not modified; these mirror its
@@ -134,9 +154,19 @@ def _has_symlink_component(path: Path) -> bool:
         current = parent
 
 
-def _iter_clips(tl: otio.schema.Timeline) -> Iterator[otio.schema.Clip]:
-    """Yield every Clip on every track, in track/item order."""
+def _iter_clips(
+    tl: otio.schema.Timeline, *, video_only: bool = False
+) -> Iterator[otio.schema.Clip]:
+    """Yield every Clip on every track, in track/item order.
+
+    When *video_only* is True, only clips on Video-kind tracks are yielded
+    (CR-NEW: used by _representative_rate so an Audio track enumerated
+    before the Video track in tl.tracks does not skew the representative
+    rate).
+    """
     for track in tl.tracks:
+        if video_only and track.kind != otio.schema.TrackKind.Video:
+            continue
         for item in track:
             if isinstance(item, otio.schema.Clip):
                 yield item
@@ -156,10 +186,19 @@ def _video_clip_count(tl: otio.schema.Timeline) -> int:
 def _representative_rate(tl: otio.schema.Timeline) -> int:
     """Return the timeline's representative frame rate as an integer.
 
-    Uses the first clip's source_range rate. Non-integer rates are already
-    rejected by _check_frame_rates before this runs, so rounding is lossless.
-    Falls back to 24 when no clip carries a source_range.
+    Uses the first Video-track clip's source_range rate (CR-NEW: Stack order
+    in tl.tracks is not kind-sorted, so an Audio track enumerated before the
+    Video track must not skew the EDL rate warning / write-then-verify rate).
+    Falls back to the first clip of any kind when no Video-track clip carries
+    a source_range, preserving the original behaviour for audio-only or
+    source_range-less timelines. Non-integer rates are already rejected by
+    _check_frame_rates before this runs, so rounding is lossless. Falls back
+    to 24 when no clip at all carries a source_range.
     """
+    for clip in _iter_clips(tl, video_only=True):
+        sr = clip.source_range
+        if sr is not None:
+            return int(round(sr.start_time.rate))
     for clip in _iter_clips(tl):
         sr = clip.source_range
         if sr is not None:
@@ -279,6 +318,20 @@ def _absolutize_media_refs(
 # ---------------------------------------------------------------------------
 
 
+def _truncate_kind(kind: str) -> str:
+    """Truncate an unknown marker *kind* to _UNKNOWN_KIND_MAX_LEN chars.
+
+    SR-V-001 (CWE-400): a clipwright marker's metadata["kind"] is
+    AI/tool-controlled, unbounded text; embedding it verbatim in the
+    aggregated loss-report warning risks an unbounded-size log/response.
+    Short kinds pass through unchanged.
+    """
+    if len(kind) <= _UNKNOWN_KIND_MAX_LEN:
+        return kind
+    keep = _UNKNOWN_KIND_MAX_LEN - len(_TRUNCATION_SUFFIX)
+    return kind[:keep] + _TRUNCATION_SUFFIX
+
+
 def _loss_report(tl: otio.schema.Timeline) -> list[str]:
     """Aggregate clipwright edit data that the exchange formats cannot carry.
 
@@ -336,7 +389,9 @@ def _loss_report(tl: otio.schema.Timeline) -> list[str]:
         if label in counts:
             parts.append(f"{counts[label]} {label}")
     for kind in sorted(other):
-        parts.append(f"{other[kind]} other clipwright annotations (kind={kind})")
+        parts.append(
+            f"{other[kind]} other clipwright annotations (kind={_truncate_kind(kind)})"
+        )
 
     if not parts:
         return []
@@ -361,7 +416,10 @@ def _write_adapter(
 
     - Missing adapter -> DEPENDENCY_MISSING (ADR-EX-9; normally does not occur).
     - Adapter write OTIOError (e.g. EDL video-track-count != 1 NotSupportedError,
-      spike §(7)) -> OTIO_ERROR; any partial artifact is removed.
+      spike §(7)) -> OTIO_ERROR; any partial artifact is removed. The hint text
+      is chosen per *fmt* (CR-E-004, _WRITE_FAILURE_HINTS): the EDL wording
+      names the single-video-track constraint, the fcpxml wording does not
+      reference EDL (the caller already requested fcpxml).
     - write-then-verify (ADR-EX-11): re-read with the same adapter (EDL passes
       rate= explicitly, C-2). Any re-read exception -> delete the artifact and
       raise OTIO_ERROR. Judgement is exception presence only (no value compare),
@@ -393,10 +451,7 @@ def _write_adapter(
             message=(
                 "The timeline could not be written to the requested exchange format."
             ),
-            hint=(
-                "The EDL format supports only a single video track; review the "
-                "track layout, or export to FCPXML instead."
-            ),
+            hint=_WRITE_FAILURE_HINTS[fmt],
         ) from exc
 
     # write-then-verify (ADR-EX-11). Broad except: EDL raises OTIOError/ValueError,

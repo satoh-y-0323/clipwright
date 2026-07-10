@@ -1,6 +1,6 @@
 """chapters.py — clipwright-export chapter/marker export orchestration.
 
-create-style tool: derives chapter data from an OTIO timeline's clipwright
+transform tool: derives chapter data from an OTIO timeline's clipwright
 markers and writes a text sidecar (YouTube description list or FFmpeg
 metadata file). The input OTIO and media are never modified.
 
@@ -21,6 +21,7 @@ Design decisions (architecture-report §2.2 / §7):
 from __future__ import annotations
 
 import math
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -68,13 +69,25 @@ class Chapter:
 def _sanitize_title(raw: str) -> str:
     """Replace newlines/control chars with single spaces and strip (§7.3).
 
-    Each disallowed character (newline, carriage return, C0 controls
-    \\x00-\\x1f, and DEL \\x7f) becomes one space; surrounding whitespace is
-    then stripped. Returns "" when nothing printable remains, letting the
-    caller apply the "chapter_{n}" fallback with a post-sort index.
+    Each disallowed character becomes one space; surrounding whitespace is
+    then stripped. Disallowed characters are: newline, carriage return, C0
+    controls \\x00-\\x1f, DEL \\x7f, and any character in Unicode category
+    Cf (format, including bidirectional-control characters that could spoof
+    display order — "Trojan Source"), Zl (line separator), or Zp (paragraph
+    separator) (SR-V-001). Returns "" when nothing printable remains,
+    letting the caller apply the "chapter_{n}" fallback with a post-sort
+    index.
     """
     cleaned = "".join(
-        " " if (ch == "\n" or ch == "\r" or ch < "\x20" or ch == "\x7f") else ch
+        " "
+        if (
+            ch == "\n"
+            or ch == "\r"
+            or ch < "\x20"
+            or ch == "\x7f"
+            or unicodedata.category(ch) in {"Cf", "Zl", "Zp"}
+        )
+        else ch
         for ch in raw
     )
     return cleaned.strip()
@@ -220,12 +233,21 @@ def _export_chapters_inner(
 ) -> ToolResult:
     """Internal implementation of export_chapters. Raises ClipwrightError.
 
-    Validation order (architecture-report §2.2):
-      1. output suffix matches the format's allowlist (§3.3, ADR-EX-3)
-      2. output parent directory exists
-      3. output != timeline (PATH_NOT_ALLOWED via check_output_not_source)
-      4. source timeline exists (validate_source_or_basename, INVALID_INPUT)
-      5. load_timeline (FILE_NOT_FOUND / OTIO_ERROR propagate)
+    Validation order (architecture-report §2.2, adjusted to match
+    timeline_export.py's precedent — see that module's docstring for why
+    the same-file guard precedes the suffix check):
+      1. output != timeline (PATH_NOT_ALLOWED via check_output_not_source).
+         NB: this precedes the suffix check on purpose. When output ==
+         timeline the paths share the .otio extension which never matches a
+         chapter format suffix, so running the suffix check first would
+         return INVALID_INPUT instead of the PATH_NOT_ALLOWED the shared
+         collision guard is meant to produce.
+      2. output suffix matches the format's allowlist (§3.3, ADR-EX-3)
+      3. output parent directory exists
+      4. source timeline exists (validate_source_or_basename, FILE_NOT_FOUND)
+      5. load_timeline (FILE_NOT_FOUND / OTIO_ERROR propagate; a bare
+         ValueError from a structurally malformed .otio is converted to
+         OTIO_ERROR here, mirroring timeline_export.py)
 
     Then collect markers, serialize the requested format, write the sidecar,
     and return an ok envelope. Zero matching markers is a success with a
@@ -235,7 +257,10 @@ def _export_chapters_inner(
     out = Path(output)
     inp = Path(timeline)
 
-    # --- Step 1: output suffix must match the selected format (SR L-1: no raw
+    # --- Step 1: output must not resolve to the same file as the timeline ---
+    check_output_not_source(out, [timeline])
+
+    # --- Step 2: output suffix must match the selected format (SR L-1: no raw
     # suffix in the message). options.format is already Literal-validated. ---
     if out.suffix.lower() not in _ALLOWED_SUFFIXES[options.format]:
         raise ClipwrightError(
@@ -247,7 +272,7 @@ def _export_chapters_inner(
             ),
         )
 
-    # --- Step 2: output parent exists (SR M-1: no path in message or hint) ---
+    # --- Step 3: output parent exists (SR M-1: no path in message or hint) ---
     if not out.parent.exists():
         raise ClipwrightError(
             code=ErrorCode.FILE_NOT_FOUND,
@@ -255,19 +280,30 @@ def _export_chapters_inner(
             hint="Create the output directory before exporting chapters.",
         )
 
-    # --- Step 3: output must not resolve to the same file as the timeline ---
-    check_output_not_source(out, [timeline])
-
-    # --- Step 4: source timeline exists (INVALID_INPUT to match create tools) ---
+    # --- Step 4: source timeline exists (FILE_NOT_FOUND default, matching
+    # the transform classification and timeline_export.py's precedent) ---
     validate_source_or_basename(
         timeline,
         message=f"Timeline file not found: {inp.name}",
         hint="Verify the timeline path and ensure the file exists.",
-        error_code=ErrorCode.INVALID_INPUT,
     )
 
-    # --- Step 5: load timeline (FILE_NOT_FOUND / OTIO_ERROR propagate) ---
-    timeline_obj = load_timeline(timeline)
+    # --- Step 5: load timeline. load_timeline wraps otio.exceptions.OTIOError
+    # as OTIO_ERROR, but a structurally malformed .otio (bad JSON) raises a
+    # bare ValueError that escapes it; convert that specific failure to
+    # OTIO_ERROR here (path-free message, CWE-209). Narrower than
+    # timeline_export.py's blanket `except Exception` wrap on purpose: this
+    # module's CWE-209 boundary test monkeypatches load_timeline itself with
+    # a RuntimeError and expects it to reach the outer INTERNAL boundary
+    # unconverted, so only the identified ValueError gap is caught here. ---
+    try:
+        timeline_obj = load_timeline(timeline)
+    except ValueError as exc:
+        raise ClipwrightError(
+            code=ErrorCode.OTIO_ERROR,
+            message="Failed to load the OTIO timeline file.",
+            hint="Specify a valid .otio timeline file.",
+        ) from exc
 
     # --- Collect markers -> chapters, then serialize the requested format ---
     chapters, duration_sec = _collect_chapters(timeline_obj, options.marker_kind)
@@ -308,7 +344,7 @@ def _export_chapters_inner(
             {
                 "role": "chapters",
                 "path": str(out_resolved),
-                "format": out.suffix.lstrip(".").lower(),
+                "format": options.format,
             }
         ],
         warnings=warnings,
@@ -322,7 +358,7 @@ def export_chapters(
 ) -> ToolResult:
     """Export chapter data from an OTIO timeline to a text sidecar file.
 
-    create-style tool: reads clipwright markers of options.marker_kind from
+    transform tool: reads clipwright markers of options.marker_kind from
     the timeline and writes either a YouTube description chapter list or an
     FFmpeg metadata file. Non-destructive: the input timeline and its media
     are never modified. Zero matching markers is a success with a warning.
