@@ -4540,18 +4540,15 @@ class TestMultiSourcePipIndexArithmetic:
 # ===========================================================================
 # SR-V-001 acceptance tests: fade_in_sec/fade_out_sec individual range
 # validation (.claude/reports/security-review-report-security-review.md
-# SR-V-001). `_marker_to_pip_overlay` (plan.py L937-938/L1038-1046) is
-# expected to gain math.isfinite() + 0<=x<=duration_sec checks for
-# fade_in_s/fade_out_s individually, in addition to the pre-existing combined
-# `fade_in_s + fade_out_s > duration_sec` cross-field check. Until that lands,
-# NaN silently disables the fade branch (`if o.fade_in_s > 0` is False for
-# NaN, so the combined check `NaN > x` is also always False and never fires)
-# and a huge finite value (e.g. 1e300) with an offsetting fade_out_s slips
-# past the combined check and is embedded verbatim into the filter_complex
-# string handed to ffmpeg. These tests are the acceptance test for the
-# individual-range-check fix: run BEFORE that fix lands, cases (1)/(2)/(3)
-# below are expected to FAIL (Red, as intended -- see test-report for which
-# state this run observed).
+# SR-V-001). `_marker_to_pip_overlay` validates fade_in_s/fade_out_s
+# individually (math.isfinite() + 0<=x<=duration_sec) in addition to the
+# pre-existing combined `fade_in_s + fade_out_s > duration_sec` cross-field
+# check. An earlier revision validated only the combined sum: NaN silently
+# disabled the fade branch (`if o.fade_in_s > 0` is False for NaN, so the
+# combined check `NaN > x` is also always False and never fires) and a huge
+# finite value (e.g. 1e300) with an offsetting fade_out_s slipped past the
+# combined check and was embedded verbatim into the filter_complex string
+# handed to ffmpeg. These tests guard against regression back to that state.
 # ===========================================================================
 
 
