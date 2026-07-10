@@ -937,9 +937,10 @@ class TestMainBgmPipMixExecution:
     def _build_timeline(
         self, tmp_path: Path, *, ducking: dict[str, Any] | None
     ) -> Path:
+        assert _FFMPEG is not None
         main_src, pip_src = _make_main_and_pip_fixtures(tmp_path)
         bgm_src = tmp_path / "bgm.mp4"
-        _make_bgm_audio_fixture(_FFMPEG, bgm_src, duration=_MAIN_DUR)  # type: ignore[arg-type]
+        _make_bgm_audio_fixture(_FFMPEG, bgm_src, duration=_MAIN_DUR)
 
         timeline = _make_base_timeline(main_src)
         _add_bgm_track(timeline, bgm_src, _MAIN_DUR)
@@ -1183,11 +1184,12 @@ class TestMultiSourceAllLayersExecution:
     bgm=audio-only, image=yellow (top-left, x=0:y=0), pip=red (centered)."""
 
     def _build_timeline(self, tmp_path: Path) -> tuple[Path, Path]:
+        assert _FFMPEG is not None
         src_a, src_b, pip_src = _make_two_source_and_pip_fixtures(tmp_path)
         bgm_src = tmp_path / "bgm.mp4"
-        _make_bgm_audio_fixture(_FFMPEG, bgm_src, duration=_MAIN_DUR)  # type: ignore[arg-type]
+        _make_bgm_audio_fixture(_FFMPEG, bgm_src, duration=_MAIN_DUR)
         image_path = tmp_path / "image.png"
-        _make_color_png(_FFMPEG, image_path, color=_IMAGE_COLOR)  # type: ignore[arg-type]
+        _make_color_png(_FFMPEG, image_path, color=_IMAGE_COLOR)
 
         timeline = _make_two_source_timeline(src_a, src_b)
         _add_bgm_track(timeline, bgm_src, _MAIN_DUR)
@@ -1274,36 +1276,37 @@ class TestMultiSourceAllLayersExecution:
 
 
 # ===========================================================================
-# Test F: PiP fade-out timing bug (Fix-Wave 0 Red)
+# Test F: PiP fade-out timing regression guard (previously Fix-Wave 0 Red)
 # (.claude/reports/test-report-test-layer3.md L72-92 — real MCP e2e finding;
 #  architecture-report-20260710-135831.md §4/§5)
 #
-# `_build_pip_video_segment` (plan.py:1105-1171, "ADR-PIP-8") computes the
-# fade-out `st=` value as `o.duration_s - o.fade_out_s` (plan.py:1159) on
-# the TRIMMED-RELATIVE clock (0-based, per the preceding
-# `setpts=PTS-STARTPTS`). The real MCP e2e smoke test found this fires
+# An earlier revision of `_build_pip_video_segment` ("ADR-PIP-8") computed
+# the fade-out `st=` value as `o.duration_s - o.fade_out_s` on the
+# TRIMMED-RELATIVE clock (0-based, per the preceding
+# `setpts=PTS-STARTPTS`). The real MCP e2e smoke test found this fired
 # `start_s` seconds too early on the COMPOSITED PROGRAM timeline — where
 # the `enable='between(...)'` gate (and therefore the visible fade) actually
 # operates. The intended fade-out start is `o.end_s - o.fade_out_s`
 # (== o.start_s + o.duration_s - o.fade_out_s), matching the absolute-time
-# convention `_build_overlay_segment` (image overlay, plan.py:770) already
-# uses for the same purpose. Confirmed reproducible with a SINGLE source
-# (not multi-source specific) in the real e2e smoke test
+# convention `_build_overlay_segment` (image overlay) already uses for the
+# same purpose. This was confirmed reproducible with a SINGLE source (not
+# multi-source specific) in the real e2e smoke test
 # (test-report-test-layer3.md L72-83, "単一ソースでも同一パターンで再現").
+# This test now serves as a regression guard against that defect recurring.
 # ===========================================================================
 
 
 @requires_ffmpeg
 class TestPipFadeOutTimingBug:
-    """Red (Fix-Wave 0): fade-out must start at end_s - fade_out_s (absolute
-    program time), not duration_s - fade_out_s (trimmed-relative time, which
-    is short by exactly start_s seconds — plan.py:1159).
+    """Regression guard (previously Fix-Wave 0 Red): fade-out must start at
+    end_s - fade_out_s (absolute program time), not duration_s - fade_out_s
+    (trimmed-relative time, which was short by exactly start_s seconds).
 
     Fixture: _make_main_and_pip_fixtures (single source, _MAIN_DUR=5.0),
     PiP window [start_s=1.0, end_s=4.0) i.e. duration_s=3.0, fade_out_s=0.3.
       - Intended fade-out start (absolute program time): end_s - fade_out_s
         = 4.0 - 0.3 = 3.7s.
-      - Current buggy fade-out start (trimmed-relative time, misread as
+      - Formerly buggy fade-out start (trimmed-relative time, misread as
         absolute): duration_s - fade_out_s = 3.0 - 0.3 = 2.7s (short by
         start_s=1.0s exactly).
     """
@@ -1348,23 +1351,124 @@ class TestPipFadeOutTimingBug:
             " test."
         )
 
-        # Core Red assertion: t=3.2s -> frame 80 @25fps. This lies strictly
-        # AFTER the buggy fade-out has fully settled (buggy start 2.7s +
-        # fade_out_s 0.3s duration = 3.0s) and strictly BEFORE the intended
-        # fade-out start (3.7s). Under correct behavior the pixel must still
-        # be pure PiP red here; the current plan.py:1159 defect fades it out
-        # ~0.7s too early, so this pixel is already diluted with the white
-        # base color by t=3.2s.
+        # Regression-guard assertion: t=3.2s -> frame 80 @25fps. This lies
+        # strictly AFTER the formerly-buggy fade-out would have fully settled
+        # (buggy start 2.7s + fade_out_s 0.3s duration = 3.0s) and strictly
+        # BEFORE the intended fade-out start (3.7s). Under correct behavior
+        # the pixel must still be pure PiP red here; an earlier revision of
+        # `_build_pip_video_segment` faded it out ~0.7s too early, diluting
+        # this pixel with the white base color by t=3.2s. This assertion
+        # guards against that regression recurring.
         r_mid, g_mid, b_mid = _pixel_at_frame(pixel_track, frame_index=80)
         assert r_mid >= 200 and g_mid < 80 and b_mid < 80, (
-            "PiP fade-out fired too early (plan.py:1159"
-            " `fade_out_st = o.duration_s - o.fade_out_s` omits the"
+            "PiP fade-out fired too early (an earlier revision of"
+            " `_build_pip_video_segment` computed"
+            " `fade_out_st = o.duration_s - o.fade_out_s`, omitting the"
             " `o.start_s` offset present in the equivalent image-overlay"
-            " calculation `o.end_s - o.fade_out_s`, plan.py:770). Window is"
+            " calculation `o.end_s - o.fade_out_s`). Window is"
             " [1.0,4.0), fade_out_s=0.3: intended fade-out start is"
-            " end_s-fade_out_s=3.7s, but the buggy formula fires at"
+            " end_s-fade_out_s=3.7s, but the buggy formula fired at"
             " duration_s-fade_out_s=2.7s (short by start_s=1.0s). Sampled"
-            " at t=3.2s (after the buggy fade has fully settled at 3.0s,"
-            " still well before the intended 3.7s start): expected pure"
-            f" PiP red, got RGB=({r_mid},{g_mid},{b_mid})."
+            " at t=3.2s (after the buggy fade would have fully settled at"
+            " 3.0s, still well before the intended 3.7s start): expected"
+            f" pure PiP red, got RGB=({r_mid},{g_mid},{b_mid})."
+        )
+
+
+# ===========================================================================
+# Test G: PiP fade-in absolute-time coverage (CR-NEW, Fix-Wave 2)
+# (.claude/reports/code-review-report-code-review.md CR-NEW "fade_in 側の絶対
+#  時間整合が実 ffmpeg のピクセル検証で未確認" — fade_out timing was validated
+#  above with a real ffmpeg execution + pixel sample after Fix-Wave 1's
+#  `setpts=PTS-STARTPTS+{start_s}/TB` re-base; fade_in shares the exact same
+#  re-based clock (`fade=t=in:st={start_s}:...`), but no real-ffmpeg pixel
+#  test previously exercised fade_in_sec>0. This is a coverage-completion
+#  test, NOT a Red test: on current main (post Fix-Wave 1) fade_in is
+#  already computed on absolute program time, so this is expected to PASS.
+# ===========================================================================
+
+
+@requires_ffmpeg
+class TestPipFadeInAbsoluteTimingExecution:
+    """Real-ffmpeg pixel coverage for fade-in with fade_in_sec>0 (CR-NEW).
+
+    Fixture: _make_main_and_pip_fixtures (single source, _MAIN_DUR=5.0),
+    PiP window [start_s=1.0, end_s=4.0) (_PIP_START_SEC/_PIP_DURATION_SEC),
+    fade_in_sec=1.0, fade_out_sec=0.0 (fade-out is intentionally disabled
+    here — it is already covered by TestPipFadeOutTimingBug above; keeping
+    fade_out out of this fixture avoids conflating the two mechanisms).
+
+    Fade-in progresses linearly over [start_s, start_s + fade_in_sec) =
+    [1.0, 2.0)s on the absolute program clock (`fade=t=in:st=1:d=1:alpha=1`
+    per the same re-based clock `_build_pip_video_segment` uses for
+    fade-out).
+
+    Sample point selection (CI 3OS seek-precision tolerance, mirrors the
+    numeric-margin convention used by TestPipFadeOutTimingBug above):
+      - Mid-fade sample t=1.6s (frame 40 @25fps): 0.6s after the window-start
+        boundary (t=1.0s) and 0.4s before fade-in completes (t=2.0s) — both
+        margins are >=0.3s, i.e. comfortably clear of either boundary. At
+        alpha~=0.6 (linear progress (1.6-1.0)/1.0), the composited pixel is
+        expected to be a red/white blend, NOT pure red: r stays high (the
+        red channel is unaffected by the white-on-red blend) but g/b must be
+        materially lifted off 0 by the blended white background.
+      - Post-fade sample t=2.6s (frame 65 @25fps): 0.6s after fade-in
+        completes (t=2.0s) and 1.4s before the window end (t=4.0s, a hard
+        cut here since fade_out_sec=0.0) — comfortably clear of both. This
+        must be pure PiP red (fade-in fully settled, fade-out not enabled).
+    """
+
+    def test_fade_in_dilutes_mid_fade_then_settles_to_pure_red(
+        self, tmp_path: Path
+    ) -> None:
+        assert _FFMPEG is not None
+        main_src, pip_src = _make_main_and_pip_fixtures(tmp_path)
+
+        timeline = _make_base_timeline(main_src)
+        _add_pip_overlay_marker(
+            timeline,
+            media_path=str(pip_src),
+            start_sec=_PIP_START_SEC,
+            duration_sec=_PIP_DURATION_SEC,
+            mix_audio=False,
+            fade_in_sec=1.0,
+        )
+        timeline_path = tmp_path / "timeline.otio"
+        _save_timeline(timeline, timeline_path)
+
+        out_path = tmp_path / "out.mp4"
+        result = render_timeline(
+            str(timeline_path), str(out_path), RenderOptions(), dry_run=False
+        )
+        assert result["ok"] is True, f"render failed unexpectedly: {result}"
+        assert out_path.exists(), "Output file was not created"
+
+        cx, cy = _WIDTH // 2, _HEIGHT // 2
+        pixel_track = _extract_pixel_track(_FFMPEG, out_path, cx, cy)
+
+        # Mid-fade: t=1.6s -> frame 40 @25fps. 0.6s past window-start (1.0s),
+        # 0.4s before fade-in completes (2.0s) -- both margins >=0.3s.
+        r_fade, g_fade, b_fade = _pixel_at_frame(pixel_track, frame_index=40)
+        assert not (r_fade >= 200 and g_fade < 80 and b_fade < 80), (
+            "Mid-fade-in pixel at t=1.6s (0.6s into a 1.0s fade_in_sec"
+            " window starting at start_s=1.0) is pure PiP red -- expected a"
+            " red/white blend (alpha~0.6, so g/b should be materially"
+            f" lifted off 0). got RGB=({r_fade},{g_fade},{b_fade})."
+            " This would indicate fade-in is not actually attenuating the"
+            " overlay on the absolute program clock."
+        )
+        assert g_fade >= 50 or b_fade >= 50, (
+            "Mid-fade-in pixel at t=1.6s should show a materially blended"
+            " white background (g or b lifted well above the pure-red"
+            f" threshold of 80, with margin). got RGB=({r_fade},{g_fade},{b_fade})."
+        )
+
+        # Post-fade: t=2.6s -> frame 65 @25fps. 0.6s after fade-in completes
+        # (2.0s), 1.4s before window end (4.0s, hard cut -- fade_out_sec=0.0
+        # in this fixture). Fade-in must have fully settled to pure red.
+        r_settled, g_settled, b_settled = _pixel_at_frame(pixel_track, frame_index=65)
+        assert r_settled >= 200 and g_settled < 80 and b_settled < 80, (
+            "Post-fade-in pixel at t=2.6s (0.6s after fade-in completes at"
+            " 2.0s) is not pure PiP red -- fade-in should have fully"
+            f" settled by this point. got RGB=({r_settled},{g_settled},{b_settled})."
         )

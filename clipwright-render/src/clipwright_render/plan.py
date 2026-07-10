@@ -994,6 +994,24 @@ def _marker_to_pip_overlay(
             ),
             hint="Re-annotate with a finite media_start_sec value.",
         )
+    if not math.isfinite(fade_in_s):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an invalid PiP overlay:"
+                " fade_in_sec is not finite."
+            ),
+            hint="Re-annotate with a finite fade_in_sec value.",
+        )
+    if not math.isfinite(fade_out_s):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an invalid PiP overlay:"
+                " fade_out_sec is not finite."
+            ),
+            hint="Re-annotate with a finite fade_out_sec value.",
+        )
 
     if start_sec < 0:
         raise ClipwrightError(
@@ -1034,6 +1052,24 @@ def _marker_to_pip_overlay(
                 " opacity must be in [0, 1]."
             ),
             hint="Re-annotate with an opacity value in the range [0, 1].",
+        )
+    if not (0 <= fade_in_s <= duration_sec):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an invalid PiP overlay:"
+                " fade_in_sec must be in [0, duration_sec]."
+            ),
+            hint="Re-annotate with a fade_in_sec in the range [0, duration_sec].",
+        )
+    if not (0 <= fade_out_s <= duration_sec):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an invalid PiP overlay:"
+                " fade_out_sec must be in [0, duration_sec]."
+            ),
+            hint="Re-annotate with a fade_out_sec in the range [0, duration_sec].",
         )
     if fade_in_s + fade_out_s > (duration_sec + 1e-9):
         raise ClipwrightError(

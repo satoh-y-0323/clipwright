@@ -4535,3 +4535,188 @@ class TestMultiSourcePipIndexArithmetic:
         )
 
         assert "[4:v]" in plan.filter_complex
+
+
+# ===========================================================================
+# SR-V-001 acceptance tests: fade_in_sec/fade_out_sec individual range
+# validation (.claude/reports/security-review-report-security-review.md
+# SR-V-001). `_marker_to_pip_overlay` (plan.py L937-938/L1038-1046) is
+# expected to gain math.isfinite() + 0<=x<=duration_sec checks for
+# fade_in_s/fade_out_s individually, in addition to the pre-existing combined
+# `fade_in_s + fade_out_s > duration_sec` cross-field check. Until that lands,
+# NaN silently disables the fade branch (`if o.fade_in_s > 0` is False for
+# NaN, so the combined check `NaN > x` is also always False and never fires)
+# and a huge finite value (e.g. 1e300) with an offsetting fade_out_s slips
+# past the combined check and is embedded verbatim into the filter_complex
+# string handed to ffmpeg. These tests are the acceptance test for the
+# individual-range-check fix: run BEFORE that fix lands, cases (1)/(2)/(3)
+# below are expected to FAIL (Red, as intended -- see test-report for which
+# state this run observed).
+# ===========================================================================
+
+
+def _add_plan_pip_marker_with_fades(
+    timeline: otio.schema.Timeline,
+    *,
+    fade_in_sec: float = 0.0,
+    fade_out_sec: float = 0.0,
+    media_path: str = "/src/pip.mp4",
+    start_sec: float = 0.5,
+    duration_sec: float = 1.0,
+    rate: float = FPS,
+    name: str = "pip_0",
+) -> None:
+    """Attach a pip_overlay marker with explicit fade_in_sec/fade_out_sec
+    (SR-V-001 acceptance tests). File-local helper added alongside
+    _add_plan_pip_marker above rather than extending it, so that helper's
+    existing layer1-B call sites are left completely untouched."""
+    video_track: otio.schema.Track | None = None
+    for track in timeline.tracks:
+        if track.kind == otio.schema.TrackKind.Video:
+            video_track = track
+            break
+    assert video_track is not None, "timeline must have a video track"
+
+    marked_range = _tr(start_sec, duration_sec, rate)
+    marker = otio.schema.Marker(
+        name=name,
+        marked_range=marked_range,
+        metadata={
+            "clipwright": {
+                "kind": "pip_overlay",
+                "tool": "clipwright-overlay",
+                "version": "0.1.0",
+                "media_path": media_path,
+                "start_sec": start_sec,
+                "duration_sec": duration_sec,
+                "media_start_sec": 0.0,
+                "x": "(W-w)/2",
+                "y": "(H-h)/2",
+                "scale": 0.3,
+                "opacity": 1.0,
+                "fade_in_sec": fade_in_sec,
+                "fade_out_sec": fade_out_sec,
+                "mix_audio": False,
+                "audio_volume": 1.0,
+                "ducking": {"enabled": False, "threshold": 0.05, "ratio": 4.0},
+            }
+        },
+    )
+    video_track.markers.append(marker)
+
+
+class TestPipFadeIndividualRangeValidation:
+    """SR-V-001: fade_in_sec/fade_out_sec must each be individually validated
+    (finite, non-negative, <=duration_sec), not only via the pre-existing
+    combined fade_in_s+fade_out_s>duration_sec check."""
+
+    def _build_and_expect_rejection(
+        self,
+        *,
+        fade_in_sec: float,
+        fade_out_sec: float,
+        duration_sec: float = 1.0,
+    ) -> ClipwrightError:
+        from clipwright_render.plan import build_plan, resolve_kept_ranges
+
+        tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
+        _add_plan_pip_marker_with_fades(
+            tl,
+            fade_in_sec=fade_in_sec,
+            fade_out_sec=fade_out_sec,
+            duration_sec=duration_sec,
+        )
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=0, bit_rate=None)
+        with pytest.raises(ClipwrightError) as exc_info:
+            build_plan(ranges, probe, RenderOptions())
+        return exc_info.value
+
+    def test_fade_in_sec_nan_rejected(self) -> None:
+        """fade_in_sec=NaN -> INVALID_INPUT (SR-V-001 case 1)."""
+        import math
+
+        exc = self._build_and_expect_rejection(fade_in_sec=math.nan, fade_out_sec=0.0)
+        assert exc.code == ErrorCode.INVALID_INPUT
+        assert exc.message
+        assert exc.hint
+        assert "/src/a.mp4" not in exc.message
+        assert "/src/pip.mp4" not in exc.message
+
+    def test_fade_out_sec_nan_rejected(self) -> None:
+        """fade_out_sec=NaN -> INVALID_INPUT (SR-V-001 case 1)."""
+        import math
+
+        exc = self._build_and_expect_rejection(fade_in_sec=0.0, fade_out_sec=math.nan)
+        assert exc.code == ErrorCode.INVALID_INPUT
+        assert exc.message
+        assert exc.hint
+        assert "/src/a.mp4" not in exc.message
+        assert "/src/pip.mp4" not in exc.message
+
+    def test_fade_in_sec_negative_rejected(self) -> None:
+        """fade_in_sec<0 -> INVALID_INPUT (SR-V-001 case 2)."""
+        exc = self._build_and_expect_rejection(fade_in_sec=-0.5, fade_out_sec=0.0)
+        assert exc.code == ErrorCode.INVALID_INPUT
+        assert exc.message
+        assert exc.hint
+        assert "/src/a.mp4" not in exc.message
+        assert "/src/pip.mp4" not in exc.message
+
+    def test_fade_out_sec_negative_rejected(self) -> None:
+        """fade_out_sec<0 -> INVALID_INPUT (SR-V-001 case 2)."""
+        exc = self._build_and_expect_rejection(fade_in_sec=0.0, fade_out_sec=-0.5)
+        assert exc.code == ErrorCode.INVALID_INPUT
+        assert exc.message
+        assert exc.hint
+        assert "/src/a.mp4" not in exc.message
+        assert "/src/pip.mp4" not in exc.message
+
+    def test_fade_in_sec_huge_finite_exceeding_duration_rejected(self) -> None:
+        """fade_in_sec=1e300 (extreme finite value far exceeding
+        duration_sec) -> INVALID_INPUT (SR-V-001 case 3). Guards against
+        `fade=t=in:st=...:d=1e300:alpha=1` being embedded verbatim into
+        filter_complex and handed to ffmpeg."""
+        exc = self._build_and_expect_rejection(fade_in_sec=1e300, fade_out_sec=0.0)
+        assert exc.code == ErrorCode.INVALID_INPUT
+        assert exc.message
+        assert exc.hint
+        assert "/src/a.mp4" not in exc.message
+        assert "/src/pip.mp4" not in exc.message
+
+    def test_fade_out_sec_huge_finite_exceeding_duration_rejected(self) -> None:
+        """fade_out_sec=1e300 -> INVALID_INPUT (SR-V-001 case 3)."""
+        exc = self._build_and_expect_rejection(fade_in_sec=0.0, fade_out_sec=1e300)
+        assert exc.code == ErrorCode.INVALID_INPUT
+        assert exc.message
+        assert exc.hint
+        assert "/src/a.mp4" not in exc.message
+        assert "/src/pip.mp4" not in exc.message
+
+    def test_combined_fade_exceeding_duration_still_rejected(self) -> None:
+        """Regression: the pre-existing combined
+        fade_in_s+fade_out_s>duration_sec cross-field check (both values
+        individually in-range) must keep rejecting once the individual
+        range checks are added."""
+        exc = self._build_and_expect_rejection(
+            fade_in_sec=0.7, fade_out_sec=0.7, duration_sec=1.0
+        )
+        assert exc.code == ErrorCode.INVALID_INPUT
+        assert exc.message
+        assert exc.hint
+
+    def test_valid_fade_values_still_accepted(self) -> None:
+        """Regression: normal in-range fade_in_sec/fade_out_sec values still
+        build a plan successfully (no false-positive rejection from the new
+        individual range checks)."""
+        from clipwright_render.plan import build_plan, resolve_kept_ranges
+
+        tl = _make_timeline_with_clips([_make_clip("/src/a.mp4", 0.0, 5.0)])
+        _add_plan_pip_marker_with_fades(
+            tl, fade_in_sec=0.3, fade_out_sec=0.3, duration_sec=1.0
+        )
+        ranges = resolve_kept_ranges(tl)
+        probe = ProbeInfo(has_video=True, audio_count=0, bit_rate=None)
+        plan = build_plan(ranges, probe, RenderOptions())
+
+        assert "fade=t=in" in plan.filter_complex
