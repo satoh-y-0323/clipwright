@@ -1271,3 +1271,100 @@ class TestMultiSourceAllLayersExecution:
             f" PiP window) is not the base blue color: got"
             f" RGB=({r_out},{g_out},{b_out})."
         )
+
+
+# ===========================================================================
+# Test F: PiP fade-out timing bug (Fix-Wave 0 Red)
+# (.claude/reports/test-report-test-layer3.md L72-92 — real MCP e2e finding;
+#  architecture-report-20260710-135831.md §4/§5)
+#
+# `_build_pip_video_segment` (plan.py:1105-1171, "ADR-PIP-8") computes the
+# fade-out `st=` value as `o.duration_s - o.fade_out_s` (plan.py:1159) on
+# the TRIMMED-RELATIVE clock (0-based, per the preceding
+# `setpts=PTS-STARTPTS`). The real MCP e2e smoke test found this fires
+# `start_s` seconds too early on the COMPOSITED PROGRAM timeline — where
+# the `enable='between(...)'` gate (and therefore the visible fade) actually
+# operates. The intended fade-out start is `o.end_s - o.fade_out_s`
+# (== o.start_s + o.duration_s - o.fade_out_s), matching the absolute-time
+# convention `_build_overlay_segment` (image overlay, plan.py:770) already
+# uses for the same purpose. Confirmed reproducible with a SINGLE source
+# (not multi-source specific) in the real e2e smoke test
+# (test-report-test-layer3.md L72-83, "単一ソースでも同一パターンで再現").
+# ===========================================================================
+
+
+@requires_ffmpeg
+class TestPipFadeOutTimingBug:
+    """Red (Fix-Wave 0): fade-out must start at end_s - fade_out_s (absolute
+    program time), not duration_s - fade_out_s (trimmed-relative time, which
+    is short by exactly start_s seconds — plan.py:1159).
+
+    Fixture: _make_main_and_pip_fixtures (single source, _MAIN_DUR=5.0),
+    PiP window [start_s=1.0, end_s=4.0) i.e. duration_s=3.0, fade_out_s=0.3.
+      - Intended fade-out start (absolute program time): end_s - fade_out_s
+        = 4.0 - 0.3 = 3.7s.
+      - Current buggy fade-out start (trimmed-relative time, misread as
+        absolute): duration_s - fade_out_s = 3.0 - 0.3 = 2.7s (short by
+        start_s=1.0s exactly).
+    """
+
+    def test_fade_out_does_not_start_early(self, tmp_path: Path) -> None:
+        assert _FFMPEG is not None
+        main_src, pip_src = _make_main_and_pip_fixtures(tmp_path)
+
+        timeline = _make_base_timeline(main_src)
+        _add_pip_overlay_marker(
+            timeline,
+            media_path=str(pip_src),
+            start_sec=_PIP_START_SEC,
+            duration_sec=_PIP_DURATION_SEC,
+            mix_audio=False,
+            fade_out_sec=0.3,
+        )
+        timeline_path = tmp_path / "timeline.otio"
+        _save_timeline(timeline, timeline_path)
+
+        out_path = tmp_path / "out.mp4"
+        result = render_timeline(
+            str(timeline_path), str(out_path), RenderOptions(), dry_run=False
+        )
+        assert result["ok"] is True, f"render failed unexpectedly: {result}"
+        assert out_path.exists(), "Output file was not created"
+
+        cx, cy = _WIDTH // 2, _HEIGHT // 2
+        pixel_track = _extract_pixel_track(_FFMPEG, out_path, cx, cy)
+
+        # Contrast point BEFORE either the buggy (2.7s) or intended (3.7s)
+        # fade-out start: t=2.0s -> frame 50 @25fps. Must be pure PiP red
+        # regardless of which formula is correct -- isolates "fixture/window
+        # is sane" from the fade-timing defect itself (mirrors the
+        # in/out-of-window isolation pattern used elsewhere in this file).
+        r_before, g_before, b_before = _pixel_at_frame(pixel_track, frame_index=50)
+        assert r_before >= 200 and g_before < 80 and b_before < 80, (
+            "Sanity check failed: center pixel at t=2.0s (well before either"
+            " fade-out candidate start) is not pure PiP red -- got RGB="
+            f"({r_before},{g_before},{b_before}). This means the fixture/"
+            " window itself is broken, not the fade-timing defect under"
+            " test."
+        )
+
+        # Core Red assertion: t=3.2s -> frame 80 @25fps. This lies strictly
+        # AFTER the buggy fade-out has fully settled (buggy start 2.7s +
+        # fade_out_s 0.3s duration = 3.0s) and strictly BEFORE the intended
+        # fade-out start (3.7s). Under correct behavior the pixel must still
+        # be pure PiP red here; the current plan.py:1159 defect fades it out
+        # ~0.7s too early, so this pixel is already diluted with the white
+        # base color by t=3.2s.
+        r_mid, g_mid, b_mid = _pixel_at_frame(pixel_track, frame_index=80)
+        assert r_mid >= 200 and g_mid < 80 and b_mid < 80, (
+            "PiP fade-out fired too early (plan.py:1159"
+            " `fade_out_st = o.duration_s - o.fade_out_s` omits the"
+            " `o.start_s` offset present in the equivalent image-overlay"
+            " calculation `o.end_s - o.fade_out_s`, plan.py:770). Window is"
+            " [1.0,4.0), fade_out_s=0.3: intended fade-out start is"
+            " end_s-fade_out_s=3.7s, but the buggy formula fires at"
+            " duration_s-fade_out_s=2.7s (short by start_s=1.0s). Sampled"
+            " at t=3.2s (after the buggy fade has fully settled at 3.0s,"
+            " still well before the intended 3.7s start): expected pure"
+            f" PiP red, got RGB=({r_mid},{g_mid},{b_mid})."
+        )
