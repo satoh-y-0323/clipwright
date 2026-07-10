@@ -5,6 +5,40 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.37.0] - 2026-07-10
+
+New `clipwright-export` package: NLE interchange and chapter export.
+
+### Added (`clipwright-export` v0.1.0)
+
+- **New package `clipwright-export` with two MCP tools for taking a clipwright OTIO
+  program out to other tools.**
+  - **`clipwright_export_timeline`** exports an OTIO timeline to an NLE interchange
+    format — `edl` (CMX3600 adapter) or `fcpxml` (FCPX-XML adapter) — so an AI rough
+    cut (cuts, scene detection) can be finished by a human editor in Premiere / Resolve /
+    Final Cut. Media references are resolved to absolute paths on a deep copy so the source
+    OTIO is never modified; references whose media cannot be resolved keep their original
+    relative path and are reported in `warnings`. clipwright-specific edit data that the
+    interchange format cannot carry (captions, overlays, BGM, color grades, speed changes,
+    transition directives) is counted by kind and listed in `warnings` so the caller can
+    keep the source OTIO as the master and re-run `clipwright-render` to bake it into a
+    flat MP4. The output extension must match the format (`.edl` / `.fcpxml`).
+  - **`clipwright_export_chapters`** exports OTIO markers to a chapter sidecar — `youtube`
+    (a `MM:SS` / `HH:MM:SS` plain-text list for a video description) or `ffmetadata`
+    (a `;FFMETADATA1` file muxable into an MP4 with `ffmpeg -map_metadata`). Markers of
+    `marker_kind` (default `scene_boundary`, e.g. produced by `clipwright_detect_scenes`)
+    are collected, time-sorted, and titled from the marker name. YouTube-eligibility
+    violations (first chapter not at 00:00, fewer than 3 chapters, or an interval shorter
+    than 10 s) are surfaced in `warnings` with a hint instead of fabricating markers.
+    ffmetadata chapters use `TIMEBASE=1/1000`, each `END` is the next chapter's start and
+    the last `END` is the timeline duration. A timeline with no matching markers still
+    returns `ok: true` with an empty chapter file and a warning. The output extension is
+    `.txt` for `youtube`; `.txt` / `.ffmeta` / `.ffmetadata` for `ffmetadata`.
+  - Both tools are non-destructive (the input OTIO and media are never modified), reject
+    `output == timeline` (same-path) with `INVALID_INPUT`, and are subprocess-free at
+    export time (FFmpeg is not invoked; an `ffmetadata` file is only muxed later by the
+    caller's own `ffmpeg` command).
+
 ## [0.36.1] - 2026-07-10
 
 Picture-in-Picture (PiP) fade timing fix in `clipwright-render`.

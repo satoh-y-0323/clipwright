@@ -87,6 +87,7 @@ jobs:
             "clipwright-sequence"
             "clipwright-transition"
             "clipwright-overlay"
+            "clipwright-export"
           )
           # Note: clipwright-stabilize unit tests mock ffmpeg entirely and do not
           # require a libvidstab-enabled ffmpeg build (policy A). Integration/e2e

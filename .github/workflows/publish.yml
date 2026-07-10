@@ -31,6 +31,7 @@ jobs:
           - clipwright
           - clipwright-bgm
           - clipwright-color
+          - clipwright-export
           - clipwright-frames
           - clipwright-loudness
           - clipwright-noise

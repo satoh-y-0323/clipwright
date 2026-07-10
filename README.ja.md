@@ -297,6 +297,8 @@ src/clipwright/
 | `clipwright-overlay` | `clipwright_add_overlay` | OTIO タイムラインに画像オーバーレイ（PNG/JPEG ロゴ・ウォーターマーク・ロワーサード）を注記する。位置・スケール・不透明度・時間範囲を指定し、FFmpeg `fade:alpha=1` フィルタチェーンでフェードイン/フェードアウトをサポート。画像ファイルはどこでも readable なら可: 出力タイムラインの親ディレクトリ配下の画像は相対 POSIX パスで OTIO に格納（移植性確保）、外部画像は絶対パスで格納し `clipwright-render` が ADR-PP-1 絶対参照エスケープハッチで受け取る。symlink は拒否。`clipwright-render` が実体化時に画像を追加 `-i` として入力し、`scale/format=rgba/colorchannelmixer/fade/overlay` フィルタチェーンを filtergraph に挿入する（drawtext の後段で最前面に合成）。非破壊: 入力メディアおよびタイムラインは変更しない。 |
 | `clipwright-overlay` | `clipwright_add_pip` | OTIO タイムラインに PiP（Picture-in-Picture）オーバーレイを注記する: 第2の動画（webcam・リアクション・B-roll インセット）を位置・サイズ・時間窓を指定して合成し、任意で音声もミックスできる。`media_path` は動画ストリームを含む `.mp4`/`.mkv`/`.mov`/`.webm` ファイルである必要がある（音声のみのソースは `clipwright_add_bgm` の使用を促すヒント付きで拒否される）。デフォルトは中央配置・`scale=0.3`（`clipwright_add_overlay` の `1.0` とは異なる既定値。PiP のソース動画は通常すでにフル解像度のため）。`options.mix_audio=true` を指定すると PiP の音声をプログラムトラックにミックスする（配置時間窓のみ鳴る）。任意で `options.ducking`（PiP音声に合わせてメイン/BGMトラックをサイドチェーン圧縮する。`clipwright_place_bgm` のダッキングと同じ仕組み）も指定できる。1つのタイムラインに最大4件の PiP オーバーレイを積み重ねられる。`clipwright_add_overlay` と同じパス境界・symlink 再検証で `clipwright-render` によりレンダリングされる。非破壊: 入力メディアおよびタイムラインは変更しない。 |
 | `clipwright-transition` | `clipwright_add_transition` | 隣接するクリップ境界にクロスフェード/ディゾルブ（映像は FFmpeg `xfade`、音声は `acrossfade`）を注記する。`options.uniform`（全境界に適用する TransitionSpec: type と duration_sec）または `options.per_boundary`（境界ごとの TransitionSpec リスト）を指定する。非破壊: 新しい OTIO ファイルのみ書き出す。実体化は `clipwright-render` が行う。v1 制約: 一部の境界のみを指定する歯抜け per_boundary は UNSUPPORTED_OPERATION。uniform モードまたは全境界を指定した per_boundary は正式サポート。 |
+| `clipwright-export` | `clipwright_export_timeline` | OTIO タイムラインを NLE 交換形式へエクスポートし、AI が作ったラフカットを人間の編集者が Premiere / Resolve / Final Cut で仕上げられるようにする。`options.format`: `edl`（CMX3600 アダプタ経由）または `fcpxml`（FCPX-XML アダプタ経由）。メディア参照はタイムラインのディープコピー上で絶対パスに解決するため、元の OTIO は一切変更しない。解決できなかった参照は元の相対パスを維持し `warnings` で報告する。交換形式が保持できない clipwright 固有の編集データ（キャプション・オーバーレイ・BGM・カラーグレード・速度変換・トランジション指令）は種類別に件数を数えて `warnings` に列挙する — 元の OTIO をマスターとして保持し、`clipwright-render` で再レンダリングしてフラット MP4 に焼き込むこと。出力拡張子は format に一致させる必要がある（`.edl` / `.fcpxml`）。`output == timeline` は `INVALID_INPUT` で拒否する。非破壊・subprocess-free（エクスポート時に FFmpeg を呼ばない）。 |
+| `clipwright-export` | `clipwright_export_chapters` | OTIO マーカーをチャプターサイドカーへエクスポートする。`options.format`: `youtube`（動画概要欄に貼る `MM:SS` / `HH:MM:SS タイトル` のプレーンテキスト一覧）または `ffmetadata`（`ffmpeg -map_metadata` で MP4 に mux できる `;FFMETADATA1` ファイル）。`options.marker_kind`（デフォルト `scene_boundary`・例えば `clipwright_detect_scenes` が生成する）のマーカーを収集し、時刻昇順でソートし、マーカー名を各チャプターのタイトルにする。ファイルは常に書き出す: YouTube の掲載条件違反（先頭チャプターが 00:00 でない・チャプター数が 3 未満・間隔が 10 秒未満）はマーカーを捏造せず `warnings` に hint 付きで通知する。ffmetadata チャプターは `TIMEBASE=1/1000` を使い、各 `END` は次チャプターの開始・最終 `END` はタイムライン尺とする。一致するマーカーが 0 件でも `ok: true` を返し、空のチャプターファイルと warning を出す。出力拡張子: youtube は `.txt`、ffmetadata は `.txt` / `.ffmeta` / `.ffmetadata`。非破壊・エクスポート時 subprocess-free。 |
 
 ---
 
@@ -377,12 +379,17 @@ src/clipwright/
     },
     "clipwright-transition": {
       "command": "clipwright-transition"
+    },
+    "clipwright-export": {
+      "command": "clipwright-export"
     }
   }
 }
 ```
 
 > 注: `clipwright-transition` は `CLIPWRIGHT_FFPROBE` / `CLIPWRIGHT_FFMPEG` を必要としない（pure OTIO 注記ツールのため、注記時に ffprobe / ffmpeg を呼び出さない）。
+
+> 注: `clipwright-export`（`clipwright_export_timeline` / `clipwright_export_chapters` の両方）は `CLIPWRIGHT_FFPROBE` / `CLIPWRIGHT_FFMPEG` を必要としない（pure OTIO アダプタ / マーカーシリアライズツールのため、エクスポート時に FFmpeg を呼び出さない。`ffmetadata` チャプターファイルは後から呼び出し元自身の `ffmpeg -map_metadata` コマンドで MP4 に mux するだけ）。
 
 > 注: `clipwright-scene` はデフォルトの ffmpeg バックエンドで `CLIPWRIGHT_FFMPEG` を必要とする。`backend='pyscenedetect'` を使う場合は `scenedetect` CLI のインストール（`pip install scenedetect`）または `CLIPWRIGHT_SCENEDETECT` でのパス指定が必要。オプション extra `clipwright-scene[pyscenedetect]` を指定すると PySceneDetect が自動インストールされる。
 
