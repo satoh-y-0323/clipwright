@@ -111,20 +111,22 @@ Verification aspects:
       (J-1) A fcpxml write failure (OTIOError) must not surface the
             EDL-specific hint text ("single video track" / "export to
             FCPXML instead" is nonsensical when fcpxml was already
-            requested). Expected Red until _write_adapter's OTIOError
-            handler is made format-aware.
+            requested). This test was Red until _write_adapter's OTIOError
+            handler was made format-aware; it now guards against that
+            regression.
   (K) [CR-NEW] _representative_rate must prefer the Video track's rate
       (K-1) When an Audio track is enumerated before the Video track in
             tl.tracks (Stack order is not kind-sorted), the EDL rate warning
             must still name the Video track's rate, not whichever clip
-            _iter_clips happens to yield first. Expected Red until
-            _representative_rate is made track-kind-aware.
+            _iter_clips happens to yield first. This test was Red until
+            _representative_rate was made track-kind-aware; it now guards
+            against that regression.
   (L) [SR-V-001] _loss_report unknown-kind length bound (CWE-400)
       (L-1) An unbounded-length unknown marker kind string must not be
             echoed verbatim into the aggregated warning; the embedded kind
             text must be truncated to a small fixed upper bound (<=64
-            chars). Expected Red until _loss_report truncates the kind
-            string.
+            chars). This test was Red until _loss_report truncated the kind
+            string; it now guards against that regression.
 """
 
 from __future__ import annotations
@@ -754,7 +756,8 @@ class TestEdlSpecific:
         even when an Audio track is enumerated first in tl.tracks (Stack
         order is not kind-sorted). Uses distinct integer rates per track
         kind so a wrong pick is observable in the EDL rate warning text.
-        Expected Red until _representative_rate is made track-kind-aware.
+        This test was Red until _representative_rate was made
+        track-kind-aware; it now guards against that regression.
         """
         media = make_media_file("clip.mov")
         ref_str = media_ref_for_otio(media, tmp_path)
@@ -1047,9 +1050,10 @@ class TestDependencyMissing:
 
 
 class TestWriteAdapterHintMatchesFormat:
-    """Expected Red until _write_adapter's OTIOError handler picks its hint
-    text based on *fmt* instead of always returning the EDL-specific
-    wording (timeline_export.py:387-400)."""
+    """An earlier revision of _write_adapter's OTIOError handler always
+    returned the EDL-specific hint wording regardless of *fmt*. This test
+    was Red until the handler was fixed to pick its hint text based on
+    *fmt*; it now guards against that regression."""
 
     def test_fcpxml_otio_error_hint_does_not_reference_edl(
         self,
@@ -1092,9 +1096,10 @@ class TestWriteAdapterHintMatchesFormat:
 
 
 class TestLossReportUnknownKindLengthBound:
-    """Expected Red until _loss_report truncates an over-long unknown
-    marker kind string (timeline_export.py:338-339) to a small fixed upper
-    bound before embedding it in the aggregated warning sentence."""
+    """An earlier revision of _loss_report embedded an over-long unknown
+    marker kind string verbatim into the aggregated warning sentence. This
+    test was Red until _loss_report was fixed to truncate it to a small
+    fixed upper bound; it now guards against that regression."""
 
     def test_unknown_kind_is_truncated_to_length_limit(self) -> None:
         tl = new_timeline(name="kind-overflow")

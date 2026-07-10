@@ -22,9 +22,10 @@ test-timeline task.
 
 Fix-wave additions (code-review-report-export.md / security-review-report-
 export.md, 2026-07-10 second cycle) — see (G)/(H)/(I) below. Some of these
-are TDD Red for a src fix that has not landed yet (noted per-test); the
-rest are verification tests for existing behaviour that should already
-pass.
+were written as TDD Red for a chapters.py fix that had not landed yet at
+the time (noted per-test); the corresponding fix has since landed and
+those tests now pass as regression guards. The rest are verification
+tests for existing behaviour that already passed.
 
 Verification aspects:
   (A) _collect_chapters
@@ -96,28 +97,35 @@ Verification aspects:
             untested even though timeline_export.py's equivalent boundary
             was).
   (G) export_chapters — full-orchestration error taxonomy (CR-T-001)
-      (G-1) [CR-NEW, Red] output == timeline should raise PATH_NOT_ALLOWED
-            via check_output_not_source, mirroring timeline_export.py's
-            TestErrors precedent. chapters.py currently checks the output
-            suffix (Step 1) before check_output_not_source (Step 3); since
-            no youtube/ffmetadata suffix ever matches a real timeline's
-            .otio suffix, this always short-circuits to INVALID_INPUT
-            before Step 3 is reached, so today it is Red.
+      (G-1) [CR-NEW] output == timeline raises PATH_NOT_ALLOWED via
+            check_output_not_source, mirroring timeline_export.py's
+            TestErrors precedent. This test was originally Red because
+            chapters.py checked the output suffix (Step 1) before
+            check_output_not_source (Step 3); since no youtube/ffmetadata
+            suffix ever matches a real timeline's .otio suffix, this always
+            short-circuited to INVALID_INPUT before Step 3 was reached. The
+            step ordering has since been fixed and this test now guards
+            against that regression.
       (G-2) [verification] Output suffix mismatch (Step 1) -> INVALID_INPUT,
             offending suffix not echoed (SR L-1 / CWE-209).
       (G-3) [verification] Output parent directory missing (Step 2) ->
             FILE_NOT_FOUND.
-      (G-4) [CR-N-004, Red] Timeline file does not exist (Step 4) ->
+      (G-4) [CR-N-004] Timeline file does not exist (Step 4) ->
             FILE_NOT_FOUND, matching FR-3's transform classification and
-            timeline_export.py's validate_source_or_basename default.
-            chapters.py currently passes error_code=ErrorCode.INVALID_INPUT
-            explicitly at Step 4, so today it is Red.
-      (G-5) [Red — implementation gap not called out in the review reports]
-            Structurally invalid OTIO file (Step 5) -> OTIO_ERROR is the
-            desired behaviour (matches timeline_export.py precedent), but
-            load_timeline's bare ValueError (malformed JSON) escapes
-            chapters.py's Step 5 uncaught, landing on the outer
-            except-Exception -> INTERNAL boundary instead of OTIO_ERROR.
+            timeline_export.py's validate_source_or_basename default. This
+            test was originally Red because chapters.py passed
+            error_code=ErrorCode.INVALID_INPUT explicitly at Step 4; that
+            has since been fixed and this test now guards against that
+            regression.
+      (G-5) [implementation gap discovered while writing this test, not
+            called out in the review reports] Structurally invalid OTIO
+            file (Step 5) -> OTIO_ERROR is the desired behaviour (matches
+            timeline_export.py precedent). load_timeline's bare ValueError
+            (malformed JSON) used to escape chapters.py's Step 5 uncaught,
+            landing on the outer except-Exception -> INTERNAL boundary
+            instead of OTIO_ERROR; a local except-ValueError wrapper was
+            added to fix this and this test now guards against that
+            regression.
   (H) export_chapters — AC-9 zero markers via full orchestration (CR-T-001)
       (H-1) [verification] youtube format: empty output file, chapter_count
             0, two independent warnings (missing-markers notice +
@@ -126,13 +134,13 @@ Verification aspects:
             chapter_count 0, one warning (missing-markers notice only —
             serialize_ffmetadata has no chapter-count constraint).
   (I) artifacts[0].format reflects options.format, not the output suffix
-      (CR-M-002, Red)
+      (CR-M-002)
       (I-1) ffmetadata format written to a .txt path -> artifact format is
             "ffmetadata", not "txt".
       (I-2) youtube format written to a .txt path -> artifact format is
             "youtube", not "txt".
   (J) _sanitize_title covers bidi control chars and Unicode line/paragraph
-      separators, not just ASCII controls (SR-V-001, Red)
+      separators, not just ASCII controls (SR-V-001)
       (J-1) Bidirectional control characters (e.g. U+202E RIGHT-TO-LEFT
             OVERRIDE, U+2069 POP DIRECTIONAL ISOLATE) are stripped to a
             single space so a marker name cannot spoof display order
@@ -654,9 +662,10 @@ class TestExportChaptersErrorOrchestration:
     def test_output_equals_timeline_returns_path_not_allowed(
         self, tmp_path: Path
     ) -> None:
-        """(G-1) [CR-NEW, Red] See module docstring (G-1): today this fails
-        because Step 1 (suffix check) fires INVALID_INPUT before Step 3
-        (check_output_not_source) is reached."""
+        """(G-1) [CR-NEW] See module docstring (G-1): this test used to fail
+        because Step 1 (suffix check) fired INVALID_INPUT before Step 3
+        (check_output_not_source) was reached. The step ordering has since
+        been fixed; this test now guards against that regression."""
         tl = _build_timeline(markers=[(0.0, "A", "scene_boundary")])
         otio_path = tmp_path / "same_path.otio"
         save_timeline(tl, str(otio_path))
@@ -723,10 +732,11 @@ class TestExportChaptersErrorOrchestration:
         assert not out.exists()
 
     def test_nonexistent_timeline_returns_file_not_found(self, tmp_path: Path) -> None:
-        """(G-4) [CR-N-004, Red] See module docstring (G-4): today this
-        fails because Step 4 passes error_code=ErrorCode.INVALID_INPUT
+        """(G-4) [CR-N-004] See module docstring (G-4): this test used to
+        fail because Step 4 passed error_code=ErrorCode.INVALID_INPUT
         explicitly instead of using validate_source_or_basename's
-        FILE_NOT_FOUND default."""
+        FILE_NOT_FOUND default. That has since been fixed; this test now
+        guards against that regression."""
         missing = tmp_path / "does_not_exist.otio"
         out = tmp_path / "out.txt"
 
@@ -741,19 +751,21 @@ class TestExportChaptersErrorOrchestration:
         assert not out.exists()
 
     def test_invalid_otio_file_returns_otio_error(self, tmp_path: Path) -> None:
-        """(G-5) [Red — implementation gap discovered while writing this
-        test, not previously called out in code-review-report-export.md /
+        """(G-5) [implementation gap discovered while writing this test, not
+        previously called out in code-review-report-export.md /
         security-review-report-export.md] A structurally malformed .otio
         (bad JSON) makes opentimelineio raise a bare ValueError, not
         otio.exceptions.OTIOError, so load_timeline's own
         `except otio.exceptions.OTIOError` does not catch it. In
         timeline_export.py (timeline_export.py:466-479) this is handled by
         an explicit local `except Exception -> OTIO_ERROR` wrapper around
-        the load_timeline call; chapters.py (_export_chapters_inner Step 5)
-        calls load_timeline directly with no equivalent wrapper, so the bare
-        ValueError escapes to export_chapters()'s outer
-        `except Exception -> INTERNAL` boundary instead. See test-report's
-        "implementation defect candidate" section."""
+        the load_timeline call; chapters.py's `_export_chapters_inner` Step
+        5 used to call load_timeline directly with no equivalent wrapper,
+        so the bare ValueError escaped to export_chapters()'s outer
+        `except Exception -> INTERNAL` boundary instead. A local
+        `except ValueError -> OTIO_ERROR` wrapper was added to fix this
+        (see test-report's "implementation defect candidate" section) and
+        this test now guards against that regression."""
         bad = tmp_path / "bad.otio"
         bad.write_text("not a valid otio json", encoding="utf-8")
         out = tmp_path / "out.txt"
@@ -843,8 +855,9 @@ class TestArtifactFormatUsesOptionsFormat:
     def test_ffmetadata_txt_extension_reports_ffmetadata_format(
         self, tmp_path: Path
     ) -> None:
-        """(I-1) [Red] Current code uses out.suffix.lstrip(".").lower(),
-        which yields "txt" instead of "ffmetadata" for a .txt output."""
+        """(I-1) An earlier revision used out.suffix.lstrip(".").lower(),
+        which yielded "txt" instead of "ffmetadata" for a .txt output. This
+        regression test guards against that."""
         tl = _build_timeline(markers=[(0.0, "A", "scene_boundary")])
         otio_path = tmp_path / "source.otio"
         save_timeline(tl, str(otio_path))
@@ -859,8 +872,9 @@ class TestArtifactFormatUsesOptionsFormat:
         assert result.artifacts[0].format == "ffmetadata"
 
     def test_youtube_txt_extension_reports_youtube_format(self, tmp_path: Path) -> None:
-        """(I-2) [Red] Current code uses out.suffix.lstrip(".").lower(),
-        which yields "txt" instead of "youtube" for a .txt output."""
+        """(I-2) An earlier revision used out.suffix.lstrip(".").lower(),
+        which yielded "txt" instead of "youtube" for a .txt output. This
+        regression test guards against that."""
         tl = _build_timeline(markers=[(0.0, "A", "scene_boundary")])
         otio_path = tmp_path / "source.otio"
         save_timeline(tl, str(otio_path))
@@ -883,9 +897,10 @@ class TestArtifactFormatUsesOptionsFormat:
 
 class TestCollectChaptersUnicodeSanitize:
     def test_sanitizes_bidi_control_chars(self) -> None:
-        """(J-1) [Red] Bidirectional control characters (U+202E RLO,
-        U+2069 PDI) are not in the current ASCII-only control-char range
-        (\\x00-\\x1f, \\x7f), so they pass through unsanitized today."""
+        """(J-1) An earlier revision's ASCII-only control-char range
+        (\\x00-\\x1f, \\x7f) did not cover bidirectional control characters
+        (U+202E RLO, U+2069 PDI), so they passed through unsanitized. This
+        regression test guards against that."""
         tl = _build_timeline(markers=[(0.0, "Evil‮Trick⁩End", "scene_boundary")])
         chapters, _duration_sec = _collect_chapters(tl, "scene_boundary")
         assert "‮" not in chapters[0].title
@@ -893,9 +908,10 @@ class TestCollectChaptersUnicodeSanitize:
         assert chapters[0].title == "Evil Trick End"
 
     def test_sanitizes_unicode_line_and_paragraph_separators(self) -> None:
-        """(J-2) [Red] U+2028 LINE SEPARATOR / U+2029 PARAGRAPH SEPARATOR
-        are not ASCII \\n/\\r, so the current sanitizer does not catch
-        them, even though a renderer may treat them as line breaks."""
+        """(J-2) U+2028 LINE SEPARATOR / U+2029 PARAGRAPH SEPARATOR are not
+        ASCII \\n/\\r, so an earlier revision's sanitizer did not catch
+        them, even though a renderer may treat them as line breaks. This
+        regression test guards against that."""
         tl = _build_timeline(markers=[(0.0, "Line1 Line2 Line3", "scene_boundary")])
         chapters, _duration_sec = _collect_chapters(tl, "scene_boundary")
         assert " " not in chapters[0].title
@@ -905,8 +921,10 @@ class TestCollectChaptersUnicodeSanitize:
     def test_ffmetadata_output_also_sanitizes_bidi_and_separators(
         self, tmp_path: Path
     ) -> None:
-        """(J-3) [Red] The ffmetadata pipeline shares _collect_chapters, so
-        the full export_chapters orchestration must sanitize the same way."""
+        """(J-3) The ffmetadata pipeline shares _collect_chapters, so the
+        full export_chapters orchestration must sanitize the same way. This
+        regression test guards against the sanitizing gap fixed in (J-1)/
+        (J-2) resurfacing through the ffmetadata path."""
         tl = _build_timeline(markers=[(0.0, "A‮B C", "scene_boundary")])
         otio_path = tmp_path / "unicode.otio"
         save_timeline(tl, str(otio_path))
