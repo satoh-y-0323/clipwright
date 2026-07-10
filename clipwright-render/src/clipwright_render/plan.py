@@ -1109,25 +1109,31 @@ def _build_pip_video_segment(
 ) -> tuple[list[str], str]:
     """Build two filter segment strings for one PiP video overlay (ADR-PIP-8).
 
-    Segment 1: trim + re-base + scale + colorchannelmixer chain.
+    Segment 1: trim + re-base-to-absolute + scale + colorchannelmixer chain.
         [{input_index}:v]
-        trim=start={media_start_s}:duration={duration_s},setpts=PTS-STARTPTS,
+        trim=start={media_start_s}:duration={duration_s},
+        setpts=PTS-STARTPTS+{start_s}/TB,
         scale=iw*{scale}:-2,format=rgba,colorchannelmixer=aa={opacity}
-        [,fade=t=in:st=0:d={fade_in_s}:alpha=1]
-        [,fade=t=out:st={duration_s-fade_out_s}:d={fade_out_s}:alpha=1]
+        [,fade=t=in:st={start_s}:d={fade_in_s}:alpha=1]
+        [,fade=t=out:st={end_s-fade_out_s}:d={fade_out_s}:alpha=1]
         [pipv{i}]
 
     Segment 2: overlay composition.
         {base_label}[pipv{i}]overlay=x='{x}':y='{y}':enable='between(t,{start_s},{end_s})'
         [outvpip{i}]
 
-    IMPORTANT (ADR-PIP-8 footgun): because segment 1 re-bases the trimmed input
-    to t=0 via setpts=PTS-STARTPTS, the fade st= values are TRIMMED-RELATIVE
-    (0 / duration_s-fade_out_s), NOT the absolute program time (start_s /
-    end_s-fade_out_s) that _build_overlay_segment (image_overlay) uses. The
-    enable='between(...)' gate in segment 2 still uses absolute program time
-    (start_s/end_s) because it operates on the composited output timeline, not
-    the trimmed input stream.
+    IMPORTANT (ADR-PIP-8): segment 1 first strips the trim offset with
+    setpts=PTS-STARTPTS, then re-bases the stream onto ABSOLUTE program time by
+    adding {start_s}/TB, so the PiP stream PTS spans [start_s, end_s). This
+    matches the enable='between(t,start_s,end_s)' gate in segment 2 and lets the
+    fade st= values use absolute program time (start_s / end_s-fade_out_s) — the
+    SAME basis as _build_overlay_segment (image_overlay). Aligning the stream
+    clock to the program clock also makes the stream reach EOF exactly at end_s,
+    so no residual last frame is repeated to the window edge.
+
+    (An earlier revision re-based only to t=0 and used trimmed-relative fade st=
+    values; measurement showed the overlay does not delay the stream, so the
+    fade fired start_s seconds early. The absolute re-base above fixes that.)
 
     DO NOT pass d=0 fades to ffmpeg — omit fade stages entirely when d==0
     (mirrors V2-1).
@@ -1148,15 +1154,15 @@ def _build_pip_video_segment(
     seg1 = (
         f"[{o.input_index}:v]"
         f"trim=start={o.media_start_s:g}:duration={o.duration_s:g},"
-        f"setpts=PTS-STARTPTS,"
+        f"setpts=PTS-STARTPTS+{o.start_s:g}/TB,"
         f"scale=iw*{o.scale:g}:-2,"
         f"format=rgba,"
         f"colorchannelmixer=aa={o.opacity:g}"
     )
     if o.fade_in_s > 0:
-        seg1 += f",fade=t=in:st=0:d={o.fade_in_s:g}:alpha=1"
+        seg1 += f",fade=t=in:st={o.start_s:g}:d={o.fade_in_s:g}:alpha=1"
     if o.fade_out_s > 0:
-        fade_out_st = o.duration_s - o.fade_out_s
+        fade_out_st = o.end_s - o.fade_out_s
         seg1 += f",fade=t=out:st={fade_out_st:g}:d={o.fade_out_s:g}:alpha=1"
     seg1 += f"[pipv{idx}]"
 

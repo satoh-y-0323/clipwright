@@ -14,18 +14,19 @@ PiP video symbols are present, so this suite runs green):
 
 Architecture authority: architecture-report-20260709-093022.md
   §2.2 (module design), ADR-PIP-7 (input order / index base), ADR-PIP-8
-  (video filtergraph design — trim/setpts + RELATIVE fade timing).
+  (video filtergraph design — trim/setpts + ABSOLUTE-time fade timing).
 
-Key differentiator vs. image_overlay (ADR-PIP-8): because PiP video is
-trimmed with `trim=start=...:duration=...,setpts=PTS-STARTPTS`, the input is
-re-based to t=0. Fade timing (`fade=t=in:st=...` / `fade=t=out:st=...`) must
-therefore use TRIMMED-RELATIVE time (0 / duration_sec-fade_out_sec), NOT the
-absolute program time (start_s / end_s-fade_out_s) that image_overlay uses
-(no trim/setpts there because `-loop 1` inputs already start at t=0 program
-time). Naively copying the image_overlay code would silently produce a fade
-that fires at the wrong moment (or never, for placements with start_s>0)
-without raising any error — this is exactly the pitfall ADR-PIP-8 calls out
-as a developer footgun, so the tests here assert on it explicitly.
+Key alignment with image_overlay (ADR-PIP-8): PiP video is trimmed with
+`trim=start=...:duration=...`, then re-based onto ABSOLUTE program time via
+`setpts=PTS-STARTPTS+{start_s}/TB` so the stream PTS spans [start_s, end_s).
+Fade timing (`fade=t=in:st=...` / `fade=t=out:st=...`) therefore uses the SAME
+absolute program time as image_overlay (start_s / end_s-fade_out_s), and the
+enable='between(t,start_s,end_s)' gate lines up with the stream clock. An
+earlier revision re-based only to t=0 (setpts=PTS-STARTPTS) and used
+trimmed-relative fade st= values (0 / duration_sec-fade_out_sec); real MCP e2e
+measurement showed the overlay does not delay the stream, so the fade fired
+start_s seconds early (test-report-test-layer3.md). The absolute re-base
+corrects that, which is why the tests here assert on absolute-time fade st=.
 
 Test isolation:
   - All new symbols are imported INSIDE test functions/methods so ImportError
@@ -487,7 +488,8 @@ class TestBuildPipVideoSegment:
         )
 
     def test_segment1_contains_setpts_pts_startpts(self) -> None:
-        """Segment 1 contains setpts=PTS-STARTPTS (re-bases trimmed input to t=0)."""
+        """Segment 1 contains setpts=PTS-STARTPTS (strips trim offset before the
+        absolute re-base +start_s/TB)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             _build_pip_video_segment,
         )
@@ -575,8 +577,8 @@ class TestBuildPipVideoSegment:
 
     def test_segment2_enable_between_with_start_and_end(self) -> None:
         """Segment 2 enable='between(t,{start_s},{end_s})' with placement times
-        (NOT trimmed-relative — the enable gate operates on program time, unlike
-        the fade st= values)."""
+        (absolute program time — same basis as the fade st= values, since the
+        stream is re-based onto program time in segment 1)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             _build_pip_video_segment,
         )
@@ -627,26 +629,26 @@ class TestBuildPipVideoSegment:
 
 
 # ===========================================================================
-# Section 5: fade timing is TRIMMED-RELATIVE, not absolute (ADR-PIP-8)
+# Section 5: fade timing is ABSOLUTE program time (ADR-PIP-8)
 # ===========================================================================
 
 
-class TestPipFadeRelativeTiming:
-    """PiP fade st= values are relative to the trimmed/re-based clip (t=0
-    after setpts=PTS-STARTPTS), NOT the absolute program time used by
-    image_overlay.
+class TestPipFadeAbsoluteTiming:
+    """PiP fade st= values use ABSOLUTE program time (start_s / end_s-fade_out_s),
+    the SAME basis as image_overlay.
 
-    This is the explicit developer-footgun called out in ADR-PIP-8: naively
-    copying image_overlay's `fade=t=in:st={start_s}` /
-    `fade=t=out:st={end_s-fade_out_s}` would use the wrong time base for PiP
-    because the input stream itself has already been shifted to t=0 by trim+
-    setpts. The correct PiP values are st=0 (fade-in) and
-    st=duration_sec-fade_out_sec (fade-out).
+    Segment 1 re-bases the trimmed stream onto program time via
+    `setpts=PTS-STARTPTS+{start_s}/TB`, so the stream PTS spans [start_s, end_s).
+    The fade filter operates on those PTS, so its st= must be absolute (fade-in
+    st=start_s, fade-out st=end_s-fade_out_s). An earlier revision re-based only
+    to t=0 and used trimmed-relative st= (0 / duration_sec-fade_out_sec); real
+    MCP e2e measurement (test-report-test-layer3.md) showed the overlay does not
+    delay the stream, so that fired the fade start_s seconds early. The absolute
+    re-base above is what makes absolute-time fade st= correct.
     """
 
-    def test_fade_in_st_is_relative_zero_not_absolute_start(self) -> None:
-        """fade=t=in:st=0 regardless of start_s (placement start on the
-        program timeline)."""
+    def test_fade_in_st_is_absolute_start(self) -> None:
+        """fade=t=in:st=start_s (absolute program time, matching image_overlay)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             _build_pip_video_segment,
         )
@@ -656,21 +658,15 @@ class TestPipFadeRelativeTiming:
         )
         segs, _ = _build_pip_video_segment(o, base_label="[outv]", i=0)
         seg1 = segs[0]
-        assert "fade=t=in:st=0:" in seg1, (
-            f"PiP fade-in st must be 0 (trimmed-relative), not absolute"
-            f" start_s=10: {seg1!r}"
-        )
-        # The image_overlay-style (WRONG for PiP) absolute value must NOT appear.
-        assert "st=10:" not in seg1, (
-            f"fade-in st must not use absolute start_s (image_overlay-style"
-            f" bug): {seg1!r}"
+        assert "fade=t=in:st=10:" in seg1, (
+            f"PiP fade-in st must be absolute start_s=10: {seg1!r}"
         )
 
-    def test_fade_out_st_uses_duration_minus_fadeout_not_end_minus_fadeout(
+    def test_fade_out_st_uses_end_minus_fadeout(
         self,
     ) -> None:
-        """fade=t=out:st={duration_sec-fade_out_sec}, NOT {end_s-fade_out_s}
-        (the image_overlay formula)."""
+        """fade=t=out:st={end_s-fade_out_s} (absolute program time, matching
+        image_overlay)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             _build_pip_video_segment,
         )
@@ -680,19 +676,13 @@ class TestPipFadeRelativeTiming:
         )
         segs, _ = _build_pip_video_segment(o, base_label="[outv]", i=0)
         seg1 = segs[0]
-        # Correct (PiP / trimmed-relative): duration_s - fade_out_s = 4 - 1 = 3
-        assert "fade=t=out:st=3:" in seg1, (
-            f"PiP fade-out st must be duration_s-fade_out_s=3"
-            f" (trimmed-relative): {seg1!r}"
-        )
-        # Wrong (image_overlay-style, using absolute end_s): 14 - 1 = 13
-        assert "st=13:" not in seg1, (
-            f"fade-out st must not use absolute end_s-fade_out_s (image_overlay"
-            f"-style bug): {seg1!r}"
+        # Correct (absolute program time): end_s - fade_out_s = 14 - 1 = 13
+        assert "fade=t=out:st=13:" in seg1, (
+            f"PiP fade-out st must be end_s-fade_out_s=13 (absolute): {seg1!r}"
         )
 
-    def test_fade_in_st_zero_holds_across_varying_placement_start(self) -> None:
-        """fade-in st=0 holds even as start_s varies (parametrized sanity check)."""
+    def test_fade_in_st_tracks_placement_start(self) -> None:
+        """fade-in st equals start_s as start_s varies (parametrized sanity check)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             _build_pip_video_segment,
         )
@@ -706,8 +696,8 @@ class TestPipFadeRelativeTiming:
                 fade_out_s=0.0,
             )
             segs, _ = _build_pip_video_segment(o, base_label="[outv]", i=0)
-            assert "fade=t=in:st=0:" in segs[0], (
-                f"fade-in st must stay 0 regardless of start_s={start_s}: {segs[0]!r}"
+            assert f"fade=t=in:st={start_s:g}:" in segs[0], (
+                f"fade-in st must equal start_s={start_s}: {segs[0]!r}"
             )
 
 
