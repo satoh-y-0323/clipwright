@@ -4265,3 +4265,273 @@ class TestBuildPlanNoScaleWhenNoWidthHeight:
 
         assert "[outvscaled]" not in plan.filter_complex
         assert "force_original_aspect_ratio" not in plan.filter_complex
+
+
+# ===========================================================================
+# Layer 1 verification: multi-source PiP wiring
+# (architecture-report-20260710-135831.md §2 layer1, ADR-A1, FR-1/AC-1).
+#
+# This is NOT Red-phase TDD: current wiring is expected to be correct, and
+# these tests are meant to stay Green. A failure here indicates a product
+# defect in plan.py, not a missing feature (see architecture report §6 for
+# the suspect-location table used to triage a failure).
+# ===========================================================================
+
+
+def _make_plan_pip_overlay(**overrides: Any) -> Any:
+    """Build a PipOverlay for direct _build_multi_source_filter_complex calls
+    (layer1-A). File-local copy of
+    test_pip_ffmpeg_execution.py::_make_default_pip_overlay's field shape
+    (no cross-test-file import, per this codebase's convention)."""
+    from clipwright_render.plan import PipOverlay  # type: ignore[attr-defined]
+
+    defaults: dict[str, Any] = dict(
+        media_path="/src/pip.mp4",
+        media_start_s=0.0,
+        duration_s=1.0,
+        start_s=0.5,
+        end_s=1.5,
+        x="(W-w)/2",
+        y="(H-h)/2",
+        scale=0.3,
+        opacity=1.0,
+        fade_in_s=0.0,
+        fade_out_s=0.0,
+        input_index=2,
+        mix_audio=False,
+        audio_volume=1.0,
+        ducking=None,
+    )
+    defaults.update(overrides)
+    return PipOverlay(**defaults)
+
+
+class TestMultiSourcePipDirectWiring:
+    """Layer1-A: direct _build_multi_source_filter_complex(pip_overlays=...) calls.
+
+    Verifies PiP filter emit/wiring in the multi-source path in isolation from
+    build_plan's index arithmetic (architecture report ADR-A1: this class alone
+    cannot prove _pip_index_base's arithmetic is correct -- see
+    TestMultiSourcePipIndexArithmetic for that).
+    """
+
+    def _call(
+        self, pip_overlays: list[Any] | None
+    ) -> tuple[str, str, str, bool, bool, list[str], float]:
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            _build_multi_source_filter_complex,
+            resolve_kept_ranges,
+            unique_sources_in_order,
+        )
+
+        clips = [
+            _make_clip("/src/a.mp4", 0.0, 3.0),
+            _make_clip("/src/b.mp4", 0.0, 2.0),
+        ]
+        tl = _make_timeline_with_clips(clips)
+        ranges = resolve_kept_ranges(tl)
+        input_sources = unique_sources_in_order(ranges)
+        source_index = {s: i for i, s in enumerate(input_sources)}
+        source_probes = {
+            "/src/a.mp4": _make_probe(width=1920, height=1080, fps=30.0),
+            "/src/b.mp4": _make_probe(width=1280, height=720, fps=30.0),
+        }
+        return _build_multi_source_filter_complex(
+            ranges,
+            source_index,
+            source_probes,
+            has_audio_overall=True,
+            denoise_directive=None,
+            loudness_directive=None,
+            options=RenderOptions(),
+            first_source=input_sources[0],
+            pip_overlays=pip_overlays,
+        )
+
+    def test_pip_overlay_emits_pipv_and_outvpip_labels(self) -> None:
+        """pip_overlays=[PipOverlay(input_index=2)] -> filter_complex contains
+        [pipv0] and [outvpip0] (layer1-A observation 1)."""
+        pip = _make_plan_pip_overlay(input_index=2)
+        filter_complex, _, _, _, _, _, _ = self._call([pip])
+
+        assert "[pipv0]" in filter_complex
+        assert "[outvpip0]" in filter_complex
+
+    def test_pip_overlay_emits_input_index_reference(self) -> None:
+        """PipOverlay.input_index=2 -> filter_complex references [2:v]
+        (layer1-A observation 2; the multi-source path must not drop/rewrite
+        the caller-supplied input_index)."""
+        pip = _make_plan_pip_overlay(input_index=2)
+        filter_complex, _, _, _, _, _, _ = self._call([pip])
+
+        assert "[2:v]" in filter_complex
+
+    def test_pip_overlay_is_final_video_map_label(self) -> None:
+        """pip_overlays given -> returned video_map_label == "[outvpip0]"
+        (layer1-A observation 3: PiP is the topmost/final video stage)."""
+        pip = _make_plan_pip_overlay(input_index=2)
+        _, video_map_label, _, _, _, _, _ = self._call([pip])
+
+        assert video_map_label == "[outvpip0]"
+
+    def test_no_pip_overlays_is_backward_compatible(self) -> None:
+        """pip_overlays=None -> no outvpip stage is added and video_map_label
+        reverts to "[outv]" (control case: no-op early return,
+        _append_pip_video_filter plan.py:1198-1199)."""
+        filter_complex, video_map_label, _, _, _, _, _ = self._call(None)
+
+        assert "outvpip" not in filter_complex
+        assert video_map_label == "[outv]"
+
+
+def _add_plan_pip_marker(
+    timeline: otio.schema.Timeline,
+    *,
+    media_path: str = "/src/pip.mp4",
+    start_sec: float = 0.5,
+    duration_sec: float = 1.0,
+    rate: float = FPS,
+    name: str = "pip_0",
+) -> None:
+    """Attach a pip_overlay marker to the timeline's video track. File-local
+    copy of test_pip_ffmpeg_execution.py::_add_pip_overlay_marker's metadata
+    shape (layer1-B; no cross-test-file import, per this codebase's
+    convention)."""
+    video_track: otio.schema.Track | None = None
+    for track in timeline.tracks:
+        if track.kind == otio.schema.TrackKind.Video:
+            video_track = track
+            break
+    assert video_track is not None, "timeline must have a video track"
+
+    marked_range = _tr(start_sec, duration_sec, rate)
+    marker = otio.schema.Marker(
+        name=name,
+        marked_range=marked_range,
+        metadata={
+            "clipwright": {
+                "kind": "pip_overlay",
+                "tool": "clipwright-overlay",
+                "version": "0.1.0",
+                "media_path": media_path,
+                "start_sec": start_sec,
+                "duration_sec": duration_sec,
+                "media_start_sec": 0.0,
+                "x": "(W-w)/2",
+                "y": "(H-h)/2",
+                "scale": 0.3,
+                "opacity": 1.0,
+                "fade_in_sec": 0.0,
+                "fade_out_sec": 0.0,
+                "mix_audio": False,
+                "audio_volume": 1.0,
+                "ducking": {"enabled": False, "threshold": 0.05, "ratio": 4.0},
+            }
+        },
+    )
+    video_track.markers.append(marker)
+
+
+def _add_plan_image_overlay_marker(
+    timeline: otio.schema.Timeline,
+    *,
+    image_path: str = "/img/logo.png",
+    start_sec: float = 0.2,
+    duration_sec: float = 1.0,
+    rate: float = FPS,
+    name: str = "image_0",
+) -> None:
+    """Attach an image_overlay marker to the timeline's video track. File-local
+    copy of test_image_overlay.py::_add_image_overlay_marker's metadata shape
+    (layer1-B; no cross-test-file import, per this codebase's convention)."""
+    video_track: otio.schema.Track | None = None
+    for track in timeline.tracks:
+        if track.kind == otio.schema.TrackKind.Video:
+            video_track = track
+            break
+    assert video_track is not None, "timeline must have a video track"
+
+    marked_range = _tr(start_sec, duration_sec, rate)
+    marker = otio.schema.Marker(
+        name=name,
+        marked_range=marked_range,
+        metadata={
+            "clipwright": {
+                "kind": "image_overlay",
+                "tool": "clipwright-overlay",
+                "version": "0.1.0",
+                "image_path": image_path,
+                "start_sec": start_sec,
+                "duration_sec": duration_sec,
+                "x": "0",
+                "y": "0",
+                "scale": 1.0,
+                "opacity": 1.0,
+                "fade_in_sec": 0.0,
+                "fade_out_sec": 0.0,
+            }
+        },
+    )
+    video_track.markers.append(marker)
+
+
+class TestMultiSourcePipIndexArithmetic:
+    """Layer1-B: build_plan-driven verification of _pip_index_base arithmetic
+    (plan.py:4887/4901; architecture report ADR-A1, required in addition to
+    TestMultiSourcePipDirectWiring because the direct-call layer1-A tests
+    receive an already-computed PipOverlay.input_index and cannot exercise the
+    len(input_sources)/bgm/image counting logic that lives in build_plan)."""
+
+    def _base_timeline(self) -> otio.schema.Timeline:
+        clips = [
+            _make_clip("/src/a.mp4", 0.0, 3.0),
+            _make_clip("/src/b.mp4", 0.0, 2.0),
+        ]
+        return _make_timeline_with_clips(clips)
+
+    def _source_probes(self) -> dict[str, ProbeInfo]:
+        return {
+            "/src/a.mp4": _make_probe(width=1920, height=1080, fps=30.0),
+            "/src/b.mp4": _make_probe(width=1280, height=720, fps=30.0),
+        }
+
+    def test_two_sources_plus_pip_only_uses_index_2(self) -> None:
+        """2 sources + pip (no bgm/image) -> _pip_index_base = 2 + 0 + 0 = 2,
+        so filter_complex references [2:v] (layer1-B-1)."""
+        from clipwright_render.plan import build_plan, resolve_kept_ranges
+
+        tl = self._base_timeline()
+        _add_plan_pip_marker(tl)
+        ranges = resolve_kept_ranges(tl)
+        source_probes = self._source_probes()
+        plan = build_plan(
+            ranges,
+            source_probes["/src/a.mp4"],
+            RenderOptions(),
+            source_probes=source_probes,
+        )
+
+        assert "[2:v]" in plan.filter_complex
+
+    def test_two_sources_plus_bgm_image_pip_uses_index_4(self) -> None:
+        """2 sources + bgm + image overlay + pip -> _pip_index_base =
+        len(input_sources)=2 + bgm=1 + image=1 = 4, so filter_complex
+        references [4:v] (layer1-B-2; static pair to layer2-(c)'s real-ffmpeg
+        pixel-level proof of the same arithmetic)."""
+        from clipwright_render.plan import build_plan, resolve_kept_ranges
+
+        tl = self._base_timeline()
+        _add_plan_image_overlay_marker(tl)
+        _add_plan_pip_marker(tl)
+        ranges = resolve_kept_ranges(tl)
+        source_probes = self._source_probes()
+        bgm_clip = _make_bgm_clip(timeline_duration_sec=5.0)
+        plan = build_plan(
+            ranges,
+            source_probes["/src/a.mp4"],
+            RenderOptions(),
+            source_probes=source_probes,
+            bgm=bgm_clip,  # type: ignore[call-arg]
+        )
+
+        assert "[4:v]" in plan.filter_complex

@@ -473,6 +473,181 @@ def _add_bgm_track(
     timeline.tracks.append(a2)
 
 
+# ===========================================================================
+# Helpers: multi-source ("layer 2") fixtures
+# (architecture-report-20260710-135831.md §2 "層2"; requirements FR-2/AC-2)
+# ===========================================================================
+
+# Two distinctly-colored main sources (ADR-A3): separate colors let pixel
+# inspection attribute a composited pixel to its input by color alone.
+# Durations sum to _MAIN_DUR (5.0s) so the PiP window
+# [_PIP_START_SEC, _PIP_START_SEC + _PIP_DURATION_SEC) == [1.0, 4.0) defined
+# above still applies unchanged to the 2-clip concatenated program timeline,
+# and deliberately straddles the concat boundary at t=2.5s (ADR-A4).
+_TWO_SRC_A_COLOR = "blue"
+_TWO_SRC_A_FREQ = 330
+_TWO_SRC_A_DUR = 2.5
+_TWO_SRC_B_COLOR = "green"
+_TWO_SRC_B_FREQ = 550
+_TWO_SRC_B_DUR = 2.5
+
+# Image overlay fixture (layer2-c "all layers" case; ADR-A6).
+_IMAGE_COLOR = "yellow"
+_IMAGE_SIZE = 60  # px; small enough that a top-left placement (x=0,y=0)
+# cannot overlap the centered PiP composite (scale=0.3 of a 320x240 source
+# -> ~96x72, horizontally centered around x in [112,208]).
+
+
+def _make_two_source_timeline(
+    source_a: Path,
+    source_b: Path,
+    duration_a_sec: float = _TWO_SRC_A_DUR,
+    duration_b_sec: float = _TWO_SRC_B_DUR,
+    rate: float = _RATE,
+) -> otio.schema.Timeline:
+    """Generate a 2-clip main OTIO timeline (Video track only): source_a then
+    source_b, back-to-back on a single V1 track.
+
+    ADR-A2: this is a new, additive helper — _make_base_timeline above is
+    intentionally left untouched (its clip-construction logic is simply
+    looped over 2 sources here) so the existing single-source test classes
+    (TestPipVideoCompositionExecution etc.) keep their exact signature.
+    """
+    track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
+    for source_path, duration_sec in (
+        (source_a, duration_a_sec),
+        (source_b, duration_b_sec),
+    ):
+        ref = otio.schema.ExternalReference(target_url=str(source_path))
+        clip = otio.schema.Clip(
+            name=source_path.name,
+            media_reference=ref,
+            source_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0.0, rate),
+                duration=otio.opentime.RationalTime(duration_sec * rate, rate),
+            ),
+        )
+        track.append(clip)
+    timeline = otio.schema.Timeline(name="e2e_pip_ffmpeg_execution_multi_source_test")
+    timeline.tracks.append(track)
+    return timeline
+
+
+def _make_two_source_and_pip_fixtures(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """Generate two distinctly-colored main sources plus a PiP source
+    (2-source version of _make_main_and_pip_fixtures above; ADR-A3)."""
+    assert _FFMPEG is not None
+    src_a = tmp_path / "src_a.mp4"
+    src_b = tmp_path / "src_b.mp4"
+    pip_src = tmp_path / "pip.mp4"
+    _make_color_video_with_audio(
+        _FFMPEG,
+        src_a,
+        color=_TWO_SRC_A_COLOR,
+        freq=_TWO_SRC_A_FREQ,
+        duration=_TWO_SRC_A_DUR,
+    )
+    _make_color_video_with_audio(
+        _FFMPEG,
+        src_b,
+        color=_TWO_SRC_B_COLOR,
+        freq=_TWO_SRC_B_FREQ,
+        duration=_TWO_SRC_B_DUR,
+    )
+    _make_color_video_with_audio(
+        _FFMPEG, pip_src, color=_PIP_COLOR, freq=_PIP_FREQ, duration=_PIP_DUR
+    )
+    return src_a, src_b, pip_src
+
+
+def _make_color_png(
+    ffmpeg: str, output: Path, *, color: str, size: int = _IMAGE_SIZE
+) -> None:
+    """Generate a single-frame solid-color PNG (layer2-c's image-overlay
+    fixture). _make_color_video_with_audio above always produces a
+    video+audio container, so a small dedicated helper is needed for a still
+    image."""
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"color={color}:size={size}x{size}",
+        "-frames:v",
+        "1",
+        str(output),
+    ]
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=_E2E_TIMEOUT,
+    )
+    assert result.returncode == 0, (
+        f"PNG fixture generation failed ({output.name}): {result.stderr[:400]}"
+    )
+
+
+def _add_image_overlay_marker(
+    timeline: otio.schema.Timeline,
+    *,
+    image_path: str,
+    start_sec: float = 0.0,
+    duration_sec: float = _MAIN_DUR,
+    x: str = "0",
+    y: str = "0",
+    scale: float = 1.0,
+    opacity: float = 1.0,
+    fade_in_sec: float = 0.0,
+    fade_out_sec: float = 0.0,
+    name: str = "image_0",
+) -> None:
+    """Attach an image_overlay marker directly to the first video track.
+
+    File-local copy of test_image_overlay.py's ``_add_image_overlay_marker``
+    (this codebase's no-cross-test-file-import convention). Fade defaults to
+    0/0 here — unlike that file's 0.3/0.3 — and start_sec/duration_sec
+    default to covering the FULL main duration, so layer2-c's pixel
+    assertion gets a crisp, always-visible color at any sample frame
+    (mirrors why _add_pip_overlay_marker above overrides fades to 0).
+    """
+    video_track: otio.schema.Track | None = None
+    for track in timeline.tracks:
+        if track.kind == otio.schema.TrackKind.Video:
+            video_track = track
+            break
+    assert video_track is not None, "timeline must have a video track"
+
+    rate = _RATE
+    marked_range = otio.opentime.TimeRange(
+        start_time=otio.opentime.RationalTime(start_sec * rate, rate),
+        duration=otio.opentime.RationalTime(duration_sec * rate, rate),
+    )
+    marker = otio.schema.Marker(
+        name=name,
+        marked_range=marked_range,
+        metadata={
+            "clipwright": {
+                "kind": "image_overlay",
+                "tool": "clipwright-overlay",
+                "version": "0.1.0",
+                "image_path": image_path,
+                "start_sec": start_sec,
+                "duration_sec": duration_sec,
+                "x": x,
+                "y": y,
+                "scale": scale,
+                "opacity": opacity,
+                "fade_in_sec": fade_in_sec,
+                "fade_out_sec": fade_out_sec,
+            }
+        },
+    )
+    video_track.markers.append(marker)
+
+
 def _make_default_pip_overlay(**overrides: Any) -> PipOverlay:
     """Build a real PipOverlay for direct unit-level calls to
     _append_pip_audio_pipe (mirrors the report's repro command in
@@ -869,4 +1044,230 @@ class TestMainBgmPipMixExecution:
             "Expected amix inputs = 1 (main+BGM combined, asplit for the"
             " sidechain) + 1 (the single ducked PiP) = 2."
             f" filter_complex={fc!r}"
+        )
+
+
+# ===========================================================================
+# Test E: multi-source ("layer 2") PiP wiring
+# (architecture-report-20260710-135831.md §2 "層2"; requirements FR-2/AC-2)
+#
+# UNLIKE Tests A-D above, these are execution-VERIFICATION tests, not Red
+# tests for already-known bugs: if the multi-source wiring is correct (the
+# `if pip_overlays:` call in _build_multi_source_filter_complex at
+# plan.py:4320-4323, the _pip_index_base arithmetic at plan.py:4887/4901,
+# and the -i ordering `input_sources -> bgm -> image -> pip` in
+# render.py:1197-1298), all of the below are expected to PASS. A failure
+# here is a NEWLY DETECTED defect (see each assertion message for the first
+# suspect location — architecture report §6 "欠陥検出時の対応方針").
+# ===========================================================================
+
+
+@requires_ffmpeg
+class TestMultiSourcePipVideoCompositionExecution:
+    """AC-2a: PiP video composited over a 2-source concatenated main
+    timeline, including persistence across the concat clip boundary at
+    t=2.5s (ADR-A4)."""
+
+    def test_pip_composited_across_concat_boundary(self, tmp_path: Path) -> None:
+        assert _FFMPEG is not None
+        src_a, src_b, pip_src = _make_two_source_and_pip_fixtures(tmp_path)
+
+        timeline = _make_two_source_timeline(src_a, src_b)
+        _add_pip_overlay_marker(
+            timeline,
+            media_path=str(pip_src),
+            start_sec=_PIP_START_SEC,
+            duration_sec=_PIP_DURATION_SEC,
+            mix_audio=False,
+        )
+        timeline_path = tmp_path / "timeline.otio"
+        _save_timeline(timeline, timeline_path)
+
+        out_path = tmp_path / "out.mp4"
+        result = render_timeline(
+            str(timeline_path), str(out_path), RenderOptions(), dry_run=False
+        )
+        assert result["ok"] is True, f"render failed unexpectedly: {result}"
+        assert out_path.exists(), "Output file was not created"
+
+        cx, cy = _WIDTH // 2, _HEIGHT // 2
+        pixel_track = _extract_pixel_track(_FFMPEG, out_path, cx, cy)
+
+        # frame 10 -> t=0.4s: before the PiP window (starts at 1.0s) AND
+        # within the src_a clip (src_a occupies [0.0, 2.5s)) -> base color
+        # = blue. (Isolation check, mirrors the single-source out-of-window
+        # assertion above.)
+        r_out, g_out, b_out = _pixel_at_frame(pixel_track, frame_index=10)
+        # frame 50 -> t=2.0s: inside the PiP window [1.0,4.0) AND still
+        # within the src_a clip (2.0s < 2.5s boundary) -> PiP red.
+        r_a, g_a, b_a = _pixel_at_frame(pixel_track, frame_index=50)
+        # frame 90 -> t=3.6s: inside the PiP window [1.0,4.0) AND now within
+        # the src_b clip (3.6s >= 2.5s boundary) -> PiP red must persist
+        # across the concat boundary (ADR-A4).
+        r_b, g_b, b_b = _pixel_at_frame(pixel_track, frame_index=90)
+
+        assert b_out >= 150 and r_out < 100 and g_out < 100, (
+            "Out-of-window center pixel (t=0.4s, src_a region) is not the"
+            f" base blue color: got RGB=({r_out},{g_out},{b_out})."
+            " This assertion isolates the base video from PiP contamination"
+            " so a failure here means the FIXTURE is wrong, not multi-source"
+            " PiP wiring."
+        )
+        assert r_a >= 150 and g_a < 100, (
+            "PiP was not composited in-window over the FIRST (src_a) clip"
+            f" (t=2.0s): got RGB=({r_a},{g_a},{b_a})."
+            " Suspect a multi-source PiP wiring defect: the -i ordering in"
+            " render.py:1197-1298 vs. the index baked into the plan's"
+            " filter_complex (plan.py:4887/4901 _pip_index_base"
+            " arithmetic) — 'executes fine but PiP color absent' per the"
+            " architecture report §6 failure-mode table."
+        )
+        assert r_b >= 150 and g_b < 100, (
+            "PiP was not composited in-window over the SECOND (src_b) clip,"
+            f" i.e. it did not persist across the concat boundary (t=3.6s):"
+            f" got RGB=({r_b},{g_b},{b_b})."
+            " If the src_a in-window pixel (above) passed but this one"
+            " fails, suspect the concat program-time handoff (the PiP"
+            " 'enable=between(t,...)' gate at plan.py:1167 operating on"
+            " post-concat program time) rather than the index arithmetic."
+        )
+
+
+@requires_ffmpeg
+class TestMultiSourcePipAudioMixExecution:
+    """AC-2b: mix_audio=True + ducking.enabled=True must execute without
+    error under a 2-source main timeline. Both sources carry audio (ADR-A5
+    defers the anullsrc-pad interaction — one silent source — to a later
+    wave; this test's scope is 'multi-source audio pad + PiP audio mix does
+    not crash', matching the historical Bug2/Bug3 failure class)."""
+
+    def test_mix_audio_and_ducking_render_succeeds(self, tmp_path: Path) -> None:
+        assert _FFMPEG is not None
+        src_a, src_b, pip_src = _make_two_source_and_pip_fixtures(tmp_path)
+
+        timeline = _make_two_source_timeline(src_a, src_b)
+        _add_pip_overlay_marker(
+            timeline,
+            media_path=str(pip_src),
+            start_sec=_PIP_START_SEC,
+            duration_sec=_PIP_DURATION_SEC,
+            mix_audio=True,
+            audio_volume=1.0,
+            ducking={"enabled": True, "threshold": 0.3, "ratio": 4.0},
+        )
+        timeline_path = tmp_path / "timeline.otio"
+        _save_timeline(timeline, timeline_path)
+
+        out_path = tmp_path / "out.mp4"
+        result = render_timeline(
+            str(timeline_path), str(out_path), RenderOptions(), dry_run=False
+        )
+        assert result["ok"] is True, (
+            "render_timeline(2-source main, mix_audio=True,"
+            " ducking.enabled=True) failed (expected SUBPROCESS_FAILED if it"
+            " reproduces here). Suspect _append_pip_audio_pipe's"
+            " atrim/asplit consumption (plan.py:4496 area) not holding up"
+            " under the multi-source audio-pad path — historically the same"
+            " failure class as the fixed Bug2 (trim=/atrim=) and Bug3"
+            f" (asplit unconnected output). render result: {result}"
+        )
+        assert out_path.exists(), "Output file was not created"
+
+
+@requires_ffmpeg
+class TestMultiSourceAllLayersExecution:
+    """AC-2c: 2 sources + BGM + image overlay + PiP together, proving
+    _pip_index_base=4 (len(input_sources)=2 + bgm=1 + image=1) resolves to
+    the correct ffmpeg -i. -i order is src_a(0), src_b(1), bgm(2), image(3),
+    pip(4). ADR-A6 color/position scheme: src_a=blue, src_b=green,
+    bgm=audio-only, image=yellow (top-left, x=0:y=0), pip=red (centered)."""
+
+    def _build_timeline(self, tmp_path: Path) -> tuple[Path, Path]:
+        src_a, src_b, pip_src = _make_two_source_and_pip_fixtures(tmp_path)
+        bgm_src = tmp_path / "bgm.mp4"
+        _make_bgm_audio_fixture(_FFMPEG, bgm_src, duration=_MAIN_DUR)  # type: ignore[arg-type]
+        image_path = tmp_path / "image.png"
+        _make_color_png(_FFMPEG, image_path, color=_IMAGE_COLOR)  # type: ignore[arg-type]
+
+        timeline = _make_two_source_timeline(src_a, src_b)
+        _add_bgm_track(timeline, bgm_src, _MAIN_DUR)
+        _add_image_overlay_marker(timeline, image_path=str(image_path))
+        _add_pip_overlay_marker(
+            timeline,
+            media_path=str(pip_src),
+            start_sec=_PIP_START_SEC,
+            duration_sec=_PIP_DURATION_SEC,
+            mix_audio=False,
+        )
+        timeline_path = tmp_path / "timeline.otio"
+        _save_timeline(timeline, timeline_path)
+        return timeline_path, tmp_path / "out.mp4"
+
+    def test_all_layers_render_succeeds(self, tmp_path: Path) -> None:
+        """Minimum bar (FR-2c required): render succeeds. Kept independent
+        of the pixel-level assertions below so this stays green even if
+        environment-dependent pixel drift affects the stronger check."""
+        assert _FFMPEG is not None
+        timeline_path, out_path = self._build_timeline(tmp_path)
+
+        result = render_timeline(
+            str(timeline_path), str(out_path), RenderOptions(), dry_run=False
+        )
+        assert result["ok"] is True, (
+            "render_timeline(2 sources + BGM + image overlay + PiP) failed."
+            " Suspect the -i ordering in render.py:1197-1298 (expected"
+            " src_a(0), src_b(1), bgm(2), image(3), pip(4)) or the"
+            " _pip_index_base arithmetic (plan.py:4887/4901 -"
+            f" len(input_sources) + bgm(1) + len(image_overlays)). result:"
+            f" {result}"
+        )
+        assert out_path.exists(), "Output file was not created"
+
+    def test_all_layers_pixel_isolation(self, tmp_path: Path) -> None:
+        """Strengthened check (FR-2c optional, per architecture report
+        ADR-A6): if _pip_index_base is off by one, PiP would composite from
+        the image's input index (or vice versa), producing a wrong
+        color/position at these sample points — a stronger signal than
+        'exit code 0' alone."""
+        assert _FFMPEG is not None
+        timeline_path, out_path = self._build_timeline(tmp_path)
+
+        result = render_timeline(
+            str(timeline_path), str(out_path), RenderOptions(), dry_run=False
+        )
+        assert result["ok"] is True, f"render failed unexpectedly: {result}"
+
+        cx, cy = _WIDTH // 2, _HEIGHT // 2
+        center_track = _extract_pixel_track(_FFMPEG, out_path, cx, cy)
+        corner_track = _extract_pixel_track(_FFMPEG, out_path, 10, 10)
+
+        # frame 50 -> t=2.0s: inside the PiP window [1.0,4.0).
+        r_c, g_c, b_c = _pixel_at_frame(center_track, frame_index=50)
+        # frame 10 -> t=0.4s: before the PiP window AND within src_a.
+        r_out, g_out, b_out = _pixel_at_frame(center_track, frame_index=10)
+        # Corner sampled at the same in-window frame as the center check;
+        # the image overlay covers the full main duration so any frame works.
+        r_img, g_img, b_img = _pixel_at_frame(corner_track, frame_index=50)
+
+        assert r_c >= 150 and g_c < 100, (
+            "In-window center pixel is not PiP red (expected input index 4)."
+            f" Got RGB=({r_c},{g_c},{b_c})."
+            " If this is instead yellowish (~255,255,0), _pip_index_base"
+            " likely resolved to the image overlay's input index (3)"
+            " instead of the PiP's (4) — suspect plan.py:4887"
+            " (_image_index_base) / plan.py:4901 (_pip_index_base) for an"
+            " off-by-one on the len(input_sources)/bgm/image counting."
+        )
+        assert r_img >= 200 and g_img >= 200 and b_img < 80, (
+            "Top-left corner pixel is not image-overlay yellow (expected"
+            f" input index 3). Got RGB=({r_img},{g_img},{b_img})."
+            " Suspect the image overlay lost its own input index (e.g. it"
+            " was overwritten by the PiP's index) — cross-check against the"
+            " center-pixel assertion above to determine which side of the"
+            " off-by-one the defect is on."
+        )
+        assert b_out >= 150 and r_out < 100 and g_out < 100, (
+            "Out-of-window center pixel (t=0.4s, src_a region, outside the"
+            f" PiP window) is not the base blue color: got"
+            f" RGB=({r_out},{g_out},{b_out})."
         )
