@@ -83,21 +83,35 @@ Verification aspects:
             Triggered both when the last chapter's start exceeds
             total_duration_ms, and when two adjacent chapters share the
             same start_sec.
+  (F) export_chapters — CWE-209 boundary (AC-12)
+      (F-1) An uncaught exception raised inside `_export_chapters_inner`
+            (chapters.py:340-351) is converted to a generic INTERNAL error
+            whose message/hint never echo the input timeline path. Mirrors
+            test_timeline_export.py::TestErrors::test_uncaught_exception_does_not_leak_path
+            (confirm-export §5 gap: chapters.py side was previously
+            untested even though timeline_export.py's equivalent boundary
+            was).
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import opentimelineio as otio
-from clipwright.otio_utils import add_clip, add_marker, new_timeline
+import pytest
+from clipwright.errors import ErrorCode
+from clipwright.otio_utils import add_clip, add_marker, new_timeline, save_timeline
 from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
 
 from clipwright_export.chapters import (
     Chapter,
     _collect_chapters,
     _escape_ffmeta,
+    export_chapters,
     serialize_ffmetadata,
     serialize_youtube,
 )
+from clipwright_export.schemas import ExportChaptersOptions
 
 # ===========================================================================
 # Helpers
@@ -532,3 +546,41 @@ class TestSerializeFfmetadata:
         assert parsed[1]["END"] == "10000"
         assert parsed[2]["START"] == "10000"
         assert parsed[2]["END"] == "20000"
+
+
+# ===========================================================================
+# (F) export_chapters — CWE-209 boundary
+# ===========================================================================
+
+
+class TestExportChaptersCwe209:
+    def test_uncaught_exception_does_not_leak_timeline_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """(F-1) An uncaught exception at the `_export_chapters_inner` ->
+        `export_chapters` boundary (chapters.py:340-351) must not leak the
+        input timeline path in the INTERNAL error's message/hint."""
+        tl = _build_timeline(markers=[(0.0, "A", "scene_boundary")])
+        otio_path = tmp_path / "cwe209_source.otio"
+        save_timeline(tl, str(otio_path))
+        out = tmp_path / "cwe209_out.txt"
+
+        def _boom(*args: object, **kwargs: object) -> otio.schema.Timeline:
+            raise RuntimeError(f"unexpected failure touching {otio_path}")
+
+        monkeypatch.setattr("clipwright_export.chapters.load_timeline", _boom)
+
+        result = export_chapters(
+            timeline=str(otio_path),
+            output=str(out),
+            options=ExportChaptersOptions(format="youtube"),
+        )
+
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.INTERNAL
+        assert otio_path.name not in result.error.message
+        assert otio_path.name not in result.error.hint
+        assert str(otio_path) not in result.error.message
+        assert str(otio_path) not in result.error.hint
+        assert not out.exists()
