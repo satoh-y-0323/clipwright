@@ -378,7 +378,7 @@ class TestResolveKeptRangesRateMismatch:
         got = ranges[0].source_range.start_time
         assert got == otio.opentime.RationalTime(125, 25.0), (
             f"expected RationalTime(125, 25.0) (5.0s), got {got!r} — rate"
-            " mismatch relativization is not yet implemented (ADR-NI-1)"
+            " mismatch relativization regressed (ADR-NI-1)"
         )
 
 

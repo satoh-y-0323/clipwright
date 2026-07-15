@@ -18,45 +18,48 @@ Spec source of truth (task instruction, most authoritative first):
     written).
   - requirements-report-20260715-190935.md FR-8, AC-9.
 
-Current implementation state (as of this test file's authoring): the EDL path
-in timeline_export.py (_export_timeline_inner step 6c) only ever *warns* about
-Audio tracks; it never removes them from tl_copy before calling
-_write_adapter. For any timeline with more than 2 Audio tracks, this means
-_write_adapter's otio.adapters.write_to_file(..., adapter_name="cmx_3600")
-call raises otio.exceptions.NotSupportedError, which the existing
-except otio.exceptions.OTIOError handler converts to
-ClipwrightError(OTIO_ERROR) — i.e. the whole export fails (ok=False) instead
-of succeeding with an audio-dropped warning. FR-8 is not yet implemented, so
-every test below that exercises the EDL path with more than 2 Audio tracks
-currently fails for that reason (Red; not a test bug).
+Implementation state (FR-8 shipped): the EDL path in timeline_export.py
+(_export_timeline_inner step 6c) removes ALL Audio tracks from the
+write-time deep copy (tl_copy) before calling _write_adapter, per the
+architect's "remove ALL" ruling (not "keep up to 2" — see rationale above).
+Before this was implemented, _write_adapter's
+otio.adapters.write_to_file(..., adapter_name="cmx_3600") call raised
+otio.exceptions.NotSupportedError for any timeline with more than 2 Audio
+tracks, which the existing except otio.exceptions.OTIOError handler
+converted to ClipwrightError(OTIO_ERROR) — i.e. the whole export failed
+(ok=False) instead of succeeding with an audio-dropped warning. All tests
+below now exercise the shipped behavior and serve as regression guards
+against that failure mode recurring.
 
 Verification aspects:
   (1) 8 Audio tracks (+ V1 clip): EDL export succeeds (ok=True) with a
-      warning naming the dropped audio tracks. Currently fails
-      (ok=False, OTIO_ERROR) because FR-8 is not yet implemented — Red.
+      warning naming the dropped audio tracks. Was Red (ok=False,
+      OTIO_ERROR) before FR-8 was implemented; now a regression guard.
   (2) The EDL output file exists and is re-readable via the same adapter
-      (write-then-verify passed), for the same 8-track case. Currently Red
-      for the same underlying reason as (1) (no output file is ever produced).
+      (write-then-verify passed), for the same 8-track case. Was Red for
+      the same underlying reason as (1) (no output file was ever produced);
+      now a regression guard.
   (3) Exactly 2 Audio tracks (within cmx_3600's own native limit): the
       *actual* otio.adapters.write_to_file(...) call must be given a
       timeline with ZERO Audio tracks, locking in the architect's "remove
       ALL" ruling rather than an alternative "keep up to 2" implementation
       (which would also make the export succeed, but for the wrong reason).
-      Currently Red: the current code passes tl_copy through with its 2
-      Audio tracks intact, since cmx_3600 natively accepts up to 2.
+      Was Red: the pre-FR-8 code passed tl_copy through with its 2 Audio
+      tracks intact, since cmx_3600 natively accepts up to 2; now a
+      regression guard on the "remove ALL" ruling specifically.
   (4) FCPXML with 8 Audio tracks + global_start_time: export succeeds and
       all 8 Audio tracks round-trip intact (spike Fact 2). This exercises a
       code path FR-8 does not touch (architecture: "FCPXML は無変更 + 回帰
-      テスト") — expected to already pass today (regression guard).
+      テスト") — passed before FR-8 and remains a regression guard.
   (5) EDL with 8 Audio tracks + global_start_time (spike configs (c)/(d)):
       export still succeeds despite global_start_time being present,
       confirming the audio-track gate is what blocks/permits the write
       (spike note: "Failure occurs before adapter checks global_start_time").
-      Currently Red for the same reason as (1).
+      Was Red for the same reason as (1); now a regression guard.
   (6) Non-destructive input: after an EDL export that removes Audio tracks
       on the write-time deep copy, the *source* .otio file on disk is
       unaffected — reloading it still shows all original Audio tracks.
-      Expected to already pass today (regression guard; the removal must
+      Passed before FR-8 and remains a regression guard (the removal must
       happen only on tl_copy, never on the loaded/source object).
 """
 
