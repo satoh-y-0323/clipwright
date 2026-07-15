@@ -1,6 +1,6 @@
 [project]
 name = "clipwright-trim"
-version = "0.2.2"
+version = "0.3.0"
 description = "MCP tool for explicit keep/drop range selection and OTIO timeline generation. Accepts time ranges in seconds and produces a kept-range OTIO timeline compatible with clipwright-render."
 readme = "README.md"
 license = { text = "MIT" }
@@ -9,7 +9,7 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "clipwright>=0.6.1",
+    "clipwright>=0.7.0",
     "mcp[cli]>=1.27.2",
     "opentimelineio>=0.18",
     "pydantic>=2",

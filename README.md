@@ -288,11 +288,44 @@ render calls byte-for-byte unchanged.
 
 ---
 
+### DaVinci Resolve NLE interop (start timecode + audio layout)
+
+Every timeline-creating tool (`trim` / `silence` / `transcribe` / `sequence` /
+`stabilize` / `loudness` / `noise` / `color` / `reframe`) automatically
+conforms its output OTIO for DaVinci Resolve — **no options to set**:
+
+- If the source media carries a start timecode (common for broadcast/business
+  formats such as MXF, e.g. `01:00:00:00`), the generated `.otio` now
+  represents `source_range` / `ExternalReference.available_range` in
+  timecode-origin coordinates and sets `timeline.global_start_time`, so
+  Resolve's media matching resolves the clip instead of reporting
+  "Media Offline". Media with no start timecode is completely unaffected
+  (0-origin, as before).
+- If the source media has multiple audio streams/channels (e.g. an 8-stream ×
+  1-channel MXF), the timeline gets one mirrored Audio track per stream,
+  tagged with DaVinci Resolve's own `Resolve_OTIO` metadata (`Audio Type`,
+  per-channel `Channels`, and a `Link Group ID` shared with the corresponding
+  video clip) so Resolve expands and links the audio correctly on import.
+- `clipwright-render` transparently relativizes timecode-origin `source_range`
+  back to 0-based file seconds before building FFmpeg cut lists, so a render
+  of a timecode-origin timeline produces identical output to the same edit on
+  0-based media — this requires no caller action either.
+- `clipwright-export`'s `edl` format drops Audio tracks (already reported in
+  `warnings`) rather than failing outright, since CMX3600 only supports up to
+  two audio tracks; `fcpxml` export carries every Audio track unchanged.
+
+See [docs/clipwright-spec6.md](docs/clipwright-spec6.md) for the full design
+(coordinate-system semantics, the `Resolve_OTIO` wire format, and known
+limitations — e.g. `speed`-edited timelines can show an audio/video desync
+*in the NLE view only*, not in `clipwright-render`'s own output).
+
+---
+
 ## Available Tools
 
 | Package | MCP Tool | Description |
 |---------|----------|-------------|
-| `clipwright` (core) | `clipwright_inspect_media` | Probe a media file and return codec / duration / stream info |
+| `clipwright` (core) | `clipwright_inspect_media` | Probe a media file and return codec / duration / stream info, including start timecode (`data.start_timecode`, read from `format`/stream tags) and per-audio-stream `channel_layout` when present |
 | `clipwright` (core) | `clipwright_init_project` | Initialize a project directory with an empty OTIO timeline |
 | `clipwright` (core) | `clipwright_read_timeline` | Read an OTIO timeline file and return its structure |
 | `clipwright` (core) | `clipwright_write_timeline` | Write an OTIO timeline back to disk |

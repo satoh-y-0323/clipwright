@@ -5,6 +5,70 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.38.0] - 2026-07-15
+
+DaVinci Resolve NLE interop (GitHub Issue #2): start timecode passthrough and
+per-stream audio track expansion.
+
+### Added (`clipwright` v0.7.0, `clipwright-render` v0.19.0, `clipwright-trim` v0.3.0,
+`clipwright-silence` v0.4.0, `clipwright-sequence` v0.3.0, `clipwright-transcribe` v0.6.0,
+`clipwright-stabilize` v0.5.0, `clipwright-loudness` v0.4.0, `clipwright-noise` v0.4.0,
+`clipwright-color` v0.4.0, `clipwright-reframe` v0.4.0, `clipwright-export` v0.2.0)
+
+- **Source media start timecode is now reflected in generated OTIO, resolving a
+  "Media Offline" error on import into DaVinci Resolve.** `inspect_media` reads the
+  start timecode from `format.tags` (checked first) or any stream's `tags` (checked
+  next, case-insensitively) and exposes it as `MediaInfo.start_timecode` /
+  `StreamInfo.start_timecode`, alongside a new `StreamInfo.channel_layout` field for
+  audio streams. A new core module `clipwright.nle_interop` conforms a freshly built
+  timeline in place, immediately before it is saved, in every timeline-creating tool
+  (`trim`, `silence`, `transcribe`, `sequence`, `stabilize`, `loudness`, `noise`,
+  `color`, `reframe`): it shifts every clip's `source_range` and the referenced
+  `ExternalReference.available_range` from a 0-based frame origin to the source's
+  timecode origin, and sets `timeline.global_start_time` to the first clip's
+  timecode. Media without a recognisable start timecode (or with a start timecode
+  `from_timecode` cannot parse — including unsupported frame rates) is left
+  untouched at a 0-based origin, exactly as before.
+- **`clipwright-render` now relativises timecode-origin `source_range` before
+  building `ffmpeg`/`ffprobe` trims.** Both `resolve_kept_ranges` and `resolve_bgm`
+  subtract each clip's `ExternalReference.available_range.start` from its
+  `source_range.start` before handing the result to the cut-list builder, so a
+  render of a timecode-origin timeline produces identical cut points and durations
+  to the same edit on 0-based media. A `source_range` starting before
+  `available_range` is rejected as `INVALID_INPUT`. Timelines without an
+  `available_range` (or with one starting at zero) are unaffected — the
+  subtraction is a no-op, and the entire existing render test suite passes
+  unmodified.
+- **Multi-stream source audio is now expanded into per-stream Audio tracks with
+  DaVinci Resolve's `Resolve_OTIO` metadata**, matching the wire format of the
+  verified sample implementation attached to Issue #2. For a source with N audio
+  streams, `nle_interop` builds (or adopts) N Audio tracks whose Clip/Gap sequence
+  mirrors the V1 video track, tags each Audio track with an `Audio Type` of `Mono`
+  or `Stereo`, tags each audio Clip with its `Channels` (`Source Channel ID` /
+  `Source Track ID`), and links each V1 Clip to its audio mirror(s) with a shared
+  `Link Group ID` (both also carry the timeline-level
+  `Resolve OTIO Meta Version`). Tools that already place a full-length mirror clip
+  on `A1` (`stabilize`/`loudness`/`noise`/`color`/`reframe`) have that existing
+  clip adopted as the stream-0 mirror when its Clip/Gap layout matches V1 exactly;
+  a non-matching `A1` (e.g. a prior `clipwright_add_bgm` track) is left alone and
+  skipped with a warning. Every conform pass is idempotent — re-running it against
+  an already-conformed timeline (identified by the presence of
+  `Resolve OTIO Meta Version` in `timeline.metadata`) is a no-op, including on the
+  warning/skip path.
+- **`clipwright-export`'s EDL path now drops Audio tracks before writing** instead
+  of leaving them for the CMX3600 adapter to reject outright: `cmx_3600` only
+  supports up to two audio tracks, and the per-stream expansion above can produce
+  more than that for any multi-stream source. The existing "were not written to
+  the EDL" warning continues to report the dropped material; `fcpxml` export is
+  unaffected (all Audio tracks are written, though `global_start_time` is not
+  preserved on round-trip — see `docs/clipwright-spec6.md`).
+
+Reported by [@in3omnia](https://github.com/in3omnia) in
+[#2](https://github.com/satoh-y-0323/clipwright/issues/2) — thank you for the detailed issue
+and verified sample implementation (tested against DaVinci Resolve with
+`.mp4`/`.mov`/`.mxf` sources in 1×2ch/2×1ch/8×1ch layouts) that this feature's
+`Resolve_OTIO` wire format is transcribed from.
+
 ## [0.37.0] - 2026-07-10
 
 New `clipwright-export` package: NLE interchange and chapter export.

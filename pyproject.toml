@@ -1,6 +1,6 @@
 [project]
 name = "clipwright"
-version = "0.6.1"
+version = "0.7.0"
 description = "MCP server group wrapping FFmpeg/OTIO. Provides primitives to manipulate video editing workflows from AI agents."
 readme = "README.md"
 license = { text = "MIT" }
@@ -35,7 +35,8 @@ dev = [
 target-version = "py311"
 line-length = 88
 # templates/ is a template containing placeholders (__TOOL__ etc). Excluded from lint/format.
-extend-exclude = ["templates"]
+# spikes/ holds throwaway measurement scripts (not shipped code). Excluded from lint.
+extend-exclude = ["templates", "spikes"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]

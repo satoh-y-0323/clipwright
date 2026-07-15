@@ -270,11 +270,43 @@ src/clipwright/
 
 ---
 
+### DaVinci Resolve NLE 連携（開始タイムコード + 音声レイアウト）
+
+タイムラインを新規生成する全ツール（`trim` / `silence` / `transcribe` /
+`sequence` / `stabilize` / `loudness` / `noise` / `color` / `reframe`）は、
+出力する OTIO を DaVinci Resolve 向けに自動で整形する — **設定するオプションはない**:
+
+- 素材が開始タイムコードを持つ場合（業務用フォーマットで一般的。MXF の
+  `01:00:00:00` など）、生成される `.otio` は `source_range` /
+  `ExternalReference.available_range` をタイムコード起点の座標で表現し、
+  `timeline.global_start_time` を設定する。これにより Resolve のタイムコード
+  ベースの素材照合が成立し、"Media Offline" エラーが解消する。開始タイムコー
+  ドを持たない素材はこれまでどおり（0 起点）で一切影響を受けない。
+- 素材が複数の音声ストリーム／チャンネルを持つ場合（8 ストリーム × 各 1ch
+  の MXF など）、ストリームごとに 1 本の Audio トラックがミラー生成され、
+  DaVinci Resolve 自身の `Resolve_OTIO` メタデータ（`Audio Type`・チャンネル
+  ごとの `Channels`・対応する V1 クリップと共有する `Link Group ID`）が付与
+  される。これにより Resolve が音声を正しく展開・リンクする。
+- `clipwright-render` は FFmpeg のカットリストを構築する前に、タイムコード
+  起点の `source_range` を 0 起点のファイル秒へ透過的に相対化する。タイム
+  コード起点タイムラインのレンダリング結果は、0 起点素材で同じ編集を行った
+  場合と同一になり、呼び出し側の対応は不要。
+- `clipwright-export` の `edl` 形式は（CMX3600 が音声トラックを最大 2 本まで
+  しかサポートしないため）Audio トラックを削除する（既存どおり `warnings`
+  に報告される）。`fcpxml` 形式は全 Audio トラックをそのまま出力する。
+
+設計の詳細（座標系の意味論・`Resolve_OTIO` のワイヤ形式・既知の制限 —
+例えば `speed` を適用したタイムラインは *NLE 上の表示でのみ* 音声・映像の
+ズレが生じ得るが `clipwright-render` 自体の出力には影響しない、など）は
+[docs/clipwright-spec6.md](docs/clipwright-spec6.md) を参照。
+
+---
+
 ## 利用可能なツール
 
 | パッケージ | MCP ツール | 説明 |
 |------------|-----------|------|
-| `clipwright`（コア） | `clipwright_inspect_media` | メディアファイルを probe し、コーデック / 尺 / ストリーム情報を返す |
+| `clipwright`（コア） | `clipwright_inspect_media` | メディアファイルを probe し、コーデック / 尺 / ストリーム情報（存在する場合は開始タイムコード `data.start_timecode`（format/stream タグから取得）と音声ストリームごとの `channel_layout` を含む）を返す |
 | `clipwright`（コア） | `clipwright_init_project` | 空の OTIO タイムラインでプロジェクトディレクトリを初期化する |
 | `clipwright`（コア） | `clipwright_read_timeline` | OTIO タイムラインファイルを読み込み、その構造を返す |
 | `clipwright`（コア） | `clipwright_write_timeline` | OTIO タイムラインをディスクへ書き戻す |
