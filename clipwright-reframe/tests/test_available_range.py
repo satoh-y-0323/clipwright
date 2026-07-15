@@ -25,14 +25,13 @@ Verification points:
           end_time_exclusive of source_range fall within available_range.
 
   B. Audio clip (A1) available_range wiring
-     B-1/B-2: shared reference quirk (documented, not a new regression) —
-       _add_full_clip reuses a single ExternalReference instance across V1 and
-       A1 (existing behaviour predates this test; see source_range sharing).
-       As a direct consequence, once available_range is wired, A1's
-       available_range will also reflect the *video-based* duration_sec, even
-       though A1's own source_range is independently constructed with the
-       same values. This test explicitly allows/documents that value (ADR-4
-       reaffirmed) rather than asserting an audio-specific available_range.
+     B-1/B-2: _add_full_clip builds a distinct ExternalReference instance per
+       track (V1/A1 no longer share one object; see nle_interop.py's
+       conform_timeline_for_nle, which shifts each clip's
+       media_reference.available_range in place -- a shared instance would be
+       visited once per track and shifted more than once, ADR-NI-10). Because
+       both instances are built from the same video-based duration_sec, A1's
+       available_range still equals V1's by value, just not by identity.
      B-3: A1 available_range still satisfies source_range ⊆ available_range
           for the audio clip's own source_range.
 
@@ -212,12 +211,9 @@ class TestVideoAvailableRange:
 
 
 class TestAudioAvailableRange:
-    """A1 shares the same ExternalReference instance as V1 in _add_full_clip.
-
-    This means available_range on the audio clip will reflect the
-    video-based duration_sec once wired, exactly as source_range already
-    does today. This is documented and accepted (ADR-4 reaffirmed), not a
-    newly introduced regression.
+    """A1 gets its own ExternalReference instance, distinct from V1's, in
+    _add_full_clip (each built from the same video-based duration_sec, so
+    values still agree).
     """
 
     def test_audio_available_range_is_not_none(self, tmp_path: Path) -> None:
@@ -243,10 +239,9 @@ class TestAudioAvailableRange:
         assert video_available_range is not None
         assert audio_available_range is not None
         assert audio_available_range.duration == video_available_range.duration, (
-            "A1 available_range.duration is expected to mirror V1's"
-            " video-based duration_sec because _add_full_clip shares a"
-            " single ExternalReference instance across V1/A1"
-            " (documented, not a new regression)."
+            "A1 available_range.duration is expected to match V1's"
+            " video-based duration_sec: _add_full_clip builds a separate"
+            " ExternalReference per track from the same source_range value."
         )
         assert audio_available_range.duration == otio.opentime.RationalTime(
             _DURATION_SEC * _FPS, _FPS

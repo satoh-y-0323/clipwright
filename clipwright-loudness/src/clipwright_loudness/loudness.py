@@ -34,6 +34,7 @@ import opentimelineio as otio
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.media import inspect_media
+from clipwright.nle_interop import conform_timeline_for_nle
 from clipwright.otio_utils import (
     get_clipwright_metadata,
     load_timeline,
@@ -164,10 +165,15 @@ def _detect_loudness_inner(
 
     otio_dir = output_path.parent
 
+    # Conform is applied to the new-creation path only (ADR-NI-3); the existing
+    # timeline (accumulate) path is never mutated (NFR-4).
+    nle_warnings: list[str] = []
     if timeline is None:
         # Create new: add one full-length keep clip to V1
         tl = new_timeline(media_path.name)
         _add_full_clip(tl, media_path, duration_sec, media_info.duration, otio_dir)
+        target_url_key = media_ref_for_otio(media_path, otio_dir)
+        nle_warnings = conform_timeline_for_nle(tl, {target_url_key: media_info})
     else:
         tl = _load_and_validate_timeline(
             timeline, media_path, duration_sec, media_info.duration, otio_dir
@@ -189,6 +195,7 @@ def _detect_loudness_inner(
 
     measured_raw: dict[str, Any] | None = analysis["measured"]
     warnings: list[str] = list(analysis["warnings"])
+    warnings.extend(nle_warnings)
 
     # --- 5. Partial-update timeline-level metadata with loudness directive ---
     # (U-1: skip when measured is None)
@@ -315,16 +322,25 @@ def _add_full_clip(
     # ADR-4: available_range mirrors source_range for a full-length keep clip
     # (Pattern B: this module builds its own ExternalReference directly instead
     # of routing through clipwright.otio_utils.append_clip).
-    ref = otio.schema.ExternalReference(
-        target_url=target_url, available_range=source_range
-    )
 
-    # Add the same clip to V1 (index 0) and A1 (index 1)
+    # Add the same clip to V1 (index 0) and A1 (index 1). Each track gets its
+    # own ExternalReference instance (not a shared object): nle_interop's
+    # conform_timeline_for_nle shifts every clip's media_reference in place
+    # (ADR-NI-10), and a shared instance would be visited once per track and
+    # shifted more than once.
     for track in tl.tracks:
+        ref = otio.schema.ExternalReference(
+            target_url=target_url,
+            available_range=otio.opentime.TimeRange(
+                start_time=source_range.start_time, duration=source_range.duration
+            ),
+        )
         clip = otio.schema.Clip(
             name=media_path.name,
             media_reference=ref,
-            source_range=source_range,
+            source_range=otio.opentime.TimeRange(
+                start_time=source_range.start_time, duration=source_range.duration
+            ),
         )
         track.append(clip)
 

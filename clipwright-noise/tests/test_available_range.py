@@ -159,9 +159,10 @@ class TestAvailableRangeNewTimeline:
         assert src.end_time_exclusive() <= avail.end_time_exclusive()
 
     def test_a1_clip_available_range_is_also_set(self, tmp_path: Path) -> None:
-        """The A1 clip (same ExternalReference instance) must also carry
-        available_range, since _add_full_clip appends the same clip to both
-        the Video and Audio tracks."""
+        """The A1 clip (its own ExternalReference instance, built from the
+        same values as V1's) must also carry available_range, since
+        _add_full_clip appends an equivalent clip to both the Video and
+        Audio tracks."""
         media = tmp_path / "video.mp4"
         media.write_bytes(b"dummy")
         output = tmp_path / "out.otio"

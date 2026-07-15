@@ -24,8 +24,8 @@ Verification points:
       (source_range.start + source_range.duration <= available_range.start
       + available_range.duration), independent of point (b)'s exact-match
       assumption.
-  (d) A1 clip's media_reference.available_range must also be set (V1/A1
-      share the same ExternalReference in _add_full_clip).
+  (d) A1 clip's media_reference.available_range must also be set (_add_full_clip
+      builds an equivalent, but distinct, ExternalReference per track).
 
 This file is new (does not modify test_loudness.py) to avoid write conflicts
 in the parallel wave.
@@ -132,7 +132,7 @@ class TestAvailableRangeWiring:
         assert isinstance(ref, otio.schema.ExternalReference)
         assert ref.available_range is not None, (
             "ADR-4: A1 clip's ExternalReference.available_range must also be"
-            " wired (V1/A1 share the same ExternalReference in _add_full_clip)."
+            " wired (_add_full_clip builds a distinct instance per track)."
         )
 
     def test_available_range_equals_full_duration(self, tmp_path: Path) -> None:

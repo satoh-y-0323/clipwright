@@ -38,6 +38,7 @@ import opentimelineio as otio
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.media import inspect_media
+from clipwright.nle_interop import conform_timeline_for_nle
 from clipwright.otio_utils import (
     get_clipwright_metadata,
     load_timeline,
@@ -173,6 +174,13 @@ def _reframe_inner(
 
     # --- 3. Timeline resolution ---
 
+    # Conform is applied to the new-creation path only (ADR-NI-3); the existing
+    # timeline (accumulate) path is never mutated (NFR-4).  For reframe, the
+    # new timeline may carry an A1 audio clip (has_audio), so conform shifts
+    # timecode on both V1 and A1, sets global_start_time, and skips audio
+    # layout mirroring with a warning while still stamping the idempotency
+    # marker (ADR-NI-10).
+    nle_warnings: list[str] = []
     if timeline is None:
         tl = new_timeline(media_path.name)
         _add_full_clip(
@@ -183,6 +191,8 @@ def _reframe_inner(
             media_info.duration,
             has_audio,
         )
+        target_url_key = media_ref_for_otio(media_path, output_path.parent)
+        nle_warnings = conform_timeline_for_nle(tl, {target_url_key: media_info})
     else:
         # D1: timeline existence check before load (B-5).
         # FileNotFoundError from load_timeline must not escape as a raw exception.
@@ -211,7 +221,7 @@ def _reframe_inner(
 
     # --- 4. Annotate ReframeDirective ---
 
-    warnings: list[str] = []
+    warnings: list[str] = list(nle_warnings)
     track: list[CentreKeyframe] | None = None
 
     if options.mode == "track":
@@ -435,17 +445,27 @@ def _add_full_clip(
     # ADR-4 parity with core otio_utils.add_clip: available_range mirrors the
     # full-clip source_range (the clip already spans [0, duration_sec)), so
     # source_range ⊆ available_range trivially holds with equality.
-    ref = otio.schema.ExternalReference(
-        target_url=target_url, available_range=source_range
-    )
 
+    # Each track gets its own ExternalReference instance (not a shared
+    # object): nle_interop's conform_timeline_for_nle shifts every clip's
+    # media_reference.available_range in place (ADR-NI-10), and a shared
+    # instance would be visited once per track and shifted more than once
+    # (this matters when has_audio adds a second clip on A1).
     for track in tl.tracks:
         if track.kind == otio.schema.TrackKind.Video or (
             track.kind == otio.schema.TrackKind.Audio and has_audio
         ):
+            ref = otio.schema.ExternalReference(
+                target_url=target_url,
+                available_range=otio.opentime.TimeRange(
+                    start_time=source_range.start_time, duration=source_range.duration
+                ),
+            )
             clip = otio.schema.Clip(
                 name=media_path.name,
                 media_reference=ref,
-                source_range=source_range,
+                source_range=otio.opentime.TimeRange(
+                    start_time=source_range.start_time, duration=source_range.duration
+                ),
             )
             track.append(clip)
