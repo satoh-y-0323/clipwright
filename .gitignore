@@ -70,3 +70,6 @@ artifacts/
 
 # ドッグフーディング用スクラッチ（大容量素材・出力物・ドライバ・clipwright のテスト資産ではない）
 temp/
+
+# spike scratch logs
+spikes/*.log
