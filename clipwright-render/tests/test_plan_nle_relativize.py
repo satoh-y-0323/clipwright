@@ -179,8 +179,8 @@ class TestResolveKeptRangesRelativizesToAvailableRange:
         got = ranges[0].source_range
         assert got.start_time == expected.start_time, (
             f"expected relativized start {expected.start_time!r}, got "
-            f"{got.start_time!r} — TC-origin relativization (ADR-NI-1) is not"
-            " yet implemented in resolve_kept_ranges"
+            f"{got.start_time!r} — resolve_kept_ranges must relativize the "
+            "TC-origin source_range to a 0-origin file second (ADR-NI-1)"
         )
         assert got.duration == expected.duration
 

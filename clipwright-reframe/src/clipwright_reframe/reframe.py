@@ -177,9 +177,10 @@ def _reframe_inner(
     # Conform is applied to the new-creation path only (ADR-NI-3); the existing
     # timeline (accumulate) path is never mutated (NFR-4).  For reframe, the
     # new timeline may carry an A1 audio clip (has_audio), so conform shifts
-    # timecode on both V1 and A1, sets global_start_time, and skips audio
-    # layout mirroring with a warning while still stamping the idempotency
-    # marker (ADR-NI-10).
+    # timecode on both V1 and A1 and sets global_start_time.  Because A1 already
+    # mirrors V1, conform adopts the existing A1 as stream #0 (no mirror clip is
+    # synthesized and no warning is emitted), while still stamping the
+    # idempotency marker (ADR-NI-10 rev2).
     nle_warnings: list[str] = []
     if timeline is None:
         tl = new_timeline(media_path.name)

@@ -29,6 +29,7 @@ from __future__ import annotations
 import contextlib
 import math
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -855,6 +856,20 @@ def _render_inner(
             )
         # Unified boundary/symlink check (ADR-PP-1)
         check_media_ref(bgm_src, timeline_path.parent, "media")
+        # Resolve a relative target_url to an absolute path against the timeline
+        # directory and write it back onto the (frozen) BgmClip. This mirrors the
+        # main-media resolution above (L823-833): downstream code (plan.py
+        # bgm_source_out -> ffmpeg -stream_loop -1 -i <bgm_source>) runs with
+        # cwd=None and must not depend on the working directory. Without this,
+        # a co-located BGM (media_ref_for_otio stores a relative POSIX path when
+        # bgm and timeline share a directory) reaches ffmpeg as a relative path
+        # and fails to open (SUBPROCESS_FAILED).
+        if not _bgm_p.is_absolute():
+            try:
+                _bgm_abs = str((_tl_dir / _bgm_p).resolve())
+            except OSError:
+                _bgm_abs = str((_tl_dir / _bgm_p).absolute())
+            bgm_clip = replace(bgm_clip, source=_bgm_abs)
 
     # --- 4c. Boundary validation, existence check, extension WL, and fonts_dir
     #         validation for subtitle options ---

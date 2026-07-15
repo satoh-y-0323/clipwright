@@ -145,13 +145,33 @@ def _validate_existing_file(path: str) -> None:
     _validate_source_file(path)
 
 
+def _first_timecode_tag(tags: dict[str, object]) -> str | None:
+    """Return the first "timecode" tag value from a ffprobe tags dict.
+
+    Keys are matched case-insensitively via .lower() (handles "timecode",
+    "TIMECODE", "TimeCode", etc.; tag keys are ASCII so .lower() suffices).
+    The raw string value is preserved as-is (drop-frame ';' punctuation
+    untouched).
+
+    Args:
+        tags: A ffprobe "tags" dict (from format or a stream).
+
+    Returns:
+        The timecode string, or None if no timecode tag is present.
+    """
+    for key, val in tags.items():
+        if str(key).lower() == "timecode" and val is not None:
+            return str(val)
+    return None
+
+
 def _resolve_start_timecode(
     raw_format: dict[str, object], raw_streams: list[dict[str, object]]
 ) -> str | None:
     """Resolve the media's start timecode per ADR-NI-2 rules.
 
     Rule: format.tags priority (MXF case), then streams[].tags walk (MOV case).
-    Keys are matched via casefold (handles "timecode", "TIMECODE", "TimeCode", etc.).
+    Keys are matched case-insensitively (see _first_timecode_tag).
     The raw string value is preserved as-is (drop-frame ';' punctuation untouched).
 
     Args:
@@ -164,17 +184,17 @@ def _resolve_start_timecode(
     # Check format.tags first (MXF case)
     format_tags = raw_format.get("tags")
     if isinstance(format_tags, dict):
-        for key, val in format_tags.items():
-            if str(key).lower() == "timecode" and val is not None:
-                return str(val)
+        tc = _first_timecode_tag(format_tags)
+        if tc is not None:
+            return tc
 
     # Walk streams in order (MOV case)
     for stream in raw_streams:
         stream_tags = stream.get("tags")
         if isinstance(stream_tags, dict):
-            for key, val in stream_tags.items():
-                if str(key).lower() == "timecode" and val is not None:
-                    return str(val)
+            tc = _first_timecode_tag(stream_tags)
+            if tc is not None:
+                return tc
 
     return None
 
@@ -263,10 +283,7 @@ def _parse_ffprobe_json(path: str, stdout: str) -> MediaInfo:
         start_timecode_raw: str | None = None
         stream_tags = s.get("tags")
         if isinstance(stream_tags, dict):
-            for key, val in stream_tags.items():
-                if str(key).lower() == "timecode" and val is not None:
-                    start_timecode_raw = str(val)
-                    break
+            start_timecode_raw = _first_timecode_tag(stream_tags)
 
         streams.append(
             StreamInfo(
