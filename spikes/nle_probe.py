@@ -73,8 +73,10 @@ def generate_test_media(
     # Base ffmpeg command
     cmd = [
         ffmpeg,
-        "-f", "lavfi",
-        "-i", f"testsrc2=duration={duration}",
+        "-f",
+        "lavfi",
+        "-i",
+        f"testsrc2=duration={duration}",
     ]
 
     # Add audio if needed
@@ -84,34 +86,50 @@ def generate_test_media(
     if audio_layout:
         if len(audio_layout) == 1 and audio_layout[0] == 1:
             # Single 1ch audio
-            cmd.extend([
-                "-f", "lavfi",
-                "-i", f"sine=frequency=440:duration={duration}:sample_rate={audio_rate}",
-            ])
+            cmd.extend(
+                [
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    f"sine=frequency=440:duration={duration}:sample_rate={audio_rate}",
+                ]
+            )
         elif len(audio_layout) == 1 and audio_layout[0] == 2:
             # Single 2ch audio (stereo)
-            cmd.extend([
-                "-f", "lavfi",
-                "-i", f"sine=frequency=440:duration={duration}:sample_rate={audio_rate}",
-            ])
+            cmd.extend(
+                [
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    f"sine=frequency=440:duration={duration}:sample_rate={audio_rate}",
+                ]
+            )
         else:
             # Multiple audio streams (e.g., 8x1ch)
             # Generate one sine wave, then split it into multiple streams
-            cmd.extend([
-                "-f", "lavfi",
-                "-i", f"sine=frequency=440:duration={duration}:sample_rate={audio_rate}",
-            ])
+            cmd.extend(
+                [
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    f"sine=frequency=440:duration={duration}:sample_rate={audio_rate}",
+                ]
+            )
     else:
         # Video only
-        cmd.extend([
-            "-f", "lavfi",
-            "-i", f"sine=duration=0.1:sample_rate={audio_rate}",  # Dummy audio to satisfy format requirements
-        ])
+        cmd.extend(
+            [
+                "-f",
+                "lavfi",
+                "-i",
+                f"sine=duration=0.1:sample_rate={audio_rate}",  # Dummy audio to satisfy format requirements
+            ]
+        )
 
     # Frame rate handling
-    if rate == 30000/1001:  # 29.97 (NTSC)
+    if rate == 30000 / 1001:  # 29.97 (NTSC)
         rate_str = "30000/1001"
-    elif rate == 24000/1001:  # 23.976
+    elif rate == 24000 / 1001:  # 23.976
         rate_str = "24000/1001"
     else:
         rate_str = str(rate)
@@ -125,16 +143,23 @@ def generate_test_media(
     # Filter complex for multi-stream audio (must come before codec selection)
     if audio_layout and len(audio_layout) > 1:
         n_streams = len(audio_layout)
-        filter_str = f"[1:a]asplit={n_streams}{''.join(f'[a{i}]' for i in range(n_streams))}"
+        filter_str = (
+            f"[1:a]asplit={n_streams}{''.join(f'[a{i}]' for i in range(n_streams))}"
+        )
         cmd.extend(["-filter_complex", filter_str])
 
     # Codec selection based on format
     if format_type == "mov":
-        cmd.extend([
-            "-c:v", "libx264",
-            "-c:a", "aac",
-            "-pix_fmt", "yuv420p",
-        ])
+        cmd.extend(
+            [
+                "-c:v",
+                "libx264",
+                "-c:a",
+                "aac",
+                "-pix_fmt",
+                "yuv420p",
+            ]
+        )
         if audio_layout and len(audio_layout) > 1:
             # Map video and all audio streams
             cmd.extend(["-map", "0:v"])
@@ -144,11 +169,16 @@ def generate_test_media(
         else:
             cmd.extend(["-map", "0:v", "-map", "1:a"])
     elif format_type == "mxf":
-        cmd.extend([
-            "-c:v", "mpeg2video",
-            "-c:a", "pcm_s16le",
-            "-q:v", "5",
-        ])
+        cmd.extend(
+            [
+                "-c:v",
+                "mpeg2video",
+                "-c:a",
+                "pcm_s16le",
+                "-q:v",
+                "5",
+            ]
+        )
         if audio_layout and len(audio_layout) > 1:
             cmd.extend(["-map", "0:v"])
             n_streams = len(audio_layout)
@@ -157,12 +187,20 @@ def generate_test_media(
         else:
             cmd.extend(["-map", "0:v", "-map", "1:a"])
     elif format_type == "mp4":
-        cmd.extend([
-            "-c:v", "libx264",
-            "-c:a", "aac",
-            "-pix_fmt", "yuv420p",
-            "-map", "0:v", "-map", "1:a",
-        ])
+        cmd.extend(
+            [
+                "-c:v",
+                "libx264",
+                "-c:a",
+                "aac",
+                "-pix_fmt",
+                "yuv420p",
+                "-map",
+                "0:v",
+                "-map",
+                "1:a",
+            ]
+        )
 
     cmd.append(output_path)
 
@@ -178,8 +216,10 @@ def probe_media(file_path: str) -> dict[str, Any]:
 
     cmd = [
         ffprobe,
-        "-v", "quiet",
-        "-print_format", "json",
+        "-v",
+        "quiet",
+        "-print_format",
+        "json",
         "-show_format",
         "-show_streams",
         file_path,
@@ -234,6 +274,7 @@ def test_rate_support(rate_value: float | str) -> bool:
     """Test if otio.opentime.from_timecode accepts a given rate."""
     try:
         import opentimelineio as otio
+
         result = otio.opentime.from_timecode("01:00:00:00", rate=rate_value)
         return True
     except (ValueError, TypeError):
@@ -250,9 +291,9 @@ def main():
         fixtures_to_create = []
 
         # Test 1: MOV with timecode
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("TEST 1: MOV with timecode (01:00:00:00)")
-        print("="*60)
+        print("=" * 60)
         mov_path = os.path.join(temp_dir, "test_tc.mov")
         generate_test_media(mov_path, "mov", timecode="01:00:00:00", audio_layout=[2])
         probe = probe_media(mov_path)
@@ -262,9 +303,9 @@ def main():
         results["mov_timecode"] = fixture
 
         # Test 2: MOV without timecode
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("TEST 2: MOV without timecode")
-        print("="*60)
+        print("=" * 60)
         mov_notc_path = os.path.join(temp_dir, "test_notc.mov")
         generate_test_media(mov_notc_path, "mov", audio_layout=[2])
         probe = probe_media(mov_notc_path)
@@ -274,9 +315,9 @@ def main():
         results["mov_no_timecode"] = fixture
 
         # Test 3: MXF with timecode
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("TEST 3: MXF with timecode (01:00:00:00)")
-        print("="*60)
+        print("=" * 60)
         mxf_path = os.path.join(temp_dir, "test_tc.mxf")
         generate_test_media(mxf_path, "mxf", timecode="01:00:00:00", audio_layout=[2])
         probe = probe_media(mxf_path)
@@ -286,11 +327,13 @@ def main():
         results["mxf_timecode"] = fixture
 
         # Test 4: Drop-frame timecode (29.97fps)
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("TEST 4: Drop-frame timecode (29.97fps, 01:00:00;00)")
-        print("="*60)
+        print("=" * 60)
         df_path = os.path.join(temp_dir, "test_df.mov")
-        generate_test_media(df_path, "mov", rate=30000/1001, timecode="01:00:00;00", audio_layout=[2])
+        generate_test_media(
+            df_path, "mov", rate=30000 / 1001, timecode="01:00:00;00", audio_layout=[2]
+        )
         probe = probe_media(df_path)
         fixture = extract_fixture(probe)
         print(json.dumps(fixture, indent=2, ensure_ascii=False))
@@ -298,11 +341,16 @@ def main():
         results["drop_frame"] = fixture
 
         # Test 5: 8x1ch audio layout
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("TEST 5: 8x1ch audio layout")
-        print("="*60)
+        print("=" * 60)
         multi8x1_path = os.path.join(temp_dir, "test_8x1.mov")
-        generate_test_media(multi8x1_path, "mov", timecode="01:00:00:00", audio_layout=[1, 1, 1, 1, 1, 1, 1, 1])
+        generate_test_media(
+            multi8x1_path,
+            "mov",
+            timecode="01:00:00:00",
+            audio_layout=[1, 1, 1, 1, 1, 1, 1, 1],
+        )
         probe = probe_media(multi8x1_path)
         fixture = extract_fixture(probe)
         print(json.dumps(fixture, indent=2, ensure_ascii=False))
@@ -310,24 +358,28 @@ def main():
         results["audio_8x1ch"] = fixture
 
         # Test rate gate support
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("RATE GATE SUPPORT TEST")
-        print("="*60)
+        print("=" * 60)
         rates_to_test = [25.0, 30.0, 29.97, 23.976, "30000/1001", "24000/1001"]
         rate_results = {}
         for rate_val in rates_to_test:
             try:
                 supported = test_rate_support(rate_val)
-                rate_results[str(rate_val)] = "✓ supported" if supported else "✗ not supported"
-                print(f"  Rate {rate_val}: {'✓ supported' if supported else '✗ not supported'}")
+                rate_results[str(rate_val)] = (
+                    "✓ supported" if supported else "✗ not supported"
+                )
+                print(
+                    f"  Rate {rate_val}: {'✓ supported' if supported else '✗ not supported'}"
+                )
             except Exception as e:
                 rate_results[str(rate_val)] = f"✗ error: {e}"
                 print(f"  Rate {rate_val}: ✗ error: {e}")
 
         # Summary
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("SUMMARY")
-        print("="*60)
+        print("=" * 60)
         print("\nRate support:")
         for rate, result in rate_results.items():
             print(f"  {rate}: {result}")

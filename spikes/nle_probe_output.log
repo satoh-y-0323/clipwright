@@ -1,0 +1,382 @@
+Temp directory: C:\Users\shoma\AppData\Local\Temp\nle_probe_e6zbccfg
+
+============================================================
+TEST 1: MOV with timecode (01:00:00:00)
+============================================================
+Generating MOV: C:\Users\shoma\AppData\Local\Temp\nle_probe_e6zbccfg\test_tc.mov
+  Command: C:\Users\shoma\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1.1-full_build\bin\ffmpeg.exe -f lavfi -i testsrc2=duration=2.0 -f lavfi -i sine=frequency=440:duration=2.0:sample_rate=44100 -r 25.0 -timecode 01:00:00:00 -c:v libx264 -c:a aac -pix_fmt yuv420p -map 0:v -map 1:a C:\Users\shoma\AppData\Local\Temp\nle_probe_e6zbccfg\test_tc.mov
+  ✓ Generated
+{
+  "format": {
+    "tags": {
+      "major_brand": "qt  ",
+      "minor_version": "512",
+      "compatible_brands": "qt  ",
+      "encoder": "Lavf62.12.101"
+    }
+  },
+  "streams": [
+    {
+      "index": 0,
+      "codec_type": "video",
+      "codec_name": "h264",
+      "width": 320,
+      "height": 240,
+      "avg_frame_rate": "25/1",
+      "duration": "2.000000",
+      "tags": {
+        "handler_name": "VideoHandler",
+        "vendor_id": "FFMP",
+        "encoder": "Lavc62.28.101 libx264",
+        "timecode": "01:00:00:00"
+      }
+    },
+    {
+      "index": 1,
+      "codec_type": "audio",
+      "codec_name": "aac",
+      "channels": 1,
+      "channel_layout": "mono",
+      "duration": "2.000000",
+      "tags": {
+        "handler_name": "SoundHandler",
+        "vendor_id": "[0][0][0][0]"
+      }
+    },
+    {
+      "index": 2,
+      "codec_type": "data",
+      "codec_name": null,
+      "tags": {
+        "language": "eng",
+        "handler_name": "TimeCodeHandler",
+        "timecode": "01:00:00:00"
+      }
+    }
+  ]
+}
+
+============================================================
+TEST 2: MOV without timecode
+============================================================
+Generating MOV: C:\Users\shoma\AppData\Local\Temp\nle_probe_e6zbccfg\test_notc.mov
+  Command: C:\Users\shoma\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1.1-full_build\bin\ffmpeg.exe -f lavfi -i testsrc2=duration=2.0 -f lavfi -i sine=frequency=440:duration=2.0:sample_rate=44100 -r 25.0 -c:v libx264 -c:a aac -pix_fmt yuv420p -map 0:v -map 1:a C:\Users\shoma\AppData\Local\Temp\nle_probe_e6zbccfg\test_notc.mov
+  ✓ Generated
+{
+  "format": {
+    "tags": {
+      "major_brand": "qt  ",
+      "minor_version": "512",
+      "compatible_brands": "qt  ",
+      "encoder": "Lavf62.12.101"
+    }
+  },
+  "streams": [
+    {
+      "index": 0,
+      "codec_type": "video",
+      "codec_name": "h264",
+      "width": 320,
+      "height": 240,
+      "avg_frame_rate": "25/1",
+      "duration": "2.000000",
+      "tags": {
+        "handler_name": "VideoHandler",
+        "vendor_id": "FFMP",
+        "encoder": "Lavc62.28.101 libx264"
+      }
+    },
+    {
+      "index": 1,
+      "codec_type": "audio",
+      "codec_name": "aac",
+      "channels": 1,
+      "channel_layout": "mono",
+      "duration": "2.000000",
+      "tags": {
+        "handler_name": "SoundHandler",
+        "vendor_id": "[0][0][0][0]"
+      }
+    }
+  ]
+}
+
+============================================================
+TEST 3: MXF with timecode (01:00:00:00)
+============================================================
+Generating MXF: C:\Users\shoma\AppData\Local\Temp\nle_probe_e6zbccfg\test_tc.mxf
+  Command: C:\Users\shoma\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1.1-full_build\bin\ffmpeg.exe -f lavfi -i testsrc2=duration=2.0 -f lavfi -i sine=frequency=440:duration=2.0:sample_rate=48000 -r 25.0 -timecode 01:00:00:00 -c:v mpeg2video -c:a pcm_s16le -q:v 5 -map 0:v -map 1:a C:\Users\shoma\AppData\Local\Temp\nle_probe_e6zbccfg\test_tc.mxf
+  ✓ Generated
+{
+  "format": {
+    "tags": {
+      "operational_pattern_ul": "060e2b34.04010101.0d010201.01010900",
+      "uid": "adab4424-2f25-4dc7-92ff-000c00000000",
+      "generation_uid": "adab4424-2f25-4dc7-92ff-000c00000001",
+      "company_name": "FFmpeg",
+      "product_name": "OP1a Muxer",
+      "product_version_num": "62.12.101.0.0",
+      "product_version": "62.12.101",
+      "application_platform": "Lavf (mingw32)",
+      "product_uid": "adab4424-2f25-4dc7-92ff-29bd000c0002",
+      "toolkit_version_num": "62.12.101.0.0",
+      "material_package_umid": "0x060A2B340101010501010D0013B4BC585294713439B4BC58005294713439B400",
+      "timecode": "01:00:00:00"
+    }
+  },
+  "streams": [
+    {
+      "index": 0,
+      "codec_type": "video",
+      "codec_name": "mpeg2video",
+      "width": 320,
+      "height": 240,
+      "avg_frame_rate": "25/1",
+      "duration": "2.000000",
+      "tags": {
+        "file_package_umid": "0x060A2B340101010501010D0013B4BC585294713439B4BC58005294713439B401"
+      }
+    },
+    {
+      "index": 1,
+      "codec_type": "audio",
+      "codec_name": "pcm_s16le",
+      "channels": 1,
+      "channel_layout": null,
+      "duration": "2.000000",
+      "tags": {
+        "file_package_umid": "0x060A2B340101010501010D0013B4BC585294713439B4BC58005294713439B401"
+      }
+    }
+  ]
+}
+
+============================================================
+TEST 4: Drop-frame timecode (29.97fps, 01:00:00;00)
+============================================================
+Generating MOV: C:\Users\shoma\AppData\Local\Temp\nle_probe_e6zbccfg\test_df.mov
+  Command: C:\Users\shoma\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1.1-full_build\bin\ffmpeg.exe -f lavfi -i testsrc2=duration=2.0 -f lavfi -i sine=frequency=440:duration=2.0:sample_rate=44100 -r 30000/1001 -timecode 01:00:00;00 -c:v libx264 -c:a aac -pix_fmt yuv420p -map 0:v -map 1:a C:\Users\shoma\AppData\Local\Temp\nle_probe_e6zbccfg\test_df.mov
+  ✓ Generated
+{
+  "format": {
+    "tags": {
+      "major_brand": "qt  ",
+      "minor_version": "512",
+      "compatible_brands": "qt  ",
+      "encoder": "Lavf62.12.101"
+    }
+  },
+  "streams": [
+    {
+      "index": 0,
+      "codec_type": "video",
+      "codec_name": "h264",
+      "width": 320,
+      "height": 240,
+      "avg_frame_rate": "30000/1001",
+      "duration": "2.002000",
+      "tags": {
+        "handler_name": "VideoHandler",
+        "vendor_id": "FFMP",
+        "encoder": "Lavc62.28.101 libx264",
+        "timecode": "01:00:00;00"
+      }
+    },
+    {
+      "index": 1,
+      "codec_type": "audio",
+      "codec_name": "aac",
+      "channels": 1,
+      "channel_layout": "mono",
+      "duration": "2.000000",
+      "tags": {
+        "handler_name": "SoundHandler",
+        "vendor_id": "[0][0][0][0]"
+      }
+    },
+    {
+      "index": 2,
+      "codec_type": "data",
+      "codec_name": null,
+      "tags": {
+        "language": "eng",
+        "handler_name": "TimeCodeHandler",
+        "timecode": "01:00:00;00"
+      }
+    }
+  ]
+}
+
+============================================================
+TEST 5: 8x1ch audio layout
+============================================================
+Generating MOV: C:\Users\shoma\AppData\Local\Temp\nle_probe_e6zbccfg\test_8x1.mov
+  Command: C:\Users\shoma\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1.1-full_build\bin\ffmpeg.exe -f lavfi -i testsrc2=duration=2.0 -f lavfi -i sine=frequency=440:duration=2.0:sample_rate=44100 -r 25.0 -timecode 01:00:00:00 -filter_complex [1:a]asplit=8[a0][a1][a2][a3][a4][a5][a6][a7] -c:v libx264 -c:a aac -pix_fmt yuv420p -map 0:v -map [a0] -map [a1] -map [a2] -map [a3] -map [a4] -map [a5] -map [a6] -map [a7] C:\Users\shoma\AppData\Local\Temp\nle_probe_e6zbccfg\test_8x1.mov
+  ✓ Generated
+{
+  "format": {
+    "tags": {
+      "major_brand": "qt  ",
+      "minor_version": "512",
+      "compatible_brands": "qt  ",
+      "encoder": "Lavf62.12.101"
+    }
+  },
+  "streams": [
+    {
+      "index": 0,
+      "codec_type": "video",
+      "codec_name": "h264",
+      "width": 320,
+      "height": 240,
+      "avg_frame_rate": "25/1",
+      "duration": "2.000000",
+      "tags": {
+        "handler_name": "VideoHandler",
+        "vendor_id": "FFMP",
+        "encoder": "Lavc62.28.101 libx264",
+        "timecode": "01:00:00:00"
+      }
+    },
+    {
+      "index": 1,
+      "codec_type": "audio",
+      "codec_name": "aac",
+      "channels": 1,
+      "channel_layout": "mono",
+      "duration": "2.000000",
+      "tags": {
+        "handler_name": "SoundHandler",
+        "vendor_id": "[0][0][0][0]"
+      }
+    },
+    {
+      "index": 2,
+      "codec_type": "audio",
+      "codec_name": "aac",
+      "channels": 1,
+      "channel_layout": "mono",
+      "duration": "2.000000",
+      "tags": {
+        "handler_name": "SoundHandler",
+        "vendor_id": "[0][0][0][0]"
+      }
+    },
+    {
+      "index": 3,
+      "codec_type": "audio",
+      "codec_name": "aac",
+      "channels": 1,
+      "channel_layout": "mono",
+      "duration": "2.000000",
+      "tags": {
+        "handler_name": "SoundHandler",
+        "vendor_id": "[0][0][0][0]"
+      }
+    },
+    {
+      "index": 4,
+      "codec_type": "audio",
+      "codec_name": "aac",
+      "channels": 1,
+      "channel_layout": "mono",
+      "duration": "2.000000",
+      "tags": {
+        "handler_name": "SoundHandler",
+        "vendor_id": "[0][0][0][0]"
+      }
+    },
+    {
+      "index": 5,
+      "codec_type": "audio",
+      "codec_name": "aac",
+      "channels": 1,
+      "channel_layout": "mono",
+      "duration": "2.000000",
+      "tags": {
+        "handler_name": "SoundHandler",
+        "vendor_id": "[0][0][0][0]"
+      }
+    },
+    {
+      "index": 6,
+      "codec_type": "audio",
+      "codec_name": "aac",
+      "channels": 1,
+      "channel_layout": "mono",
+      "duration": "2.000000",
+      "tags": {
+        "handler_name": "SoundHandler",
+        "vendor_id": "[0][0][0][0]"
+      }
+    },
+    {
+      "index": 7,
+      "codec_type": "audio",
+      "codec_name": "aac",
+      "channels": 1,
+      "channel_layout": "mono",
+      "duration": "2.000000",
+      "tags": {
+        "handler_name": "SoundHandler",
+        "vendor_id": "[0][0][0][0]"
+      }
+    },
+    {
+      "index": 8,
+      "codec_type": "audio",
+      "codec_name": "aac",
+      "channels": 1,
+      "channel_layout": "mono",
+      "duration": "2.000000",
+      "tags": {
+        "handler_name": "SoundHandler",
+        "vendor_id": "[0][0][0][0]"
+      }
+    },
+    {
+      "index": 9,
+      "codec_type": "data",
+      "codec_name": null,
+      "tags": {
+        "language": "eng",
+        "handler_name": "TimeCodeHandler",
+        "timecode": "01:00:00:00"
+      }
+    }
+  ]
+}
+
+============================================================
+RATE GATE SUPPORT TEST
+============================================================
+  Rate 25.0: ✓ supported
+  Rate 30.0: ✓ supported
+  Rate 29.97: ✗ not supported
+  Rate 23.976: ✗ not supported
+  Rate 30000/1001: ✗ not supported
+  Rate 24000/1001: ✗ not supported
+
+============================================================
+SUMMARY
+============================================================
+
+Rate support:
+  25.0: ✓ supported
+  30.0: ✓ supported
+  29.97: ✗ not supported
+  23.976: ✗ not supported
+  30000/1001: ✗ not supported
+  24000/1001: ✗ not supported
+
+Fixtures to create:
+  tests/fixtures/ffprobe/mov_tc.json
+  tests/fixtures/ffprobe/mov_no_timecode.json
+  tests/fixtures/ffprobe/mxf_tc.json
+  tests/fixtures/ffprobe/drop_frame.json
+  tests/fixtures/ffprobe/audio_8x1ch.json
+
+All observations complete. Ready to create fixture files.
+
+Generated files in: C:\Users\shoma\AppData\Local\Temp\nle_probe_e6zbccfg
+(Temp files will be cleaned up)

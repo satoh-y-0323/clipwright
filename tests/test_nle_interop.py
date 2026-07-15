@@ -13,23 +13,24 @@ MediaInfo/StreamInfo objects are hand-built (no ffmpeg needed). OTIO objects
 are constructed directly via opentimelineio.schema to keep fixtures minimal
 and fully under test control.
 
-Red phase: clipwright.nle_interop is not yet implemented, so the import below
-fails at collection time (ModuleNotFoundError). Every test in this file is
-expected to fail for this reason until impl-nle lands.
+clipwright.nle_interop is implemented in src/clipwright/nle_interop.py; this
+suite is the regression guard for resolve_start_time / conform_timeline_for_nle
+behavior described above.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import opentimelineio as otio
+
 from clipwright.nle_interop import (
     RESOLVE_OTIO_KEY,
     RESOLVE_OTIO_META_VERSION,
     conform_timeline_for_nle,
     resolve_start_time,
 )
-
 from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo
 
 GOLDEN_PATH = Path(__file__).parent / "fixtures" / "golden" / "issue2_sample.otio"
@@ -128,6 +129,24 @@ def _timeline(
     return timeline
 
 
+def _normalize_otio_value(value: object) -> object:
+    """Recursively convert OTIO AnyDictionary/AnyVector metadata to plain
+    dict/list so equality checks compare content instead of identity.
+
+    opentimelineio 0.18.1 boxes any list assigned into metadata as AnyVector,
+    whose __eq__ falls back to object identity (structurally identical
+    AnyVector instances compare unequal). AnyDictionary.__eq__ only does a
+    shallow dict(...) conversion, so nested AnyVector values stay boxed and
+    still fail comparison one level down. Recursing through both Mapping and
+    Sequence here restores plain-value equality at every nesting level.
+    """
+    if isinstance(value, Mapping):
+        return {k: _normalize_otio_value(v) for k, v in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return [_normalize_otio_value(v) for v in value]
+    return value
+
+
 def _normalize_for_golden(timeline: otio.schema.Timeline) -> dict[str, object]:
     """Reduce a Timeline to the subset of structure covered by FR-5 wire format.
 
@@ -140,7 +159,11 @@ def _normalize_for_golden(timeline: otio.schema.Timeline) -> dict[str, object]:
 
     def clip_meta(item: otio.core.Item) -> dict[str, object]:
         meta = item.metadata.get(RESOLVE_OTIO_KEY, {})
-        return {k: meta[k] for k in ("Link Group ID", "Channels") if k in meta}
+        return {
+            k: _normalize_otio_value(meta[k])
+            for k in ("Link Group ID", "Channels")
+            if k in meta
+        }
 
     def track_summary(track: otio.schema.Track) -> dict[str, object]:
         meta = track.metadata.get(RESOLVE_OTIO_KEY, {})
@@ -319,7 +342,7 @@ class TestAudioTrackMirroring:
             assert track.kind == otio.schema.TrackKind.Audio
             assert track.metadata[RESOLVE_OTIO_KEY]["Audio Type"] == "Mono"
             clip_meta = track[0].metadata[RESOLVE_OTIO_KEY]
-            assert clip_meta["Channels"] == [
+            assert _normalize_otio_value(clip_meta["Channels"]) == [
                 {"Source Channel ID": 0, "Source Track ID": i - 1}
             ]
 
@@ -413,18 +436,24 @@ class TestResolveOtioWireFormat:
 
         conform_timeline_for_nle(timeline, {"a.mov": media_info})
 
-        assert timeline.metadata[RESOLVE_OTIO_KEY] == {
+        assert _normalize_otio_value(timeline.metadata[RESOLVE_OTIO_KEY]) == {
             "Resolve OTIO Meta Version": RESOLVE_OTIO_META_VERSION
         }
-        assert timeline.tracks[1].metadata[RESOLVE_OTIO_KEY] == {"Audio Type": "Stereo"}
-        assert timeline.tracks[1][0].metadata[RESOLVE_OTIO_KEY] == {
+        assert _normalize_otio_value(timeline.tracks[1].metadata[RESOLVE_OTIO_KEY]) == {
+            "Audio Type": "Stereo"
+        }
+        assert _normalize_otio_value(
+            timeline.tracks[1][0].metadata[RESOLVE_OTIO_KEY]
+        ) == {
             "Channels": [
                 {"Source Channel ID": 0, "Source Track ID": 0},
                 {"Source Channel ID": 1, "Source Track ID": 0},
             ],
             "Link Group ID": 1,
         }
-        assert clip.metadata[RESOLVE_OTIO_KEY] == {"Link Group ID": 1}
+        assert _normalize_otio_value(clip.metadata[RESOLVE_OTIO_KEY]) == {
+            "Link Group ID": 1
+        }
 
     def test_conform_output_matches_golden_structure(self) -> None:
         """AC-13: compare against tests/fixtures/golden/issue2_sample.otio, an
@@ -670,7 +699,10 @@ class TestInputContractGuards:
 
         warnings = conform_timeline_for_nle(timeline, {"good.mov": media_info})
 
-        assert good_clip.source_range.start_time.value == 90000.0
+        # ADR-NI-1: shift is additive (source_range.start += TC), so good_clip's
+        # existing trim position (50) must be preserved, not overwritten by the
+        # timecode value alone: 50 + 90000 = 90050.
+        assert good_clip.source_range.start_time.value == 90050.0
         assert any("skip" in w.lower() or "missing" in w.lower() for w in warnings)
 
     def test_timeline_without_v1_track_is_noop_with_warning(self) -> None:

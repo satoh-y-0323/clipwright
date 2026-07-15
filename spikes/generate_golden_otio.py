@@ -34,18 +34,24 @@ def make_otio_clip_video(
 ) -> otio.schema.Clip:
     """Create a video clip with optional Resolve_OTIO metadata."""
     if resolve_group_id is not None and resolve_group_id < 1:
-        raise otio.exceptions.OTIOError("make_otio_clip_video: resolve_group_id (Link Group ID) must be None or >= 1")
+        raise otio.exceptions.OTIOError(
+            "make_otio_clip_video: resolve_group_id (Link Group ID) must be None or >= 1"
+        )
 
     return otio.schema.Clip(
         name=name or "",
         media_reference=otio.schema.ExternalReference(
-            target_url="" if str(path) == "" else pathlib.Path(path).resolve().as_posix(),
+            target_url=""
+            if str(path) == ""
+            else pathlib.Path(path).resolve().as_posix(),
         ),
         source_range=otio.opentime.TimeRange(
             start_time=otio.opentime.from_frames(frame=frame_start, rate=rate),
             duration=otio.opentime.from_frames(frame=frame_length, rate=rate),
         ),
-        metadata={} if resolve_group_id is None else {
+        metadata={}
+        if resolve_group_id is None
+        else {
             "Resolve_OTIO": {
                 "Link Group ID": resolve_group_id,
             },
@@ -65,27 +71,45 @@ def make_otio_clip_audio(
 ) -> otio.schema.Clip:
     """Create an audio clip with optional Resolve_OTIO metadata."""
     if num_channels < 1:
-        raise otio.exceptions.OTIOError("make_otio_clip_audio: num_channels must be at least 1")
+        raise otio.exceptions.OTIOError(
+            "make_otio_clip_audio: num_channels must be at least 1"
+        )
 
     if resolve_track_id is not None and resolve_track_id < 0:
-        raise otio.exceptions.OTIOError("make_otio_clip_audio: resolve_track_id (Source Track ID) must be None or >= 0")
+        raise otio.exceptions.OTIOError(
+            "make_otio_clip_audio: resolve_track_id (Source Track ID) must be None or >= 0"
+        )
 
     if resolve_group_id is not None and resolve_group_id < 1:
-        raise otio.exceptions.OTIOError("make_otio_clip_audio: resolve_group_id (Link Group ID) must be None or >= 1")
+        raise otio.exceptions.OTIOError(
+            "make_otio_clip_audio: resolve_group_id (Link Group ID) must be None or >= 1"
+        )
 
     return otio.schema.Clip(
         name=name or "",
         media_reference=otio.schema.ExternalReference(
-            target_url="" if str(path) == "" else pathlib.Path(path).resolve().as_posix(),
+            target_url=""
+            if str(path) == ""
+            else pathlib.Path(path).resolve().as_posix(),
         ),
         source_range=otio.opentime.TimeRange(
             start_time=otio.opentime.RationalTime(value=sample_start, rate=rate),
             duration=otio.opentime.RationalTime(value=sample_count, rate=rate),
         ),
-        metadata={} if resolve_track_id is None else {
+        metadata={}
+        if resolve_track_id is None
+        else {
             "Resolve_OTIO": {
-                "Channels": [{"Source Channel ID": i, "Source Track ID": resolve_track_id} for i in range(num_channels)],
-            } | ({"Link Group ID": resolve_group_id} if resolve_group_id is not None else {})
+                "Channels": [
+                    {"Source Channel ID": i, "Source Track ID": resolve_track_id}
+                    for i in range(num_channels)
+                ],
+            }
+            | (
+                {"Link Group ID": resolve_group_id}
+                if resolve_group_id is not None
+                else {}
+            )
         },
     )
 
@@ -100,16 +124,30 @@ def new_timeline(
     Tracks are created in [V1(Video), A1(Audio), A2(Audio), ...] order.
     """
     if num_audio_tracks is not None and num_audio_tracks < 0:
-        raise otio.exceptions.OTIOError("new_timeline: num_audio_tracks must be None or >= 0")
+        raise otio.exceptions.OTIOError(
+            "new_timeline: num_audio_tracks must be None or >= 0"
+        )
 
     return otio.schema.Timeline(
         name=name or "",
         tracks=[
-            otio.schema.Track(name="", kind=otio.schema.TrackKind.Video,
-                metadata={"Resolve_OTIO": {"Locked": False}}),
+            otio.schema.Track(
+                name="",
+                kind=otio.schema.TrackKind.Video,
+                metadata={"Resolve_OTIO": {"Locked": False}},
+            ),
             *[
-                otio.schema.Track(name="", kind=otio.schema.TrackKind.Audio,
-                    metadata={"Resolve_OTIO": {"Audio Type": "Mono", "Locked": False, "SoloOn": False}})
+                otio.schema.Track(
+                    name="",
+                    kind=otio.schema.TrackKind.Audio,
+                    metadata={
+                        "Resolve_OTIO": {
+                            "Audio Type": "Mono",
+                            "Locked": False,
+                            "SoloOn": False,
+                        }
+                    },
+                )
                 for i in range(num_audio_tracks or 0)
             ],
         ],
@@ -118,7 +156,13 @@ def new_timeline(
     )
 
 
-def make_otio_from_video_info(path: str, num_frames: int, rate: float, timecode: str = "00:00:00:00", channels_per_stream: list = []) -> otio.schema.Timeline:
+def make_otio_from_video_info(
+    path: str,
+    num_frames: int,
+    rate: float,
+    timecode: str = "00:00:00:00",
+    channels_per_stream: list = [],
+) -> otio.schema.Timeline:
     """Create a Timeline from the first video stream and all audio streams.
 
     One OTIO audio track is created for each source audio stream.
@@ -130,11 +174,14 @@ def make_otio_from_video_info(path: str, num_frames: int, rate: float, timecode:
     num_audio_tracks = len(channels_per_stream)
 
     try:
-        frame_start = otio.opentime.from_timecode(timecode=timecode or "00:00:00:00", rate=rate).to_frames()
+        frame_start = otio.opentime.from_timecode(
+            timecode=timecode or "00:00:00:00", rate=rate
+        ).to_frames()
     except (TypeError, ValueError):
         frame_start = 0
 
-    timeline = new_timeline(name=name,
+    timeline = new_timeline(
+        name=name,
         num_audio_tracks=num_audio_tracks,
         global_start_time=otio.opentime.from_frames(frame_start, rate),
     )
@@ -145,7 +192,7 @@ def make_otio_from_video_info(path: str, num_frames: int, rate: float, timecode:
         frame_start=frame_start,
         frame_length=num_frames,
         rate=rate,
-        resolve_group_id=1
+        resolve_group_id=1,
     )
     timeline.tracks[0].append(video_clip_otio)
 
@@ -161,7 +208,7 @@ def make_otio_from_video_info(path: str, num_frames: int, rate: float, timecode:
             resolve_track_id=n,
             resolve_group_id=1,
         )
-        timeline.tracks[1+n].append(audio_clip_otio_n)
+        timeline.tracks[1 + n].append(audio_clip_otio_n)
 
     return timeline
 
@@ -172,24 +219,56 @@ def get_streams_via_ffprobe(path: str) -> dict:
     if not ffprobe or not os.path.isfile(ffprobe):
         ffprobe = "ffprobe"
 
-    probe = json.loads(subprocess.check_output([
-        ffprobe, "-v", "error", "-show_entries",
-        "stream=codec_type,channels,nb_frames,duration,avg_frame_rate,r_frame_rate:"
-        "stream_tags=timecode:format=duration:format_tags=timecode",
-        "-of", "json", path,
-    ], text=True))
+    probe = json.loads(
+        subprocess.check_output(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-show_entries",
+                "stream=codec_type,channels,nb_frames,duration,avg_frame_rate,r_frame_rate:"
+                "stream_tags=timecode:format=duration:format_tags=timecode",
+                "-of",
+                "json",
+                path,
+            ],
+            text=True,
+        )
+    )
 
     streams = probe["streams"]
     video = next(s for s in streams if s["codec_type"] == "video")
 
-    rate_str = next(video[k] for k in ("avg_frame_rate", "r_frame_rate") if video.get(k) not in (None, "N/A", "0/0"))
+    rate_str = next(
+        video[k]
+        for k in ("avg_frame_rate", "r_frame_rate")
+        if video.get(k) not in (None, "N/A", "0/0")
+    )
     fps_num, fps_den = map(int, rate_str.split("/"))
     rate = fps_num / fps_den
 
-    duration = next(float(v) for v in (video.get("duration"), probe.get("format", {}).get("duration")) if v not in (None, "N/A"))
-    num_frames = int(video["nb_frames"]) if video.get("nb_frames") not in (None, "N/A") else round(duration * rate)
-    timecode = next((v for x in [probe.get("format", {}), *streams] for k, v in x.get("tags", {}).items() if k.casefold() == "timecode"), "00:00:00:00")
-    channels_per_stream = [int(s["channels"]) for s in streams if s["codec_type"] == "audio"]
+    duration = next(
+        float(v)
+        for v in (video.get("duration"), probe.get("format", {}).get("duration"))
+        if v not in (None, "N/A")
+    )
+    num_frames = (
+        int(video["nb_frames"])
+        if video.get("nb_frames") not in (None, "N/A")
+        else round(duration * rate)
+    )
+    timecode = next(
+        (
+            v
+            for x in [probe.get("format", {}), *streams]
+            for k, v in x.get("tags", {}).items()
+            if k.casefold() == "timecode"
+        ),
+        "00:00:00:00",
+    )
+    channels_per_stream = [
+        int(s["channels"]) for s in streams if s["codec_type"] == "audio"
+    ]
 
     return {
         "num_frames": num_frames,
@@ -207,7 +286,7 @@ def make_otio_from_video(path: str):
         num_frames=streams_info["num_frames"],
         rate=streams_info["rate"],
         timecode=streams_info["timecode"],
-        channels_per_stream=streams_info["channels_per_stream"]
+        channels_per_stream=streams_info["channels_per_stream"],
     )
 
 
@@ -219,16 +298,28 @@ def generate_test_media(output_path: str) -> None:
 
     cmd = [
         ffmpeg,
-        "-f", "lavfi",
-        "-i", "testsrc2=duration=2.0",
-        "-f", "lavfi",
-        "-i", "sine=frequency=440:duration=2.0:sample_rate=44100",
-        "-r", "25.0",
-        "-timecode", "01:00:00:00",
-        "-c:v", "libx264",
-        "-c:a", "aac",
-        "-pix_fmt", "yuv420p",
-        "-map", "0:v", "-map", "1:a",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=duration=2.0",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:duration=2.0:sample_rate=44100",
+        "-r",
+        "25.0",
+        "-timecode",
+        "01:00:00:00",
+        "-c:v",
+        "libx264",
+        "-c:a",
+        "aac",
+        "-pix_fmt",
+        "yuv420p",
+        "-map",
+        "0:v",
+        "-map",
+        "1:a",
         output_path,
     ]
 

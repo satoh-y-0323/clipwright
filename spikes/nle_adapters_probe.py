@@ -108,12 +108,14 @@ def make_timeline(
     # Audio tracks (A1 or A1..A8)
     num_audio = config["audio_tracks"]
     for i in range(num_audio):
-        track_name = f"A{i+1}"
-        audio_track = otio.schema.Track(name=track_name, kind=otio.schema.TrackKind.Audio)
+        track_name = f"A{i + 1}"
+        audio_track = otio.schema.Track(
+            name=track_name, kind=otio.schema.TrackKind.Audio
+        )
 
         # 1ch audio clip
         ref_audio = otio.schema.ExternalReference(
-            target_url=f"file:///dummy/audio{i+1}.wav"
+            target_url=f"file:///dummy/audio{i + 1}.wav"
         )
         if config["tc_shift"]:
             ref_audio.available_range = otio.opentime.TimeRange(
@@ -121,7 +123,7 @@ def make_timeline(
                 duration=otio.opentime.RationalTime(240, 24),
             )
             clip_audio = otio.schema.Clip(
-                name=f"audio{i+1}_tc",
+                name=f"audio{i + 1}_tc",
                 media_reference=ref_audio,
                 source_range=otio.opentime.TimeRange(
                     start_time=otio.opentime.RationalTime(86400, 24),
@@ -134,7 +136,7 @@ def make_timeline(
                 duration=otio.opentime.RationalTime(240, 24),
             )
             clip_audio = otio.schema.Clip(
-                name=f"audio{i+1}",
+                name=f"audio{i + 1}",
                 media_reference=ref_audio,
                 source_range=otio.opentime.TimeRange(
                     start_time=otio.opentime.RationalTime(0, 24),
@@ -169,7 +171,9 @@ def test_adapter(
         "write_success": False,
         "write_error": None,
         "num_tracks": len(timeline.tracks),
-        "num_audio_tracks": sum(1 for t in timeline.tracks if t.kind == otio.schema.TrackKind.Audio),
+        "num_audio_tracks": sum(
+            1 for t in timeline.tracks if t.kind == otio.schema.TrackKind.Audio
+        ),
         "global_start_time": None,
         "read_success": False,
         "read_error": None,
@@ -204,7 +208,9 @@ def test_adapter(
                     1 for t in loaded_tl.tracks if t.kind == otio.schema.TrackKind.Audio
                 )
             else:
-                result["read_error"] = f"Expected Timeline, got {type(loaded_tl).__name__}"
+                result["read_error"] = (
+                    f"Expected Timeline, got {type(loaded_tl).__name__}"
+                )
         except Exception as e:
             result["read_error"] = f"{type(e).__name__}: {str(e)}"
 
@@ -225,10 +231,14 @@ def main() -> None:
         print(f"{'=' * 80}")
 
         timeline = make_timeline(config)
-        audio_range = "1" if config["audio_tracks"] == 1 else f"1..{config['audio_tracks']}"
+        audio_range = (
+            "1" if config["audio_tracks"] == 1 else f"1..{config['audio_tracks']}"
+        )
         print(f"Timeline created: V1 + A{audio_range}")
         print(f"  Track count: {len(timeline.tracks)}")
-        print(f"  Audio track count: {sum(1 for t in timeline.tracks if t.kind == otio.schema.TrackKind.Audio)}")
+        print(
+            f"  Audio track count: {sum(1 for t in timeline.tracks if t.kind == otio.schema.TrackKind.Audio)}"
+        )
         if timeline.global_start_time is not None:
             print(f"  global_start_time: {timeline.global_start_time}")
 
@@ -244,8 +254,12 @@ def main() -> None:
             if result_cmx["read_error"]:
                 print(f"      Error: {result_cmx['read_error']}")
             if result_cmx["read_success"]:
-                print(f"      Round-trip global_start_time: {result_cmx['round_trip_global_start_time']}")
-                print(f"      Round-trip audio tracks: {result_cmx['round_trip_num_audio_tracks']}")
+                print(
+                    f"      Round-trip global_start_time: {result_cmx['round_trip_global_start_time']}"
+                )
+                print(
+                    f"      Round-trip audio tracks: {result_cmx['round_trip_num_audio_tracks']}"
+                )
 
         # Test FCPXML
         print("\n  [FCPXML]")
@@ -255,12 +269,18 @@ def main() -> None:
         if result_fcpx["write_error"]:
             print(f"      Error: {result_fcpx['write_error']}")
         if result_fcpx["write_success"]:
-            print(f"    Read:  {'SUCCESS' if result_fcpx['read_success'] else 'FAILED'}")
+            print(
+                f"    Read:  {'SUCCESS' if result_fcpx['read_success'] else 'FAILED'}"
+            )
             if result_fcpx["read_error"]:
                 print(f"      Error: {result_fcpx['read_error']}")
             if result_fcpx["read_success"]:
-                print(f"      Round-trip global_start_time: {result_fcpx['round_trip_global_start_time']}")
-                print(f"      Round-trip audio tracks: {result_fcpx['round_trip_num_audio_tracks']}")
+                print(
+                    f"      Round-trip global_start_time: {result_fcpx['round_trip_global_start_time']}"
+                )
+                print(
+                    f"      Round-trip audio tracks: {result_fcpx['round_trip_num_audio_tracks']}"
+                )
 
     # Summary
     print(f"\n{'=' * 80}")
