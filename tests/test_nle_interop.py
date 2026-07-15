@@ -1,7 +1,7 @@
 """test_nle_interop.py -- Tests for clipwright.nle_interop (Issue #2 Resolve interop).
 
-Target (FR-2~FR-6 / ADR-NI-3, ADR-NI-5, ADR-NI-6, ADR-NI-9, ADR-NI-10, ADR-NI-11,
-ADR-NI-12, ADR-NI-13a / DC-GP-003):
+Target (FR-2~FR-6 / ADR-NI-3, ADR-NI-5, ADR-NI-6, ADR-NI-9, ADR-NI-10 rev.2 (A1
+mirror adoption), ADR-NI-11, ADR-NI-12, ADR-NI-13a / DC-GP-003):
 - resolve_start_time: MediaInfo -> RationalTime | None, safe fallback on any
   unsupported/invalid input (never raises).
 - conform_timeline_for_nle: post-processing helper that, in-place, shifts
@@ -502,11 +502,116 @@ class TestIdempotency:
         assert before == after
 
 
-class TestReframeTypeDegeneration:
-    """A1 already has a clip (reframe's `_add_full_clip` layout, ADR-NI-10):
-    TC shift still applies to every track, but audio mirror expansion is
-    skipped -- and the idempotent Resolve_OTIO marker must still be stamped
-    on the timeline so a second conform call cannot double-shift."""
+class TestAudioMirrorAdoption:
+    """ADR-NI-10 rev.2: when A1 already has a clip (e.g. reframe's, or any of
+    the 5 create tools' ``_add_full_clip`` layout) and its item sequence is a
+    *mirror match* of V1 (same item count, same Clip/Gap kind at each
+    position, same target_url and source_range for Clips), conform *adopts*
+    that A1 as stream#0 instead of skipping: it stamps Resolve_OTIO metadata
+    (Audio Type / Channels / Link Group ID) onto the existing track/clip in
+    place and appends A2..AN for any additional audio streams -- with no
+    warning. These tests are the regression guard for that adoption path:
+    before ADR-NI-10 rev.2 the code treated any non-empty A1 as a skip case
+    regardless of whether it mirrored V1, which these assertions now forbid.
+    """
+
+    def _build(
+        self, media_info: MediaInfo
+    ) -> tuple[
+        otio.schema.Timeline, dict[str, MediaInfo], otio.schema.Clip, otio.schema.Clip
+    ]:
+        rate = 25.0
+        v1_clip = _clip("a.mov", start=0, duration=50, rate=rate)
+        a1_clip = _clip("a.mov", start=0, duration=50, rate=rate)
+        timeline = _timeline([v1_clip], extra_audio_tracks=[[a1_clip]])
+        media_infos = {"a.mov": media_info}
+        return timeline, media_infos, v1_clip, a1_clip
+
+    def test_mirror_matching_a1_with_stereo_source_is_adopted_as_stream_zero(
+        self,
+    ) -> None:
+        rate = 25.0
+        media_info = _media_info(
+            start_timecode="01:00:00:00", rate=rate, frames=50, channels_per_stream=[2]
+        )
+        timeline, media_infos, v1_clip, a1_clip = self._build(media_info)
+
+        warnings = conform_timeline_for_nle(timeline, media_infos)
+
+        assert warnings == []
+        # No new track created for a single audio stream: A1 is reused.
+        assert len(timeline.tracks) == 2
+        a1 = timeline.tracks[1]
+        assert a1.kind == otio.schema.TrackKind.Audio
+        assert a1.metadata[RESOLVE_OTIO_KEY]["Audio Type"] == "Stereo"
+        assert len(a1) == 1
+        assert a1[0] is a1_clip  # existing clip object is augmented, not replaced
+
+        # TC shift still applies to the adopted A1 clip (ADR-NI-10 all-track shift).
+        assert a1_clip.source_range.start_time.value == 90000.0
+        assert a1_clip.media_reference.available_range.start_time.value == 90000.0
+
+        assert _normalize_otio_value(a1_clip.metadata[RESOLVE_OTIO_KEY]) == {
+            "Channels": [
+                {"Source Channel ID": 0, "Source Track ID": 0},
+                {"Source Channel ID": 1, "Source Track ID": 0},
+            ],
+            "Link Group ID": 1,
+        }
+        assert v1_clip.metadata[RESOLVE_OTIO_KEY] == {"Link Group ID": 1}
+        assert timeline.metadata[RESOLVE_OTIO_KEY] == {
+            "Resolve OTIO Meta Version": RESOLVE_OTIO_META_VERSION
+        }
+
+    def test_mirror_matching_a1_with_eight_mono_streams_adopts_and_adds_a2_through_a8(
+        self,
+    ) -> None:
+        rate = 25.0
+        media_info = _media_info(rate=rate, frames=50, channels_per_stream=[1] * 8)
+        timeline, media_infos, _v1_clip, a1_clip = self._build(media_info)
+
+        warnings = conform_timeline_for_nle(timeline, media_infos)
+
+        assert warnings == []
+        assert len(timeline.tracks) == 9  # V1 + adopted A1 + A2..A8
+        a1 = timeline.tracks[1]
+        assert a1.metadata[RESOLVE_OTIO_KEY]["Audio Type"] == "Mono"
+        assert a1[0] is a1_clip
+        for i in range(1, 9):
+            track = timeline.tracks[i]
+            assert track.kind == otio.schema.TrackKind.Audio
+            assert track.metadata[RESOLVE_OTIO_KEY]["Audio Type"] == "Mono"
+            clip_meta = track[0].metadata[RESOLVE_OTIO_KEY]
+            assert _normalize_otio_value(clip_meta["Channels"]) == [
+                {"Source Channel ID": 0, "Source Track ID": i - 1}
+            ]
+
+    def test_double_apply_on_adopted_a1_is_noop(self) -> None:
+        rate = 25.0
+        media_info = _media_info(
+            start_timecode="01:00:00:00", rate=rate, frames=50, channels_per_stream=[2]
+        )
+        timeline, media_infos, v1_clip, _a1_clip = self._build(media_info)
+
+        conform_timeline_for_nle(timeline, media_infos)
+        before = otio.adapters.write_to_string(timeline, "otio_json")
+        shifted_once = v1_clip.source_range.start_time.value
+
+        second_warnings = conform_timeline_for_nle(timeline, media_infos)
+        after = otio.adapters.write_to_string(timeline, "otio_json")
+
+        assert second_warnings == []
+        assert before == after
+        assert v1_clip.source_range.start_time.value == shifted_once
+
+
+class TestAudioMirrorMismatchDegeneration:
+    """A1 already has a clip whose item sequence does *not* mirror V1 (e.g. a
+    pre-existing narration/bgm track unrelated to V1's source, ADR-NI-10
+    rev.2): TC shift still applies to every track, but audio mirror expansion
+    is skipped -- and the idempotent Resolve_OTIO marker must still be
+    stamped on the timeline so a second conform call cannot double-shift.
+    This degenerate branch is unchanged from the original ADR-NI-10 design."""
 
     def _build(
         self,
@@ -515,7 +620,10 @@ class TestReframeTypeDegeneration:
     ]:
         rate = 25.0
         v1_clip = _clip("a.mov", start=0, duration=50, rate=rate)
-        a1_clip = _clip("a.mov", start=0, duration=50, rate=rate)
+        # Mismatched A1: an unrelated pre-existing clip (different
+        # target_url), so the item-for-item mirror comparison against V1
+        # fails and this degenerates to skip+warning.
+        a1_clip = _clip("narration.mov", start=0, duration=50, rate=rate)
         timeline = _timeline([v1_clip], extra_audio_tracks=[[a1_clip]])
         media_infos = {
             "a.mov": _media_info(
@@ -523,7 +631,14 @@ class TestReframeTypeDegeneration:
                 rate=rate,
                 frames=50,
                 channels_per_stream=[2],
-            )
+            ),
+            "narration.mov": _media_info(
+                path="narration.mov",
+                start_timecode="01:00:00:00",
+                rate=rate,
+                frames=50,
+                channels_per_stream=[1],
+            ),
         }
         return timeline, media_infos, v1_clip, a1_clip
 
