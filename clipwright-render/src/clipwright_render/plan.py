@@ -1339,6 +1339,68 @@ def unique_sources_in_order(ranges: list[KeptRange]) -> list[str]:
 
 
 # ===========================================================================
+# Helper: TC-origin relativization (ADR-NI-1)
+# ===========================================================================
+
+
+def _relativize_source_range_to_file_seconds(
+    source_range: otio.opentime.TimeRange,
+    available_range: otio.opentime.TimeRange | None,
+) -> otio.opentime.TimeRange:
+    """Relativize source_range to file seconds using available_range.start_time.
+
+    When available_range is present and starts at a non-zero timecode origin,
+    subtract available_range.start_time from source_range.start_time to get
+    the file-relative (0-origin) seconds needed for ffmpeg trim/atrim.
+
+    This applies uniformly wherever a Clip's source_range flows into a
+    KeptRange or BgmClip (ADR-NI-1, architecture-report §2).
+
+    Args:
+        source_range: The clip's source_range (may start at TC-origin absolute time).
+        available_range: The media's available_range (may start at TC-origin). If None
+            or start_time == 0, no relativization is performed (backward compatible).
+
+    Returns:
+        source_range with start_time relativized to 0-origin file seconds.
+
+    Raises:
+        ClipwrightError(INVALID_INPUT): when source_range.start_time <
+            available_range.start_time (TC underflow: source clip starts
+            before the available media).
+    """
+    # If no available_range or it starts at 0, no relativization needed
+    # (backward-compatible paths: no NLE-interop conform, or pre-ADR-NI-1 pipeline)
+    if available_range is None or available_range.start_time.value == 0.0:
+        return source_range
+
+    # Relativize: subtract the TC offset to get file-relative seconds.
+    # RationalTime subtraction auto-rescales to the minuend's rate (the
+    # source_range's rate), which handles rate-mismatch cases correctly
+    # (observation 6 in test_plan_nle_relativize.py).
+    avail_start_rescaled = available_range.start_time.rescaled_to(
+        source_range.start_time.rate
+    )
+    rel_start = source_range.start_time - avail_start_rescaled
+
+    # Validate: source_range must not start before available_range (TC underflow).
+    # SR NL-1 / CWE-209 compliance: message is a fixed literal, never an
+    # interpolation of raw OTIO time values.
+    if rel_start.value < 0.0:
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message="Source clip starts before the available media range.",
+            hint="Regenerate the timeline using the correct timecode offset.",
+        )
+
+    # Construct the relativized TimeRange with the new start_time.
+    return otio.opentime.TimeRange(
+        start_time=rel_start,
+        duration=source_range.duration,
+    )
+
+
+# ===========================================================================
 # resolve_kept_ranges
 # ===========================================================================
 
@@ -1412,6 +1474,13 @@ def resolve_kept_ranges(timeline: otio.schema.Timeline) -> KeptRangeList:
                 )
             source = mr.target_url
             source_range = item.source_range
+            # Relativize source_range to file seconds if available_range is present
+            # and starts at a non-zero TC origin (ADR-NI-1). available_range belongs
+            # to mr (ExternalReference), same scope as source_range; both describe
+            # the media asset's timecode mapping. Raises INVALID_INPUT on TC underflow.
+            source_range = _relativize_source_range_to_file_seconds(
+                source_range, mr.available_range
+            )
             # Extract time_scalar from the first LinearTimeWarp effect (ADR-SP-2).
             # First-found wins; non-LinearTimeWarp effects are ignored.
             # Default is 1.0 (no warp; ADR-SP-5).
@@ -1513,6 +1582,13 @@ def resolve_bgm(timeline: otio.schema.Timeline) -> BgmClip | None:
             if not isinstance(mr, otio.schema.ExternalReference):
                 continue
             source_range = item.source_range
+            # Relativize source_range to file seconds if available_range is present
+            # (defensive: NLE-interop conform does not produce BGM clips today, but
+            # relativization must apply uniformly wherever source_range flows into
+            # a KeptRange-like structure — ADR-NI-1, architecture-report §2).
+            source_range = _relativize_source_range_to_file_seconds(
+                source_range, mr.available_range
+            )
             bgm_clips.append((mr.target_url, source_range, cw_meta))
 
     if len(bgm_clips) == 0:

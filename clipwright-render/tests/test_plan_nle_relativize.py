@@ -30,17 +30,13 @@ AC-7, AC-8):
   directly against the installed opentimelineio build before writing these
   assertions.
 
-  As of this writing, resolve_kept_ranges/resolve_bgm do not read
-  available_range at all: source_range is used verbatim. Tests 1, 2, 4 (in
-  TestResolveKeptRangesRelativizesToAvailableRange /
-  TestBuildPlanRelativizesTcOriginTrim /
-  TestResolveKeptRangesTcUnderflowRejected), test 5 (in
-  TestResolveBgmRelativizesToAvailableRange), test 6 (in
-  TestResolveKeptRangesRateMismatch), and test 7 (in
-  TestRetimingParityWithTcOrigin) are expected to fail for that reason (not
-  yet implemented — ADR-NI-1). Tests 3 (backward-compat, no
-  available_range / available_range.start == 0) are regression pins that
-  must stay green both before and after the Green-phase implementation.
+  All tests are now regression guards: resolve_kept_ranges/resolve_bgm apply
+  relativization via _relativize_source_range_to_file_seconds (ADR-NI-1).
+  Tests 1, 2, 4, 5, 6, 7 verify the relativization logic works correctly
+  (absolute → file-relative seconds, rate mismatches, TC underflow detection,
+  BGM defensive application, retiming parity). Tests 3 (backward-compat, no
+  available_range / available_range.start == 0) confirm the no-op path is
+  still honored.
 """
 
 from __future__ import annotations
@@ -167,11 +163,13 @@ class TestResolveKeptRangesRelativizesToAvailableRange:
         """A TC-origin clip (available_range.start=3600s, source_range.start=
         3605s) must yield a KeptRange whose source_range is 0-origin: start=5s.
 
-        Currently fails: resolve_kept_ranges does not read available_range at
-        all, so ranges[0].source_range.start_time is still 3605s (not yet
-        implemented — ADR-NI-1).
+        Regression test: verify that resolve_kept_ranges correctly relativizes
+        source_range using available_range.start_time to convert from absolute
+        timecode-origin coordinates to file-relative seconds (ADR-NI-1).
         """
-        clip = _make_tc_clip("/src/a.mov", source_start=TC_START_SEC + 5.0, duration=3.0)
+        clip = _make_tc_clip(
+            "/src/a.mov", source_start=TC_START_SEC + 5.0, duration=3.0
+        )
         tl = _make_timeline_with_clips([clip])
 
         ranges = resolve_kept_ranges(tl)
@@ -190,10 +188,15 @@ class TestResolveKeptRangesRelativizesToAvailableRange:
         """All Clips in the video track are individually relativized against
         their own available_range.start, not just the first one.
 
-        Currently fails: same reason as above (not yet implemented).
+        Regression test: verify that resolve_kept_ranges applies relativization
+        to each clip independently (ADR-NI-1).
         """
-        clip1 = _make_tc_clip("/src/a.mov", source_start=TC_START_SEC + 0.0, duration=2.0)
-        clip2 = _make_tc_clip("/src/a.mov", source_start=TC_START_SEC + 10.0, duration=4.0)
+        clip1 = _make_tc_clip(
+            "/src/a.mov", source_start=TC_START_SEC + 0.0, duration=2.0
+        )
+        clip2 = _make_tc_clip(
+            "/src/a.mov", source_start=TC_START_SEC + 10.0, duration=4.0
+        )
         tl = _make_timeline_with_clips([clip1, clip2])
 
         ranges = resolve_kept_ranges(tl)
@@ -214,12 +217,13 @@ class TestBuildPlanRelativizesTcOriginTrim:
         """ffmpeg filter_complex trim=start must be the relativized 5.0s, and
         must never contain the raw absolute TC-origin value (3605s).
 
-        Currently fails: build_plan flows resolve_kept_ranges' unrelativized
-        source_range straight into `start = _to_seconds(r.source_range.start_time)`
-        (plan.py:3874), so filter_complex still contains trim=start=3605...
-        (not yet implemented — ADR-NI-1).
+        Regression test: verify that build_plan uses the relativized source_range
+        from resolve_kept_ranges, so filter_complex contains trim=start=5.0 (file
+        seconds), not the raw TC-absolute value (ADR-NI-1, AC-6 unit portion).
         """
-        clip = _make_tc_clip("/src/a.mov", source_start=TC_START_SEC + 5.0, duration=3.0)
+        clip = _make_tc_clip(
+            "/src/a.mov", source_start=TC_START_SEC + 5.0, duration=3.0
+        )
         tl = _make_timeline_with_clips([clip])
         ranges = resolve_kept_ranges(tl)
         probe = ProbeInfo(has_video=True, audio_count=0, bit_rate=None)
@@ -283,9 +287,9 @@ class TestResolveKeptRangesTcUnderflowRejected:
         ClipwrightError(INVALID_INPUT), not silently pass through or crash
         with a negative trim value.
 
-        Currently fails: resolve_kept_ranges performs no such validation
-        today (no exception is raised at all — not yet implemented, ADR-NI-1
-        / AC-8).
+        Regression test: verify that resolve_kept_ranges rejects TC underflow
+        (source_range.start < available_range.start) with a fixed-literal message
+        and actionable hint (ADR-NI-1 / AC-8 / SR NL-1 compliance).
         """
         clip = _make_tc_clip(
             "/src/a.mov", source_start=TC_START_SEC - 1.0, duration=2.0
@@ -320,9 +324,9 @@ class TestResolveBgmRelativizesToAvailableRange:
         start=3602s) must yield a BgmClip whose source_range is 0-origin:
         start=2s.
 
-        Currently fails: resolve_bgm reads `item.source_range` verbatim
-        (plan.py:1515) with no available_range relativization (not yet
-        implemented — ADR-NI-1 defensive application).
+        Regression test: verify that resolve_bgm defensively applies the same
+        relativization, even though NLE-interop conform does not produce BGM
+        clips today (ADR-NI-1 defensive application, architecture-report §2).
         """
         clip = otio.schema.Clip()
         ref = otio.schema.ExternalReference(target_url="/proj/bgm.mp3")
@@ -356,8 +360,9 @@ class TestResolveKeptRangesRateMismatch:
         start must still be the correct 5.0s (125/25), not a naive same-rate
         value subtraction.
 
-        Currently fails: no relativization is performed at all (not yet
-        implemented — ADR-NI-1).
+        Regression test: verify that RationalTime subtraction auto-rescaling
+        handles rate mismatches correctly (minuend's rate preserved — ADR-NI-1,
+        observation 6 in test_plan_nle_relativize.py).
         """
         clip = _make_tc_clip(
             "/src/a.mov",
@@ -394,10 +399,10 @@ class TestRetimingParityWithTcOrigin:
         produce the exact same ProgramTimeMap as the 0-origin equivalent
         (same has_cut / segment source_start / source_end / program_start).
 
-        Currently fails: without relativization in resolve_kept_ranges, the
-        TC-origin ranges carry absolute (TC-shifted) source_range values, so
-        the two ProgramTimeMaps differ by the TC offset (not yet implemented
-        — ADR-NI-1).
+        Regression test: verify that resolve_kept_ranges is the single
+        relativization chokepoint, so downstream trim/atrim/retiming produce
+        identical results regardless of TC origin (ADR-NI-1, architecture-report
+        §2 "下流の修正不要").
         """
         tc_clip1 = _make_tc_clip(
             "/src/a.mov", source_start=TC_START_SEC + 0.0, duration=3.0
