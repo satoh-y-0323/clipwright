@@ -163,6 +163,7 @@ def clipwright_inspect_media(
         "container": media_info.container,
         "duration": (media_info.duration.model_dump() if media_info.duration else None),
         "streams": [s.model_dump() for s in media_info.streams],
+        "start_timecode": media_info.start_timecode,
     }
     video_streams = [s for s in media_info.streams if s.codec_type == "video"]
     audio_streams = [s for s in media_info.streams if s.codec_type == "audio"]

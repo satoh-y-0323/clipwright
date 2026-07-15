@@ -145,6 +145,40 @@ def _validate_existing_file(path: str) -> None:
     _validate_source_file(path)
 
 
+def _resolve_start_timecode(
+    raw_format: dict[str, object], raw_streams: list[dict[str, object]]
+) -> str | None:
+    """Resolve the media's start timecode per ADR-NI-2 rules.
+
+    Rule: format.tags priority (MXF case), then streams[].tags walk (MOV case).
+    Keys are matched via casefold (handles "timecode", "TIMECODE", "TimeCode", etc.).
+    The raw string value is preserved as-is (drop-frame ';' punctuation untouched).
+
+    Args:
+        raw_format: The "format" dict from ffprobe JSON.
+        raw_streams: The "streams" list from ffprobe JSON.
+
+    Returns:
+        Resolved timecode string, or None if no timecode tag is found.
+    """
+    # Check format.tags first (MXF case)
+    format_tags = raw_format.get("tags")
+    if isinstance(format_tags, dict):
+        for key, val in format_tags.items():
+            if str(key).lower() == "timecode" and val is not None:
+                return str(val)
+
+    # Walk streams in order (MOV case)
+    for stream in raw_streams:
+        stream_tags = stream.get("tags")
+        if isinstance(stream_tags, dict):
+            for key, val in stream_tags.items():
+                if str(key).lower() == "timecode" and val is not None:
+                    return str(val)
+
+    return None
+
+
 def _parse_avg_frame_rate(avg_frame_rate: str) -> float:
     """Convert an ffprobe avg_frame_rate string (e.g. "30/1", "24000/1001") to float.
 
@@ -219,6 +253,21 @@ def _parse_ffprobe_json(path: str, stdout: str) -> MediaInfo:
         codec_name_raw = s.get("codec_name")
         index_raw = s.get("index", 0)
 
+        # Extract channel_layout (None for non-audio or null in JSON)
+        channel_layout_raw = s.get("channel_layout")
+        channel_layout: str | None = None
+        if channel_layout_raw is not None:
+            channel_layout = str(channel_layout_raw)
+
+        # Extract start_timecode from stream tags (raw per-stream value)
+        start_timecode_raw: str | None = None
+        stream_tags = s.get("tags")
+        if isinstance(stream_tags, dict):
+            for key, val in stream_tags.items():
+                if str(key).lower() == "timecode" and val is not None:
+                    start_timecode_raw = str(val)
+                    break
+
         streams.append(
             StreamInfo(
                 index=_to_optional_int(index_raw) or 0,
@@ -229,6 +278,8 @@ def _parse_ffprobe_json(path: str, stdout: str) -> MediaInfo:
                 sample_rate=_to_optional_int(s.get("sample_rate")),
                 channels=_to_optional_int(s.get("channels")),
                 nb_frames=_to_optional_int(s.get("nb_frames")),
+                channel_layout=channel_layout,
+                start_timecode=start_timecode_raw,
             )
         )
 
@@ -267,10 +318,14 @@ def _parse_ffprobe_json(path: str, stdout: str) -> MediaInfo:
 
     container = str(raw_format.get("format_name", "")) or None
 
+    # Resolve the media-level start timecode (format.tags priority, then streams walk)
+    start_timecode = _resolve_start_timecode(raw_format, raw_streams)
+
     return MediaInfo(
         path=path,
         container=container,
         duration=duration,
         streams=streams,
         bit_rate=_to_optional_int(raw_format.get("bit_rate")),
+        start_timecode=start_timecode,
     )

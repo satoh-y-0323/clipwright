@@ -156,10 +156,10 @@ class TestEightAudioTracksEdlSucceeds:
             options=ExportTimelineOptions(format="edl"),
         )
 
-        # Currently Red: cmx_3600 raises NotSupportedError for >2 Audio
-        # tracks, which the existing OTIOError handler converts to
-        # OTIO_ERROR (ok=False) because FR-8's removal-before-write is not
-        # yet implemented.
+        # Was Red: cmx_3600 raised NotSupportedError for >2 Audio tracks, which
+        # the OTIOError handler converted to OTIO_ERROR (ok=False). FR-8 now
+        # removes all Audio tracks from the write-time copy before calling
+        # write_to_file, eliminating the error.
         assert result.ok is True, result.error
         joined = " ".join(result.warnings).lower()
         assert "were not written to the edl" in joined
@@ -179,8 +179,9 @@ class TestEightAudioTracksEdlSucceeds:
             options=ExportTimelineOptions(format="edl"),
         )
 
-        # Currently Red for the same underlying reason as above: no output
-        # file is ever produced because the write itself raises.
+        # Was Red for the same underlying reason as above: no output file was
+        # produced because the write raised NotSupportedError. FR-8 now ensures
+        # the write succeeds by removing Audio tracks before calling write_to_file.
         assert result.ok is True, result.error
         assert out.exists(), (
             "write-then-verify (ADR-EX-11) must leave the artifact in place"
@@ -234,8 +235,9 @@ class TestAudioTrackRemovalScopeIsAll:
         assert captured, "expected otio.adapters.write_to_file to have been called"
         written_tl = captured[0]
         remaining_audio = _audio_track_count(written_tl)
-        # Currently Red: the current implementation never removes Audio
-        # tracks from tl_copy, so remaining_audio is 2 here, not 0.
+        # Was Red: the implementation did not remove Audio tracks from tl_copy,
+        # so remaining_audio was 2 instead of 0. FR-8 now removes all Audio
+        # tracks before write_to_file is called, satisfying the architect ruling.
         assert remaining_audio == 0, (
             "ADR-NI-7 mandates removing ALL Audio tracks from the deep copy "
             "before an EDL write (architect ruling: full removal, not "
@@ -307,10 +309,10 @@ class TestEdlWithGlobalStartTime:
             options=ExportTimelineOptions(format="edl"),
         )
 
-        # Currently Red: same underlying NotSupportedError as (1); the
-        # spike confirmed the audio-track gate is hit before global_start_time
-        # is ever considered, so global_start_time must not change the
-        # outcome once FR-8 is implemented.
+        # Was Red: same underlying NotSupportedError as (1). The spike confirmed
+        # that the audio-track gate is hit before global_start_time is ever
+        # considered. FR-8 ensures export succeeds by removing Audio tracks
+        # before write_to_file is called, regardless of global_start_time.
         assert result.ok is True, result.error
         assert out.exists()
         joined = " ".join(result.warnings).lower()

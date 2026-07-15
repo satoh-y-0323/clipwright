@@ -144,6 +144,10 @@ class StreamInfo(BaseModel):
     sample_rate: int | None = None
     channels: int | None = None
     nb_frames: int | None = None
+    channel_layout: str | None = None
+    """Audio channel layout (e.g. "mono", "stereo"). None if not detected."""
+    start_timecode: str | None = None
+    """Per-stream timecode tag (raw; validation handled by nle_interop)."""
 
 
 class MediaInfo(BaseModel):
@@ -154,6 +158,8 @@ class MediaInfo(BaseModel):
     duration: RationalTimeModel | None
     streams: list[StreamInfo]
     bit_rate: int | None = None
+    start_timecode: str | None = None
+    """Resolved timecode (format.tags priority, then streams[].tags)."""
 
 
 # ===========================================================================

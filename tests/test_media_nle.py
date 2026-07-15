@@ -1,14 +1,14 @@
 """test_media_nle.py — Red-phase tests for core NLE probe extension (FR-1 / ADR-NI-2).
 
-Target additions (not yet implemented):
-  - schemas.StreamInfo.channel_layout: str | None
+Regression guard: Confirms that FR-1 implementation (Wave 1) correctly provides:
+  - schemas.StreamInfo.channel_layout: str | None (audio stream field)
   - schemas.StreamInfo.start_timecode: str | None (raw per-stream tag value)
   - schemas.MediaInfo.start_timecode: str | None (resolved value)
-  - media._parse_ffprobe_json: resolve start_timecode (format.tags priority,
+  - media._parse_ffprobe_json: resolved start_timecode (format.tags priority,
     then streams[].tags walk in stream order, casefold key match on
-    "timecode") and parse channel_layout for each stream
-  - server.clipwright_inspect_media: expose start_timecode / streams[].channel_layout
-    in the `data` payload so the calling AI agent can observe them
+    "timecode") and parsed channel_layout for each stream
+  - server.clipwright_inspect_media: exposed start_timecode / streams[].channel_layout
+    in the `data` payload for calling AI agent observation
 
 Design references:
   - requirements-report-20260715-190935.md FR-1 / AC-1
@@ -20,12 +20,10 @@ audio_8x1ch}.json — fixed by spike-probe from real ffprobe output. Read-only;
 do not edit. One case (uppercase "TIMECODE" key casefold match) has no
 corresponding fixture file, so its ffprobe JSON is constructed inline below.
 
-Most tests here are expected to FAIL until FR-1 is implemented, because the
-new schema fields do not exist yet (getattr(..., "MISSING") sentinel makes
-this an explicit AssertionError rather than a silent AttributeError). One
+Tests 1-5 were Red (waiting for FR-1) until implementation. One
 test (TestRateDerivationGuarantee) pins already-correct existing behaviour as
-a regression guard and is expected to stay green (ADR-NI-12 confirmation,
-not a new Red case).
+a regression guard and remained green throughout (ADR-NI-12 confirmation,
+not a new Red case). With FR-1 wave complete, all tests should now pass.
 """
 
 from __future__ import annotations
@@ -90,7 +88,7 @@ class TestStartTimecodeResolution:
         """MOV: format.tags has no timecode; video/data stream tags do.
 
         Expected: streams[].tags walk resolves "01:00:00:00" (ADR-NI-2 MOV path).
-        Currently fails: MediaInfo.start_timecode does not exist (not yet implemented).
+        Regression verified: MediaInfo.start_timecode carries the resolved value.
         """
         result = _inspect_fixture(mocker, tmp_path, "mov_tc.json")
         assert getattr(result, "start_timecode", _MISSING) == "01:00:00:00"
@@ -101,7 +99,7 @@ class TestStartTimecodeResolution:
         """MXF: timecode is present in format.tags only (not in stream tags).
 
         Expected: format.tags priority resolves "01:00:00:00" (ADR-NI-2 MXF path).
-        Currently fails: MediaInfo.start_timecode does not exist (not yet implemented).
+        Regression verified: MediaInfo.start_timecode carries the resolved value.
         """
         result = _inspect_fixture(mocker, tmp_path, "mxf_tc.json")
         assert getattr(result, "start_timecode", _MISSING) == "01:00:00:00"
@@ -112,7 +110,7 @@ class TestStartTimecodeResolution:
         """Drop-frame punctuation (';' vs ':') must be preserved verbatim; no
         DF-aware reparsing happens at this layer (nle_interop's job).
 
-        Currently fails: MediaInfo.start_timecode does not exist (not yet implemented).
+        Regression verified: MediaInfo.start_timecode preserves drop-frame syntax.
         """
         result = _inspect_fixture(mocker, tmp_path, "drop_frame.json")
         assert getattr(result, "start_timecode", _MISSING) == "01:00:00;00"
@@ -122,8 +120,7 @@ class TestStartTimecodeResolution:
     ) -> None:
         """No timecode tag anywhere -> start_timecode is None (fallback safe).
 
-        Currently fails: the attribute does not exist at all yet, so the
-        _MISSING sentinel (not None) is what getattr returns today.
+        Regression verified: missing timecode returns None gracefully.
         """
         result = _inspect_fixture(mocker, tmp_path, "mov_no_timecode.json")
         assert getattr(result, "start_timecode", _MISSING) is None
@@ -135,7 +132,7 @@ class TestStartTimecodeResolution:
         stream (video/audio streams carry no timecode tag); the stream-tag
         walk must scan all streams, not just the first video stream.
 
-        Currently fails: MediaInfo.start_timecode does not exist (not yet implemented).
+        Regression verified: MediaInfo.start_timecode resolves from data stream.
         """
         result = _inspect_fixture(mocker, tmp_path, "audio_8x1ch.json")
         assert getattr(result, "start_timecode", _MISSING) == "01:00:00:00"
@@ -147,7 +144,7 @@ class TestStartTimecodeResolution:
         resolve the same as lowercase "timecode" (ADR-NI-2). No fixture file
         covers this case, so the ffprobe JSON is constructed inline here.
 
-        Currently fails: MediaInfo.start_timecode does not exist (not yet implemented).
+        Regression verified: case-insensitive key matching works.
         """
         media_file = tmp_path / "video.mov"
         media_file.write_bytes(b"dummy")
@@ -190,8 +187,7 @@ class TestChannelLayoutParsing:
     def test_mov_audio_stream_channel_layout_mono(
         self, mocker: MagicMock, tmp_path: Path
     ) -> None:
-        """Currently fails: StreamInfo.channel_layout does not exist (not yet
-        implemented)."""
+        """Regression verified: audio stream channel_layout is populated."""
         result = _inspect_fixture(mocker, tmp_path, "mov_tc.json")
         audio = next(s for s in result.streams if s.codec_type == "audio")
         assert getattr(audio, "channel_layout", _MISSING) == "mono"
@@ -199,7 +195,7 @@ class TestChannelLayoutParsing:
     def test_mov_video_stream_channel_layout_is_none(
         self, mocker: MagicMock, tmp_path: Path
     ) -> None:
-        """Currently fails: the attribute does not exist yet (_MISSING sentinel)."""
+        """Regression verified: video stream channel_layout is None (non-audio)."""
         result = _inspect_fixture(mocker, tmp_path, "mov_tc.json")
         video = next(s for s in result.streams if s.codec_type == "video")
         assert getattr(video, "channel_layout", _MISSING) is None
@@ -209,8 +205,7 @@ class TestChannelLayoutParsing:
     ) -> None:
         """MXF may not populate channel_layout (spike-report divergence from MOV).
 
-        Currently fails: StreamInfo.channel_layout does not exist (not yet
-        implemented).
+        Regression verified: channel_layout is gracefully None when not present.
         """
         result = _inspect_fixture(mocker, tmp_path, "mxf_tc.json")
         audio = next(s for s in result.streams if s.codec_type == "audio")
@@ -221,8 +216,7 @@ class TestChannelLayoutParsing:
     ) -> None:
         """8x1ch fixture: each of the 8 audio streams reports channel_layout=="mono".
 
-        Currently fails: StreamInfo.channel_layout does not exist (not yet
-        implemented).
+        Regression verified: multi-stream channel_layout extraction works.
         """
         result = _inspect_fixture(mocker, tmp_path, "audio_8x1ch.json")
         audio_streams = [s for s in result.streams if s.codec_type == "audio"]
@@ -245,8 +239,7 @@ class TestStreamStartTimecodeRawPreservation:
     def test_mov_video_stream_carries_raw_start_timecode(
         self, mocker: MagicMock, tmp_path: Path
     ) -> None:
-        """Currently fails: StreamInfo.start_timecode does not exist (not yet
-        implemented)."""
+        """Regression verified: per-stream start_timecode is extracted."""
         result = _inspect_fixture(mocker, tmp_path, "mov_tc.json")
         video = next(s for s in result.streams if s.codec_type == "video")
         assert getattr(video, "start_timecode", _MISSING) == "01:00:00:00"
@@ -257,8 +250,7 @@ class TestStreamStartTimecodeRawPreservation:
         """The tmcd data stream (codec_type == "data") also carries its own
         raw tag value, independent of the video stream's tag.
 
-        Currently fails: StreamInfo.start_timecode does not exist (not yet
-        implemented).
+        Regression verified: all stream types carry their own start_timecode.
         """
         result = _inspect_fixture(mocker, tmp_path, "mov_tc.json")
         data_stream = next(s for s in result.streams if s.codec_type == "data")
@@ -267,7 +259,7 @@ class TestStreamStartTimecodeRawPreservation:
     def test_mov_audio_stream_without_tag_is_none(
         self, mocker: MagicMock, tmp_path: Path
     ) -> None:
-        """Currently fails: the attribute does not exist yet (_MISSING sentinel)."""
+        """Regression verified: streams without tags return None."""
         result = _inspect_fixture(mocker, tmp_path, "mov_tc.json")
         audio = next(s for s in result.streams if s.codec_type == "audio")
         assert getattr(audio, "start_timecode", _MISSING) is None
@@ -275,8 +267,7 @@ class TestStreamStartTimecodeRawPreservation:
     def test_drop_frame_video_stream_raw_value_has_semicolon(
         self, mocker: MagicMock, tmp_path: Path
     ) -> None:
-        """Currently fails: StreamInfo.start_timecode does not exist (not yet
-        implemented)."""
+        """Regression verified: drop-frame punctuation preserved in start_timecode."""
         result = _inspect_fixture(mocker, tmp_path, "drop_frame.json")
         video = next(s for s in result.streams if s.codec_type == "video")
         assert getattr(video, "start_timecode", _MISSING) == "01:00:00;00"
@@ -299,8 +290,7 @@ class TestBackwardCompatibleDefaults:
         """Existing fixture-style JSON (no "tags" key at all on any stream)
         must not raise; new fields simply default to None.
 
-        Currently fails: the new fields do not exist yet (_MISSING sentinel),
-        even though today's parser tolerates the tags-less JSON shape fine.
+        Regression verified: backward compatibility for tags-less JSON.
         """
         media_file = tmp_path / "video.mp4"
         media_file.write_bytes(b"dummy")
@@ -344,7 +334,7 @@ class TestBackwardCompatibleDefaults:
         """schemas.MediaInfo must accept construction without start_timecode
         and default it to None (pure schema-level check, no ffprobe involved).
 
-        Currently fails: the field does not exist on MediaInfo yet.
+        Regression verified: MediaInfo.start_timecode defaults to None.
         """
         info = MediaInfo(path="x.mp4", container=None, duration=None, streams=[])
         assert getattr(info, "start_timecode", _MISSING) is None
@@ -353,7 +343,7 @@ class TestBackwardCompatibleDefaults:
         """schemas.StreamInfo must accept construction without
         channel_layout / start_timecode and default both to None.
 
-        Currently fails: neither field exists on StreamInfo yet.
+        Regression verified: StreamInfo new fields default to None.
         """
         info = StreamInfo(index=0, codec_type="audio")
         assert getattr(info, "channel_layout", _MISSING) is None
@@ -377,10 +367,7 @@ class TestServerExposesNleFields:
     def test_data_contains_start_timecode(
         self, mocker: MagicMock, tmp_path: Path
     ) -> None:
-        """Currently fails: MediaInfo has no start_timecode field to carry the
-        value, and server.py's data dict does not add a "start_timecode" key
-        yet (both FR-1 / architecture §5 #4 not yet implemented).
-        """
+        """Regression verified: clipwright_inspect_media exposes start_timecode in data."""
         from clipwright.server import clipwright_inspect_media
 
         media_file = tmp_path / "video.mov"
@@ -403,10 +390,7 @@ class TestServerExposesNleFields:
     def test_data_streams_contain_channel_layout(
         self, mocker: MagicMock, tmp_path: Path
     ) -> None:
-        """Currently fails: StreamInfo has no channel_layout field to carry
-        the value, so it cannot appear in the serialized streams list
-        (FR-1 not yet implemented).
-        """
+        """Regression verified: clipwright_inspect_media exposes channel_layout in streams."""
         from clipwright.server import clipwright_inspect_media
 
         media_file = tmp_path / "audio.mov"

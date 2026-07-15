@@ -555,7 +555,7 @@ def _export_timeline_inner(
 
     rep_rate = _representative_rate(tl_copy)
 
-    # --- Step 6c: EDL-specific warnings (§13.3) ---
+    # --- Step 6c: EDL-specific warnings + audio removal (ADR-NI-7, §13.3) ---
     if fmt == "edl":
         audio_tracks = [
             t for t in tl_copy.tracks if t.kind == otio.schema.TrackKind.Audio
@@ -567,6 +567,13 @@ def _export_timeline_inner(
                 "hint: re-link or lay back the audio in your NLE, or use "
                 "clipwright-render for a muxed MP4."
             )
+            # ADR-NI-7: Remove all Audio tracks from the write-time deep copy
+            # (architect ruling: full removal, not "keep up to 2"). This ensures
+            # that otio.adapters.write_to_file does not encounter cmx_3600's
+            # NotSupportedError for timelines with >2 Audio tracks. The removal
+            # happens on tl_copy only; the source OTIO file remains unmodified.
+            for track in audio_tracks:
+                tl_copy.tracks.remove(track)
         warnings_out.append(
             "EDL timecode carries no frame rate; set your NLE project/sequence to "
             f"{rep_rate} fps on import so the cut points land at the intended times."
