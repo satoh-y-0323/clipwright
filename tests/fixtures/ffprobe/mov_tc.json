@@ -1,0 +1,49 @@
+{
+  "format": {
+    "tags": {
+      "major_brand": "qt  ",
+      "minor_version": "512",
+      "compatible_brands": "qt  ",
+      "encoder": "Lavf62.12.101"
+    }
+  },
+  "streams": [
+    {
+      "index": 0,
+      "codec_type": "video",
+      "codec_name": "h264",
+      "width": 320,
+      "height": 240,
+      "avg_frame_rate": "25/1",
+      "duration": "2.000000",
+      "tags": {
+        "handler_name": "VideoHandler",
+        "vendor_id": "FFMP",
+        "encoder": "Lavc62.28.101 libx264",
+        "timecode": "01:00:00:00"
+      }
+    },
+    {
+      "index": 1,
+      "codec_type": "audio",
+      "codec_name": "aac",
+      "channels": 1,
+      "channel_layout": "mono",
+      "duration": "2.000000",
+      "tags": {
+        "handler_name": "SoundHandler",
+        "vendor_id": "[0][0][0][0]"
+      }
+    },
+    {
+      "index": 2,
+      "codec_type": "data",
+      "codec_name": null,
+      "tags": {
+        "language": "eng",
+        "handler_name": "TimeCodeHandler",
+        "timecode": "01:00:00:00"
+      }
+    }
+  ]
+}

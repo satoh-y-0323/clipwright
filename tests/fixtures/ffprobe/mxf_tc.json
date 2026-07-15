@@ -1,0 +1,43 @@
+{
+  "format": {
+    "tags": {
+      "operational_pattern_ul": "060e2b34.04010101.0d010201.01010900",
+      "uid": "adab4424-2f25-4dc7-92ff-000c00000000",
+      "generation_uid": "adab4424-2f25-4dc7-92ff-000c00000001",
+      "company_name": "FFmpeg",
+      "product_name": "OP1a Muxer",
+      "product_version_num": "62.12.101.0.0",
+      "product_version": "62.12.101",
+      "application_platform": "Lavf (mingw32)",
+      "product_uid": "adab4424-2f25-4dc7-92ff-29bd000c0002",
+      "toolkit_version_num": "62.12.101.0.0",
+      "material_package_umid": "0x060A2B340101010501010D0013B4BC585294713439B4BC58005294713439B400",
+      "timecode": "01:00:00:00"
+    }
+  },
+  "streams": [
+    {
+      "index": 0,
+      "codec_type": "video",
+      "codec_name": "mpeg2video",
+      "width": 320,
+      "height": 240,
+      "avg_frame_rate": "25/1",
+      "duration": "2.000000",
+      "tags": {
+        "file_package_umid": "0x060A2B340101010501010D0013B4BC585294713439B4BC58005294713439B401"
+      }
+    },
+    {
+      "index": 1,
+      "codec_type": "audio",
+      "codec_name": "pcm_s16le",
+      "channels": 1,
+      "channel_layout": null,
+      "duration": "2.000000",
+      "tags": {
+        "file_package_umid": "0x060A2B340101010501010D0013B4BC585294713439B4BC58005294713439B401"
+      }
+    }
+  ]
+}
