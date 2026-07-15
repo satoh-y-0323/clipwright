@@ -34,6 +34,7 @@ from typing import Any, Literal, NamedTuple, TypedDict
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.media import inspect_media
+from clipwright.nle_interop import conform_timeline_for_nle
 from clipwright.otio_utils import add_clip, add_marker, new_timeline, save_timeline
 from clipwright.pathpolicy import check_output_not_source, media_ref_for_otio
 from clipwright.process import resolve_tool, run, safe_subprocess_message
@@ -629,10 +630,14 @@ def _transcribe_inner(
     if options.word_timestamps:
         clip_metadata["words"] = words_for_otio(whisper_run.words)
 
+    # ADR-NI-9: capture the target_url once so the same string is reused as the
+    # media_infos key for conform_timeline_for_nle below (never recomputed).
+    target_url = media_ref_for_otio(media_path, output_path.parent)
+
     add_clip(
         v1,
         MediaRef(
-            target_url=media_ref_for_otio(media_path, output_path.parent),
+            target_url=target_url,
             # transcribe is a full-length ("create") tool: source_range already spans
             # the whole media (0..media_info.duration), so available_range can reuse
             # the same full_source_range instance (ADR-4 pattern A).
@@ -665,6 +670,10 @@ def _transcribe_inner(
                 "language": language,
             },
         )
+
+    warnings: list[str] = []
+    nle_warnings = conform_timeline_for_nle(timeline, {target_url: media_info})
+    warnings.extend(nle_warnings)
 
     save_timeline(timeline, output)
 
@@ -713,7 +722,6 @@ def _transcribe_inner(
         word_count = sum(len(ws["words"]) for ws in whisper_run.words)
         summary += f" {word_count} word(s)."
 
-    warnings: list[str] = []
     if segment_count == 0:
         warnings.append(
             "No transcription segments found "

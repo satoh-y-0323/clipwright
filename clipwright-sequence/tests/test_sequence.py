@@ -194,8 +194,15 @@ class TestHappyPath:
         v1_clips = [it for it in tl.tracks[0] if isinstance(it, otio.schema.Clip)]
         assert len(v1_clips) == 3
 
-    def test_a1_track_is_empty(self, tmp_path: Path) -> None:
-        """A1 track (tracks[1]) must be empty (DC-AS-006)."""
+    def test_a1_track_mirrors_v1_audio(self, tmp_path: Path) -> None:
+        """A1 now mirrors V1's audio via NLE conform (DC-AS-006, ADR-NI-8/10).
+
+        Previously A1 was asserted empty. After conform_timeline_for_nle is
+        wired into build_sequence, a source that carries an audio stream gets
+        its V1 clips mirrored onto N audio tracks (N = max audio streams).
+        The single-source, single-audio-stream case here therefore yields one
+        audio mirror clip on A1 referencing the same source as V1.
+        """
         media = _media_path(tmp_path)
         Path(media).touch()
         output = _output_path(tmp_path)
@@ -207,8 +214,11 @@ class TestHappyPath:
             build_sequence(clips=clips, output=output)
 
         tl = load_timeline(output)
+        v1_clips = [it for it in tl.tracks[0] if isinstance(it, otio.schema.Clip)]
         a1_clips = [it for it in tl.tracks[1] if isinstance(it, otio.schema.Clip)]
-        assert len(a1_clips) == 0
+        assert tl.tracks[1].kind == otio.schema.TrackKind.Audio
+        assert len(a1_clips) == len(v1_clips) == 1
+        assert isinstance(a1_clips[0].media_reference, otio.schema.ExternalReference)
 
     def test_clips_are_external_references(self, tmp_path: Path) -> None:
         """Each clip in V1 must be an ExternalReference (render requirement)."""

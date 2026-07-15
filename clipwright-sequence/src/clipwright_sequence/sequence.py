@@ -29,9 +29,16 @@ from pathlib import Path
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.media import inspect_media
+from clipwright.nle_interop import conform_timeline_for_nle
 from clipwright.otio_utils import add_clip, new_timeline, save_timeline
 from clipwright.pathpolicy import check_output_not_source, media_ref_for_otio
-from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel, ToolResult
+from clipwright.schemas import (
+    MediaInfo,
+    MediaRef,
+    RationalTimeModel,
+    TimeRangeModel,
+    ToolResult,
+)
 
 import clipwright_sequence
 from clipwright_sequence.plan import SourceProbe, resolve_clip_specs
@@ -91,6 +98,8 @@ def _build_sequence_inner(clips: list[SequenceClip], output: str) -> ToolResult:
       5. OTIO build: new_timeline -> V1 clips with add_clip.
          target_url = media_ref_for_otio(source, output_dir): relative POSIX
          for internal sources, absolute for external sources.
+      5b. conform_timeline_for_nle (ADR-NI-8): stamp Resolve wire format from
+         the target_url -> MediaInfo map built during the add_clip loop.
       6. save_timeline (atomic write).
       7. Return ok_result envelope.
     """
@@ -256,6 +265,7 @@ def _build_sequence_inner(clips: list[SequenceClip], output: str) -> ToolResult:
             duration_value=duration_value,
             rate=rate,
             has_video=has_video,
+            media_info=info,
         )
 
         # Record the canonical abs_path for every clip.media string that shares
@@ -297,6 +307,14 @@ def _build_sequence_inner(clips: list[SequenceClip], output: str) -> ToolResult:
     v1 = timeline.tracks[0]  # V1 (Video) track; index 0 per new_timeline
     otio_dir = output_path.parent
 
+    # target_url -> MediaInfo map for conform_timeline_for_nle (ADR-NI-8/9).
+    # The key is the exact string returned by media_ref_for_otio below and
+    # written onto each Clip's ExternalReference, so conform's literal
+    # target_url lookup cannot silently miss (ADR-NI-9: no re-computation with
+    # potentially divergent arguments). Sources whose media_info is absent
+    # (e.g. plan-only paths) are simply omitted and skipped by conform.
+    media_info_map: dict[str, MediaInfo] = {}
+
     for rc in resolved_clips:
         source_range = TimeRangeModel(
             start_time=RationalTimeModel(value=rc.start_sec * rc.rate, rate=rc.rate),
@@ -323,6 +341,8 @@ def _build_sequence_inner(clips: list[SequenceClip], output: str) -> ToolResult:
         # target_url: relative POSIX path for internal sources (under otio_dir),
         # absolute path for external sources (media_ref_for_otio, ADR-SEQ-6).
         target_url = media_ref_for_otio(rc.source, otio_dir)
+        if source_probe.media_info is not None:
+            media_info_map[target_url] = source_probe.media_info
         add_clip(
             v1,
             MediaRef(target_url=target_url, available_range=available_range),
@@ -335,6 +355,16 @@ def _build_sequence_inner(clips: list[SequenceClip], output: str) -> ToolResult:
                 "index": rc.index,
             },
         )
+
+    # ------------------------------------------------------------------
+    # 5b. Conform for NLE interop (ADR-NI-8): stamp Resolve wire format —
+    #     start-timecode shift, global_start_time, and N audio-track mirror —
+    #     right before save. Never raises; its warnings are relayed to the
+    #     envelope so an AI can see any degenerate case (unresolved timecode,
+    #     unsupported channel count, etc.).
+    # ------------------------------------------------------------------
+
+    warnings = warnings + conform_timeline_for_nle(timeline, media_info_map)
 
     # ------------------------------------------------------------------
     # 6. Save timeline (atomic write)

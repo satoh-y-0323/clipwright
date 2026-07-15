@@ -35,6 +35,7 @@ from typing import Any
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.media import inspect_media
+from clipwright.nle_interop import conform_timeline_for_nle
 from clipwright.otio_utils import add_clip, new_timeline, save_timeline
 from clipwright.pathpolicy import check_output_not_source, media_ref_for_otio
 from clipwright.process import resolve_tool, run, safe_subprocess_message
@@ -489,6 +490,13 @@ def _detect_inner(
             },
         )
 
+    # ADR-NI-9: the media_infos key must be the exact target_url string written
+    # onto each Clip's ExternalReference, i.e. the same target_url value used to
+    # build the MediaRef above (never recomputed here).
+    warnings: list[str] = []
+    nle_warnings = conform_timeline_for_nle(timeline, {target_url: media_info})
+    warnings.extend(nle_warnings)
+
     save_timeline(timeline, output)
 
     # --- 6. Return envelope ---
@@ -521,7 +529,6 @@ def _detect_inner(
             f" (total {_keep_fmt})."
         )
 
-    warnings: list[str] = []
     if keep_count == 0:
         warnings.append(
             "No intervals to keep (all intervals classified as silence). "

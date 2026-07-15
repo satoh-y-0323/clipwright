@@ -3,8 +3,9 @@
 Design rationale:
   - §8.3, §V2.1 (DC-AS-001 round-trip co-location): sources produced by build_sequence
     must be accepted by clipwright-render without PATH_NOT_ALLOWED.
-  - §V2.5 (DC-AS-006 empty A1 / resolve_bgm harmless): a timeline with an empty
-    A1 audio track (no clips added to A1) produces zero BGM clips; render must succeed.
+  - §V2.5 (DC-AS-006 resolve_bgm harmless / ADR-NI-8): after NLE conform is wired
+    into build_sequence, A1 carries audio-mirror clips (not kind="bgm"), so
+    resolve_bgm still produces zero BGM clips; render must succeed regardless.
   - §V2.9 (DC-AM-003 approx duration): rendered output duration ≈ sum of input
     clip source_range durations within ±a few frames.
 
@@ -15,7 +16,8 @@ Test layout:
      render._check_source_within_timeline_dir — assert no PATH_NOT_ALLOWED
   4. render_timeline on the .otio: assert output duration ≈ sum of source durations
      (DC-AM-003, ±3-frame tolerance at 30 fps)
-  5. DC-AS-006: assert resolve_bgm returns None for the V1-only timeline
+  5. DC-AS-006: assert resolve_bgm returns None even though NLE conform now
+     populates A1 with audio-mirror clips (they carry no kind="bgm" metadata)
 
 How to run:
   cd clipwright-sequence
@@ -306,12 +308,13 @@ class TestBuildSequenceRenderRoundTrip:
     def test_dc_as_006_empty_audio_track_resolve_bgm_harmless(
         self, tmp_path: Path
     ) -> None:
-        """DC-AS-006: resolve_bgm returns None for a timeline with an empty A1 track.
+        """DC-AS-006: resolve_bgm returns None despite NLE audio-mirror on A1.
 
-        build_sequence produces a V1 (video) track and an empty A1 audio track
-        (no clips added to A1; new_timeline always creates V1+A1).
-        resolve_bgm must return None — meaning 0 BGM clips — and render must
-        succeed without any side-effects from the empty audio path.
+        build_sequence produces a V1 (video) track; after NLE conform is wired
+        (ADR-NI-8), audio-mirror clips are added onto the audio track(s) for
+        sources that carry an audio stream. Those mirror clips carry no
+        kind="bgm" metadata, so resolve_bgm must still return None — meaning 0
+        BGM clips — and render must succeed regardless.
         """
         assert _FFMPEG is not None
         assert _FFPROBE is not None
@@ -333,11 +336,11 @@ class TestBuildSequenceRenderRoundTrip:
         tl = otio.adapters.read_from_file(str(otio_path))
         bgm_clip = resolve_bgm(tl)
         assert bgm_clip is None, (
-            f"resolve_bgm should return None for a V1-only timeline (DC-AS-006),"
-            f" but returned: {bgm_clip}"
+            f"resolve_bgm should return None for NLE audio-mirror clips that "
+            f"carry no kind='bgm' metadata (DC-AS-006), but returned: {bgm_clip}"
         )
 
-        # render must also succeed (harmless empty-audio path)
+        # render must also succeed (audio-mirror clips carry no bgm metadata)
         out_path = tmp_path / "rendered.mp4"
         render_result = render_timeline(
             str(otio_path),

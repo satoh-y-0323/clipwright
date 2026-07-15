@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from clipwright.errors import ClipwrightError, ErrorCode
+from clipwright.schemas import MediaInfo
 
 from clipwright_sequence.schemas import SequenceClip
 
@@ -46,6 +47,13 @@ class SourceProbe:
     falls back to duration_sec * rate in that case, preserving the original
     round-trip behaviour for callers that don't care about the
     available_range precision edge case.
+
+    media_info carries the full MediaInfo returned by inspect_media so that
+    sequence.py can build the target_url -> MediaInfo map consumed by
+    clipwright.nle_interop.conform_timeline_for_nle (start-timecode shift and
+    Resolve audio-layout mirroring, ADR-NI-8). It defaults to None so callers
+    that only exercise resolve_clip_specs (e.g. plan-only tests) need not
+    supply it; conform simply skips any source whose media_info is absent.
     """
 
     abs_path: str
@@ -53,6 +61,7 @@ class SourceProbe:
     rate: float
     has_video: bool
     duration_value: float | None = field(default=None)
+    media_info: MediaInfo | None = field(default=None)
 
     @property
     def available_duration_value(self) -> float:
