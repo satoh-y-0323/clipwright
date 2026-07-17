@@ -1585,20 +1585,19 @@ def _make_render_media_info(path: str) -> Any:
 
 
 class TestImageOverlayOutputCollision:
-    """FR-2 (Red): the image overlay loop must reject image_path == output_path
-    with PATH_NOT_ALLOWED, mirroring the BGM precedent (render.py:753-757 /
-    ADR-B8) via check_output_not_source(output_path, [img]) placed at the very
-    top of the loop body (architecture-report-20260717-163916.md S5.1 / S8).
+    """Regression guard (FR-2 was Red before check_output_not_source was wired):
+    the image overlay loop must reject image_path == output_path with
+    PATH_NOT_ALLOWED, mirroring the BGM precedent (render.py:753-757 / ADR-B8)
+    via check_output_not_source(output_path, [img]) placed at the very top of
+    the loop body (architecture-report-20260717-163916.md S5.1 / S8). This
+    test pins the collision-detection behavior and prevents regression to
+    pre-wiring state where pathological image_path==output would fall through
+    to the pre-existing existence check (FILE_NOT_FOUND) or extension check
+    (INVALID_INPUT) instead of raising PATH_NOT_ALLOWED.
 
     The image boundary/existence/extension checks fire in the "6b. Execute"
     branch of _render_inner (render.py:1238-), so dry_run=False is required
     (same constraint documented by test_pathpolicy_render.py's PP-1d).
-
-    Currently render.py:1238's image loop has NO check_output_not_source call,
-    so the pathological image_path==output input falls through to the
-    pre-existing existence check (FILE_NOT_FOUND) or extension check
-    (INVALID_INPUT) instead of PATH_NOT_ALLOWED — Red until the collision
-    check is added as the loop's first statement.
     """
 
     def test_image_path_equals_output_raises_path_not_allowed(
@@ -1766,20 +1765,18 @@ class TestImageOverlayOutputCollision:
 
 
 class TestImageFadeFailClosed:
-    """FR-3 (Red): fade_in_sec/fade_out_sec must be validated isfinite -> range
-    -> sum, matching the PiP fade validation (plan.py:997-1073), instead of
-    silently dropping NaN/negative/inf fades.
-
-    Currently _marker_to_image_overlay (plan.py) only checks
-    fade_in_sec + fade_out_sec > duration_sec + 1e-9 (plan.py:567); there is no
-    isfinite or per-field range guard. NaN and a finite negative fade slip
-    through this single sum comparison silently (NaN comparisons are always
-    False; a negative offset can shrink the sum below the threshold). This is
-    Red until the isfinite (plan.py:532) and range (plan.py:566) checks are
-    added. NOTE: a bare +inf value already trips the existing sum check today
-    (inf > duration is True) via a DIFFERENT code path than the one FR-3
-    introduces — those two parametrize cases are pre-existing green, not Red;
-    see test-report for the itemised breakdown.
+    """Regression guard (FR-3 was Red before isfinite/range checks were wired):
+    fade_in_sec/fade_out_sec must be validated isfinite -> range -> sum,
+    matching the PiP fade validation (plan.py:997-1073), instead of silently
+    dropping NaN/negative/inf fades. Before the FR-3 checks were added,
+    _marker_to_image_overlay only checked fade_in_sec + fade_out_sec >
+    duration_sec + 1e-9 with no isfinite or per-field range guard, allowing
+    NaN and negative fades to slip through silently (NaN comparisons always
+    False; negative offsets can shrink the sum below the threshold). These
+    tests pin the fail-closed validation and prevent regression to pre-wiring
+    state. NOTE: a bare +inf value already tripped the pre-existing sum check
+    (inf > duration is True) via a different code path than the one FR-3
+    introduces — the +inf sub-cases were pre-existing green, not Red.
     """
 
     @pytest.mark.parametrize("fade_field", ["fade_in_sec", "fade_out_sec"])
@@ -1793,11 +1790,11 @@ class TestImageFadeFailClosed:
     ) -> None:
         """fade_in/out_sec in {NaN, -1.0, -inf, +inf} -> INVALID_INPUT + hint.
 
-        Currently Red for {nan, -1.0, -inf}: these values are silently
-        accepted today (no isfinite/range guard exists yet), so
-        _collect_image_overlays does NOT raise. The +inf sub-cases are
-        already green today via the pre-existing sum-exceeds check (a
-        different code path than the one FR-3 adds).
+        Regression guard: verifies that _collect_image_overlays now raises
+        INVALID_INPUT for {nan, -1.0, -inf}. Before FR-3, these values were
+        silently accepted with no isfinite/range guard. The +inf sub-cases
+        were pre-existing green, tripped by the pre-existing sum-exceeds check
+        (a different code path than the one FR-3 adds).
         """
         from clipwright.errors import ClipwrightError, ErrorCode
         from clipwright_render.plan import (  # type: ignore[attr-defined]

@@ -11,17 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Subprocess error messages no longer leak raw stderr or absolute paths
   (SR-R-001 / CWE-209 / ADR-SR-1).** The render tool has five code paths that
-  reach a child process (ffmpeg / ffprobe): the main ffmpeg transcode (`run()`
-  at :1336 and :402), the probe step (`inspect_media()` / ffprobe at :123 and
-  :1310), and the encoder capability probe (encoders.py:282). When any seam
-  raises a `SUBPROCESS_FAILED` or `SUBPROCESS_TIMEOUT` error, the raw child
-  stderr (which may contain absolute input paths or temporary working
-  directories) is replaced with a generic safe message before being returned
-  in the MCP envelope. The error `code` and `hint` remain unchanged for
-  backward compatibility with callers that rely on the stable contract;
-  render-owned curated messages (`_verify_image_magic` basename display,
-  "output file not generated" wording) are never masked because they are
-  raised directly and are already path-safe by construction.
+  reach a child process (ffmpeg / ffprobe): the main ffmpeg execution in
+  `_render_inner` and `render_plan`, the source probe in `_probe`, the PiP
+  re-probe in `_render_inner`, and the encoder capability probe in
+  `encoders._get_encoders_output`. When any seam raises a `SUBPROCESS_FAILED`
+  or `SUBPROCESS_TIMEOUT` error, the raw child stderr (which may contain
+  absolute input paths or temporary working directories) is replaced with a
+  generic safe message before being returned in the MCP envelope. The error
+  `code` and `hint` remain unchanged for backward compatibility with callers
+  that rely on the stable contract; render-owned curated messages
+  (`_verify_image_magic` basename display, "output file not generated" wording)
+  are never masked because they are raised directly and are already path-safe
+  by construction.
 
 ### Fixed
 
