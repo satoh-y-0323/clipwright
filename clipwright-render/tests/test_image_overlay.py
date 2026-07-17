@@ -1383,9 +1383,9 @@ class TestCorruptImageSubprocessFailed:
         version asserted the mocked message kept the image basename; that
         basename now flows through S2 masking and must NOT appear).
 
-        Currently Red: render_plan has no try/except around run() yet, so the
-        mocked message ("corrupt.png") passes through unmasked and both the
-        equality assertion and the basename-exclusion assertion fail.
+        Regression guard: verifies that S2 masking in render_plan correctly
+        replaces the mocked SUBPROCESS_FAILED message with safe_subprocess_message,
+        ensuring basename ("corrupt.png") and parent path are both redacted.
         """
         from clipwright.errors import ClipwrightError, ErrorCode
         from clipwright.process import safe_subprocess_message
@@ -1606,8 +1606,9 @@ class TestImageOverlayOutputCollision:
     ) -> None:
         """image_path == output (output not yet created) -> PATH_NOT_ALLOWED.
 
-        Currently Red: the existence check fires first (real file doesn't
-        exist yet) and returns FILE_NOT_FOUND instead.
+        Regression guard: verifies that check_output_not_source at the loop head
+        catches the collision before the existence check, preventing FILE_NOT_FOUND
+        and returning PATH_NOT_ALLOWED instead.
         """
         from clipwright.errors import ErrorCode
         from clipwright_render.render import render_timeline
@@ -1661,8 +1662,11 @@ class TestImageOverlayOutputCollision:
         With the output file already on disk, the existence check would pass
         and the (disjoint) extension check fires instead (INVALID_INPUT,
         since .mp4 is not in _ALLOWED_IMAGE_EXTENSIONS) — demonstrating why the
-        collision check must sit ahead of BOTH pre-existing checks. Currently
-        Red: current code returns INVALID_INPUT, not PATH_NOT_ALLOWED.
+        collision check must sit ahead of BOTH pre-existing checks.
+
+        Regression guard: verifies that check_output_not_source catches the
+        collision even when the output file exists and would otherwise trigger
+        the extension check, ensuring PATH_NOT_ALLOWED is returned consistently.
         """
         from clipwright.errors import ErrorCode
         from clipwright_render.render import render_timeline
@@ -1812,9 +1816,11 @@ class TestImageFadeFailClosed:
         assert err.hint is not None and len(err.hint) > 0
 
     def test_fade_in_isfinite_message_and_hint_exact(self) -> None:
-        """isfinite guard on fade_in_sec: exact message/hint (architecture S5.2 (a)).
+        """isfinite guard on fade_in_sec: exact message/hint (architecture §5.2 (a)).
 
-        Currently Red: no isfinite guard exists yet, so no error is raised.
+        Regression guard: verifies that NaN fade_in_sec is fail-closed with
+        INVALID_INPUT and the exact expected message/hint, preventing silent-drop
+        (prior behavior of ignoring NaN fade values).
         """
         from clipwright.errors import ClipwrightError, ErrorCode
         from clipwright_render.plan import (  # type: ignore[attr-defined]
@@ -1835,9 +1841,10 @@ class TestImageFadeFailClosed:
         assert err.hint == "Re-annotate with a finite fade_in_sec value."
 
     def test_fade_out_isfinite_message_and_hint_exact(self) -> None:
-        """isfinite guard on fade_out_sec: exact message/hint (architecture S5.2 (a)).
+        """isfinite guard on fade_out_sec: exact message/hint (architecture §5.2 (a)).
 
-        Currently Red: no isfinite guard exists yet, so no error is raised.
+        Regression guard: verifies that NaN fade_out_sec is fail-closed with
+        INVALID_INPUT and the exact expected message/hint, preventing silent-drop.
         """
         from clipwright.errors import ClipwrightError, ErrorCode
         from clipwright_render.plan import (  # type: ignore[attr-defined]
@@ -1859,10 +1866,11 @@ class TestImageFadeFailClosed:
         assert err.hint == "Re-annotate with a finite fade_out_sec value."
 
     def test_fade_in_range_message_and_hint_exact(self) -> None:
-        """range guard on fade_in_sec: exact message/hint (architecture S5.2 (b)).
+        """range guard on fade_in_sec: exact message/hint (architecture §5.2 (b)).
 
-        Currently Red: fade_in_sec=-1.0 with fade_out_sec=0.1 sums to -0.9,
-        which does not exceed duration_sec, so no error is raised today.
+        Regression guard: verifies that negative fade_in_sec is fail-closed with
+        INVALID_INPUT and the exact expected message/hint, even when sum with
+        fade_out_sec does not exceed duration (range check precedes sum check).
         """
         from clipwright.errors import ClipwrightError, ErrorCode
         from clipwright_render.plan import (  # type: ignore[attr-defined]
@@ -1886,10 +1894,11 @@ class TestImageFadeFailClosed:
         )
 
     def test_fade_out_range_message_and_hint_exact(self) -> None:
-        """range guard on fade_out_sec: exact message/hint (architecture S5.2 (b)).
+        """range guard on fade_out_sec: exact message/hint (architecture §5.2 (b)).
 
-        Currently Red: fade_out_sec=-1.0 with fade_in_sec=0.1 sums to -0.9,
-        which does not exceed duration_sec, so no error is raised today.
+        Regression guard: verifies that negative fade_out_sec is fail-closed with
+        INVALID_INPUT and the exact expected message/hint, even when sum with
+        fade_in_sec does not exceed duration (range check precedes sum check).
         """
         from clipwright.errors import ClipwrightError, ErrorCode
         from clipwright_render.plan import (  # type: ignore[attr-defined]

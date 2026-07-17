@@ -530,6 +530,24 @@ def _marker_to_image_overlay(
             ),
             hint="Re-annotate with a finite duration_sec value.",
         )
+    if not math.isfinite(fade_in_s):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an invalid image overlay:"
+                " fade_in_sec is not finite."
+            ),
+            hint="Re-annotate with a finite fade_in_sec value.",
+        )
+    if not math.isfinite(fade_out_s):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an invalid image overlay:"
+                " fade_out_sec is not finite."
+            ),
+            hint="Re-annotate with a finite fade_out_sec value.",
+        )
 
     # Range checks.
     if start_sec < 0:
@@ -563,6 +581,24 @@ def _marker_to_image_overlay(
                 " opacity must be in [0, 1]."
             ),
             hint="Re-annotate with an opacity value in the range [0, 1].",
+        )
+    if not (0 <= fade_in_s <= duration_sec):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an invalid image overlay:"
+                " fade_in_sec must be in [0, duration_sec]."
+            ),
+            hint="Re-annotate with a fade_in_sec in the range [0, duration_sec].",
+        )
+    if not (0 <= fade_out_s <= duration_sec):
+        raise ClipwrightError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                "The timeline contains an invalid image overlay:"
+                " fade_out_sec must be in [0, duration_sec]."
+            ),
+            hint="Re-annotate with a fade_out_sec in the range [0, duration_sec].",
         )
     if fade_in_s + fade_out_s > (duration_sec + 1e-9):
         raise ClipwrightError(
@@ -4554,6 +4590,45 @@ def _append_bgm_pipe(
     return "[outa_bgm]"
 
 
+def _append_ducking_asplit(
+    filter_parts: list[str],
+    amix_input_labels: list[str],
+    sidechain_for_pip: dict[int, str],
+    pip_branch_labels: list[tuple[str, float | None, float | None]],
+    *,
+    prefix: str,
+    source_label: str,
+    num_ducking: int,
+) -> None:
+    """Append the asplit + amix-input wiring for a ducking sidechain source
+    (main or bgm) to *filter_parts* (ADR-PIP-9; extracted for DRY, ADR-SR-1 batch).
+
+    Pure refactor of the two identical main/bgm blocks in _append_pip_audio_pipe.
+    When num_ducking > 0, appends `[source_label]asplit[prefix_mix][prefix_sc_0]...`
+    to filter_parts, registers `prefix_mix` as the amix input, and maps each ducking
+    PiP index (threshold is not None, in enumeration order) to `prefix_sc_{k}` in
+    sidechain_for_pip. When num_ducking == 0, no asplit is emitted and source_label
+    itself is registered as the amix input. Mutates filter_parts, amix_input_labels,
+    and sidechain_for_pip in place; returns nothing. Behaviour is byte-identical to
+    the pre-extraction code (pinned by a characterization test + the real-ffmpeg
+    execution test).
+    """
+    if num_ducking > 0:
+        asplit_outputs = [f"{prefix}_mix"] + [
+            f"{prefix}_sc_{i}" for i in range(num_ducking)
+        ]
+        asplit_str = "".join(f"[{label}]" for label in asplit_outputs)
+        filter_parts.append(f"[{source_label}]asplit{asplit_str}")
+        amix_input_labels.append(f"{prefix}_mix")
+        ducking_idx = 0
+        for i, (_, threshold, _) in enumerate(pip_branch_labels):
+            if threshold is not None:
+                sidechain_for_pip[i] = f"{prefix}_sc_{ducking_idx}"
+                ducking_idx += 1
+    else:
+        amix_input_labels.append(source_label)
+
+
 def _append_pip_audio_pipe(
     filter_parts: list[str],
     pip_overlays: list[PipOverlay],
@@ -4666,26 +4741,15 @@ def _append_pip_audio_pipe(
 
         # If there are ducking PiPs using main as sidechain, asplit main
         # into (num_ducking_pips + 1) outputs: one for mixing, rest for sidechains
-        if num_ducking_pips_with_main > 0:
-            # Create asplit with (num_ducking_pips + 1) outputs:
-            # output 0: main_mix (for the main audio in amix)
-            # outputs 1+: main_sc_0, main_sc_1, ... (for each ducking PiP's sidechain)
-            asplit_outputs = ["main_mix"] + [
-                f"main_sc_{i}" for i in range(num_ducking_pips_with_main)
-            ]
-            asplit_str = "".join(f"[{label}]" for label in asplit_outputs)
-            filter_parts.append(f"[{main_fmt_label}]asplit{asplit_str}")
-            amix_input_labels.append("main_mix")
-
-            # Map each ducking PiP (that uses main) to its sidechain label
-            ducking_idx = 0
-            for i, (_, threshold, _) in enumerate(pip_branch_labels):
-                if threshold is not None:  # Ducking enabled
-                    sidechain_for_pip[i] = f"main_sc_{ducking_idx}"
-                    ducking_idx += 1
-        else:
-            # No ducking PiPs using main, use main directly
-            amix_input_labels.append(main_fmt_label)
+        _append_ducking_asplit(
+            filter_parts,
+            amix_input_labels,
+            sidechain_for_pip,
+            pip_branch_labels,
+            prefix="main",
+            source_label=main_fmt_label,
+            num_ducking=num_ducking_pips_with_main,
+        )
 
     # Add BGM (already at correct sample rate from _append_bgm_pipe).
     # Skip entirely when has_main_audio: in that case audio_map_label is
@@ -4693,26 +4757,15 @@ def _append_pip_audio_pipe(
     # main_pip_fmt/main_mix by the "Add main audio" block above — re-adding a
     # bare outa_bgm here would mix the same signal twice (CR-NEW).
     if bgm_present and not has_main_audio:
-        if num_ducking_pips_with_bgm > 0 and not has_main_audio:
-            # Similar asplit for BGM when ducking is enabled and no main audio
-            asplit_outputs = ["bgm_mix"] + [
-                f"bgm_sc_{i}" for i in range(num_ducking_pips_with_bgm)
-            ]
-            asplit_str = "".join(f"[{label}]" for label in asplit_outputs)
-            filter_parts.append(f"[outa_bgm]asplit{asplit_str}")
-            amix_input_labels.append("bgm_mix")
-
-            # Map each ducking PiP (that uses bgm) to its sidechain label
-            ducking_idx = 0
-            for i, (_, threshold, _) in enumerate(pip_branch_labels):
-                if (
-                    threshold is not None and not has_main_audio
-                ):  # Ducking enabled, no main
-                    sidechain_for_pip[i] = f"bgm_sc_{ducking_idx}"
-                    ducking_idx += 1
-        else:
-            # No asplit needed for BGM
-            amix_input_labels.append("outa_bgm")
+        _append_ducking_asplit(
+            filter_parts,
+            amix_input_labels,
+            sidechain_for_pip,
+            pip_branch_labels,
+            prefix="bgm",
+            source_label="outa_bgm",
+            num_ducking=num_ducking_pips_with_bgm,
+        )
 
     # Add PiP branches, handling ducking sidechaining
     for i, (branch_label, threshold, ratio) in enumerate(pip_branch_labels):
