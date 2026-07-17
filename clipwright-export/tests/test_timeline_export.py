@@ -2184,6 +2184,53 @@ class TestFcpxmlQuantizationAndAvailableRange:
             f"zero-collapse sentence; got: {result.warnings!r}"
         )
 
+    def test_available_range_none_plus_zero_collapse_succeeds_with_warning(
+        self, tmp_path: Path, make_media_file: Any
+    ) -> None:
+        """Regression guard (CR-T-001, code-review-report-review-code-w2.md):
+        pins the combination of an available_range=None clip (F2's shape)
+        with a zero-collapse clip (the first clip's 0.3f cumulative raw
+        boundary rounds half-up to 0, per test_zero_collapse_clip_reports_
+        warning above) going through _synthesize_missing_available_ranges.
+
+        This was already green when authored (a characterization test, not
+        a Red-phase test): the reviewer confirmed by direct execution that
+        this combination does not crash (ok=True) and reports both the
+        quantization and zero-collapse warnings. It exists purely to guard
+        against a future regression in that interaction, since no other
+        test in this class exercises available_range=None and zero-collapse
+        together.
+        """
+        rate = 30.0
+        durations = (0.3, 50.0)
+        otio_path = _build_frame_duration_timeline(
+            tmp_path,
+            make_media_file,
+            rate,
+            durations,
+            name="fcpxml_none_zerocollapse",
+            with_available_range=False,
+        )
+        out = tmp_path / "fcpxml_none_zerocollapse.fcpxml"
+
+        result = export_timeline(
+            timeline=otio_path,
+            output=str(out),
+            options=ExportTimelineOptions(format="fcpxml"),
+        )
+        assert result.ok is True, result.error
+        joined = " ".join(result.warnings).lower()
+        assert _QUANT_WARNING_SUBSTR in joined, (
+            f"expected a quantization warning fragment; got: {result.warnings!r}"
+        )
+        assert _ZERO_COLLAPSE_SUBSTR in joined, (
+            f"expected a zero-collapse warning fragment; got: {result.warnings!r}"
+        )
+        assert "in the fcpxml" in joined, (
+            "format_label parameterization must name FCPXML (not EDL) in the "
+            f"zero-collapse sentence; got: {result.warnings!r}"
+        )
+
     @pytest.mark.parametrize(
         "case_id,rate,with_available_range",
         [
