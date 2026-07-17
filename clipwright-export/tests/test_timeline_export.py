@@ -1735,12 +1735,14 @@ class TestFcpxmlQuantizationAndAvailableRange:
     pass a silently-broken file) or crashing with INTERNAL (F2, an
     unguarded AttributeError inside the fcpx_xml adapter's writer).
 
-    This class was Red at authoring time: FCPXML export never called
-    _quantize_to_frame_boundaries (EDL-only branch, timeline_export.py:697-
-    722), so it was not yet wired to FCPXML, and available_range=None was
-    dereferenced without a None guard inside the fcpx_xml adapter's writer,
-    which currently crashes with INTERNAL instead of succeeding. See the
-    per-test comments below for which specific failure each test exercises.
+    This class was Red at authoring time and is now a regression guard:
+    before ADR-EX-13, FCPXML export never called
+    _quantize_to_frame_boundaries (EDL-only branch), so it was not wired to
+    FCPXML, and available_range=None was dereferenced without a None guard
+    inside the fcpx_xml adapter's writer, which crashed with INTERNAL instead
+    of succeeding. The shared quantization pass plus
+    _synthesize_missing_available_ranges now fix both; the per-test comments
+    below record which specific failure each test used to exercise.
 
     Test-oracle layering (reviewer-mandated 3-layer split, architecture
     §7.3, so a round-trip-only oracle does not hide the adapter reader's own
@@ -1779,11 +1781,12 @@ class TestFcpxmlQuantizationAndAvailableRange:
     ) -> None:
         """Observation 1 (architecture §7.2 table row 1, measured A5).
 
-        Currently Red: FCPXML export is not yet wired to
-        _quantize_to_frame_boundaries, so no quantization warning is
+        Regression guard: before ADR-EX-13, FCPXML export was not wired to
+        _quantize_to_frame_boundaries, so no quantization warning was
         produced and the fcpx_xml adapter's own silent per-clip int()
-        truncation instead yields re-read durations (10, 20) -- not the
-        required drift-free (10, 21) -- with no warning at all (F1).
+        truncation instead yielded re-read durations (10, 20) -- not the
+        required drift-free (10, 21) -- with no warning at all (F1). It is
+        now quantized and reported like EDL.
         """
         rate = 30.0
         durations = (10.3, 20.7)
@@ -1826,10 +1829,11 @@ class TestFcpxmlQuantizationAndAvailableRange:
     ) -> None:
         """Observation 2 (architecture §7.2 table row 2, measured A2).
 
-        Currently Red: without quantization, naive per-clip floor of
-        10.9f would give re-read durations [10, 10, 10, 10] with 3.6f
-        (0.12s) of cumulative drift over 4 clips (measured A0) instead of
-        the required drift-free [11, 11, 11, 11].
+        Regression guard: before ADR-EX-13, without quantization, naive
+        per-clip floor of 10.9f gave re-read durations [10, 10, 10, 10] with
+        3.6f (0.12s) of cumulative drift over 4 clips (measured A0) instead
+        of the required drift-free [11, 11, 11, 11]. The shared boundary-diff
+        quantization now removes the drift.
         """
         rate = 30.0
         durations = (10.9, 10.9, 10.9, 10.9)
@@ -1915,12 +1919,14 @@ class TestFcpxmlQuantizationAndAvailableRange:
     ) -> None:
         """Observation 4 (architecture §7.2 table row 4, measured B1).
 
-        Currently crashes with INTERNAL: the fcpx_xml adapter's writer
-        (_find_asset_duration / _find_asset_start) dereferences
-        media_reference.available_range without a None guard and raises an
-        unguarded AttributeError (F2), which escapes _write_adapter's own
-        OTIOError-only except clause and is masked as INTERNAL by
-        export_timeline's outer boundary.
+        Regression guard: before ADR-EX-13, this crashed with INTERNAL --
+        the fcpx_xml adapter's writer (_find_asset_duration /
+        _find_asset_start) dereferences media_reference.available_range
+        without a None guard and raised an unguarded AttributeError (F2),
+        which escaped _write_adapter's own OTIOError-only except clause and
+        was masked as INTERNAL by export_timeline's outer boundary.
+        _synthesize_missing_available_ranges now completes the range before
+        the write, so it succeeds.
         """
         rate = 24.0
         durations = (10.0,)
@@ -1958,10 +1964,10 @@ class TestFcpxmlQuantizationAndAvailableRange:
     ) -> None:
         """Observation 5 (architecture §7.2 table row 5, measured A4/D).
 
-        Currently crashes with INTERNAL (F2, same as observation 4) before
-        quantization is even relevant; once F2 is fixed this also exercises
-        F1's quantization pass (durations are fractional), so both defects
-        are covered in combination.
+        Regression guard: before ADR-EX-13, this crashed with INTERNAL (F2,
+        same as observation 4) before quantization was even relevant. With
+        F2 fixed it also exercises F1's quantization pass (durations are
+        fractional), so both defects are covered in combination.
         """
         rate = 24.0
         durations = (10.3, 20.7)
@@ -2035,11 +2041,12 @@ class TestFcpxmlQuantizationAndAvailableRange:
         """Observation 7 (architecture §3.2 guards, measured E/B1): a direct
         call to _synthesize_missing_available_ranges.
 
-        Currently Red: _synthesize_missing_available_ranges does not yet
-        exist in clipwright_export.timeline_export, so the local import
-        below raises ImportError (deferred-import pattern; only this test
-        fails at collection is avoided because the import is local to the
-        test body, not a module-level import).
+        Regression guard: before ADR-EX-13,
+        _synthesize_missing_available_ranges did not exist in
+        clipwright_export.timeline_export, so the local import below raised
+        ImportError (deferred-import pattern kept the failure local to this
+        test body rather than breaking module collection). The function now
+        exists and this pins its guard semantics.
         """
         from clipwright_export.timeline_export import (
             _synthesize_missing_available_ranges,
@@ -2144,8 +2151,9 @@ class TestFcpxmlQuantizationAndAvailableRange:
     ) -> None:
         """Observation 9 (architecture §7.2 table row 9, measured Z).
 
-        Currently Red: without quantization wired to FCPXML, no zero-
-        collapse warning (or any quantization warning) is produced.
+        Regression guard: before ADR-EX-13, without quantization wired to
+        FCPXML, no zero-collapse warning (or any quantization warning) was
+        produced. It is now reported like EDL, naming FCPXML.
         """
         rate = 30.0
         durations = (0.3, 50.0)

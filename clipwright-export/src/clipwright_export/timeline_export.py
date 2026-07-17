@@ -19,20 +19,34 @@ Design decisions (architecture-report §2/§4/§5/§6/§11/§13):
   deletes the artifact and returns OTIO_ERROR. The judgement is exception
   presence only (no value comparison), so normal integer-rate frame
   quantisation never false-fails.
-- ADR-EX-12 (§quantization): in the EDL path only, after audio-track removal
-  (ADR-NI-7) and immediately before _write_adapter, the write-time deep copy is
-  quantized to whole-frame boundaries at the representative integer rate by
-  _quantize_to_frame_boundaries. Cumulative record boundaries are snapped
+- ADR-EX-12 (§quantization): in both export paths, after any EDL audio-track
+  removal (ADR-NI-7) and immediately before _write_adapter, the write-time deep
+  copy is quantized to whole-frame boundaries at the representative integer rate
+  by _quantize_to_frame_boundaries. Cumulative record boundaries are snapped
   half-up (floor(x+0.5), never banker's round) and each item's record duration
   is the rounded boundary difference; source start is rounded independently and
   source duration is set equal to the record duration, so cmx_3600's
   src_duration == rec_duration check holds by construction. Adjustments are
-  reported in one aggregated warning. FCPXML is passed through without a
-  quantization pass: the fcpx_xml adapter performs its own frame conversion and
-  never fails the write-then-verify round-trip the way cmx_3600 does. FCPXML
-  export can silently floor fractional-frame durations per clip with unbounded
-  cumulative drift and no warning (pre-existing adapter limitation, tracked
-  separately).
+  reported in one aggregated warning.
+- ADR-EX-13 (quantization + available_range synthesis, FCPXML): the FCPXML path
+  now applies the same _quantize_to_frame_boundaries pass on the write-time deep
+  copy at the same representative integer rate (format_label="FCPXML"), so every
+  N/Ds rational-seconds value the fcpx_xml adapter writes is an exact multiple of
+  frameDuration. Without this the adapter preserves fractional-frame values that
+  are not valid FCPXML timings and that its own reader (and the write-then-verify
+  re-read) silently floors per clip with unbounded cumulative drift. Adjustments
+  are reported with the same aggregated warning as the EDL path. Additionally, an
+  ExternalReference whose available_range is None (a supported backward-compatible
+  clip shape per core add_clip) previously crashed the adapter (AttributeError in
+  _find_asset_duration / _find_asset_start, surfacing as INTERNAL); the
+  write-time copy now synthesizes available_range from the clip source_range
+  after quantization -- semantically identical to the adapter missing-reference
+  fallback, so no warning is emitted. EDL and FCPXML now share one identical
+  frame-quantization guarantee (at most half a frame, no cumulative drift). A
+  residual adapter-side artifact (out of scope) remains: the fcpx_xml reader's
+  int()-based rational parsing can read certain integer frame counts one frame
+  short at some rates; the written file itself is frame-aligned and valid, and
+  write-then-verify judges exception presence only, so exports are unaffected.
 - ADR-EX-4 (§4.2): media references that do not exist are skipped (kept
   relative) with a warning; only a relative reference that escapes the OTIO
   directory (CWE-22) fails the whole export.
@@ -295,22 +309,28 @@ def _round_half_up(x: float) -> int:
 
 
 def _quantize_warnings(
-    adjusted: int, zero_collapse: int, max_shift_frames: float, rate: int
+    adjusted: int,
+    zero_collapse: int,
+    max_shift_frames: float,
+    rate: int,
+    format_label: str,
 ) -> list[str]:
-    """Build the aggregated ADR-EX-12 quantization warning (architecture §4).
+    """Build the aggregated ADR-EX-12/13 quantization warning (architecture §4).
 
     Returns [] when nothing was adjusted. Otherwise one aggregated sentence
     (with an inline lowercase ``hint:``) reporting the adjustment count and the
     largest adjustment in seconds; a second sentence is appended to the
-    same string when clips collapsed to zero length. Only counts and seconds
-    are exposed -- never paths or clip names (CWE-209).
+    same string when clips collapsed to zero length. *format_label* names the
+    exchange format in the sentence ("EDL" or "FCPXML"); passing "EDL"
+    reproduces the pre-ADR-EX-13 wording byte-for-byte (architecture §5.1).
+    Only counts and seconds are exposed -- never paths or clip names (CWE-209).
     """
     if adjusted == 0:
         return []
     max_shift_s = max_shift_frames / rate
     sentence = (
         f"{adjusted} clip/gap boundary(ies) were quantized to whole frames for "
-        f"the EDL at {rate} fps; the largest adjustment was "
+        f"the {format_label} at {rate} fps; the largest adjustment was "
         f"{max_shift_s:.4f}s (at most half a frame, no cumulative drift). "
         "hint: this is expected for second-based trims and silence cuts; "
         "re-cut on frame boundaries in the source OTIO if the shift matters."
@@ -318,28 +338,36 @@ def _quantize_warnings(
     if zero_collapse > 0:
         sentence += (
             f" {zero_collapse} clip(s) shorter than half a frame collapsed to "
-            "zero length in the EDL. hint: lengthen or remove these clips in the "
-            "source OTIO if they are meant to be visible."
+            f"zero length in the {format_label}. hint: lengthen or remove these "
+            "clips in the source OTIO if they are meant to be visible."
         )
     return [sentence]
 
 
-def _quantize_to_frame_boundaries(tl: otio.schema.Timeline, rate: int) -> list[str]:
+def _quantize_to_frame_boundaries(
+    tl: otio.schema.Timeline, rate: int, format_label: str = "EDL"
+) -> list[str]:
     """Quantize each track item's source_range to whole-frame boundaries.
 
-    EDL-only conform (ADR-EX-12): cmx_3600 timecode floors fractional frames,
-    so adjacent fractional-duration clips desync source vs record cumulative
-    boundaries and fail write-then-verify. This walks each track's item
-    sequence (Clips and Gaps -- _iter_clips skips Gaps, so the track is walked
-    directly) and snaps the cumulative record boundaries to whole frames at
-    *rate* using half-up rounding, deriving each item's record duration from
-    the rounded boundary difference. Source start is rounded independently to
-    the nearest frame and source duration is set equal to the record duration,
-    which constructively satisfies cmx_3600's src_duration == rec_duration
-    check. Only track items' source_range is mutated (markers, timeline
-    metadata, clipwright metadata and effects are untouched). Mutates *tl* (the
-    write-time deep copy) in place and returns an aggregated warning list (empty
-    when nothing was adjusted). Never raises.
+    EDL/FCPXML shared conform (ADR-EX-12 for EDL, ADR-EX-13 for FCPXML):
+    cmx_3600 timecode floors fractional frames, so adjacent fractional-duration
+    clips desync source vs record cumulative boundaries and fail
+    write-then-verify; the fcpx_xml adapter writes fractional-frame values as
+    rational seconds that are not multiples of frameDuration (invalid FCPXML
+    timing its own reader silently floors with unbounded drift). This walks each
+    track's item sequence (Clips and Gaps -- _iter_clips skips Gaps, so the
+    track is walked directly) and snaps the cumulative record boundaries to
+    whole frames at *rate* using half-up rounding, deriving each item's record
+    duration from the rounded boundary difference. Source start is rounded
+    independently to the nearest frame and source duration is set equal to the
+    record duration, which constructively satisfies cmx_3600's src_duration ==
+    rec_duration check and, for FCPXML, guarantees every written N/Ds is an
+    exact multiple of frameDuration. Only track items' source_range is mutated
+    (markers, timeline metadata, clipwright metadata and effects are untouched).
+    *format_label* ("EDL"/"FCPXML") only names the format in the aggregated
+    warning; the body logic is format-independent. Mutates *tl* (the write-time
+    deep copy) in place and returns an aggregated warning list (empty when
+    nothing was adjusted). Never raises.
     """
     adjusted_count = 0
     zero_collapse_count = 0
@@ -390,8 +418,46 @@ def _quantize_to_frame_boundaries(tl: otio.schema.Timeline, rate: int) -> list[s
                     zero_collapse_count += 1
 
     return _quantize_warnings(
-        adjusted_count, zero_collapse_count, max_shift_frames, rate
+        adjusted_count, zero_collapse_count, max_shift_frames, rate, format_label
     )
+
+
+def _synthesize_missing_available_ranges(tl: otio.schema.Timeline) -> int:
+    """Fill a missing ExternalReference.available_range from the clip
+    source_range (ADR-EX-13, FCPXML write-time copy only).
+
+    available_range is None is a supported backward-compatible clip shape (core
+    add_clip; older / hand-written OTIO), but the fcpx_xml adapter dereferences
+    available_range without a None guard in _find_asset_duration /
+    _find_asset_start and crashes with AttributeError (surfaced as INTERNAL).
+    Synthesizing TimeRange(sr.start_time, sr.duration) is semantically identical
+    to the adapter missing-reference fallback (item.duration() /
+    source_range.start_time), so this is a lossless metadata completion, not a
+    content change -- no warning is emitted. Runs AFTER quantization so the
+    synthesized range is frame-aligned (this order is preferred to keep the
+    synthesized asset duration frame-aligned, an ADR-EX-13 write invariant --
+    not a round-trip requirement; both orders round-trip, architecture §4.4).
+    Only ExternalReference is handled (MissingReference / GeneratorReference
+    have the adapter's own fallback and carry no available_range attribute
+    contract here). Mutates *tl* (the write-time deep copy) in place; the source
+    OTIO is never modified. Returns the number of references synthesized. Never
+    raises.
+    """
+    synthesized = 0
+    for clip in _iter_clips(tl):
+        mr = clip.media_reference
+        if not isinstance(mr, otio.schema.ExternalReference):
+            continue
+        if mr.available_range is not None:
+            continue
+        sr = clip.source_range
+        if sr is None:
+            continue
+        mr.available_range = otio.opentime.TimeRange(
+            start_time=sr.start_time, duration=sr.duration
+        )
+        synthesized += 1
+    return synthesized
 
 
 # ---------------------------------------------------------------------------
@@ -716,10 +782,25 @@ def _export_timeline_inner(
             "EDL timecode carries no frame rate; set your NLE project/sequence to "
             f"{rep_rate} fps on import so the cut points land at the intended times."
         )
-        # ADR-EX-12: quantize the write-time copy to whole-frame boundaries so
-        # adjacent fractional-duration clips do not desync source vs record and
-        # fail write-then-verify. Same rep_rate as verify_rate below (invariant).
-        warnings_out.extend(_quantize_to_frame_boundaries(tl_copy, rep_rate))
+
+    # --- ADR-EX-12 (EDL) / ADR-EX-13 (FCPXML): shared frame quantization ---
+    # Quantize the write-time copy to whole-frame boundaries at rep_rate.
+    # EDL: prevents cmx_3600 src/rec desync. FCPXML: guarantees every written
+    # N/Ds is an exact multiple of frameDuration (frame-aligned, FCP-valid, zero
+    # cumulative drift; the adapter otherwise writes fractional-frame rational
+    # seconds its own reader silently floors). Same rep_rate as verify_rate
+    # below (invariant).
+    format_label = "EDL" if fmt == "edl" else "FCPXML"
+    warnings_out.extend(
+        _quantize_to_frame_boundaries(tl_copy, rep_rate, format_label=format_label)
+    )
+    if fmt == "fcpxml":
+        # ADR-EX-13: fill missing available_range from source_range to keep the
+        # fcpx_xml adapter from crashing (AttributeError -> INTERNAL) on the
+        # supported available_range=None clip shape. Lossless; no warning. Runs
+        # after quantization so the synthesized asset duration stays frame-
+        # aligned (preferred, not a round-trip requirement; architecture §4.4).
+        _synthesize_missing_available_ranges(tl_copy)
 
     # --- Step 7: write adapter + write-then-verify (ADR-EX-11) ---
     _write_adapter(tl_copy, output, fmt, verify_rate=rep_rate)
