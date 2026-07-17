@@ -2194,12 +2194,11 @@ class TestFcpxmlQuantizationAndAvailableRange:
         warning above) going through _synthesize_missing_available_ranges.
 
         This was already green when authored (a characterization test, not
-        a Red-phase test): the reviewer confirmed by direct execution that
-        this combination does not crash (ok=True) and reports both the
-        quantization and zero-collapse warnings. It exists purely to guard
-        against a future regression in that interaction, since no other
-        test in this class exercises available_range=None and zero-collapse
-        together.
+        a Red-phase test): direct execution confirmed that this combination
+        does not crash (ok=True) and reports both the quantization and
+        zero-collapse warnings. It exists purely to guard against a future
+        regression in that interaction, since no other test in this class
+        exercises available_range=None and zero-collapse together.
         """
         rate = 30.0
         durations = (0.3, 50.0)

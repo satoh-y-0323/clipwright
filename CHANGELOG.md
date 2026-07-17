@@ -11,17 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **FCPXML export no longer writes frame-misaligned (fractional-frame) clips as
   raw rational seconds.** The exporter previously wrote clip durations such as
-  `"109/240s"` verbatim, producing FCPXML whose values are not integer multiples
-  of `frameDuration` — a malformed interchange file. Because the adapter reader
-  silently floors with `int()` instead of raising, this went undetected by
-  write-then-verify: a 4-clip chain of such fractional durations accumulated
-  3.6 frames (0.12 s at 30 fps) of drift with no warning. The exporter now applies the same
-  boundary quantization used for EDL export to the write-time copy, at the
-  representative integer frame rate, aligning every numerator/denominator to a
-  whole multiple of `frameDuration` before the FCPXML is written, so the export
-  succeeds, and reports each adjustment in `warnings`. Cut points shift by at
-  most 0.5 frame with no cumulative drift, giving EDL and FCPXML export the
-  same quantization guarantee.
+  `"109/240s"` verbatim, producing FCPXML whose values are not integer
+  multiples of `frameDuration` — a malformed interchange file. Because the
+  adapter reader silently floors with `int()` instead of raising, this went
+  undetected by write-then-verify: a 4-clip chain of such fractional durations
+  accumulated 3.6 frames (0.12 s at 30 fps) of drift with no warning. The
+  exporter now applies the same boundary quantization used for EDL export to
+  the write-time copy, at the representative integer frame rate, aligning every
+  numerator/denominator to a whole multiple of `frameDuration` before the
+  FCPXML is written, so the export succeeds, and reports each adjustment in
+  `warnings`. Cut points shift by at most 0.5 frame with no cumulative drift,
+  giving EDL and FCPXML export the same quantization guarantee.
 - **FCPXML export no longer crashes with an internal `AttributeError` on an
   `ExternalReference` without an `available_range`.** This clip shape is a
   backward-compatible one that the core `add_clip` helper still supports. The
