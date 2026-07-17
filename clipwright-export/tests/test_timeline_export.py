@@ -151,7 +151,8 @@ Verification aspects:
       (M-4) A frame-aligned input (roundtrip_timeline_factory) produces no
             quantization warning and is unchanged.
       (M-5) FCPXML is not quantized for the same fractional-duration input
-            (rational-seconds representation round-trips losslessly).
+            (the fcpx_xml adapter performs its own frame conversion,
+            with no quantization pass on the clipwright side).
       (M-6) The input .otio file is byte-unchanged after an EDL export of
             fractional-duration clips (non-destructive, EDL variant of the
             (B-2) pattern).
@@ -1302,18 +1303,21 @@ class TestEdlFrameQuantization:
     don't match"). This class was Red at authoring time:
     _quantize_to_frame_boundaries did not yet exist in timeline_export.py,
     so 11 of 15 subtests failed via the desync bug itself (export_timeline
-    returned ok=False / OTIO_ERROR). These 11 were the 8 fractional-rate
-    clips subtests (rate24/rate25/rate30/half_boundary, each parametrized
-    over test methods), plus the 3 desync-related subtests
-    (test_cut_points_shift_at_most_half_a_frame, test_multi_clip_with_gap_has_
-    no_cumulative_drift, test_input_otio_bytes_unchanged_after_edl_export).
-    The remaining 4 subtests (frame-aligned input at 24/25/30fps, FCPXML)
-    were already green before the fix (those clips do not trigger the desync
-    condition, so they pass verify without quantization) and were added as
-    regression guards. That Red phase was resolved by implementing and wiring
-    in _quantize_to_frame_boundaries per architecture-report-20260717-095045
-    .md §1-§6; these tests now guard against a regression of the quantization
-    behaviour.
+    returned ok=False / OTIO_ERROR). These 11 failed tests consist of:
+    4 from test_fractional_clips_succeed_with_quantization_warning
+    (rate24/rate25/rate30/half_boundary), 3 from
+    test_cut_points_shift_at_most_half_a_frame (24.0/25.0/30.0 rates),
+    plus test_multi_clip_with_gap_has_no_cumulative_drift,
+    test_input_otio_bytes_unchanged_after_edl_export,
+    test_zero_collapse_clip_reports_warning, and
+    test_output_edl_rereads_without_exception. The remaining 4 subtests
+    (frame-aligned input at 24/25/30fps, FCPXML) were already green before
+    the fix (those clips do not trigger the desync condition, so they pass
+    verify without quantization) and were added as regression guards. That
+    Red phase was resolved by implementing and wiring in
+    _quantize_to_frame_boundaries per
+    architecture-report-20260717-095045.md §1-§6; these tests now guard
+    against a regression of the quantization behaviour.
     """
 
     # (10.3, 20.7) is a measured bug-reproducing pair (verified by direct
@@ -1518,8 +1522,9 @@ class TestEdlFrameQuantization:
         assert result.ok is True, result.error
         joined = " ".join(result.warnings).lower()
         assert _QUANT_WARNING_SUBSTR not in joined, (
-            "FCPXML must never be quantized (rational-seconds representation "
-            f"round-trips losslessly); got warnings: {result.warnings!r}"
+            "FCPXML must never be quantized (the fcpx_xml adapter performs "
+            "its own frame conversion with no quantization pass); got "
+            f"warnings: {result.warnings!r}"
         )
 
         back = otio.adapters.read_from_file(str(out), adapter_name="fcpx_xml")
