@@ -15,7 +15,7 @@ import platform
 from typing import TYPE_CHECKING
 
 from clipwright.errors import ClipwrightError, ErrorCode
-from clipwright.process import resolve_tool, run
+from clipwright.process import resolve_tool, run, safe_subprocess_message
 
 if TYPE_CHECKING:
     from clipwright_render.schemas import RenderOptions
@@ -279,7 +279,21 @@ def _get_encoders_output(ffmpeg: str) -> str:
     """
     global _ENCODERS_OUTPUT_CACHE
     if _ENCODERS_OUTPUT_CACHE is None:
-        result = run([ffmpeg, "-encoders"], timeout=30.0)
+        # S5 of ADR-SR-1 (render.py): redact subprocess-error messages inline to
+        # avoid a circular import with render._sanitize_subprocess_error (CWE-209).
+        try:
+            result = run([ffmpeg, "-encoders"], timeout=30.0)
+        except ClipwrightError as exc:
+            if exc.code in (
+                ErrorCode.SUBPROCESS_FAILED,
+                ErrorCode.SUBPROCESS_TIMEOUT,
+            ):
+                raise ClipwrightError(
+                    code=exc.code,
+                    message=safe_subprocess_message(exc),
+                    hint=exc.hint,
+                ) from None
+            raise
         _ENCODERS_OUTPUT_CACHE = result.stdout
     return _ENCODERS_OUTPUT_CACHE
 

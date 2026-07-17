@@ -5,13 +5,12 @@ Pins render's `_sanitize_subprocess_error` to the shared core helper
 `safe_subprocess_message` (mirrors `clipwright_transcribe.transcribe`'s
 `_sanitize_subprocess_error` / TR-AD-09, adapted for clipwright-render).
 
-Red phase (this file): `_sanitize_subprocess_error` does not yet exist in
-`clipwright_render.render`, so every test below currently fails — either at
-collection time (ImportError for the unit-test class) or at assertion time
-(the render/S1/S3 integration tests currently observe raw, unmasked
-SUBPROCESS_FAILED/TIMEOUT messages because render.py has not yet been wired
-to call the sanitizer). This is the expected Red state for FR-1 (Green is
-delivered by the impl-render task).
+Regression guard (this file): `_sanitize_subprocess_error` is implemented in
+`clipwright_render.render` and wired into all five seams. Before impl-render
+these tests were Red — either at collection time (ImportError for the unit-test
+class) or at assertion time (the render/S1/S3 integration tests observed raw,
+unmasked SUBPROCESS_FAILED/TIMEOUT messages because render.py did not call the
+sanitizer). They now pass and guard against a regression of FR-1.
 
 Covers (architecture-report-20260717-163916.md §3/§7/§8):
   - Unit: `_sanitize_subprocess_error(exc) -> ClipwrightError` in isolation
@@ -51,23 +50,22 @@ import clipwright_render.render as render_module
 from clipwright_render.schemas import RenderOptions
 
 # ---------------------------------------------------------------------------
-# _sanitize_subprocess_error is not yet implemented in render.py (Red phase).
-# Each unit test below imports it locally (function scope) rather than at
-# module scope: this lets ImportError/AttributeError fail exactly those 8
-# tests for the right reason (FR-1 unit contract), while the S1/S3
-# integration tests further down in this same file still collect and run
-# (they currently fail on assertions instead, because render.py does not yet
-# call the sanitizer anywhere).
+# _sanitize_subprocess_error is now implemented in render.py. Each unit test
+# below imports it locally (function scope) rather than at module scope: this
+# kept the earlier Red phase clean (an ImportError failed exactly those 8 unit
+# tests for the right reason without turning a module-level ImportError into a
+# collection error for the S1/S3 integration tests). The function-scope import
+# is retained so the shim's contract stays self-documenting.
 # ---------------------------------------------------------------------------
 
 
 def _sanitize(exc: ClipwrightError) -> ClipwrightError:
     """Local-import shim for clipwright_render.render._sanitize_subprocess_error.
 
-    Raises ImportError when the function does not exist yet (Red phase) --
-    the exact failure mode required for the unit tests below, without turning
-    a module-level ImportError into a collection error for the rest of this
-    test file.
+    During the earlier Red phase this raised ImportError when the function did
+    not exist yet -- the exact failure mode required for the unit tests below,
+    without turning a module-level ImportError into a collection error for the
+    rest of this test file.
     """
     from clipwright_render.render import _sanitize_subprocess_error
 
@@ -150,10 +148,11 @@ def _make_exc(
 class TestSanitizeSubprocessError:
     """Verify _sanitize_subprocess_error produces the shared core helper output.
 
-    Currently (Red): clipwright_render.render defines no _sanitize_subprocess_error
-    function, so every test below fails with ImportError raised from _sanitize()
-    (the local-import shim above) -- the correct Red signal for FR-1's unit
-    contract (not yet implemented, as opposed to a broken test).
+    Before impl-render, clipwright_render.render defined no
+    _sanitize_subprocess_error function, so every test here failed with
+    ImportError raised from _sanitize() (the local-import shim above) -- the
+    correct Red signal for FR-1's unit contract. The function now exists and
+    these tests pass.
     """
 
     def test_subprocess_failed_equals_safe_message(self) -> None:
@@ -225,9 +224,9 @@ class TestNoLocalSubprocessSafeMessage:
     Pins that render.py reuses the shared core constant
     (`clipwright.process.SUBPROCESS_SAFE_MESSAGE`) rather than defining a
     redundant local copy (ADR-SR-1 §3.1 / DRY, mirrors transcribe's
-    TestNoLocalSubprocessSafeMessage). This test currently passes already
-    (render.py defines no such constant today) and must keep passing after
-    the impl-render task adds `_sanitize_subprocess_error`.
+    TestNoLocalSubprocessSafeMessage). This test passed throughout (render.py
+    defines no such constant) and keeps passing now that impl-render added
+    `_sanitize_subprocess_error` using the shared core helper.
     """
 
     def test_no_local_subprocess_safe_message(self) -> None:
@@ -243,10 +242,11 @@ class TestNoLocalSubprocessSafeMessage:
 # Integration S1: render_plan() / render_timeline() with run() monkeypatched
 # to raise a SUBPROCESS_FAILED carrying a raw absolute path.
 #
-# Currently (Red): render.py does not call _sanitize_subprocess_error anywhere,
-# so both render_plan() (raises the exception verbatim) and render_timeline()
-# (converts it to an error_result envelope via render_timeline's top-level
-# except ClipwrightError, without masking) currently leak the raw message.
+# Before impl-render, render.py did not call _sanitize_subprocess_error
+# anywhere, so both render_plan() (raised the exception verbatim) and
+# render_timeline() (converted it to an error_result envelope via
+# render_timeline's top-level except ClipwrightError, without masking) leaked
+# the raw message. Both seams now route through the sanitizer.
 # ===========================================================================
 
 
@@ -256,9 +256,10 @@ class TestS1RenderPlanInjection:
     def test_render_plan_masks_subprocess_failed_message(self, tmp_path: Path) -> None:
         """render_plan() raises a masked ClipwrightError when run() fails.
 
-        Currently (Red): render_plan does not wrap run() in a try/except, so the
-        raw ClipwrightError (with the embedded absolute path) propagates verbatim
-        -- the masked-message assertion below fails.
+        Before impl-render, render_plan did not wrap run() in a try/except, so
+        the raw ClipwrightError (with the embedded absolute path) propagated
+        verbatim -- the masked-message assertion below failed. render_plan now
+        wraps run() (S2 seam) and re-raises through _sanitize_subprocess_error.
         """
         from clipwright_render.plan import RenderPlan
 
@@ -294,8 +295,8 @@ class TestS1RenderPlanInjection:
         assert raised.hint == "Check the command arguments."
         expected_message = safe_subprocess_message(raised)
         assert raised.message == expected_message, (
-            "render_plan() currently leaks the raw run() message verbatim "
-            "instead of masking it via _sanitize_subprocess_error (S2 seam, "
+            "render_plan() must mask the raw run() message via "
+            "_sanitize_subprocess_error rather than leak it verbatim (S2 seam, "
             "ADR-SR-1)."
         )
         assert leak_path not in raised.message
@@ -304,12 +305,13 @@ class TestS1RenderPlanInjection:
         self, tmp_path: Path
     ) -> None:
         """Full render_timeline() pipeline masks a SUBPROCESS_FAILED from the main
-        ffmpeg run() call (S1 seam, render.py:1336).
+        ffmpeg run() call (S1 seam).
 
-        Currently (Red): render_timeline's top-level except ClipwrightError
-        (render.py:683) converts the exception to an error_result envelope
-        without masking, so the assertion on the masked message fails and the
-        leaked absolute path is still present in the envelope.
+        Before impl-render, render_timeline's top-level except ClipwrightError
+        converted the exception to an error_result envelope without masking, so
+        the assertion on the masked message failed and the leaked absolute path
+        was still present in the envelope. The main ffmpeg run() is now wrapped
+        (S1 seam) and its error routed through _sanitize_subprocess_error.
         """
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
@@ -351,8 +353,8 @@ class TestS1RenderPlanInjection:
             )
         )
         assert result["error"]["message"] == expected_message, (
-            "render_timeline() currently returns the raw run() message verbatim "
-            "instead of masking it via _sanitize_subprocess_error (S1 seam, "
+            "render_timeline() must mask the raw run() message via "
+            "_sanitize_subprocess_error rather than return it verbatim (S1 seam, "
             "ADR-SR-1)."
         )
         assert leak_path not in result["error"]["message"]
@@ -371,11 +373,12 @@ class TestS3ProbeInjection:
         """_probe() re-raises a masked ClipwrightError when inspect_media() fails
         with SUBPROCESS_FAILED.
 
-        Currently (Red): _probe's except ClipwrightError branch only special-cases
-        FILE_NOT_FOUND (render.py:125-130); every other code (including
-        SUBPROCESS_FAILED) falls through to a bare `raise` (render.py:131), so the
-        raw message -- including the embedded absolute path -- propagates
-        unmodified and the masked-message assertion below fails.
+        Before impl-render, _probe's except ClipwrightError branch only
+        special-cased FILE_NOT_FOUND; every other code (including
+        SUBPROCESS_FAILED) fell through to a bare `raise`, so the raw message --
+        including the embedded absolute path -- propagated unmodified and the
+        masked-message assertion below failed. The bare `raise` now routes
+        through _sanitize_subprocess_error (S3 seam).
         """
         source = str(tmp_path / "a.mp4")
         Path(source).touch()
@@ -402,8 +405,8 @@ class TestS3ProbeInjection:
         )
         expected_message = safe_subprocess_message(raised)
         assert raised.message == expected_message, (
-            "_probe() currently leaks the raw inspect_media() message verbatim "
-            "instead of masking it via _sanitize_subprocess_error (S3 seam, "
+            "_probe() must mask the raw inspect_media() message via "
+            "_sanitize_subprocess_error rather than leak it verbatim (S3 seam, "
             "ADR-SR-1)."
         )
         assert leak_path not in raised.message
@@ -433,8 +436,8 @@ class TestS3ProbeInjection:
         assert raised.code == ErrorCode.SUBPROCESS_TIMEOUT
         expected_message = safe_subprocess_message(raised)
         assert raised.message == expected_message, (
-            "_probe() currently leaks the raw inspect_media() timeout message "
-            "verbatim instead of masking it (S3 seam, ADR-SR-1)."
+            "_probe() must mask the raw inspect_media() timeout message rather "
+            "than leak it verbatim (S3 seam, ADR-SR-1)."
         )
         assert leak_path not in raised.message
 
@@ -444,7 +447,8 @@ class TestS3ProbeInjection:
         """Regression guard: FILE_NOT_FOUND keeps its existing curated
         (basename-only) re-raise path and is NOT routed through
         _sanitize_subprocess_error (§8 edge-case table). This is a pre-existing
-        behaviour and passes today; it must keep passing after FR-1 lands.
+        behaviour that passed before FR-1 and keeps passing now that FR-1 has
+        landed.
         """
         source = "/abs/path/to/link.mp4"
         expected_hint = "Specify a real file instead of a symbolic link."
@@ -502,9 +506,9 @@ requires_ffprobe = pytest.mark.skipif(
 class TestRealFfprobeMasking:
     """Real ffprobe stderr masking (no monkeypatch on run()/inspect_media()).
 
-    Currently (Red): _probe() does not mask SUBPROCESS_FAILED messages, so the
-    message does not start with SUBPROCESS_SAFE_MESSAGE (it currently starts
-    with "Command failed with exit code ...").
+    Before impl-render, _probe() did not mask SUBPROCESS_FAILED messages, so the
+    message did not start with SUBPROCESS_SAFE_MESSAGE (it started with "Command
+    failed with exit code ..."). _probe() now masks it via S3.
     """
 
     @requires_ffprobe
@@ -523,9 +527,9 @@ class TestRealFfprobeMasking:
         raised = exc_info.value
         assert raised.code == ErrorCode.SUBPROCESS_FAILED
         assert raised.message.startswith(SUBPROCESS_SAFE_MESSAGE), (
-            "_probe() currently returns the raw ffprobe-derived message "
-            f"({raised.message!r}) instead of the masked "
-            f"{SUBPROCESS_SAFE_MESSAGE!r}-prefixed message (S3 seam, ADR-SR-1)."
+            "_probe() must return the masked "
+            f"{SUBPROCESS_SAFE_MESSAGE!r}-prefixed message rather than the raw "
+            f"ffprobe-derived message ({raised.message!r}) (S3 seam, ADR-SR-1)."
         )
         assert resolved_tmp_path not in raised.message
         assert str(garbage) not in raised.message

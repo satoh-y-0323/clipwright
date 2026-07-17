@@ -292,13 +292,12 @@ class TestMcpBoundarySubprocessRedaction:
     Unlike TestMcpBoundary.test_structuredcontent_top_level_ok, render_timeline
     itself is NOT mocked here: only render.py's low-level run()/inspect_media()
     seams are monkeypatched, so the real render_timeline() -> _render_inner()
-    pipeline executes and (once implemented) is expected to route the
-    SUBPROCESS_FAILED through _sanitize_subprocess_error before it reaches the
-    MCP envelope.
+    pipeline executes and routes the SUBPROCESS_FAILED through
+    _sanitize_subprocess_error before it reaches the MCP envelope.
 
-    Currently (Red): render.py does not yet mask subprocess-error messages, so
-    the raw absolute path injected below is still present verbatim in
-    structuredContent -- the assertions fail.
+    Before impl-render, render.py did not mask subprocess-error messages, so the
+    raw absolute path injected below was present verbatim in structuredContent
+    and these assertions failed. The S1 seam now masks it.
     """
 
     def test_structuredcontent_masks_subprocess_failed_message(
@@ -367,8 +366,8 @@ class TestMcpBoundarySubprocessRedaction:
             ClipwrightError(code=ErrorCode.SUBPROCESS_FAILED, message="", hint="")
         )
         assert error.get("message") == expected_message, (
-            "structuredContent currently exposes the raw run() message verbatim "
-            "instead of the masked message (S1 seam, ADR-SR-1)."
+            "structuredContent must expose the masked message rather than the "
+            "raw run() message verbatim (S1 seam, ADR-SR-1)."
         )
         assert leak_path not in json.dumps(content), (
             "structuredContent must not contain the raw absolute path leaked by "

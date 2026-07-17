@@ -22,6 +22,23 @@ Design decisions:
 - _probe sets fps only when "first video StreamInfo present AND duration not
   None", so it does not mis-adopt the rate=1000.0 sentinel from audio-only
   sources (ADR-C2-r2).
+- ADR-SR-1 (per-seam subprocess-error redaction, SR-R-001 / CWE-209): every
+  render seam that reaches a child process (ffmpeg / ffprobe) individually
+  routes its ClipwrightError through _sanitize_subprocess_error(exc), which
+  replaces the message with the shared safe_subprocess_message(exc) ONLY for
+  SUBPROCESS_FAILED / SUBPROCESS_TIMEOUT, leaving code and hint unchanged and
+  passing every other error code through untouched. The five seams are S1 the
+  main ffmpeg run() in _render_inner, S2 the run() in render_plan, S3 the
+  inspect_media() (ffprobe) in _probe, S4 the PiP re-probe inspect_media(), and
+  S5 the ffmpeg -encoders run() in encoders.py (redacted inline to avoid a
+  circular import). A single top-level swap in the tool boundary is deliberately
+  NOT used: it would miss S2 (called outside the render() try), clobber render's
+  own path-safe curated SUBPROCESS_FAILED messages (_verify_image_magic
+  basename; the "output file was not generated" wording), and not cover the S5
+  capability probe. render-owned messages that are raised directly (not through
+  a run() / inspect_media() seam) are never redacted. The stable contract for
+  callers is code / hint, not message, so redacting message is backward
+  compatible.
 """
 
 from __future__ import annotations
@@ -38,7 +55,7 @@ from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.media import inspect_media
 from clipwright.otio_utils import get_clipwright_metadata, load_timeline
 from clipwright.pathpolicy import check_media_ref, check_output_not_source
-from clipwright.process import resolve_tool, run
+from clipwright.process import resolve_tool, run, safe_subprocess_message
 from clipwright.schemas import ToolResult
 from pydantic import ValidationError as PydanticValidationError
 
@@ -95,6 +112,24 @@ _MAX_SRT_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB
 _CUE_FRAGMENTATION_ADVISORY_THRESHOLD = 2
 
 
+def _sanitize_subprocess_error(exc: ClipwrightError) -> ClipwrightError:
+    """Replace a SUBPROCESS_FAILED/TIMEOUT message with a generic string (ADR-SR-1).
+
+    core run() / inspect_media() messages may embed raw child stderr and absolute
+    input paths; this substitutes the shared safe_subprocess_message so nothing
+    leaks into the MCP envelope (CWE-209). hint is preserved (AI reads the next
+    step); every other error code is returned unchanged (its message/hint is
+    user-facing and path-safe by construction).
+    """
+    if exc.code in (ErrorCode.SUBPROCESS_FAILED, ErrorCode.SUBPROCESS_TIMEOUT):
+        return ClipwrightError(
+            code=exc.code,
+            message=safe_subprocess_message(exc),
+            hint=exc.hint,
+        )
+    return exc
+
+
 def _probe(source: str) -> ProbeInfo:
     """Call inspect_media and return ProbeInfo (AD-3 / ADR-C2-r2).
 
@@ -128,7 +163,7 @@ def _probe(source: str) -> ProbeInfo:
                 message=(f"Source media file not found: {Path(source).name}"),
                 hint=exc.hint,
             ) from exc
-        raise
+        raise _sanitize_subprocess_error(exc) from exc  # S3 (ADR-SR-1)
     has_video = any(s.codec_type == "video" for s in info.streams)
     audio_count = sum(1 for s in info.streams if s.codec_type == "audio")
 
@@ -399,7 +434,10 @@ def render_plan(
         + plan.ffmpeg_args
         + [output_arg]
     )
-    run(cmd, timeout=float(timeout), cwd=plan.stabilize_cwd)
+    try:
+        run(cmd, timeout=float(timeout), cwd=plan.stabilize_cwd)
+    except ClipwrightError as exc:
+        raise _sanitize_subprocess_error(exc) from None  # S2 (ADR-SR-1)
 
 
 def _generate_retimed_srt(
@@ -1236,6 +1274,11 @@ def _render_inner(
             f"{plan.total_duration_seconds:g}" if plan.image_sources else None
         )
         for img in plan.image_sources:
+            # Early path collision check (ADR-B8 parity / ADR-SR-1): output == image
+            # is rejected before existence/extension checks (non-destructive; the
+            # extensions are disjoint so this only trips the pathological
+            # image_path == output input).
+            check_output_not_source(output_path, [img])
             _img_p = Path(img.replace("\\", "/"))
             _img_exists_p = (
                 (timeline_path.parent / _img_p) if not _img_p.is_absolute() else _img_p
@@ -1307,7 +1350,11 @@ def _render_inner(
             # Re-probe video stream (TOCTOU: check_media_ref covers symlink/path
             # validation; re-probe ensures content is still valid at render time,
             # unlike _verify_image_magic which only checks magic bytes).
-            inspect_media(pip)
+            # Redact subprocess errors (ADR-SR-1 / S4).
+            try:
+                inspect_media(pip)
+            except ClipwrightError as exc:
+                raise _sanitize_subprocess_error(exc) from None
             # Check that output is not equal to pip source
             check_output_not_source(output_path, [pip])
             inputs += ["-i", pip]
@@ -1333,7 +1380,10 @@ def _render_inner(
             + [output_arg]
         )
 
-        run(cmd, timeout=float(timeout), cwd=plan.stabilize_cwd)  # §6-C
+        try:
+            run(cmd, timeout=float(timeout), cwd=plan.stabilize_cwd)  # §6-C
+        except ClipwrightError as exc:
+            raise _sanitize_subprocess_error(exc) from None  # S1 (ADR-SR-1)
 
         # Verify output file exists
         if not output_path.exists():
