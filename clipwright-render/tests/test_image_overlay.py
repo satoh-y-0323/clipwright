@@ -1374,7 +1374,7 @@ class TestCorruptImageSubprocessFailed:
     def test_corrupt_image_message_masked_by_s2_redaction(self, tmp_path: Path) -> None:
         """Corrupt-image SUBPROCESS_FAILED message is masked by S2 redaction.
 
-        ADR-SR-1 (architecture-report-20260717-163916.md S2.5 Consequences):
+        ADR-SR-1 (architecture-report-20260717-163916.md §2.5 Consequences):
         render_plan's own ffmpeg run() call is subprocess seam S2. Once
         _sanitize_subprocess_error is wired in, any SUBPROCESS_FAILED/TIMEOUT
         raised from that run() call has its message replaced with
@@ -1543,7 +1543,7 @@ class TestVerifyImageMagic:
 
 # ===========================================================================
 # Section 11: FR-2 image overlay output collision check (ADR-SR-1 / ADR-B8
-# parity — architecture-report-20260717-163916.md S5.1)
+# parity — architecture-report-20260717-163916.md §5.1)
 # ===========================================================================
 
 
@@ -1589,7 +1589,7 @@ class TestImageOverlayOutputCollision:
     the image overlay loop must reject image_path == output_path with
     PATH_NOT_ALLOWED, mirroring the BGM precedent (render.py:753-757 / ADR-B8)
     via check_output_not_source(output_path, [img]) placed at the very top of
-    the loop body (architecture-report-20260717-163916.md S5.1 / S8). This
+    the loop body (architecture-report-20260717-163916.md §5.1 / S8). This
     test pins the collision-detection behavior and prevents regression to
     pre-wiring state where pathological image_path==output would fall through
     to the pre-existing existence check (FILE_NOT_FOUND) or extension check
@@ -1760,7 +1760,7 @@ class TestImageOverlayOutputCollision:
 
 # ===========================================================================
 # Section 12: FR-3 image fade fail-closed validation (ADR-SR-1 / PiP parity —
-# architecture-report-20260717-163916.md S5.2 / S8)
+# architecture-report-20260717-163916.md §5.2 / S8)
 # ===========================================================================
 
 
@@ -1980,7 +1980,7 @@ class TestImageFadeFailClosed:
     def test_fade_sum_exceeds_duration_message_unchanged(self) -> None:
         """Existing combined fade-sum check keeps its original wording (plan.py:567).
 
-        Architecture S2.5 Consequences: FR-3 only adds isfinite/range checks
+        Architecture §2.5 Consequences: FR-3 only adds isfinite/range checks
         BEFORE this existing check; its message/hint text is unchanged. Green
         both before and after FR-3 (regression guard, not Red).
         """

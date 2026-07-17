@@ -35,7 +35,8 @@ Design decisions:
   NOT used: it would miss S2 (called outside the render() try), clobber render's
   own path-safe curated SUBPROCESS_FAILED messages (_verify_image_magic
   basename; the "output file was not generated" wording), and not cover the S5
-  capability probe. render-owned messages that are raised directly (not through
+  encoder list probe (`ffmpeg -encoders`). render-owned messages that are raised
+  directly (not through
   a run() / inspect_media() seam) are never redacted. The stable contract for
   callers is code / hint, not message, so redacting message is backward
   compatible.

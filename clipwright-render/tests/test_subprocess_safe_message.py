@@ -29,6 +29,16 @@ Covers (architecture-report-20260717-163916.md §3/§7/§8):
   - Real-binary (e2e marker): a garbage `.mp4` file fed to the real ffprobe
     binary via `_probe()`, verifying the real subprocess failure is masked
     (skipped when ffprobe cannot be resolved via PATH / CLIPWRIGHT_FFPROBE).
+  - S5 (security-review-report-review-security-w3.md [SR-NEW]): a regression
+    guard for `clipwright_render.encoders._get_encoders_output()`'s inline
+    mask, added because this seam previously had no dedicated test. Green
+    against the already-correct implementation (not a Red/Green pair -- this
+    closes a coverage gap, not a missing feature).
+  - SR-R-001 pin (security-review-report-review-security-w3.md [SR-R-001]):
+    direct assertions that S3's `from exc` chain keeps the raw message on
+    `__cause__` (expected), and that `render_timeline()`'s error envelope
+    never surfaces it (code/message/hint only). Also green against the
+    already-correct implementation.
 """
 
 from __future__ import annotations
@@ -470,6 +480,201 @@ class TestS3ProbeInjection:
         assert raised.code == ErrorCode.FILE_NOT_FOUND
         assert raised.message == "Source media file not found: link.mp4"
         assert raised.hint == expected_hint
+
+
+# ===========================================================================
+# S5 regression pin: encoders._get_encoders_output() (ffmpeg -encoders probe)
+# masks SUBPROCESS_FAILED/TIMEOUT the same way as S1-S4, via an inline copy of
+# safe_subprocess_message() (encoders.py cannot import
+# render._sanitize_subprocess_error without a circular import).
+#
+# security-review-report-review-security-w3.md [SR-NEW]: before this test was
+# added, S5 was the only one of the five masking seams with no dedicated
+# regression test, so a future edit could silently weaken or remove the inline
+# mask (dropping the `except ClipwrightError` branch, or forgetting
+# `safe_subprocess_message`) without any test failing. This test closes that
+# coverage gap; the source is unchanged and the test is green against the
+# already-correct implementation.
+# ===========================================================================
+
+
+class TestS5EncodersOutputMasking:
+    """S5 seam: encoders._get_encoders_output() masks a raw ffmpeg -encoders
+    probe failure (SUBPROCESS_FAILED/TIMEOUT), mirroring S1-S4 in render.py.
+    """
+
+    def test_get_encoders_output_masks_subprocess_failed_message(
+        self, tmp_path: Path
+    ) -> None:
+        """_get_encoders_output() re-raises a masked ClipwrightError when the
+        underlying `ffmpeg -encoders` probe itself fails with SUBPROCESS_FAILED.
+
+        code/hint are preserved unchanged; only message is replaced with
+        safe_subprocess_message(exc), and the raw absolute path embedded in
+        the original message must not survive into the re-raised message.
+        """
+        import clipwright_render.encoders as encoders_module
+
+        leak_path = str(tmp_path / "leaked-media-secret.mp4")
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            raise ClipwrightError(
+                code=ErrorCode.SUBPROCESS_FAILED,
+                message=f"Command failed with exit code 1: {leak_path}: not found",
+                hint="Check the command arguments.",
+            )
+
+        previous_cache = encoders_module._ENCODERS_OUTPUT_CACHE
+        encoders_module._ENCODERS_OUTPUT_CACHE = None
+        try:
+            with (
+                patch("clipwright_render.encoders.run", side_effect=_fake_run),
+                pytest.raises(ClipwrightError) as exc_info,
+            ):
+                encoders_module._get_encoders_output("/usr/bin/ffmpeg")
+        finally:
+            encoders_module._ENCODERS_OUTPUT_CACHE = previous_cache
+
+        raised = exc_info.value
+        assert raised.code == ErrorCode.SUBPROCESS_FAILED
+        assert raised.hint == "Check the command arguments."
+        expected_message = safe_subprocess_message(raised)
+        assert raised.message == expected_message, (
+            "_get_encoders_output() must mask the raw run() message via its "
+            "inline safe_subprocess_message() copy rather than leak it "
+            "verbatim (S5 seam, ADR-SR-1)."
+        )
+        assert leak_path not in raised.message
+
+    def test_resolve_hw_encoder_masks_subprocess_failed_message(
+        self, tmp_path: Path
+    ) -> None:
+        """_resolve_hw_encoder() (auto mode) surfaces the same masked message
+        when the `ffmpeg -encoders` probe it depends on fails, verifying the
+        S5 mask holds through the public capability-layer entry point and not
+        only the private helper called directly above.
+        """
+        import clipwright_render.encoders as encoders_module
+
+        leak_path = str(tmp_path / "leaked-media-secret.mp4")
+
+        def _fake_run(cmd: list[str], **kwargs: Any) -> CompletedProcess[str]:
+            raise ClipwrightError(
+                code=ErrorCode.SUBPROCESS_FAILED,
+                message=f"Command failed with exit code 1: {leak_path}: not found",
+                hint="Check the command arguments.",
+            )
+
+        opts = RenderOptions(hw_encoder="auto")  # type: ignore[call-arg]
+
+        previous_cache = encoders_module._ENCODERS_OUTPUT_CACHE
+        encoders_module._ENCODERS_OUTPUT_CACHE = None
+        try:
+            with (
+                patch("clipwright_render.encoders.run", side_effect=_fake_run),
+                patch(
+                    "clipwright_render.encoders.resolve_tool",
+                    return_value="/usr/bin/ffmpeg",
+                ),
+                pytest.raises(ClipwrightError) as exc_info,
+            ):
+                encoders_module._resolve_hw_encoder(opts)
+        finally:
+            encoders_module._ENCODERS_OUTPUT_CACHE = previous_cache
+
+        raised = exc_info.value
+        assert raised.code == ErrorCode.SUBPROCESS_FAILED
+        expected_message = safe_subprocess_message(raised)
+        assert raised.message == expected_message
+        assert leak_path not in raised.message
+
+
+# ===========================================================================
+# SR-R-001 pin: S3's `raise _sanitize_subprocess_error(exc) from exc`
+# (render.py:166) is the only one of the five seams that keeps the exception
+# chain (`__cause__`) pointing at the original, unmasked exception (S1/S2/S4/S5
+# all use `from None`). security-review-report-review-security-w3.md
+# [SR-R-001] confirms this is a deliberate style choice, safe only because
+# render_timeline()'s `error_result(exc.code, exc.message, exc.hint)` reads
+# exclusively those three strings and never serialises `__cause__` /
+# `__context__` / the traceback into the MCP envelope. These tests pin both
+# halves of that guarantee directly, rather than relying on architecture-report
+# prose alone.
+# ===========================================================================
+
+
+class TestS3CauseNotLeakedViaEnvelope:
+    """S3 `from exc` retains the raw exception on __cause__, but the MCP
+    envelope never exposes it (code/message/hint are the only fields read).
+    """
+
+    def test_probe_cause_chain_still_holds_raw_message(self, tmp_path: Path) -> None:
+        """_probe()'s masked ClipwrightError keeps __cause__ pointing at the
+        original, unmasked exception (the `from exc` chain, as opposed to
+        `from None` used by the other four seams). This is expected and safe
+        in isolation -- __cause__ is never read by render_timeline()'s
+        error_result() call (see the sibling test below).
+        """
+        source = str(tmp_path / "a.mp4")
+        Path(source).touch()
+        leak_path = str(tmp_path / "leaked-media-secret.mp4")
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                side_effect=ClipwrightError(
+                    code=ErrorCode.SUBPROCESS_FAILED,
+                    message=f"Command failed with exit code 1: {leak_path}: eof",
+                    hint="Check the command arguments, input file path, and tool version.",
+                ),
+            ),
+            pytest.raises(ClipwrightError) as exc_info,
+        ):
+            render_module._probe(source)
+
+        raised = exc_info.value
+        assert raised.__cause__ is not None
+        assert leak_path in str(raised.__cause__), (
+            "This pins that S3 still uses `from exc` (not `from None`); if a "
+            "future refactor switches S3 to `from None` this assertion should "
+            "be updated alongside it, not silently broken."
+        )
+
+    def test_render_timeline_envelope_never_exposes_cause_chain(
+        self, tmp_path: Path
+    ) -> None:
+        """Full render_timeline() pipeline: even though S3's `__cause__` holds
+        the raw, unmasked message (previous test), the returned error envelope
+        contains only code/message/hint -- no cause/traceback field -- and the
+        leaked absolute path is absent from the envelope's full string form.
+        """
+        source = str(tmp_path / "a.mp4")
+        Path(source).touch()
+        tl_path = tmp_path / "tl.otio"
+        _write_timeline(tl_path, [_make_clip(source, 0.0, 5.0)])
+        output = str(tmp_path / "out.mp4")
+        leak_path = str(tmp_path / "leaked-media-secret.mp4")
+
+        with patch(
+            "clipwright_render.render.inspect_media",
+            side_effect=ClipwrightError(
+                code=ErrorCode.SUBPROCESS_FAILED,
+                message=f"Command failed with exit code 1: {leak_path}: eof",
+                hint="Check the command arguments, input file path, and tool version.",
+            ),
+        ):
+            result = render_module.render_timeline(
+                timeline=str(tl_path), output=output, options=RenderOptions()
+            )
+
+        assert result["ok"] is False
+        assert set(result["error"].keys()) == {"code", "message", "hint"}, (
+            "error_result() must only carry code/message/hint -- no __cause__ "
+            "or traceback field -- so the S3 `from exc` chain has nothing to "
+            "leak through the envelope."
+        )
+        assert leak_path not in result["error"]["message"]
+        assert leak_path not in str(result)
 
 
 # ===========================================================================

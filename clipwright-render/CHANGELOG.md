@@ -13,8 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (SR-R-001 / CWE-209 / ADR-SR-1).** The render tool has five code paths that
   reach a child process (ffmpeg / ffprobe): the main ffmpeg execution in
   `_render_inner` and `render_plan`, the source probe in `_probe`, the PiP
-  re-probe in `_render_inner`, and the encoder capability probe in
-  `encoders._get_encoders_output`. When any seam raises a `SUBPROCESS_FAILED`
+  re-probe in `_render_inner`, and the encoder list probe (`ffmpeg -encoders`)
+  in `encoders._get_encoders_output`. When any seam raises a `SUBPROCESS_FAILED`
   or `SUBPROCESS_TIMEOUT` error, the raw child stderr (which may contain
   absolute input paths or temporary working directories) is replaced with a
   generic safe message before being returned in the MCP envelope. The error
@@ -36,12 +36,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Image overlay fade values are now validated fail-closed for NaN,
   infinities, and negative values.** The `_marker_to_image_overlay` function
-  previously passed fade times to `isfinite()` in a sum comparison that silently
-  dropped `NaN + x > d` (always False), allowing NaN fades to be applied
-  without warning. Image fade validation now matches the PiP implementation:
-  `isfinite()` for NaN/±inf detection, then range checks `0 <= fade <=
-  duration`, with a explicit `INVALID_INPUT` error + hint for any out-of-bounds
-  value. Legitimate boundary values (0.0 and duration_sec) remain accepted.
+  previously validated fade times only via a sum comparison
+  (`fade_in_s + fade_out_s > duration_sec`), with no `isfinite()`/range guard
+  on the individual values, so NaN silently passed (`NaN + x > d` is always
+  False), allowing NaN fades to be applied without warning. Image fade
+  validation now matches the PiP implementation: `isfinite()` for NaN/±inf
+  detection, then range checks `0 <= fade <= duration`, with an explicit
+  `INVALID_INPUT` error + hint for any out-of-bounds value. Legitimate
+  boundary values (0.0 and duration_sec) remain accepted.
 
 ### Changed
 
