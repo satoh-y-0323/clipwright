@@ -61,12 +61,14 @@ def clipwright_export_timeline(
 
     format enumerates 'edl' (CMX3600 EDL) and 'fcpxml' (Final Cut Pro XML). Media
     references are absolutized for NLE hand-off. Non-integer (NTSC 23.976/29.97)
-    frame rates are rejected before any write. For EDL export, clips that do not
-    fall on whole-frame boundaries (e.g. from second-based trims or silence cuts)
-    are quantized to the nearest frame on the write-time copy and reported in
-    warnings; the input OTIO is never modified. clipwright-specific edit data the
-    exchange format cannot carry (captions, overlays, color grades, etc.) is
-    reported in 'warnings' — keep the source OTIO as master and re-run
+    frame rates are rejected before any write. For EDL and FCPXML export, clips
+    that do not fall on whole-frame boundaries (e.g. from second-based trims or
+    silence cuts) are quantized to the nearest frame on the write-time copy and
+    reported in warnings; the input OTIO is never modified. For FCPXML, a media
+    reference without an available_range is completed from the clip
+    source_range on the write-time copy (lossless; no warning). clipwright-specific
+    edit data the exchange format cannot carry (captions, overlays, color grades,
+    etc.) is reported in 'warnings' — keep the source OTIO as master and re-run
     clipwright-render to bake those into a flat MP4.
 
     readOnlyHint=True: the tool writes only a freshly created output file; the

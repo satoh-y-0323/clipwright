@@ -150,9 +150,17 @@ Verification aspects:
             regardless of item count).
       (M-4) A frame-aligned input (roundtrip_timeline_factory) produces no
             quantization warning and is unchanged.
-      (M-5) FCPXML is not quantized for the same fractional-duration input
-            (the fcpx_xml adapter performs its own frame conversion,
-            with no quantization pass on the clipwright side).
+      (M-5) [SUPERSEDED by ADR-EX-13 / (N) below] This class used to pin
+            "FCPXML is not quantized for the same fractional-duration
+            input" via test_fcpxml_is_not_quantized_for_fractional_clips.
+            That test was deleted because ADR-EX-13 (architecture-report
+            20260717-122520.md) reverses this: FCPXML now shares the same
+            _quantize_to_frame_boundaries pass as EDL, since the fcpx_xml
+            adapter does not floor fractional frames itself -- it writes
+            invalid, non-frame-aligned rational-seconds values that its own
+            reader silently truncates with unbounded cumulative drift (F1,
+            no exception, so write-then-verify used to pass silently
+            broken). See TestFcpxmlQuantizationAndAvailableRange (N) below.
       (M-6) The input .otio file is byte-unchanged after an EDL export of
             fractional-duration clips (non-destructive, EDL variant of the
             (B-2) pattern).
@@ -161,13 +169,55 @@ Verification aspects:
       (M-8) The written EDL re-reads via read_from_file(..., "cmx_3600",
             rate=...) without raising (the exact EDLParseError this ADR
             eliminates).
+  (N) [ADR-EX-13] FCPXML frame-boundary quantization + available_range
+      synthesis (architecture-report 20260717-122520.md sect 2/3/4/5/6/7;
+      requirements-report 20260717-122257.md functional requirement 5)
+      (N-1..9) TestFcpxmlQuantizationAndAvailableRange exercises the 9
+            acceptance-criteria-mapped observations: fractional-frame FCPXML
+            export succeeds with an aggregated quantization warning and an
+            exact round-trip (N-1); a 4-clip run accumulates zero drift
+            versus naive per-clip floor (N-2); frame-aligned input is
+            unmutated with no warning (N-3); an available_range=None clip
+            (F2's crash shape) now succeeds (N-4) including in combination
+            with fractional durations (N-5); the input .otio stays
+            byte-unchanged (N-6); an existing non-None available_range
+            (including fractional values) is left untouched, verified via
+            a direct call to _synthesize_missing_available_ranges (N-7);
+            the EDL warning wording is an unchanged byte-identical
+            regression (N-8); a sub-half-frame clip collapses to zero
+            length with its own warning fragment, FCPXML variant of (M-7)
+            (N-9). This class was Red at authoring time: FCPXML export
+            never called _quantize_to_frame_boundaries at all (EDL-only
+            branch), and an available_range=None ExternalReference crashed
+            the fcpx_xml adapter's writer with an unguarded AttributeError
+            that escaped to export_timeline's outer INTERNAL boundary (F2).
+      (N-Layer1) A dedicated test parses the written .fcpxml's raw XML and
+            asserts every offset/duration/start rational-seconds value is
+            an exact multiple of the file's own frameDuration -- the F1
+            write-time contract itself (ADR-EX-13), verified independently
+            of the fcpx_xml adapter's reader (which carries the unrelated,
+            out-of-scope "A3b" int()-truncation artifact below). This is
+            the primary oracle for F1; N-1/N-2/N-3/N-5's round-trip
+            equality checks are a secondary (adapter-reader-dependent)
+            observation limited to fixture values measured exact against
+            the real adapter, not guessed, to avoid an unrelated false red.
+      (N-Layer3) A dedicated xfail(strict=False) test pins the fcpx_xml
+            reader's residual "A3b" artifact (29 frames at 25fps read back
+            as 28, a float-precision int() truncation inside the adapter's
+            own reader, unrelated to and unaffected by ADR-EX-13) so the
+            out-of-scope defect is documented and tracked, not hidden by
+            N-1..N-9's measured-exact fixture selection, and not fixed into
+            a "1-frame-short is correct" expectation (adapter-side, out of
+            scope; the written file itself is frame-aligned per N-Layer1).
 """
 
 from __future__ import annotations
 
 import math
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree as ET
 
 import opentimelineio as otio
 import pytest
@@ -308,6 +358,7 @@ def _build_frame_duration_timeline(
     gap_after_index: int | None = None,
     gap_duration_frames: float = 0.0,
     name: str = "frac",
+    with_available_range: bool = True,
 ) -> str:
     """Build and save a V1-only timeline whose clips carry the given
     frame-unit (possibly fractional) durations at *rate* -- the shape that
@@ -327,13 +378,24 @@ def _build_frame_duration_timeline(
     Optionally inserts one Gap (via clipwright.otio_utils.add_gap, reused
     as-is, not reimplemented) of *gap_duration_frames* immediately after
     clip index *gap_after_index* (0-based).
+
+    When *with_available_range* is False (ADR-EX-13 §7.2 helper extension),
+    each clip's MediaRef carries no available_range at all
+    (``MediaRef(target_url=ref)``), so ``add_clip`` (otio_utils.py:112-120)
+    leaves ``ExternalReference.available_range`` unset (None) -- the
+    backward-compatible clip shape that reproduces F2 (available_range=None
+    crashing the fcpx_xml adapter's writer).
     """
     media = make_media_file(f"{name}.mov")
     tl = new_timeline(name=f"export-{name}")
     v1 = tl.tracks[0]
-    available = TimeRangeModel(
-        start_time=RationalTimeModel(value=0.0, rate=rate),
-        duration=RationalTimeModel(value=100000.0, rate=rate),
+    available = (
+        TimeRangeModel(
+            start_time=RationalTimeModel(value=0.0, rate=rate),
+            duration=RationalTimeModel(value=100000.0, rate=rate),
+        )
+        if with_available_range
+        else None
     )
     ref = media_ref_for_otio(media, tmp_path)
     for i, dur in enumerate(durations_frames):
@@ -1310,14 +1372,20 @@ class TestEdlFrameQuantization:
     plus test_multi_clip_with_gap_has_no_cumulative_drift,
     test_input_otio_bytes_unchanged_after_edl_export,
     test_zero_collapse_clip_reports_warning, and
-    test_output_edl_rereads_without_exception. The remaining 4 subtests
-    (frame-aligned input at 24/25/30fps, FCPXML) were already green before
-    the fix (those clips do not trigger the desync condition, so they pass
-    verify without quantization) and were added as regression guards. That
-    Red phase was resolved by implementing and wiring in
+    test_output_edl_rereads_without_exception. The remaining 3 subtests
+    (frame-aligned input at 24/25/30fps) were already green before the fix
+    (those clips do not trigger the desync condition, so they pass verify
+    without quantization) and were added as regression guards. That Red
+    phase was resolved by implementing and wiring in
     _quantize_to_frame_boundaries per
     architecture-report-20260717-095045.md §1-§6; these tests now guard
     against a regression of the quantization behaviour.
+
+    This class previously also carried a FCPXML test asserting the opposite
+    of ADR-EX-13 (test_fcpxml_is_not_quantized_for_fractional_clips, "FCPXML
+    is never quantized"); that test was deleted -- see (N) in the module
+    docstring and TestFcpxmlQuantizationAndAvailableRange below, which now
+    quantizes the FCPXML path too (architecture-report-20260717-122520.md).
     """
 
     # (10.3, 20.7) is a measured bug-reproducing pair (verified by direct
@@ -1504,39 +1572,6 @@ class TestEdlFrameQuantization:
             assert abs(_seconds(sr.start_time) - start_s) <= tolerance
             assert abs(_seconds(sr.duration) - dur_s) <= tolerance
 
-    def test_fcpxml_is_not_quantized_for_fractional_clips(
-        self, tmp_path: Path, make_media_file: Any
-    ) -> None:
-        rate = 30.0
-        durations = (10.3, 20.7)
-        otio_path = _build_frame_duration_timeline(
-            tmp_path, make_media_file, rate, durations, name="fcpxml_frac"
-        )
-        out = tmp_path / "fcpxml_frac.fcpxml"
-
-        result = export_timeline(
-            timeline=otio_path,
-            output=str(out),
-            options=ExportTimelineOptions(format="fcpxml"),
-        )
-        assert result.ok is True, result.error
-        joined = " ".join(result.warnings).lower()
-        assert _QUANT_WARNING_SUBSTR not in joined, (
-            "FCPXML must never be quantized (the fcpx_xml adapter performs "
-            "its own frame conversion with no quantization pass); got "
-            f"warnings: {result.warnings!r}"
-        )
-
-        back = otio.adapters.read_from_file(str(out), adapter_name="fcpx_xml")
-        video_clips = _video_clips(back)
-        assert len(video_clips) == len(durations)
-        tolerance = 1.0 / rate
-        for clip, dur_frames in zip(video_clips, durations, strict=True):
-            assert (
-                abs(_seconds(clip.source_range.duration) - dur_frames / rate)
-                <= tolerance
-            )
-
     def test_input_otio_bytes_unchanged_after_edl_export(
         self, tmp_path: Path, make_media_file: Any
     ) -> None:
@@ -1606,3 +1641,626 @@ class TestEdlFrameQuantization:
             str(out), adapter_name="cmx_3600", rate=rate
         )
         assert isinstance(back, otio.schema.Timeline)
+
+
+# ===========================================================================
+# ADR-EX-13 (FCPXML frame-boundary quantization + available_range synthesis)
+# helpers -- used only by TestFcpxmlQuantizationAndAvailableRange below.
+# ===========================================================================
+
+
+def _parse_fcpxml_rational_seconds(value: str) -> Fraction:
+    """Parse an fcpx_xml rational-seconds attribute value ("N/Ds" or a bare
+    "Ns") into an exact Fraction of seconds.
+
+    Mirrors the two string shapes the fcpx_xml adapter itself writes
+    (from_rational_time / _calculate_rational_number in
+    otio_fcpx_xml_adapter/fcpx_xml.py): "0s" for zero, "{n}s" for a whole
+    number of seconds, "{n}/{d}s" otherwise. Used only to verify the F1
+    write-time contract (layer 1, architecture §7.3) directly on the written
+    XML bytes -- never via the adapter's own (buggy, A3b) reader.
+    """
+    text = value.rstrip("s")
+    if "/" in text:
+        num, den = text.split("/")
+        return Fraction(int(num), int(den))
+    return Fraction(int(text))
+
+
+def _fcpxml_frame_duration_seconds(xml_text: str) -> Fraction:
+    """Return the written .fcpxml's <format frameDuration=...> as a Fraction
+    of seconds.
+
+    Assumes a single representative rate per file, which holds for every
+    fixture in TestFcpxmlQuantizationAndAvailableRange (all clips share one
+    rate, per _representative_rate / _check_frame_rates).
+    """
+    root = ET.fromstring(xml_text)
+    fmt = root.find(".//format")
+    assert fmt is not None, "fcpxml output is missing a <format> element"
+    frame_duration = fmt.get("frameDuration")
+    assert frame_duration is not None, "<format> is missing frameDuration"
+    return _parse_fcpxml_rational_seconds(frame_duration)
+
+
+def _assert_fcpxml_frame_aligned(out_path: Path) -> int:
+    """Layer 1 oracle (architecture-report-20260717-122520.md §7.3): assert
+    every offset/duration/start rational-seconds attribute value in the
+    written .fcpxml is an exact multiple of the file's own frameDuration.
+
+    This is F1's actual write-time contract (ADR-EX-13: "every N/Ds value
+    the adapter writes is an exact multiple of frameDuration"), verified
+    directly on the written bytes by parsing the raw XML -- independent of
+    the fcpx_xml adapter's own reader, which carries an unrelated,
+    out-of-scope int()-truncation artifact ("A3b") that occasionally reads
+    a frame-aligned integer value one frame short at some rates. A test
+    relying only on round-trip equality (layer 2) would conflate "our
+    contract" with "the adapter reader's behaviour"; this function is the
+    layer-1 primary oracle that does not.
+
+    Returns the number of offset/duration/start attribute values checked
+    (the caller should assert this is > 0 as a canary against a vacuous
+    parse of an unexpectedly empty/malformed document).
+    """
+    xml_text = out_path.read_text(encoding="utf-8")
+    frame_duration = _fcpxml_frame_duration_seconds(xml_text)
+    root = ET.fromstring(xml_text)
+    checked = 0
+    for elem in root.iter():
+        for attr in ("offset", "duration", "start"):
+            raw = elem.get(attr)
+            if raw is None:
+                continue
+            seconds = _parse_fcpxml_rational_seconds(raw)
+            ratio = seconds / frame_duration
+            assert ratio.denominator == 1, (
+                f"<{elem.tag} {attr}={raw!r}> is not an exact multiple of "
+                f"frameDuration ({frame_duration}s); ADR-EX-13 requires every "
+                "written rational-seconds value to be frame-aligned"
+            )
+            checked += 1
+    return checked
+
+
+class TestFcpxmlQuantizationAndAvailableRange:
+    """ADR-EX-13 (architecture-report-20260717-122520.md; requirements-report
+    -20260717-122257.md functional requirement 5): the FCPXML export path
+    now shares EDL's frame-boundary quantization
+    (_quantize_to_frame_boundaries, ADR-EX-12) at the same representative
+    integer rate, and additionally synthesizes a missing
+    ExternalReference.available_range from the clip's (quantized)
+    source_range (_synthesize_missing_available_ranges), so a
+    fractional-frame input or an available_range=None clip succeeds instead
+    of silently drifting (F1, no exception, so write-then-verify used to
+    pass a silently-broken file) or crashing with INTERNAL (F2, an
+    unguarded AttributeError inside the fcpx_xml adapter's writer).
+
+    This class was Red at authoring time: FCPXML export never called
+    _quantize_to_frame_boundaries (EDL-only branch, timeline_export.py:697-
+    722), so it was not yet wired to FCPXML, and available_range=None was
+    dereferenced without a None guard inside the fcpx_xml adapter's writer,
+    which currently crashes with INTERNAL instead of succeeding. See the
+    per-test comments below for which specific failure each test exercises.
+
+    Test-oracle layering (reviewer-mandated 3-layer split, architecture
+    §7.3, so a round-trip-only oracle does not hide the adapter reader's own
+    residual defect):
+
+      - Layer 1 (primary oracle for F1 itself, _assert_fcpxml_frame_aligned
+        above): the written .fcpxml's raw XML offset/duration/start
+        attributes are parsed directly and checked to be exact multiples of
+        the file's own frameDuration. This is what ADR-EX-13 actually
+        guarantees (a frame-aligned, FCP-valid file) and does not depend on
+        the fcpx_xml adapter's reader at all. Attached to the fractional-
+        input tests (test_fractional_clips_..., test_available_range_none_
+        plus_fractional_...) and exercised again on its own in
+        test_layer1_written_fcpxml_is_frame_duration_aligned.
+      - Layer 2 (round-trip observation, most tests below): the written
+        file is re-read via otio.adapters.read_from_file(...,
+        adapter_name="fcpx_xml") and compared against exact expected
+        RationalTime values. Because the reader's own to_rational_time /
+        _number_of_frames int() truncation occasionally reads a frame-
+        aligned integer value one frame short at some rates (out-of-scope
+        adapter artifact, "A3b"; see ADR-EX-13 Consequences), these
+        strict-equality fixtures are limited to values measured exact
+        against the real adapter (not guessed) to avoid an unrelated false
+        red.
+      - Layer 3 (characterization,
+        test_layer3_a3b_reader_truncates_29_frames_at_25fps_by_one): pins
+        A3b itself as an xfail(strict=False) so the residual, out-of-scope
+        adapter-reader defect is documented and tracked without either
+        hiding it (a layer-2-only oracle picking only clean fixture values
+        would silently avoid it) or fixing it into a "1-frame-short is
+        correct" expectation (out of scope; adapter-side).
+    """
+
+    def test_fractional_clips_succeed_with_quantization_warning_and_roundtrip(
+        self, tmp_path: Path, make_media_file: Any
+    ) -> None:
+        """Observation 1 (architecture §7.2 table row 1, measured A5).
+
+        Currently Red: FCPXML export is not yet wired to
+        _quantize_to_frame_boundaries, so no quantization warning is
+        produced and the fcpx_xml adapter's own silent per-clip int()
+        truncation instead yields re-read durations (10, 20) -- not the
+        required drift-free (10, 21) -- with no warning at all (F1).
+        """
+        rate = 30.0
+        durations = (10.3, 20.7)
+        otio_path = _build_frame_duration_timeline(
+            tmp_path, make_media_file, rate, durations, name="fcpxml_frac"
+        )
+        out = tmp_path / "fcpxml_frac.fcpxml"
+
+        result = export_timeline(
+            timeline=otio_path,
+            output=str(out),
+            options=ExportTimelineOptions(format="fcpxml"),
+        )
+        assert result.ok is True, result.error
+        joined = " ".join(result.warnings).lower()
+        assert _QUANT_WARNING_SUBSTR in joined, (
+            "ADR-EX-13: fractional-frame FCPXML clips must be quantized and "
+            "reported with the same aggregated warning as EDL; got warnings: "
+            f"{result.warnings!r}"
+        )
+
+        # Layer 1 (primary oracle, architecture §7.3): the written file's
+        # raw rational-seconds values are themselves frame-aligned,
+        # independent of the fcpx_xml adapter's reader.
+        checked = _assert_fcpxml_frame_aligned(out)
+        assert checked > 0
+
+        # Layer 2 (round-trip observation; measured exact, architecture §7.3).
+        back = otio.adapters.read_from_file(str(out), adapter_name="fcpx_xml")
+        video_clips = _video_clips(back)
+        assert len(video_clips) == len(durations)
+        expected = [(0, 10), (1000, 21)]
+        for clip, (exp_start, exp_dur) in zip(video_clips, expected, strict=True):
+            sr = clip.source_range
+            assert sr.start_time == otio.opentime.RationalTime(exp_start, int(rate))
+            assert sr.duration == otio.opentime.RationalTime(exp_dur, int(rate))
+
+    def test_multi_clip_has_no_cumulative_drift(
+        self, tmp_path: Path, make_media_file: Any
+    ) -> None:
+        """Observation 2 (architecture §7.2 table row 2, measured A2).
+
+        Currently Red: without quantization, naive per-clip floor of
+        10.9f would give re-read durations [10, 10, 10, 10] with 3.6f
+        (0.12s) of cumulative drift over 4 clips (measured A0) instead of
+        the required drift-free [11, 11, 11, 11].
+        """
+        rate = 30.0
+        durations = (10.9, 10.9, 10.9, 10.9)
+        otio_path = _build_frame_duration_timeline(
+            tmp_path, make_media_file, rate, durations, name="fcpxml_drift"
+        )
+        out = tmp_path / "fcpxml_drift.fcpxml"
+
+        result = export_timeline(
+            timeline=otio_path,
+            output=str(out),
+            options=ExportTimelineOptions(format="fcpxml"),
+        )
+        assert result.ok is True, result.error
+        joined = " ".join(result.warnings).lower()
+        assert _QUANT_WARNING_SUBSTR in joined
+
+        back = otio.adapters.read_from_file(str(out), adapter_name="fcpx_xml")
+        video_clips = _video_clips(back)
+        assert len(video_clips) == len(durations)
+
+        expected_durations = [11, 11, 11, 11]
+        expected_offsets = [0, 11, 22, 33]
+        for clip, exp_dur, exp_offset in zip(
+            video_clips, expected_durations, expected_offsets, strict=True
+        ):
+            assert clip.source_range.duration == otio.opentime.RationalTime(
+                exp_dur, int(rate)
+            ), (
+                "naive per-clip floor (10.9 -> 10) would give "
+                "[10, 10, 10, 10] with 3.6f cumulative drift over 4 clips "
+                "(measured A0); ADR-EX-13's shared boundary-diff "
+                "quantization must give [11, 11, 11, 11] instead"
+            )
+            assert clip.trimmed_range_in_parent().start_time == (
+                otio.opentime.RationalTime(exp_offset, int(rate))
+            )
+
+    @pytest.mark.parametrize("rate", [24.0, 25.0, 30.0])
+    def test_frame_aligned_input_is_unchanged_no_warning(
+        self, tmp_path: Path, make_media_file: Any, rate: float
+    ) -> None:
+        """Observation 3 (architecture §7.2 table row 3, measured A5).
+
+        Durations (10, 21) reuse observation 1's own post-quantization
+        values (already measured exact at every rate exercised here), so
+        this pins the "already-aligned input is mutation-free" regression
+        guard using values independently known to round-trip exactly.
+        """
+        durations = (10.0, 21.0)
+        otio_path = _build_frame_duration_timeline(
+            tmp_path,
+            make_media_file,
+            rate,
+            durations,
+            name=f"fcpxml_aligned_{int(rate)}",
+        )
+        out = tmp_path / f"fcpxml_aligned_{int(rate)}.fcpxml"
+
+        result = export_timeline(
+            timeline=otio_path,
+            output=str(out),
+            options=ExportTimelineOptions(format="fcpxml"),
+        )
+        assert result.ok is True, result.error
+        joined = " ".join(result.warnings).lower()
+        assert _QUANT_WARNING_SUBSTR not in joined, (
+            "a frame-aligned FCPXML input must produce zero mutation, so no "
+            f"quantization warning is expected; got warnings: {result.warnings!r}"
+        )
+
+        back = otio.adapters.read_from_file(str(out), adapter_name="fcpx_xml")
+        video_clips = _video_clips(back)
+        assert len(video_clips) == len(durations)
+        expected = [(0, 10), (1000, 21)]
+        for clip, (exp_start, exp_dur) in zip(video_clips, expected, strict=True):
+            sr = clip.source_range
+            assert sr.start_time == otio.opentime.RationalTime(exp_start, int(rate))
+            assert sr.duration == otio.opentime.RationalTime(exp_dur, int(rate))
+
+    def test_available_range_none_succeeds_when_aligned(
+        self, tmp_path: Path, make_media_file: Any
+    ) -> None:
+        """Observation 4 (architecture §7.2 table row 4, measured B1).
+
+        Currently crashes with INTERNAL: the fcpx_xml adapter's writer
+        (_find_asset_duration / _find_asset_start) dereferences
+        media_reference.available_range without a None guard and raises an
+        unguarded AttributeError (F2), which escapes _write_adapter's own
+        OTIOError-only except clause and is masked as INTERNAL by
+        export_timeline's outer boundary.
+        """
+        rate = 24.0
+        durations = (10.0,)
+        otio_path = _build_frame_duration_timeline(
+            tmp_path,
+            make_media_file,
+            rate,
+            durations,
+            name="fcpxml_none_aligned",
+            with_available_range=False,
+        )
+        out = tmp_path / "fcpxml_none_aligned.fcpxml"
+
+        result = export_timeline(
+            timeline=otio_path,
+            output=str(out),
+            options=ExportTimelineOptions(format="fcpxml"),
+        )
+        assert result.ok is True, result.error
+        joined = " ".join(result.warnings).lower()
+        assert _QUANT_WARNING_SUBSTR not in joined, (
+            "an already frame-aligned available_range=None clip must not "
+            f"trigger a quantization warning; got: {result.warnings!r}"
+        )
+
+        back = otio.adapters.read_from_file(str(out), adapter_name="fcpx_xml")
+        video_clips = _video_clips(back)
+        assert len(video_clips) == 1
+        sr = video_clips[0].source_range
+        assert sr.start_time == otio.opentime.RationalTime(0.0, int(rate))
+        assert sr.duration == otio.opentime.RationalTime(10.0, int(rate))
+
+    def test_available_range_none_plus_fractional_succeeds_with_quantization(
+        self, tmp_path: Path, make_media_file: Any
+    ) -> None:
+        """Observation 5 (architecture §7.2 table row 5, measured A4/D).
+
+        Currently crashes with INTERNAL (F2, same as observation 4) before
+        quantization is even relevant; once F2 is fixed this also exercises
+        F1's quantization pass (durations are fractional), so both defects
+        are covered in combination.
+        """
+        rate = 24.0
+        durations = (10.3, 20.7)
+        otio_path = _build_frame_duration_timeline(
+            tmp_path,
+            make_media_file,
+            rate,
+            durations,
+            name="fcpxml_none_frac",
+            with_available_range=False,
+        )
+        out = tmp_path / "fcpxml_none_frac.fcpxml"
+
+        result = export_timeline(
+            timeline=otio_path,
+            output=str(out),
+            options=ExportTimelineOptions(format="fcpxml"),
+        )
+        assert result.ok is True, result.error
+        joined = " ".join(result.warnings).lower()
+        assert _QUANT_WARNING_SUBSTR in joined
+
+        # Layer 1 (primary oracle, architecture §7.3), co-located with this
+        # fractional-input case per the architect's instruction.
+        checked = _assert_fcpxml_frame_aligned(out)
+        assert checked > 0
+
+        back = otio.adapters.read_from_file(str(out), adapter_name="fcpx_xml")
+        video_clips = _video_clips(back)
+        assert len(video_clips) == len(durations)
+        expected = [(0, 10), (1000, 21)]
+        for clip, (exp_start, exp_dur) in zip(video_clips, expected, strict=True):
+            sr = clip.source_range
+            assert sr.start_time == otio.opentime.RationalTime(exp_start, int(rate))
+            assert sr.duration == otio.opentime.RationalTime(exp_dur, int(rate))
+
+    def test_input_otio_bytes_unchanged_after_fcpxml_export(
+        self, tmp_path: Path, make_media_file: Any
+    ) -> None:
+        """Observation 6: non-destructiveness (FCPXML variant of (B-2)/(M-6)).
+
+        Quantization and synthesis both run on the write-time deep copy
+        only; the source .otio must stay byte-unchanged regardless of
+        whether ADR-EX-13 is wired in yet.
+        """
+        rate = 30.0
+        durations = (10.3, 20.7)
+        otio_path = _build_frame_duration_timeline(
+            tmp_path,
+            make_media_file,
+            rate,
+            durations,
+            name="fcpxml_nondestructive",
+        )
+        out = tmp_path / "fcpxml_nondestructive.fcpxml"
+
+        before = Path(otio_path).read_bytes()
+        result = export_timeline(
+            timeline=otio_path,
+            output=str(out),
+            options=ExportTimelineOptions(format="fcpxml"),
+        )
+        assert result.ok is True, result.error
+
+        after = Path(otio_path).read_bytes()
+        assert before == after, "the input OTIO file must never be modified"
+
+    def test_synthesize_missing_available_ranges_leaves_existing_untouched(
+        self, tmp_path: Path, make_media_file: Any
+    ) -> None:
+        """Observation 7 (architecture §3.2 guards, measured E/B1): a direct
+        call to _synthesize_missing_available_ranges.
+
+        Currently Red: _synthesize_missing_available_ranges does not yet
+        exist in clipwright_export.timeline_export, so the local import
+        below raises ImportError (deferred-import pattern; only this test
+        fails at collection is avoided because the import is local to the
+        test body, not a module-level import).
+        """
+        from clipwright_export.timeline_export import (
+            _synthesize_missing_available_ranges,
+        )
+
+        media = make_media_file("synth.mov")
+        target_url = Path(media).resolve().as_posix()
+
+        tl = otio.schema.Timeline(name="synth-direct")
+        v1 = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
+        tl.tracks.append(v1)
+
+        # clip0: existing available_range (deliberately fractional, 10.5f)
+        # must be left completely untouched (requirements FR-5 / non-
+        # functional "既存の非None available_rangeは一切変更しない").
+        existing_range = otio.opentime.TimeRange(
+            start_time=otio.opentime.RationalTime(0.0, 24.0),
+            duration=otio.opentime.RationalTime(10.5, 24.0),
+        )
+        ref0 = otio.schema.ExternalReference(target_url=target_url)
+        ref0.available_range = existing_range
+        clip0 = otio.schema.Clip(
+            name="clip0",
+            media_reference=ref0,
+            source_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0.0, 24.0),
+                duration=otio.opentime.RationalTime(10.5, 24.0),
+            ),
+        )
+        v1.append(clip0)
+
+        # clip1: available_range=None (F2's crash shape); must be synthesized
+        # from source_range exactly (architecture §3.2 "sr同値").
+        ref1 = otio.schema.ExternalReference(target_url=target_url)
+        source_range1 = otio.opentime.TimeRange(
+            start_time=otio.opentime.RationalTime(240.0, 24.0),
+            duration=otio.opentime.RationalTime(60.0, 24.0),
+        )
+        clip1 = otio.schema.Clip(
+            name="clip1", media_reference=ref1, source_range=source_range1
+        )
+        v1.append(clip1)
+
+        synthesized = _synthesize_missing_available_ranges(tl)
+
+        assert synthesized == 1, (
+            "exactly one clip (clip1, available_range=None) should be "
+            "synthesized; clip0's existing available_range must not count"
+        )
+        assert ref0.available_range == existing_range, (
+            "an existing (even fractional) available_range must never be "
+            "modified by synthesis"
+        )
+        assert ref1.available_range is not None
+        assert ref1.available_range.start_time == source_range1.start_time
+        assert ref1.available_range.duration == source_range1.duration
+
+    def test_edl_quantization_warning_wording_is_byte_identical_regression(
+        self, tmp_path: Path, make_media_file: Any
+    ) -> None:
+        """Observation 8: EDL warning wording regression (architecture §5.1,
+        risk table row 1). Reuses the exact rate30/(10.3, 20.7) scenario
+        from TestEdlFrameQuantization's own "rate30" case, whose expected
+        wording is computed independently here (adjusted=2, max_shift=0.3f
+        at rate 30 -> 0.0100s) so the format_label parameterization of
+        _quantize_warnings is pinned to reproduce the EDL sentence
+        byte-for-byte, not just via substring containment.
+        """
+        rate = 30.0
+        durations = (10.3, 20.7)
+        otio_path = _build_frame_duration_timeline(
+            tmp_path,
+            make_media_file,
+            rate,
+            durations,
+            name="edl_wording_regress",
+        )
+        out = tmp_path / "edl_wording_regress.edl"
+
+        result = export_timeline(
+            timeline=otio_path,
+            output=str(out),
+            options=ExportTimelineOptions(format="edl"),
+        )
+        assert result.ok is True, result.error
+
+        expected = (
+            "2 clip/gap boundary(ies) were quantized to whole frames for "
+            "the EDL at 30 fps; the largest adjustment was "
+            "0.0100s (at most half a frame, no cumulative drift). "
+            "hint: this is expected for second-based trims and silence cuts; "
+            "re-cut on frame boundaries in the source OTIO if the shift matters."
+        )
+        quant_warnings = [w for w in result.warnings if _QUANT_WARNING_SUBSTR in w]
+        assert quant_warnings == [expected], (
+            "ADR-EX-13's format_label parameterization of _quantize_warnings "
+            f"must reproduce the EDL wording byte-for-byte; got: {result.warnings!r}"
+        )
+
+    def test_zero_collapse_clip_reports_warning(
+        self, tmp_path: Path, make_media_file: Any
+    ) -> None:
+        """Observation 9 (architecture §7.2 table row 9, measured Z).
+
+        Currently Red: without quantization wired to FCPXML, no zero-
+        collapse warning (or any quantization warning) is produced.
+        """
+        rate = 30.0
+        durations = (0.3, 50.0)
+        otio_path = _build_frame_duration_timeline(
+            tmp_path,
+            make_media_file,
+            rate,
+            durations,
+            name="fcpxml_zerocollapse",
+        )
+        out = tmp_path / "fcpxml_zerocollapse.fcpxml"
+
+        result = export_timeline(
+            timeline=otio_path,
+            output=str(out),
+            options=ExportTimelineOptions(format="fcpxml"),
+        )
+        assert result.ok is True, result.error
+        joined = " ".join(result.warnings).lower()
+        assert _ZERO_COLLAPSE_SUBSTR in joined, (
+            f"expected a zero-collapse warning fragment; got: {result.warnings!r}"
+        )
+        assert "in the fcpxml" in joined, (
+            "format_label parameterization must name FCPXML (not EDL) in the "
+            f"zero-collapse sentence; got: {result.warnings!r}"
+        )
+
+    @pytest.mark.parametrize(
+        "case_id,rate,with_available_range",
+        [
+            ("with_range", 30.0, True),
+            ("range_none", 24.0, False),
+        ],
+    )
+    def test_layer1_written_fcpxml_is_frame_duration_aligned(
+        self,
+        tmp_path: Path,
+        make_media_file: Any,
+        case_id: str,
+        rate: float,
+        with_available_range: bool,
+    ) -> None:
+        """Layer 1 dedicated test (architecture §7.3): the primary F1
+        oracle, exercised on its own (in addition to being co-located
+        inline with observations 1 and 5 above) against the same two
+        fractional-input shapes those observations use -- with an existing
+        available_range, and with available_range=None (F2's shape).
+        """
+        durations = (10.3, 20.7)
+        otio_path = _build_frame_duration_timeline(
+            tmp_path,
+            make_media_file,
+            rate,
+            durations,
+            name=f"fcpxml_layer1_{case_id}",
+            with_available_range=with_available_range,
+        )
+        out = tmp_path / f"fcpxml_layer1_{case_id}.fcpxml"
+
+        result = export_timeline(
+            timeline=otio_path,
+            output=str(out),
+            options=ExportTimelineOptions(format="fcpxml"),
+        )
+        assert result.ok is True, result.error
+
+        checked = _assert_fcpxml_frame_aligned(out)
+        assert checked > 0, "no offset/duration/start attribute was found to check"
+
+    @pytest.mark.xfail(
+        reason=(
+            "A3b: out-of-scope fcpx_xml reader int() float artifact reads "
+            "some integer frames 1f short; the written file is frame-aligned"
+        ),
+        strict=False,
+    )
+    def test_layer3_a3b_reader_truncates_29_frames_at_25fps_by_one(
+        self, tmp_path: Path, make_media_file: Any
+    ) -> None:
+        """Layer 3 characterization test (architecture §7.3): pins the
+        fcpx_xml adapter reader's own residual "A3b" artifact -- 29 frames
+        at 25fps (an already frame-aligned, integer-frame duration
+        requiring no quantization at all) is read back as 28 frames, a
+        float-precision int() truncation inside the adapter's own reader,
+        unrelated to and unaffected by ADR-EX-13. xfail(strict=False): if
+        the adapter is fixed upstream this flips to xpass without failing
+        the suite, surfacing the fix instead of silently masking it.
+        """
+        rate = 25.0
+        durations = (29.0,)
+        otio_path = _build_frame_duration_timeline(
+            tmp_path, make_media_file, rate, durations, name="fcpxml_a3b_29_25"
+        )
+        out = tmp_path / "fcpxml_a3b_29_25.fcpxml"
+
+        result = export_timeline(
+            timeline=otio_path,
+            output=str(out),
+            options=ExportTimelineOptions(format="fcpxml"),
+        )
+        assert result.ok is True, result.error
+
+        # Layer 1: the written file itself IS frame-aligned (our contract
+        # holds) regardless of the adapter reader's own artifact below.
+        _assert_fcpxml_frame_aligned(out)
+
+        # Layer 2 (A3b characterization, not a correctness pin): asserts the
+        # *correct* round-trip value (29, matching the 29-frame input) --
+        # this is expected to FAIL today because the adapter reader's own
+        # int() truncation reads it back as 28 (one frame short); that
+        # failure is exactly what xfail(strict=False) pins. Asserting the
+        # buggy value (28) instead would invert the xfail semantics (it
+        # would pass today and only fail once the adapter bug is fixed).
+        back = otio.adapters.read_from_file(str(out), adapter_name="fcpx_xml")
+        video_clips = _video_clips(back)
+        assert video_clips[0].source_range.duration == otio.opentime.RationalTime(
+            29.0, int(rate)
+        )

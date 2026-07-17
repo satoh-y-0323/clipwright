@@ -1,6 +1,6 @@
 [project]
 name = "clipwright-export"
-version = "0.2.1"
+version = "0.2.2"
 description = "MCP tools that export OTIO timelines to NLE exchange formats (EDL/FCPXML) and chapter sidecars (YouTube/ffmetadata)."
 readme = "README.md"
 license = { text = "MIT" }

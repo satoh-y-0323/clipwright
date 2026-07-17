@@ -5,6 +5,32 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.38.2] - 2026-07-17
+
+### Fixed (`clipwright-export` v0.2.2)
+
+- **FCPXML export no longer writes frame-misaligned (fractional-frame) clips as
+  raw rational seconds.** The exporter previously wrote clip durations such as
+  `"109/240s"` verbatim, producing FCPXML whose values are not integer multiples
+  of `frameDuration` — a malformed interchange file. Because the adapter reader
+  silently floors with `int()` instead of raising, this went undetected by
+  write-then-verify: a 4-clip chain of such fractional durations accumulated
+  0.15s of drift (3.6 frames) with no warning. The exporter now applies the same
+  boundary quantization used for EDL export to the write-time copy, at the
+  representative integer frame rate, aligning every numerator/denominator to a
+  whole multiple of `frameDuration` before writing FCPXML succeeds, and reports
+  each adjustment in `warnings`. Cut points shift by at most 0.5 frame with no
+  cumulative drift, giving EDL and FCPXML export the same quantization
+  guarantee.
+- **FCPXML export no longer crashes with an internal `AttributeError` on an
+  `ExternalReference` without an `available_range`.** This clip shape is a
+  backward-compatible one that the core `add_clip` helper still supports. The
+  exporter now losslessly synthesizes a missing `available_range` from the
+  clip's `source_range` on the write-time copy so the export succeeds with no
+  warning; the input OTIO is never modified.
+- ADR-EX-10/11/12 (from v0.2.0/v0.2.1) are unchanged. Only `clipwright-export`
+  is bumped to v0.2.2; all other packages, the core and uv.lock are unchanged.
+
 ## [0.38.1] - 2026-07-17
 
 ### Fixed (`clipwright-export` v0.2.1)

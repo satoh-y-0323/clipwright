@@ -317,7 +317,7 @@ dev = [
 
 [[package]]
 name = "clipwright-export"
-version = "0.2.1"
+version = "0.2.2"
 source = { editable = "clipwright-export" }
 dependencies = [
     { name = "clipwright" },
