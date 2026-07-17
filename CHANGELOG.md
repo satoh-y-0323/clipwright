@@ -17,9 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   representative integer frame rate on the write-time copy so the write succeeds,
   and reports every adjustment in `warnings`. Cut points shift by at most 0.5
   frame with no cumulative drift, and the input OTIO is never modified. FCPXML
-  export is unaffected: it keeps its non-quantized rational-seconds representation.
-  Only `clipwright-export` is bumped to v0.2.1; all other packages and the core
-  are unchanged.
+  export is unaffected by this change (no quantization pass is applied on the
+  clipwright side). Only `clipwright-export` is bumped to v0.2.1; all other
+  packages and the core are unchanged.
 
 ## [0.38.0] - 2026-07-15
 

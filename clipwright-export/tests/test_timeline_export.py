@@ -134,8 +134,11 @@ Verification aspects:
             that silence detection / second-based trims typically produce)
             on the EDL path succeed with an aggregated quantization
             warning, parametrized over integer rates 24/25/30 plus a
-            dedicated half-frame-boundary (62.5f) case pinning half-up
-            rounding (floor(x+0.5+eps)) against banker's round()'s 62.
+            dedicated half-frame-boundary (10.5f cumulative) case pinning
+            half-up rounding (floor(x+0.5+eps)) against banker's round()'s
+            10 (the same half-up-vs-banker's-rounding contrast is stated
+            generically as 62.5 -> 63 in _round_half_up_frames's docstring
+            below; this class's actual fixture data is 10.5 -> 11).
             This class was Red at authoring time -- _quantize_to_frame_
             boundaries did not yet exist, so the EDL write-then-verify
             (ADR-EX-11) rejected these inputs with OTIO_ERROR instead of
@@ -264,12 +267,14 @@ _ZERO_COLLAPSE_SUBSTR = "collapsed to zero length"
 def _round_half_up_frames(x: float) -> int:
     """Independent half-up reference (architecture §2.2): floor(x+0.5+eps).
 
-    This is a *test oracle*, not a copy of the implementation (which does
+    This is a *test oracle*, not a copy of the implementation (which did
     not exist yet at Red-authoring time) -- it exists so quantization tests
     can state exact expected integer frame values from the spec formula
     alone. Deliberately NOT round(), which uses banker's rounding and would
-    send 62.5 -> 62 instead of the required 63 (see the half_boundary case
-    below).
+    send 62.5 -> 62 instead of the required 63. This 62.5 -> 63 example is
+    a generic illustration of the half-up-vs-banker's-rounding contract;
+    the half_boundary case below pins the identical contract with the
+    class's actual fixture data, 10.5 -> 11, not 62.5.
     """
     return math.floor(x + 0.5 + 1e-6)
 
@@ -1307,10 +1312,10 @@ class TestEdlFrameQuantization:
     """
 
     # (10.3, 20.7) is a measured bug-reproducing pair (verified by direct
-    # probe against the pre-fix implementation): at rate 24/25/30 it makes
-    # export_timeline return ok=False/OTIO_ERROR today (the cmx_3600
-    # write-then-verify EDLParseError this ADR eliminates), not just a
-    # missing-warning gap.
+    # probe against the pre-fix implementation): at rate 24/25/30 it used
+    # to make export_timeline return ok=False/OTIO_ERROR before ADR-EX-12
+    # quantization (the cmx_3600 write-then-verify EDLParseError this ADR
+    # eliminates), not just a missing-warning gap.
     @pytest.mark.parametrize(
         "case_id,rate,durations",
         [
@@ -1321,7 +1326,7 @@ class TestEdlFrameQuantization:
             # clip's cumulative raw boundary lands exactly on 10.5 frames;
             # half-up (floor(x+0.5+eps)) must round it to 11, never
             # banker's round()'s 10 (round-half-to-even). Also a measured
-            # bug-reproducing pair (ok=False today).
+            # bug-reproducing pair (used to be ok=False before the fix).
             ("half_boundary", 25.0, (10.5, 20.7)),
         ],
     )

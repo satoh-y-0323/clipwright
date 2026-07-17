@@ -27,8 +27,9 @@ Design decisions (architecture-report §2/§4/§5/§6/§11/§13):
   is the rounded boundary difference; source start is rounded independently and
   source duration is set equal to the record duration, so cmx_3600's
   src_duration == rec_duration check holds by construction. Adjustments are
-  reported in one aggregated warning. FCPXML is left unquantized because its
-  rational-seconds representation round-trips fractional durations losslessly.
+  reported in one aggregated warning. FCPXML is passed through without a
+  quantization pass: the fcpx_xml adapter performs its own frame conversion and
+  never fails the write-then-verify round-trip the way cmx_3600 does.
 - ADR-EX-4 (§4.2): media references that do not exist are skipped (kept
   relative) with a warning; only a relative reference that escapes the OTIO
   directory (CWE-22) fails the whole export.
