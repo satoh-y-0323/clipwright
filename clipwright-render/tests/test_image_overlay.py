@@ -1371,9 +1371,24 @@ class TestCorruptImageSubprocessFailed:
                 render_plan(plan, output=str(tmp_path / "out.mp4"))
         assert exc_info.value.code == ErrorCode.SUBPROCESS_FAILED
 
-    def test_corrupt_image_message_uses_basename_only(self, tmp_path: Path) -> None:
-        """Corrupt image error message uses BASENAME only (no full path — CWE-209)."""
+    def test_corrupt_image_message_masked_by_s2_redaction(self, tmp_path: Path) -> None:
+        """Corrupt-image SUBPROCESS_FAILED message is masked by S2 redaction.
+
+        ADR-SR-1 (architecture-report-20260717-163916.md S2.5 Consequences):
+        render_plan's own ffmpeg run() call is subprocess seam S2. Once
+        _sanitize_subprocess_error is wired in, any SUBPROCESS_FAILED/TIMEOUT
+        raised from that run() call has its message replaced with
+        safe_subprocess_message(exc) — code/hint stay unchanged. This is the
+        ONLY existing test in this batch whose expectation changed (the prior
+        version asserted the mocked message kept the image basename; that
+        basename now flows through S2 masking and must NOT appear).
+
+        Currently Red: render_plan has no try/except around run() yet, so the
+        mocked message ("corrupt.png") passes through unmasked and both the
+        equality assertion and the basename-exclusion assertion fail.
+        """
         from clipwright.errors import ClipwrightError, ErrorCode
+        from clipwright.process import safe_subprocess_message
         from clipwright_render.plan import RenderPlan
         from clipwright_render.render import render_plan  # type: ignore[attr-defined]
 
@@ -1386,21 +1401,26 @@ class TestCorruptImageSubprocessFailed:
             image_sources=["/project/logo/corrupt.png"],
         )
 
+        raw_exc = ClipwrightError(
+            code=ErrorCode.SUBPROCESS_FAILED,
+            message="corrupt.png",
+            hint=(
+                "The overlay image may be corrupt or an unsupported format;"
+                " provide a valid .png/.jpg/.jpeg/.webp."
+            ),
+        )
         with patch("clipwright_render.render.run") as mock_run:
-            mock_run.side_effect = ClipwrightError(
-                code=ErrorCode.SUBPROCESS_FAILED,
-                message="corrupt.png",
-                hint=(
-                    "The overlay image may be corrupt or an unsupported format;"
-                    " provide a valid .png/.jpg/.jpeg/.webp."
-                ),
-            )
+            mock_run.side_effect = raw_exc
             with pytest.raises(ClipwrightError) as exc_info:
                 render_plan(plan, output=str(tmp_path / "out.mp4"))
         err = exc_info.value
-        # Must contain basename
-        assert "corrupt.png" in err.message
-        # Must NOT contain full directory path
+        # Message must equal the shared safe_subprocess_message contract (ADR-SR-1).
+        assert err.message == safe_subprocess_message(raw_exc), (
+            "S2 seam must replace message with safe_subprocess_message"
+            f" (ADR-SR-1); got: {err.message!r}"
+        )
+        # Neither the image basename NOR the parent directory path may leak (CWE-209).
+        assert "corrupt.png" not in err.message
         assert "/project/logo" not in err.message
 
     def test_corrupt_image_hint_mentions_valid_formats(self, tmp_path: Path) -> None:
@@ -1519,3 +1539,462 @@ class TestVerifyImageMagic:
             _verify_image_magic(str(img))
         err = exc_info.value
         assert err.hint is not None and len(err.hint) > 0
+
+
+# ===========================================================================
+# Section 11: FR-2 image overlay output collision check (ADR-SR-1 / ADR-B8
+# parity — architecture-report-20260717-163916.md S5.1)
+# ===========================================================================
+
+
+def _fake_run(cmd: list[str], **kwargs: Any) -> Any:
+    """Stub for process.run — always succeeds without calling ffmpeg.
+
+    Mirrors test_pathpolicy_render.py's _fake_run (no cross-file import).
+    """
+    from subprocess import CompletedProcess
+
+    return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+
+def _fake_resolve_tool(name: str, env_var: str | None = None) -> str:
+    """Mirrors test_pathpolicy_render.py's _fake_resolve_tool (no cross-file import)."""
+    return f"/usr/bin/{name}"
+
+
+def _make_render_media_info(path: str) -> Any:
+    """Minimal MediaInfo for a single-source render_timeline pipeline.
+
+    Mirrors test_pathpolicy_render.py's _make_media_info (no cross-file
+    import) — no fps_rate needed for a single-source plan.
+    """
+    from clipwright.schemas import MediaInfo, StreamInfo
+
+    return MediaInfo(
+        path=path,
+        container="mov,mp4,m4a,3gp,3g2,mj2",
+        duration=None,
+        streams=[
+            StreamInfo(
+                index=0, codec_type="video", codec_name="h264", width=1920, height=1080
+            ),
+            StreamInfo(index=1, codec_type="audio", codec_name="aac"),
+        ],
+        bit_rate=8_000_000,
+    )
+
+
+class TestImageOverlayOutputCollision:
+    """FR-2 (Red): the image overlay loop must reject image_path == output_path
+    with PATH_NOT_ALLOWED, mirroring the BGM precedent (render.py:753-757 /
+    ADR-B8) via check_output_not_source(output_path, [img]) placed at the very
+    top of the loop body (architecture-report-20260717-163916.md S5.1 / S8).
+
+    The image boundary/existence/extension checks fire in the "6b. Execute"
+    branch of _render_inner (render.py:1238-), so dry_run=False is required
+    (same constraint documented by test_pathpolicy_render.py's PP-1d).
+
+    Currently render.py:1238's image loop has NO check_output_not_source call,
+    so the pathological image_path==output input falls through to the
+    pre-existing existence check (FILE_NOT_FOUND) or extension check
+    (INVALID_INPUT) instead of PATH_NOT_ALLOWED — Red until the collision
+    check is added as the loop's first statement.
+    """
+
+    def test_image_path_equals_output_raises_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """image_path == output (output not yet created) -> PATH_NOT_ALLOWED.
+
+        Currently Red: the existence check fires first (real file doesn't
+        exist yet) and returns FILE_NOT_FOUND instead.
+        """
+        from clipwright.errors import ErrorCode
+        from clipwright_render.render import render_timeline
+        from clipwright_render.schemas import RenderOptions
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        src = str(project_dir / "clip.mp4")
+        Path(src).touch()
+
+        tl = _make_timeline([_make_clip(src, 0.0, 5.0)])
+        # image_path (relative to timeline dir) reconstructs to the exact same
+        # absolute path as output (V2-3 reconstruction) — the pathological
+        # image_path == output_path collision.
+        _add_image_overlay_marker(
+            tl, image_path="out.mp4", start_sec=1.0, duration_sec=3.0
+        )
+        tl_path = project_dir / "tl.otio"
+        otio.adapters.write_to_file(tl, str(tl_path))
+        output = str(project_dir / "out.mp4")
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_render_media_info(src),
+            ),
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=_fake_resolve_tool,
+            ),
+            patch("clipwright_render.render.run", side_effect=_fake_run),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(overwrite=True),
+                dry_run=False,
+            )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED, (
+            "image_path == output must be rejected as PATH_NOT_ALLOWED"
+            f" (FR-2 / ADR-B8 parity); got: {result['error']}"
+        )
+
+    def test_image_path_equals_output_overwrite_variant_raises_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """image_path == output, output pre-exists (overwrite=True) -> PATH_NOT_ALLOWED.
+
+        With the output file already on disk, the existence check would pass
+        and the (disjoint) extension check fires instead (INVALID_INPUT,
+        since .mp4 is not in _ALLOWED_IMAGE_EXTENSIONS) — demonstrating why the
+        collision check must sit ahead of BOTH pre-existing checks. Currently
+        Red: current code returns INVALID_INPUT, not PATH_NOT_ALLOWED.
+        """
+        from clipwright.errors import ErrorCode
+        from clipwright_render.render import render_timeline
+        from clipwright_render.schemas import RenderOptions
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        src = str(project_dir / "clip.mp4")
+        Path(src).touch()
+
+        tl = _make_timeline([_make_clip(src, 0.0, 5.0)])
+        _add_image_overlay_marker(
+            tl, image_path="out.mp4", start_sec=1.0, duration_sec=3.0
+        )
+        tl_path = project_dir / "tl.otio"
+        otio.adapters.write_to_file(tl, str(tl_path))
+        output = str(project_dir / "out.mp4")
+        # Pre-create the output file (overwrite scenario).
+        Path(output).touch()
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_render_media_info(src),
+            ),
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=_fake_resolve_tool,
+            ),
+            patch("clipwright_render.render.run", side_effect=_fake_run),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(overwrite=True),
+                dry_run=False,
+            )
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED, (
+            "image_path == output must be rejected as PATH_NOT_ALLOWED even"
+            f" when output pre-exists; got: {result['error']}"
+        )
+
+    def test_image_path_not_equal_output_still_passes(self, tmp_path: Path) -> None:
+        """image_path != output (no collision) -> ok=True (green regression guard).
+
+        FR-2 only changes the pathological image_path==output case; a normal,
+        non-colliding image overlay must keep rendering successfully.
+        """
+        from clipwright_render.render import render_timeline
+        from clipwright_render.schemas import RenderOptions
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        src = str(project_dir / "clip.mp4")
+        Path(src).touch()
+        image_file = project_dir / "logo.png"
+        image_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 4)
+
+        tl = _make_timeline([_make_clip(src, 0.0, 5.0)])
+        _add_image_overlay_marker(
+            tl, image_path="logo.png", start_sec=1.0, duration_sec=3.0
+        )
+        tl_path = project_dir / "tl.otio"
+        otio.adapters.write_to_file(tl, str(tl_path))
+        output = str(project_dir / "out.mp4")
+        Path(output).touch()
+
+        with (
+            patch(
+                "clipwright_render.render.inspect_media",
+                return_value=_make_render_media_info(src),
+            ),
+            patch(
+                "clipwright_render.render.resolve_tool",
+                side_effect=_fake_resolve_tool,
+            ),
+            patch("clipwright_render.render.run", side_effect=_fake_run),
+        ):
+            result = render_timeline(
+                timeline=str(tl_path),
+                output=output,
+                options=RenderOptions(overwrite=True),
+                dry_run=False,
+            )
+
+        assert result["ok"] is True, (
+            f"Non-colliding image overlay must still succeed: {result.get('error')}"
+        )
+
+
+# ===========================================================================
+# Section 12: FR-3 image fade fail-closed validation (ADR-SR-1 / PiP parity —
+# architecture-report-20260717-163916.md S5.2 / S8)
+# ===========================================================================
+
+
+class TestImageFadeFailClosed:
+    """FR-3 (Red): fade_in_sec/fade_out_sec must be validated isfinite -> range
+    -> sum, matching the PiP fade validation (plan.py:997-1073), instead of
+    silently dropping NaN/negative/inf fades.
+
+    Currently _marker_to_image_overlay (plan.py) only checks
+    fade_in_sec + fade_out_sec > duration_sec + 1e-9 (plan.py:567); there is no
+    isfinite or per-field range guard. NaN and a finite negative fade slip
+    through this single sum comparison silently (NaN comparisons are always
+    False; a negative offset can shrink the sum below the threshold). This is
+    Red until the isfinite (plan.py:532) and range (plan.py:566) checks are
+    added. NOTE: a bare +inf value already trips the existing sum check today
+    (inf > duration is True) via a DIFFERENT code path than the one FR-3
+    introduces — those two parametrize cases are pre-existing green, not Red;
+    see test-report for the itemised breakdown.
+    """
+
+    @pytest.mark.parametrize("fade_field", ["fade_in_sec", "fade_out_sec"])
+    @pytest.mark.parametrize(
+        "bad_value",
+        [math.nan, -1.0, -math.inf, math.inf],
+        ids=["nan", "neg1", "neginf", "posinf"],
+    )
+    def test_fail_closed_on_non_finite_or_negative_fade(
+        self, fade_field: str, bad_value: float
+    ) -> None:
+        """fade_in/out_sec in {NaN, -1.0, -inf, +inf} -> INVALID_INPUT + hint.
+
+        Currently Red for {nan, -1.0, -inf}: these values are silently
+        accepted today (no isfinite/range guard exists yet), so
+        _collect_image_overlays does NOT raise. The +inf sub-cases are
+        already green today via the pre-existing sum-exceeds check (a
+        different code path than the one FR-3 adds).
+        """
+        from clipwright.errors import ClipwrightError, ErrorCode
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            _collect_image_overlays,
+        )
+
+        tl = _make_timeline([_make_clip("/src/a.mp4", 0.0, 10.0)])
+        kwargs: dict[str, float] = {"fade_in_sec": 0.1, "fade_out_sec": 0.1}
+        kwargs[fade_field] = bad_value
+        _add_image_overlay_marker(tl, duration_sec=3.0, **kwargs)
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            _collect_image_overlays(tl, image_index_base=1)
+        err = exc_info.value
+        assert err.code == ErrorCode.INVALID_INPUT
+        assert err.hint is not None and len(err.hint) > 0
+
+    def test_fade_in_isfinite_message_and_hint_exact(self) -> None:
+        """isfinite guard on fade_in_sec: exact message/hint (architecture S5.2 (a)).
+
+        Currently Red: no isfinite guard exists yet, so no error is raised.
+        """
+        from clipwright.errors import ClipwrightError, ErrorCode
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            _collect_image_overlays,
+        )
+
+        tl = _make_timeline([_make_clip("/src/a.mp4", 0.0, 10.0)])
+        _add_image_overlay_marker(
+            tl, duration_sec=3.0, fade_in_sec=math.nan, fade_out_sec=0.1
+        )
+        with pytest.raises(ClipwrightError) as exc_info:
+            _collect_image_overlays(tl, image_index_base=1)
+        err = exc_info.value
+        assert err.code == ErrorCode.INVALID_INPUT
+        assert err.message == (
+            "The timeline contains an invalid image overlay: fade_in_sec is not finite."
+        )
+        assert err.hint == "Re-annotate with a finite fade_in_sec value."
+
+    def test_fade_out_isfinite_message_and_hint_exact(self) -> None:
+        """isfinite guard on fade_out_sec: exact message/hint (architecture S5.2 (a)).
+
+        Currently Red: no isfinite guard exists yet, so no error is raised.
+        """
+        from clipwright.errors import ClipwrightError, ErrorCode
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            _collect_image_overlays,
+        )
+
+        tl = _make_timeline([_make_clip("/src/a.mp4", 0.0, 10.0)])
+        _add_image_overlay_marker(
+            tl, duration_sec=3.0, fade_in_sec=0.1, fade_out_sec=math.nan
+        )
+        with pytest.raises(ClipwrightError) as exc_info:
+            _collect_image_overlays(tl, image_index_base=1)
+        err = exc_info.value
+        assert err.code == ErrorCode.INVALID_INPUT
+        assert err.message == (
+            "The timeline contains an invalid image overlay:"
+            " fade_out_sec is not finite."
+        )
+        assert err.hint == "Re-annotate with a finite fade_out_sec value."
+
+    def test_fade_in_range_message_and_hint_exact(self) -> None:
+        """range guard on fade_in_sec: exact message/hint (architecture S5.2 (b)).
+
+        Currently Red: fade_in_sec=-1.0 with fade_out_sec=0.1 sums to -0.9,
+        which does not exceed duration_sec, so no error is raised today.
+        """
+        from clipwright.errors import ClipwrightError, ErrorCode
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            _collect_image_overlays,
+        )
+
+        tl = _make_timeline([_make_clip("/src/a.mp4", 0.0, 10.0)])
+        _add_image_overlay_marker(
+            tl, duration_sec=3.0, fade_in_sec=-1.0, fade_out_sec=0.1
+        )
+        with pytest.raises(ClipwrightError) as exc_info:
+            _collect_image_overlays(tl, image_index_base=1)
+        err = exc_info.value
+        assert err.code == ErrorCode.INVALID_INPUT
+        assert err.message == (
+            "The timeline contains an invalid image overlay:"
+            " fade_in_sec must be in [0, duration_sec]."
+        )
+        assert err.hint == (
+            "Re-annotate with a fade_in_sec in the range [0, duration_sec]."
+        )
+
+    def test_fade_out_range_message_and_hint_exact(self) -> None:
+        """range guard on fade_out_sec: exact message/hint (architecture S5.2 (b)).
+
+        Currently Red: fade_out_sec=-1.0 with fade_in_sec=0.1 sums to -0.9,
+        which does not exceed duration_sec, so no error is raised today.
+        """
+        from clipwright.errors import ClipwrightError, ErrorCode
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            _collect_image_overlays,
+        )
+
+        tl = _make_timeline([_make_clip("/src/a.mp4", 0.0, 10.0)])
+        _add_image_overlay_marker(
+            tl, duration_sec=3.0, fade_in_sec=0.1, fade_out_sec=-1.0
+        )
+        with pytest.raises(ClipwrightError) as exc_info:
+            _collect_image_overlays(tl, image_index_base=1)
+        err = exc_info.value
+        assert err.code == ErrorCode.INVALID_INPUT
+        assert err.message == (
+            "The timeline contains an invalid image overlay:"
+            " fade_out_sec must be in [0, duration_sec]."
+        )
+        assert err.hint == (
+            "Re-annotate with a fade_out_sec in the range [0, duration_sec]."
+        )
+
+    def test_fade_in_equals_zero_boundary_still_green(self) -> None:
+        """fade_in_sec == 0.0 remains accepted (boundary; architecture S8).
+
+        Green today and must remain green after FR-3 (0 <= 0.0 <= duration_sec).
+        """
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            _collect_image_overlays,
+        )
+
+        tl = _make_timeline([_make_clip("/src/a.mp4", 0.0, 10.0)])
+        _add_image_overlay_marker(
+            tl, duration_sec=3.0, fade_in_sec=0.0, fade_out_sec=0.5
+        )
+        result = _collect_image_overlays(tl, image_index_base=1)
+        assert len(result) == 1
+
+    def test_fade_in_equals_duration_boundary_still_green(self) -> None:
+        """fade_in_sec == duration_sec remains accepted (boundary; architecture S8).
+
+        Green today and must remain green after FR-3
+        (0 <= duration_sec <= duration_sec).
+        """
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            _collect_image_overlays,
+        )
+
+        tl = _make_timeline([_make_clip("/src/a.mp4", 0.0, 10.0)])
+        _add_image_overlay_marker(
+            tl, duration_sec=3.0, fade_in_sec=3.0, fade_out_sec=0.0
+        )
+        result = _collect_image_overlays(tl, image_index_base=1)
+        assert len(result) == 1
+
+    def test_fade_out_equals_zero_boundary_still_green(self) -> None:
+        """fade_out_sec == 0.0 remains accepted (boundary; architecture S8)."""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            _collect_image_overlays,
+        )
+
+        tl = _make_timeline([_make_clip("/src/a.mp4", 0.0, 10.0)])
+        _add_image_overlay_marker(
+            tl, duration_sec=3.0, fade_in_sec=0.5, fade_out_sec=0.0
+        )
+        result = _collect_image_overlays(tl, image_index_base=1)
+        assert len(result) == 1
+
+    def test_fade_out_equals_duration_boundary_still_green(self) -> None:
+        """fade_out_sec == duration_sec remains accepted (boundary; architecture S8)."""
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            _collect_image_overlays,
+        )
+
+        tl = _make_timeline([_make_clip("/src/a.mp4", 0.0, 10.0)])
+        _add_image_overlay_marker(
+            tl, duration_sec=3.0, fade_in_sec=0.0, fade_out_sec=3.0
+        )
+        result = _collect_image_overlays(tl, image_index_base=1)
+        assert len(result) == 1
+
+    def test_fade_sum_exceeds_duration_message_unchanged(self) -> None:
+        """Existing combined fade-sum check keeps its original wording (plan.py:567).
+
+        Architecture S2.5 Consequences: FR-3 only adds isfinite/range checks
+        BEFORE this existing check; its message/hint text is unchanged. Green
+        both before and after FR-3 (regression guard, not Red).
+        """
+        from clipwright.errors import ClipwrightError, ErrorCode
+        from clipwright_render.plan import (  # type: ignore[attr-defined]
+            _collect_image_overlays,
+        )
+
+        tl = _make_timeline([_make_clip("/src/a.mp4", 0.0, 10.0)])
+        _add_image_overlay_marker(
+            tl, fade_in_sec=2.0, fade_out_sec=2.0, duration_sec=3.0
+        )
+        with pytest.raises(ClipwrightError) as exc_info:
+            _collect_image_overlays(tl, image_index_base=1)
+        err = exc_info.value
+        assert err.code == ErrorCode.INVALID_INPUT
+        assert err.message == (
+            "The timeline contains an invalid image overlay:"
+            " fade_in_sec + fade_out_sec exceeds duration_sec."
+        )
+        assert err.hint == (
+            "Re-annotate so that fade_in_sec + fade_out_sec <= duration_sec."
+        )

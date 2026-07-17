@@ -5,6 +5,30 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.38.3] - 2026-07-17
+
+### Security (`clipwright-render` v0.19.1)
+
+- Subprocess error messages no longer leak raw stderr or absolute paths
+  (SR-R-001 / CWE-209 / ADR-SR-1). The render tool redacts SUBPROCESS_FAILED
+  and SUBPROCESS_TIMEOUT error messages across all five internal seams that
+  reach ffmpeg or ffprobe.
+
+### Fixed (`clipwright-render` v0.19.1)
+
+- Image overlay now runs output-collision detection before extension checks
+  (ADR-B8 parity).
+- Image overlay fade validation now fails closed on NaN, infinities, and
+  negative values instead of silently dropping them.
+
+### Changed (`clipwright-render` v0.19.1)
+
+- PiP audio ducking asplit wiring extracted to `_append_ducking_asplit` for
+  code reuse (pure refactor, no behavioral change).
+
+Only `clipwright-render` is bumped to v0.19.1; the core (`clipwright`) and all
+other satellite packages remain at their current versions.
+
 ## [0.38.2] - 2026-07-17
 
 ### Fixed (`clipwright-export` v0.2.2)

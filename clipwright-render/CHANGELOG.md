@@ -5,6 +5,54 @@ All notable changes to `clipwright-render` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.1] - 2026-07-17
+
+### Security
+
+- **Subprocess error messages no longer leak raw stderr or absolute paths
+  (SR-R-001 / CWE-209 / ADR-SR-1).** The render tool has five code paths that
+  reach a child process (ffmpeg / ffprobe): the main ffmpeg transcode (`run()`
+  at :1336 and :402), the probe step (`inspect_media()` / ffprobe at :123 and
+  :1310), and the encoder capability probe (encoders.py:282). When any seam
+  raises a `SUBPROCESS_FAILED` or `SUBPROCESS_TIMEOUT` error, the raw child
+  stderr (which may contain absolute input paths or temporary working
+  directories) is replaced with a generic safe message before being returned
+  in the MCP envelope. The error `code` and `hint` remain unchanged for
+  backward compatibility with callers that rely on the stable contract;
+  render-owned curated messages (`_verify_image_magic` basename display,
+  "output file not generated" wording) are never masked because they are
+  raised directly and are already path-safe by construction.
+
+### Fixed
+
+- **Image overlay output collision detection now runs at loop start, before
+  extension checks.** The `check_output_not_source` guard has been added to
+  the image overlay loop (ADR-B8 parity with background music and PiP),
+  rejecting `output_path == image_path` with a `PATH_NOT_ALLOWED` error
+  before any file operations. This is a rare edge case (the output video and
+  input image have disjoint MIME types by design), but the fix restores
+  multi-layered defense symmetry across all three overlay types.
+
+- **Image overlay fade values are now validated fail-closed for NaN,
+  infinities, and negative values.** The `_marker_to_image_overlay` function
+  previously passed fade times to `isfinite()` in a sum comparison that silently
+  dropped `NaN + x > d` (always False), allowing NaN fades to be applied
+  without warning. Image fade validation now matches the PiP implementation:
+  `isfinite()` for NaN/±inf detection, then range checks `0 <= fade <=
+  duration`, with a explicit `INVALID_INPUT` error + hint for any out-of-bounds
+  value. Legitimate boundary values (0.0 and duration_sec) remain accepted.
+
+### Changed
+
+- **PiP audio ducking asplit wiring extracted for code reuse.** The `asplit`
+  filter generation in `_append_pip_audio_pipe` (main and bgm branches) was
+  de-duplicated into a new `_append_ducking_asplit` function. This is a pure
+  refactor with no change to behavior, proven by an expanded characterization
+  test (7 cases covering all ducking/source combinations) and the existing
+  real-ffmpeg execution test suite. All asplit label names, filter graph
+  ordering, and ducking mix output assignments are byte-identical to the
+  pre-extraction code.
+
 ## [0.18.1] - 2026-07-10
 
 ### Fixed
