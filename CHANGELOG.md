@@ -5,6 +5,22 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.38.1] - 2026-07-17
+
+### Fixed (`clipwright-export` v0.2.1)
+
+- **EDL export no longer fails when two or more clips fall on non-whole-frame
+  boundaries.** Clips whose in/out points did not land on frame boundaries — for
+  example from second-based trims or silence cuts — previously caused EDL export
+  to fail its write-then-verify round-trip once two or more such clips were
+  chained. The exporter now half-up quantizes each clip's edit points to the
+  representative integer frame rate on the write-time copy so the write succeeds,
+  and reports every adjustment in `warnings`. Cut points shift by at most 0.5
+  frame with no cumulative drift, and the input OTIO is never modified. FCPXML
+  export is unaffected: it keeps its non-quantized rational-seconds representation.
+  Only `clipwright-export` is bumped to v0.2.1; all other packages and the core
+  are unchanged.
+
 ## [0.38.0] - 2026-07-15
 
 DaVinci Resolve NLE interop (GitHub Issue #2): start timecode passthrough and

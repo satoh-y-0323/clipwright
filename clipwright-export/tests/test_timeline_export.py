@@ -127,10 +127,41 @@ Verification aspects:
             text must be truncated to a small fixed upper bound (<=64
             chars). This test was Red until _loss_report truncated the kind
             string; it now guards against that regression.
+  (M) [ADR-EX-12] EDL frame-boundary quantization (architecture-report
+      20260717-095045.md sect 2/4/5/6; requirements-report
+      20260717-094900.md acceptance criteria)
+      (M-1) Fractional-frame clip/gap durations (the bug-reproducing shape
+            that silence detection / second-based trims typically produce)
+            on the EDL path succeed with an aggregated quantization
+            warning, parametrized over integer rates 24/25/30 plus a
+            dedicated half-frame-boundary (62.5f) case pinning half-up
+            rounding (floor(x+0.5+eps)) against banker's round()'s 62.
+            This class was Red at authoring time -- _quantize_to_frame_
+            boundaries did not yet exist, so the EDL write-then-verify
+            (ADR-EX-11) rejected these inputs with OTIO_ERROR instead of
+            succeeding.
+      (M-2) Re-read cut points stay within 0.5/rate + eps seconds of the
+            original (pre-quantization) cumulative value.
+      (M-3) 3+ clips plus a Gap: quantized durations match an independent
+            reference boundary-diff model exactly (no drift accumulation
+            regardless of item count).
+      (M-4) A frame-aligned input (roundtrip_timeline_factory) produces no
+            quantization warning and is unchanged.
+      (M-5) FCPXML is not quantized for the same fractional-duration input
+            (rational-seconds representation round-trips losslessly).
+      (M-6) The input .otio file is byte-unchanged after an EDL export of
+            fractional-duration clips (non-destructive, EDL variant of the
+            (B-2) pattern).
+      (M-7) A sub-half-frame clip collapses to zero length with its own
+            "collapsed to zero length" warning fragment.
+      (M-8) The written EDL re-reads via read_from_file(..., "cmx_3600",
+            rate=...) without raising (the exact EDLParseError this ADR
+            eliminates).
 """
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any
 
@@ -139,6 +170,7 @@ import pytest
 from clipwright.errors import ErrorCode
 from clipwright.otio_utils import (
     add_clip,
+    add_gap,
     add_marker,
     load_timeline,
     new_timeline,
@@ -216,6 +248,103 @@ def _video_clips(tl: otio.schema.Timeline) -> list[otio.schema.Clip]:
         for item in track
         if isinstance(item, otio.schema.Clip)
     ]
+
+
+# ===========================================================================
+# ADR-EX-12 (EDL frame-boundary quantization) helpers -- used only by
+# TestEdlFrameQuantization below.
+# ===========================================================================
+
+# Pinned substrings from architecture-report §4 (_quantize_warnings); not
+# guessed -- the exact aggregate-warning wording the fix is required to emit.
+_QUANT_WARNING_SUBSTR = "quantized to whole frames"
+_ZERO_COLLAPSE_SUBSTR = "collapsed to zero length"
+
+
+def _round_half_up_frames(x: float) -> int:
+    """Independent half-up reference (architecture §2.2): floor(x+0.5+eps).
+
+    This is a *test oracle*, not a copy of the implementation (which does
+    not exist yet at Red-authoring time) -- it exists so quantization tests
+    can state exact expected integer frame values from the spec formula
+    alone. Deliberately NOT round(), which uses banker's rounding and would
+    send 62.5 -> 62 instead of the required 63 (see the half_boundary case
+    below).
+    """
+    return math.floor(x + 0.5 + 1e-6)
+
+
+def _expected_quantized_durations(items: list[tuple[str, float]]) -> list[int]:
+    """Reference boundary-diff model (architecture §2.3) for a track's item
+    sequence, given as (kind, duration_frames) pairs where kind is "clip" or
+    "gap" (kind itself is not used by the math, only documents intent at
+    call sites). Returns each item's expected exact quantized duration, in
+    the same order. Independent of the implementation under test -- see
+    _round_half_up_frames docstring.
+    """
+    raw_acc = 0.0
+    prev_rounded = 0
+    out: list[int] = []
+    for _, dur in items:
+        raw_acc += dur
+        new_rounded = _round_half_up_frames(raw_acc)
+        out.append(new_rounded - prev_rounded)
+        prev_rounded = new_rounded
+    return out
+
+
+def _build_frame_duration_timeline(
+    tmp_path: Path,
+    make_media_file: Any,
+    rate: float,
+    durations_frames: tuple[float, ...],
+    *,
+    gap_after_index: int | None = None,
+    gap_duration_frames: float = 0.0,
+    name: str = "frac",
+) -> str:
+    """Build and save a V1-only timeline whose clips carry the given
+    frame-unit (possibly fractional) durations at *rate* -- the shape that
+    reproduces the ADR-EX-12 EDL desync bug (silence detection / second-
+    based trims generally produce non-frame-aligned durations, so two or
+    more fractional-duration clips in a row phase-shift the record_in of
+    later clips against their source duration).
+
+    Each clip's source_range.start_time is set to an arbitrary, distinct
+    in-source-media position (n * 1000 frames) rather than a value related
+    to its record/timeline position: a Track composes items sequentially by
+    duration alone, so a clip's source_range.start_time is only its in-point
+    *within the source media*, never its record position (ADR-EX-12 §2.3
+    quantizes the two independently -- this distinguishes a start-
+    quantization bug from a duration/boundary-quantization bug).
+
+    Optionally inserts one Gap (via clipwright.otio_utils.add_gap, reused
+    as-is, not reimplemented) of *gap_duration_frames* immediately after
+    clip index *gap_after_index* (0-based).
+    """
+    media = make_media_file(f"{name}.mov")
+    tl = new_timeline(name=f"export-{name}")
+    v1 = tl.tracks[0]
+    available = TimeRangeModel(
+        start_time=RationalTimeModel(value=0.0, rate=rate),
+        duration=RationalTimeModel(value=100000.0, rate=rate),
+    )
+    ref = media_ref_for_otio(media, tmp_path)
+    for i, dur in enumerate(durations_frames):
+        add_clip(
+            v1,
+            MediaRef(target_url=ref, available_range=available),
+            TimeRangeModel(
+                start_time=RationalTimeModel(value=i * 1000.0, rate=rate),
+                duration=RationalTimeModel(value=dur, rate=rate),
+            ),
+            name=f"clip{i}",
+        )
+        if gap_after_index is not None and i == gap_after_index:
+            add_gap(v1, RationalTimeModel(value=gap_duration_frames, rate=rate))
+    otio_path = tmp_path / f"{name}.otio"
+    save_timeline(tl, str(otio_path))
+    return str(otio_path)
 
 
 # Table labels from architecture-report §5.1 (fixed strings, independent of
@@ -315,7 +444,22 @@ class TestRoundtripEdl:
     def test_subsecond_frame_aligned_boundaries_pass_verify(
         self, tmp_path: Path, make_media_file: Any
     ) -> None:
-        """§13.2 false-positive safety net (spike §(4b))."""
+        """§13.2 false-positive safety net (spike §(4b)).
+
+        ADR-EX-12 note: despite the test name, this clip's source_range is
+        actually fractional-frame (10.5s start / 40.25s duration * 30fps =
+        315.0f start / 1207.5f duration -- 1207.5f is not frame-aligned).
+        Before ADR-EX-12 this happened to still pass write-then-verify
+        because it is a *single* clip on an otherwise-empty track (the
+        desync only appears once a second fractional-duration clip/gap
+        follows and accumulates phase error into the next record_in). After
+        the ADR-EX-12 fix this now also exercises the quantization path
+        (1207.5f rounds half-up to 1208f) and still passes verify; the
+        assertions below (ok/exists only) are intentionally left unchanged
+        as this test's role is a false-positive safety net, not a
+        quantization-value regression pin (see TestEdlFrameQuantization for
+        that).
+        """
         rate = 30.0
         media = make_media_file("clip.mov")
         tl = new_timeline(name="subsecond")
@@ -1138,3 +1282,311 @@ class TestLossReportUnknownKindLengthBound:
             "expected the embedded kind string truncated to <=64 chars, got "
             f"{len(embedded)} chars: {embedded[:80]!r}..."
         )
+
+
+# ===========================================================================
+# (M) [ADR-EX-12] EDL frame-boundary quantization
+# ===========================================================================
+
+
+class TestEdlFrameQuantization:
+    """ADR-EX-12: fractional-frame clip/gap durations on the EDL path are
+    quantized to whole-frame boundaries on the write-time deep copy
+    (_quantize_to_frame_boundaries) instead of failing write-then-verify
+    (ADR-EX-11) with cmx_3600's EDLParseError("Source and record duration
+    don't match"). This class was Red at authoring time:
+    _quantize_to_frame_boundaries does not yet exist in timeline_export.py,
+    so every test below currently fails -- most directly via the desync bug
+    itself (export_timeline returns ok=False / OTIO_ERROR instead of
+    ok=True), and the aligned-input/FCPXML/non-destructive tests fail their
+    "no quantization warning" assertions once the warning text is
+    introduced elsewhere in the class's shared fixtures. Each will pass once
+    _quantize_to_frame_boundaries is implemented and wired in per
+    architecture-report-20260717-095045.md §1-§6.
+    """
+
+    # (10.3, 20.7) is a measured bug-reproducing pair (verified by direct
+    # probe against the pre-fix implementation): at rate 24/25/30 it makes
+    # export_timeline return ok=False/OTIO_ERROR today (the cmx_3600
+    # write-then-verify EDLParseError this ADR eliminates), not just a
+    # missing-warning gap.
+    @pytest.mark.parametrize(
+        "case_id,rate,durations",
+        [
+            ("rate24", 24.0, (10.3, 20.7)),
+            ("rate25", 25.0, (10.3, 20.7)),
+            ("rate30", 30.0, (10.3, 20.7)),
+            # Half-up regression pin (architecture §2.2/§6): the first
+            # clip's cumulative raw boundary lands exactly on 10.5 frames;
+            # half-up (floor(x+0.5+eps)) must round it to 11, never
+            # banker's round()'s 10 (round-half-to-even). Also a measured
+            # bug-reproducing pair (ok=False today).
+            ("half_boundary", 25.0, (10.5, 20.7)),
+        ],
+    )
+    def test_fractional_clips_succeed_with_quantization_warning(
+        self,
+        tmp_path: Path,
+        make_media_file: Any,
+        case_id: str,
+        rate: float,
+        durations: tuple[float, float],
+    ) -> None:
+        otio_path = _build_frame_duration_timeline(
+            tmp_path, make_media_file, rate, durations, name=f"quant_{case_id}"
+        )
+        out = tmp_path / f"quant_{case_id}.edl"
+
+        result = export_timeline(
+            timeline=otio_path,
+            output=str(out),
+            options=ExportTimelineOptions(format="edl"),
+        )
+
+        assert result.ok is True, result.error
+        assert out.exists()
+        joined = " ".join(result.warnings).lower()
+        assert _QUANT_WARNING_SUBSTR in joined
+
+        if case_id == "half_boundary":
+            back = otio.adapters.read_from_file(
+                str(out), adapter_name="cmx_3600", rate=rate
+            )
+            first_clip = _video_clips(back)[0]
+            assert first_clip.source_range.duration.value == pytest.approx(
+                11.0, abs=1e-6
+            ), (
+                "10.5 frames must round half-up to 11 (never banker's "
+                "round()'s 10); regression pin for the ADR-EX-12 half-up rule"
+            )
+
+    @pytest.mark.parametrize("rate", [24.0, 25.0, 30.0])
+    def test_cut_points_shift_at_most_half_a_frame(
+        self, tmp_path: Path, make_media_file: Any, rate: float
+    ) -> None:
+        durations = (10.3, 20.7)
+        otio_path = _build_frame_duration_timeline(
+            tmp_path, make_media_file, rate, durations, name=f"cutpt_{int(rate)}"
+        )
+        out = tmp_path / f"cutpt_{int(rate)}.edl"
+
+        result = export_timeline(
+            timeline=otio_path,
+            output=str(out),
+            options=ExportTimelineOptions(format="edl"),
+        )
+        assert result.ok is True, result.error
+
+        back = otio.adapters.read_from_file(
+            str(out), adapter_name="cmx_3600", rate=rate
+        )
+        video_clips = _video_clips(back)
+        assert len(video_clips) == len(durations)
+
+        tolerance_s = 0.5 / rate + 1e-6
+        back_durations_frames = [c.source_range.duration.value for c in video_clips]
+        cumulative_original = 0.0
+        cumulative_back = 0.0
+        for orig_dur, back_dur in zip(durations, back_durations_frames, strict=True):
+            cumulative_original += orig_dur
+            cumulative_back += back_dur
+            original_s = cumulative_original / rate
+            back_s = cumulative_back / rate
+            assert abs(back_s - original_s) <= tolerance_s, (
+                f"cut point at cumulative {cumulative_original} frames drifted "
+                f"{abs(back_s - original_s)}s, exceeding the 0.5-frame tolerance "
+                f"{tolerance_s}s"
+            )
+
+    def test_multi_clip_with_gap_has_no_cumulative_drift(
+        self, tmp_path: Path, make_media_file: Any
+    ) -> None:
+        rate = 30.0
+        clip_durations = (62.4, 45.3, 33.7)
+        gap_duration = 20.6
+        otio_path = _build_frame_duration_timeline(
+            tmp_path,
+            make_media_file,
+            rate,
+            clip_durations,
+            gap_after_index=1,
+            gap_duration_frames=gap_duration,
+            name="drift",
+        )
+        out = tmp_path / "drift.edl"
+
+        result = export_timeline(
+            timeline=otio_path,
+            output=str(out),
+            options=ExportTimelineOptions(format="edl"),
+        )
+        assert result.ok is True, result.error
+
+        back = otio.adapters.read_from_file(
+            str(out), adapter_name="cmx_3600", rate=rate
+        )
+        video_clips = _video_clips(back)
+        assert len(video_clips) == len(clip_durations)
+
+        back_durations = [c.source_range.duration.value for c in video_clips]
+        assert all(d >= 0 for d in back_durations), (
+            "quantized durations must never go negative (record boundaries "
+            "must be monotonic non-decreasing)"
+        )
+
+        # Independent reference model (architecture §2.3 boundary-diff):
+        # walking clip0, clip1, gap, clip2 in order and diffing successively
+        # rounded cumulative boundaries. Matching this exactly (not just
+        # approximately) demonstrates zero drift regardless of item count --
+        # naive independent per-item rounding would instead accumulate up to
+        # 0.5 frame of drift per item.
+        items: list[tuple[str, float]] = [
+            ("clip", clip_durations[0]),
+            ("clip", clip_durations[1]),
+            ("gap", gap_duration),
+            ("clip", clip_durations[2]),
+        ]
+        expected = _expected_quantized_durations(items)
+        expected_clip_durations = [expected[0], expected[1], expected[3]]
+        assert back_durations == pytest.approx(
+            [float(d) for d in expected_clip_durations], abs=1e-6
+        ), (
+            f"expected quantized clip durations {expected_clip_durations} "
+            f"(boundary-diff, drift-free), got {back_durations}"
+        )
+
+    @pytest.mark.parametrize("rate", [24.0, 25.0, 30.0])
+    def test_frame_aligned_input_is_unchanged_no_warning(
+        self, roundtrip_timeline_factory: Any, tmp_path: Path, rate: float
+    ) -> None:
+        fixture: RoundtripFixture = roundtrip_timeline_factory(
+            rate=rate, name=f"aligned_quant_{int(rate)}"
+        )
+        out = tmp_path / f"aligned_quant_{int(rate)}.edl"
+
+        result = export_timeline(
+            timeline=fixture.otio_path,
+            output=str(out),
+            options=ExportTimelineOptions(format="edl"),
+        )
+        assert result.ok is True, result.error
+        joined = " ".join(result.warnings).lower()
+        assert _QUANT_WARNING_SUBSTR not in joined, (
+            "a frame-aligned input must produce zero mutation, so no "
+            f"quantization warning is expected; got warnings: {result.warnings!r}"
+        )
+
+        back = otio.adapters.read_from_file(
+            str(out), adapter_name="cmx_3600", rate=rate
+        )
+        video_clips = _video_clips(back)
+        assert len(video_clips) == len(fixture.clip_specs)
+        tolerance = 1.0 / rate
+        for clip, (_, start_s, dur_s) in zip(
+            video_clips, fixture.clip_specs, strict=True
+        ):
+            sr = clip.source_range
+            assert abs(_seconds(sr.start_time) - start_s) <= tolerance
+            assert abs(_seconds(sr.duration) - dur_s) <= tolerance
+
+    def test_fcpxml_is_not_quantized_for_fractional_clips(
+        self, tmp_path: Path, make_media_file: Any
+    ) -> None:
+        rate = 30.0
+        durations = (10.3, 20.7)
+        otio_path = _build_frame_duration_timeline(
+            tmp_path, make_media_file, rate, durations, name="fcpxml_frac"
+        )
+        out = tmp_path / "fcpxml_frac.fcpxml"
+
+        result = export_timeline(
+            timeline=otio_path,
+            output=str(out),
+            options=ExportTimelineOptions(format="fcpxml"),
+        )
+        assert result.ok is True, result.error
+        joined = " ".join(result.warnings).lower()
+        assert _QUANT_WARNING_SUBSTR not in joined, (
+            "FCPXML must never be quantized (rational-seconds representation "
+            f"round-trips losslessly); got warnings: {result.warnings!r}"
+        )
+
+        back = otio.adapters.read_from_file(str(out), adapter_name="fcpx_xml")
+        video_clips = _video_clips(back)
+        assert len(video_clips) == len(durations)
+        tolerance = 1.0 / rate
+        for clip, dur_frames in zip(video_clips, durations, strict=True):
+            assert (
+                abs(_seconds(clip.source_range.duration) - dur_frames / rate)
+                <= tolerance
+            )
+
+    def test_input_otio_bytes_unchanged_after_edl_export(
+        self, tmp_path: Path, make_media_file: Any
+    ) -> None:
+        rate = 30.0
+        durations = (10.3, 20.7)
+        otio_path = _build_frame_duration_timeline(
+            tmp_path, make_media_file, rate, durations, name="nondestructive"
+        )
+        out = tmp_path / "nondestructive.edl"
+
+        before = Path(otio_path).read_bytes()
+        result = export_timeline(
+            timeline=otio_path,
+            output=str(out),
+            options=ExportTimelineOptions(format="edl"),
+        )
+        assert result.ok is True, result.error
+
+        after = Path(otio_path).read_bytes()
+        assert before == after, "the input OTIO file must never be modified"
+
+    def test_zero_collapse_clip_reports_warning(
+        self, tmp_path: Path, make_media_file: Any
+    ) -> None:
+        rate = 30.0
+        # The first clip is well under half a frame (0.3f); its cumulative
+        # raw boundary (0.3) rounds half-up to 0, collapsing it to zero
+        # length in the EDL (architecture §5 edge-case table). The second
+        # clip keeps the export non-degenerate.
+        durations = (0.3, 50.0)
+        otio_path = _build_frame_duration_timeline(
+            tmp_path, make_media_file, rate, durations, name="zerocollapse"
+        )
+        out = tmp_path / "zerocollapse.edl"
+
+        result = export_timeline(
+            timeline=otio_path,
+            output=str(out),
+            options=ExportTimelineOptions(format="edl"),
+        )
+        assert result.ok is True, result.error
+        joined = " ".join(result.warnings).lower()
+        assert _ZERO_COLLAPSE_SUBSTR in joined, (
+            f"expected a zero-collapse warning fragment; got: {result.warnings!r}"
+        )
+
+    def test_output_edl_rereads_without_exception(
+        self, tmp_path: Path, make_media_file: Any
+    ) -> None:
+        rate = 24.0
+        durations = (10.3, 20.7)
+        otio_path = _build_frame_duration_timeline(
+            tmp_path, make_media_file, rate, durations, name="rereadonly"
+        )
+        out = tmp_path / "rereadonly.edl"
+
+        result = export_timeline(
+            timeline=otio_path,
+            output=str(out),
+            options=ExportTimelineOptions(format="edl"),
+        )
+        assert result.ok is True, result.error
+
+        # Must not raise EDLParseError("Source and record duration don't
+        # match") -- the exact desync this ADR eliminates.
+        back = otio.adapters.read_from_file(
+            str(out), adapter_name="cmx_3600", rate=rate
+        )
+        assert isinstance(back, otio.schema.Timeline)
