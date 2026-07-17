@@ -19,6 +19,16 @@ Design decisions (architecture-report §2/§4/§5/§6/§11/§13):
   deletes the artifact and returns OTIO_ERROR. The judgement is exception
   presence only (no value comparison), so normal integer-rate frame
   quantisation never false-fails.
+- ADR-EX-12 (§quantization): in the EDL path only, after audio-track removal
+  (ADR-NI-7) and immediately before _write_adapter, the write-time deep copy is
+  quantized to whole-frame boundaries at the representative integer rate by
+  _quantize_to_frame_boundaries. Cumulative record boundaries are snapped
+  half-up (floor(x+0.5), never banker's round) and each item's record duration
+  is the rounded boundary difference; source start is rounded independently and
+  source duration is set equal to the record duration, so cmx_3600's
+  src_duration == rec_duration check holds by construction. Adjustments are
+  reported in one aggregated warning. FCPXML is left unquantized because its
+  rational-seconds representation round-trips fractional durations losslessly.
 - ADR-EX-4 (§4.2): media references that do not exist are skipped (kept
   relative) with a warning; only a relative reference that escapes the OTIO
   directory (CWE-22) fails the whole export.
@@ -46,6 +56,7 @@ from __future__ import annotations
 
 import collections.abc
 import contextlib
+import math
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -123,6 +134,12 @@ _LABEL_ORDER: tuple[str, ...] = (
 
 # Non-integer rate detection threshold (ADR-EX-10 §13.1).
 _RATE_EPS = 1e-6
+
+# Frame-boundary rounding tolerance (ADR-EX-12). Distinct from _RATE_EPS: this
+# absorbs float representation noise when snapping cumulative record boundaries
+# to whole frames in _quantize_to_frame_boundaries (a different concern than
+# non-integer rate detection, so it is kept as an independent constant).
+_FRAME_EPS = 1e-6
 
 # SR-V-001 (CWE-400): unknown marker-kind strings embedded in the aggregated
 # loss-report warning are truncated to this many characters.
@@ -254,6 +271,123 @@ def _check_frame_rates(tl: otio.schema.Timeline) -> None:
                         "(24/25/30) before exporting to EDL/FCPXML."
                     ),
                 )
+
+
+# ---------------------------------------------------------------------------
+# ADR-EX-12: EDL frame-boundary quantization (write-time deep copy only)
+# ---------------------------------------------------------------------------
+
+
+def _round_half_up(x: float) -> int:
+    """Half-up rounding (floor(x + 0.5)); NOT banker's round().
+
+    _FRAME_EPS absorbs float representation error so a value that is
+    conceptually an exact integer or exact .5 boundary snaps deterministically
+    (e.g. 61.9999998 -> 62, 62.5 -> 63). Python's built-in round() uses
+    banker's rounding and would send 62.5 -> 62, breaking the half-up
+    consistency the boundary walk relies on.
+    """
+    return math.floor(x + 0.5 + _FRAME_EPS)
+
+
+def _quantize_warnings(
+    adjusted: int, zero_collapse: int, max_shift_frames: float, rate: int
+) -> list[str]:
+    """Build the aggregated ADR-EX-12 quantization warning (architecture §4).
+
+    Returns [] when nothing was adjusted. Otherwise one aggregated sentence
+    (with an inline lowercase ``hint:``) reporting the adjustment count and the
+    largest cut-point shift in seconds; a second sentence is appended to the
+    same string when clips collapsed to zero length. Only counts and seconds
+    are exposed -- never paths or clip names (CWE-209).
+    """
+    if adjusted == 0:
+        return []
+    max_shift_s = max_shift_frames / rate
+    sentence = (
+        f"{adjusted} clip/gap boundary(ies) were quantized to whole frames for "
+        f"the EDL at {rate} fps; the largest cut-point shift was "
+        f"{max_shift_s:.4f}s (at most half a frame, no cumulative drift). "
+        "hint: this is expected for second-based trims and silence cuts; "
+        "re-cut on frame boundaries in the source OTIO if the shift matters."
+    )
+    if zero_collapse > 0:
+        sentence += (
+            f" {zero_collapse} clip(s) shorter than half a frame collapsed to "
+            "zero length in the EDL. hint: lengthen or remove these clips in the "
+            "source OTIO if they are meant to be visible."
+        )
+    return [sentence]
+
+
+def _quantize_to_frame_boundaries(tl: otio.schema.Timeline, rate: int) -> list[str]:
+    """Quantize each track item's source_range to whole-frame boundaries.
+
+    EDL-only conform (ADR-EX-12): cmx_3600 timecode floors fractional frames,
+    so adjacent fractional-duration clips desync source vs record cumulative
+    boundaries and fail write-then-verify. This walks each track's item
+    sequence (Clips and Gaps -- _iter_clips skips Gaps, so the track is walked
+    directly) and snaps the cumulative record boundaries to whole frames at
+    *rate* using half-up rounding, deriving each item's record duration from
+    the rounded boundary difference. Source start is rounded independently to
+    the nearest frame and source duration is set equal to the record duration,
+    which constructively satisfies cmx_3600's src_duration == rec_duration
+    check. Only track items' source_range is mutated (markers, timeline
+    metadata, clipwright metadata and effects are untouched). Mutates *tl* (the
+    write-time deep copy) in place and returns an aggregated warning list (empty
+    when nothing was adjusted). Never raises.
+    """
+    adjusted_count = 0
+    zero_collapse_count = 0
+    max_shift_frames = 0.0
+
+    for track in tl.tracks:
+        # Each track is an independent record timeline; reset the accumulators
+        # per track (EDL is single-video, but close per-track defensively).
+        raw_acc = 0.0
+        prev_rounded = 0
+        for item in track:
+            # Only Clip/Gap advance the record timeline. Transitions etc. are
+            # not produced by clipwright (ADR-EX-6); source_range-less items are
+            # non-reachable under the create contract. Skip both without
+            # advancing the accumulator.
+            if not isinstance(item, (otio.schema.Clip, otio.schema.Gap)):
+                continue
+            sr = item.source_range
+            if sr is None:
+                continue
+
+            # 1) raw duration in rep-rate frames (rate is a single rep_rate).
+            dur_frames = sr.duration.value * rate / sr.duration.rate
+            raw_acc += dur_frames
+            # 2) snap the record boundary half-up; duration = boundary diff.
+            new_rounded = _round_half_up(raw_acc)
+            quant_dur = new_rounded - prev_rounded  # >= 0 (raw_acc monotonic)
+            boundary_shift = abs(new_rounded - raw_acc)  # <= 0.5 + eps
+            prev_rounded = new_rounded
+            # 3) source start rounded independently; source dur == record dur.
+            start_frames = sr.start_time.value * rate / sr.start_time.rate
+            new_start = _round_half_up(start_frames)
+            start_shift = abs(new_start - start_frames)  # <= 0.5 + eps
+
+            # 4) mutation judgement in frame space (eps-tolerant). Already
+            # aligned items keep their source_range untouched (zero mutation).
+            if (
+                abs(quant_dur - dur_frames) > _FRAME_EPS
+                or abs(new_start - start_frames) > _FRAME_EPS
+            ):
+                item.source_range = otio.opentime.TimeRange(
+                    start_time=otio.opentime.RationalTime(float(new_start), rate),
+                    duration=otio.opentime.RationalTime(float(quant_dur), rate),
+                )
+                adjusted_count += 1
+                max_shift_frames = max(max_shift_frames, boundary_shift, start_shift)
+                if quant_dur == 0:
+                    zero_collapse_count += 1
+
+    return _quantize_warnings(
+        adjusted_count, zero_collapse_count, max_shift_frames, rate
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -578,6 +712,10 @@ def _export_timeline_inner(
             "EDL timecode carries no frame rate; set your NLE project/sequence to "
             f"{rep_rate} fps on import so the cut points land at the intended times."
         )
+        # ADR-EX-12: quantize the write-time copy to whole-frame boundaries so
+        # adjacent fractional-duration clips do not desync source vs record and
+        # fail write-then-verify. Same rep_rate as verify_rate below (invariant).
+        warnings_out.extend(_quantize_to_frame_boundaries(tl_copy, rep_rate))
 
     # --- Step 7: write adapter + write-then-verify (ADR-EX-11) ---
     _write_adapter(tl_copy, output, fmt, verify_rate=rep_rate)

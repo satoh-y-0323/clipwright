@@ -1295,14 +1295,15 @@ class TestEdlFrameQuantization:
     (_quantize_to_frame_boundaries) instead of failing write-then-verify
     (ADR-EX-11) with cmx_3600's EDLParseError("Source and record duration
     don't match"). This class was Red at authoring time:
-    _quantize_to_frame_boundaries does not yet exist in timeline_export.py,
-    so every test below currently fails -- most directly via the desync bug
-    itself (export_timeline returns ok=False / OTIO_ERROR instead of
-    ok=True), and the aligned-input/FCPXML/non-destructive tests fail their
-    "no quantization warning" assertions once the warning text is
-    introduced elsewhere in the class's shared fixtures. Each will pass once
-    _quantize_to_frame_boundaries is implemented and wired in per
-    architecture-report-20260717-095045.md §1-§6.
+    _quantize_to_frame_boundaries did not yet exist in timeline_export.py,
+    so every test below failed -- most directly via the desync bug itself
+    (export_timeline returned ok=False / OTIO_ERROR instead of ok=True),
+    and the aligned-input/FCPXML/non-destructive tests failed their "no
+    quantization warning" assertions once the warning text was introduced
+    elsewhere in the class's shared fixtures. That Red phase was resolved by
+    implementing and wiring in _quantize_to_frame_boundaries per
+    architecture-report-20260717-095045.md §1-§6; these tests now guard
+    against a regression of the quantization behaviour.
     """
 
     # (10.3, 20.7) is a measured bug-reproducing pair (verified by direct
