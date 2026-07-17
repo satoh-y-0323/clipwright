@@ -1589,7 +1589,7 @@ class TestImageOverlayOutputCollision:
     the image overlay loop must reject image_path == output_path with
     PATH_NOT_ALLOWED, mirroring the BGM precedent (render.py:753-757 / ADR-B8)
     via check_output_not_source(output_path, [img]) placed at the very top of
-    the loop body (architecture-report-20260717-163916.md §5.1 / S8). This
+    the loop body (architecture-report-20260717-163916.md §5.1 / §8). This
     test pins the collision-detection behavior and prevents regression to
     pre-wiring state where pathological image_path==output would fall through
     to the pre-existing existence check (FILE_NOT_FOUND) or extension check
@@ -1760,7 +1760,7 @@ class TestImageOverlayOutputCollision:
 
 # ===========================================================================
 # Section 12: FR-3 image fade fail-closed validation (ADR-SR-1 / PiP parity —
-# architecture-report-20260717-163916.md §5.2 / S8)
+# architecture-report-20260717-163916.md §5.2 / §8)
 # ===========================================================================
 
 
@@ -1919,7 +1919,7 @@ class TestImageFadeFailClosed:
         )
 
     def test_fade_in_equals_zero_boundary_still_green(self) -> None:
-        """fade_in_sec == 0.0 remains accepted (boundary; architecture S8).
+        """fade_in_sec == 0.0 remains accepted (boundary; architecture §8).
 
         Green today and must remain green after FR-3 (0 <= 0.0 <= duration_sec).
         """
@@ -1935,7 +1935,7 @@ class TestImageFadeFailClosed:
         assert len(result) == 1
 
     def test_fade_in_equals_duration_boundary_still_green(self) -> None:
-        """fade_in_sec == duration_sec remains accepted (boundary; architecture S8).
+        """fade_in_sec == duration_sec remains accepted (boundary; architecture §8).
 
         Green today and must remain green after FR-3
         (0 <= duration_sec <= duration_sec).
@@ -1952,7 +1952,7 @@ class TestImageFadeFailClosed:
         assert len(result) == 1
 
     def test_fade_out_equals_zero_boundary_still_green(self) -> None:
-        """fade_out_sec == 0.0 remains accepted (boundary; architecture S8)."""
+        """fade_out_sec == 0.0 remains accepted (boundary; architecture §8)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             _collect_image_overlays,
         )
@@ -1965,7 +1965,7 @@ class TestImageFadeFailClosed:
         assert len(result) == 1
 
     def test_fade_out_equals_duration_boundary_still_green(self) -> None:
-        """fade_out_sec == duration_sec remains accepted (boundary; architecture S8)."""
+        """fade_out_sec == duration_sec remains accepted (boundary; architecture §8)."""
         from clipwright_render.plan import (  # type: ignore[attr-defined]
             _collect_image_overlays,
         )
