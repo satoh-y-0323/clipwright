@@ -1364,8 +1364,11 @@ class TestEdlFrameQuantization:
     (ADR-EX-11) with cmx_3600's EDLParseError("Source and record duration
     don't match"). This class was Red at authoring time:
     _quantize_to_frame_boundaries did not yet exist in timeline_export.py,
-    so 11 of 15 subtests failed via the desync bug itself (export_timeline
-    returned ok=False / OTIO_ERROR). These 11 failed tests consist of:
+    so 11 of the then-15 subtests failed via the desync bug itself
+    (export_timeline returned ok=False / OTIO_ERROR) -- the FCPXML subtest
+    was later replaced by TestFcpxmlQuantizationAndAvailableRange under
+    ADR-EX-13 (see below), leaving 14 subtests in this class today. These
+    11 failed tests consist of:
     4 from test_fractional_clips_succeed_with_quantization_warning
     (rate24/rate25/rate30/half_boundary), 3 from
     test_cut_points_shift_at_most_half_a_frame (24.0/25.0/30.0 rates),

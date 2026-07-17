@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of `frameDuration` — a malformed interchange file. Because the adapter reader
   silently floors with `int()` instead of raising, this went undetected by
   write-then-verify: a 4-clip chain of such fractional durations accumulated
-  0.15s of drift (3.6 frames) with no warning. The exporter now applies the same
+  3.6 frames (0.12 s at 30 fps) of drift with no warning. The exporter now applies the same
   boundary quantization used for EDL export to the write-time copy, at the
   representative integer frame rate, aligning every numerator/denominator to a
   whole multiple of `frameDuration` before writing FCPXML succeeds, and reports
