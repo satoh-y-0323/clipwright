@@ -1301,14 +1301,19 @@ class TestEdlFrameQuantization:
     (ADR-EX-11) with cmx_3600's EDLParseError("Source and record duration
     don't match"). This class was Red at authoring time:
     _quantize_to_frame_boundaries did not yet exist in timeline_export.py,
-    so every test below failed -- most directly via the desync bug itself
-    (export_timeline returned ok=False / OTIO_ERROR instead of ok=True),
-    and the aligned-input/FCPXML/non-destructive tests failed their "no
-    quantization warning" assertions once the warning text was introduced
-    elsewhere in the class's shared fixtures. That Red phase was resolved by
-    implementing and wiring in _quantize_to_frame_boundaries per
-    architecture-report-20260717-095045.md §1-§6; these tests now guard
-    against a regression of the quantization behaviour.
+    so 11 of 15 subtests failed via the desync bug itself (export_timeline
+    returned ok=False / OTIO_ERROR). These 11 were the 8 fractional-rate
+    clips subtests (rate24/rate25/rate30/half_boundary, each parametrized
+    over test methods), plus the 3 desync-related subtests
+    (test_cut_points_shift_at_most_half_a_frame, test_multi_clip_with_gap_has_
+    no_cumulative_drift, test_input_otio_bytes_unchanged_after_edl_export).
+    The remaining 4 subtests (frame-aligned input at 24/25/30fps, FCPXML)
+    were already green before the fix (those clips do not trigger the desync
+    condition, so they pass verify without quantization) and were added as
+    regression guards. That Red phase was resolved by implementing and wiring
+    in _quantize_to_frame_boundaries per architecture-report-20260717-095045
+    .md §1-§6; these tests now guard against a regression of the quantization
+    behaviour.
     """
 
     # (10.3, 20.7) is a measured bug-reproducing pair (verified by direct

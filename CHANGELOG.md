@@ -18,7 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and reports every adjustment in `warnings`. Cut points shift by at most 0.5
   frame with no cumulative drift, and the input OTIO is never modified. FCPXML
   export is unaffected by this change (no quantization pass is applied on the
-  clipwright side). Only `clipwright-export` is bumped to v0.2.1; all other
+  clipwright side); however, the FCPXML exchange adapter can silently floor
+  fractional-frame durations per clip with unbounded cumulative drift and no
+  warning (pre-existing adapter limitation, tracked separately). Only
+  `clipwright-export` is bumped to v0.2.1; all other
   packages and the core are unchanged.
 
 ## [0.38.0] - 2026-07-15

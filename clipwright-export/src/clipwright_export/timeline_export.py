@@ -29,7 +29,10 @@ Design decisions (architecture-report §2/§4/§5/§6/§11/§13):
   src_duration == rec_duration check holds by construction. Adjustments are
   reported in one aggregated warning. FCPXML is passed through without a
   quantization pass: the fcpx_xml adapter performs its own frame conversion and
-  never fails the write-then-verify round-trip the way cmx_3600 does.
+  never fails the write-then-verify round-trip the way cmx_3600 does. FCPXML
+  export can silently floor fractional-frame durations per clip with unbounded
+  cumulative drift and no warning (pre-existing adapter limitation, tracked
+  separately).
 - ADR-EX-4 (§4.2): media references that do not exist are skipped (kept
   relative) with a warning; only a relative reference that escapes the OTIO
   directory (CWE-22) fails the whole export.
@@ -298,7 +301,7 @@ def _quantize_warnings(
 
     Returns [] when nothing was adjusted. Otherwise one aggregated sentence
     (with an inline lowercase ``hint:``) reporting the adjustment count and the
-    largest cut-point shift in seconds; a second sentence is appended to the
+    largest adjustment in seconds; a second sentence is appended to the
     same string when clips collapsed to zero length. Only counts and seconds
     are exposed -- never paths or clip names (CWE-209).
     """
@@ -307,7 +310,7 @@ def _quantize_warnings(
     max_shift_s = max_shift_frames / rate
     sentence = (
         f"{adjusted} clip/gap boundary(ies) were quantized to whole frames for "
-        f"the EDL at {rate} fps; the largest cut-point shift was "
+        f"the EDL at {rate} fps; the largest adjustment was "
         f"{max_shift_s:.4f}s (at most half a frame, no cumulative drift). "
         "hint: this is expected for second-based trims and silence cuts; "
         "re-cut on frame boundaries in the source OTIO if the shift matters."
