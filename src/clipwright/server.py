@@ -248,7 +248,15 @@ def clipwright_read_timeline(
 
     # Resolve the timeline path
     if project_dir is not None:
-        resolved_path = str(Path(project_dir) / "timeline.otio")
+        project_path = Path(project_dir)
+        timeline_otio = project_path / "timeline.otio"
+        if not timeline_otio.is_file():
+            return error_result(
+                ErrorCode.FILE_NOT_FOUND,
+                "timeline.otio not found in project_dir",
+                "Initialise the project with clipwright_init_project, then try again.",
+            )
+        resolved_path = str(timeline_otio)
     else:
         # Direct timeline_path: whitelist .otio extension (path-traversal guard)
         resolved = Path(str(timeline_path)).resolve()
@@ -272,9 +280,9 @@ def clipwright_read_timeline(
         return error_result(exc.code, exc.message, exc.hint)
     except Exception:
         return error_result(
-            ErrorCode.OTIO_ERROR,
-            "Failed to load timeline.otio",
-            "Check that the file is a valid OTIO file.",
+            ErrorCode.INTERNAL,
+            "An unexpected error occurred",
+            "Please report with reproduction steps.",
         )
 
     summary_dict = summarize_timeline(timeline)
@@ -374,7 +382,15 @@ def clipwright_write_timeline(
 
     data contains the ValidationReport (valid/operation_count/applied_count/errors).
     """
-    resolved_path = str(Path(project_dir) / "timeline.otio")
+    project_path = Path(project_dir)
+    timeline_otio = project_path / "timeline.otio"
+    if not timeline_otio.is_file():
+        return error_result(
+            ErrorCode.FILE_NOT_FOUND,
+            "timeline.otio not found in project_dir",
+            "Initialise the project with clipwright_init_project, then try again.",
+        )
+    resolved_path = str(timeline_otio)
 
     # Load the timeline
     try:
@@ -383,9 +399,9 @@ def clipwright_write_timeline(
         return error_result(exc.code, exc.message, exc.hint)
     except Exception:
         return error_result(
-            ErrorCode.OTIO_ERROR,
-            "Failed to load timeline.otio",
-            "Initialise the project with init_project, then try again.",
+            ErrorCode.INTERNAL,
+            "An unexpected error occurred",
+            "Please report with reproduction steps.",
         )
 
     # Convert to Pydantic types (rejects unknown_op and other invalid ops here)

@@ -49,16 +49,37 @@ def new_timeline(name: str) -> otio.schema.Timeline:
 def load_timeline(path: str) -> otio.schema.Timeline:
     """Load an OTIO file and return a Timeline.
 
-    Load failures and type mismatches are wrapped as ClipwrightError(OTIO_ERROR) (L-3).
-    Raw OTIO exceptions must not reach the caller (L-1 / F-07).
+    Converts file-system and OTIO parsing errors into ClipwrightError (L-3).
+    Catches FileNotFoundError / (OTIOError, ValueError) / OSError from read_from_file
+    and re-raises as ClipwrightError with appropriate error codes.
+    Non-ClipwrightError exceptions (e.g. RuntimeError) are left unconverted
+    (contract boundary L-1). Type mismatches (non-Timeline results) are also wrapped
+    as OTIO_ERROR. Raw OTIO exceptions must not reach the caller (L-1 / F-07).
     """
     try:
         result = otio.adapters.read_from_file(path)
-    except otio.exceptions.OTIOError as exc:
+    except FileNotFoundError as exc:
+        raise ClipwrightError(
+            code=ErrorCode.FILE_NOT_FOUND,
+            message=f"Timeline file not found: {Path(path).name}",
+            hint="Verify the timeline path and ensure the file exists.",
+        ) from exc
+    except (otio.exceptions.OTIOError, ValueError) as exc:
         raise ClipwrightError(
             code=ErrorCode.OTIO_ERROR,
             message=f"Failed to load OTIO file: {Path(path).name}",
-            hint="Specify a valid .otio timeline file.",
+            hint=(
+                "The file exists but its contents are not valid OTIO JSON."
+                " Regenerate the timeline with clipwright tools"
+                " (e.g. clipwright_init_project + clipwright_write_timeline),"
+                " or specify a different .otio file."
+            ),
+        ) from exc
+    except OSError as exc:
+        raise ClipwrightError(
+            code=ErrorCode.OTIO_ERROR,
+            message=f"Failed to read OTIO file: {Path(path).name}",
+            hint="Check that the file exists and is readable, then try again.",
         ) from exc
 
     if not isinstance(result, otio.schema.Timeline):
