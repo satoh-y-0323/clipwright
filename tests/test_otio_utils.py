@@ -1048,6 +1048,139 @@ class TestLoadTimelineConvertsOTIOException:
 
 
 # ===========================================================================
+# ADR-LT-1: load_timeline real-file failure modes (T-1..T-10)
+# ===========================================================================
+
+
+class TestLoadTimelineRealFileFailures:
+    """ADR-LT-1: load_timeline converts real-file read/parse failures to
+    ClipwrightError with the correct ErrorCode (FILE_NOT_FOUND / OTIO_ERROR),
+    and never leaks directory components in the message (CWE-209).
+
+    Uses real files written to disk (not monkeypatch) so the actual exception
+    types raised by the OTIO adapter are exercised, per
+    architecture-report-20260720-003853.md §3 layer 1 (T-1..T-10). The only
+    monkeypatch-based cases are T-8/T-9, which pin exception types the OTIO
+    adapter does not naturally raise from a real file on this platform.
+    """
+
+    _TRUNCATE_SENTINEL = object()
+
+    @pytest.mark.parametrize(
+        "case_id,content",
+        [
+            ("malformed_json", "{not valid json"),
+            ("empty_file", ""),
+            ("unknown_schema", '{"OTIO_SCHEMA": "NoSuchSchema.1"}'),
+            ("missing_schema_key", '{"foo": 1}'),
+            ("truncated_valid_file", _TRUNCATE_SENTINEL),
+        ],
+    )
+    def test_broken_json_content_raises_otio_error(
+        self, tmp_path: Path, case_id: str, content: object
+    ) -> None:
+        """T-1..T-5: malformed / empty / unknown-schema / schema-less /
+        truncated JSON files raise ClipwrightError(OTIO_ERROR) (ADR-LT-1).
+
+        T-5 truncates a real valid OTIO file (built via save_timeline) to its
+        first half, so it is neither parseable JSON nor a complete schema.
+        """
+        from clipwright.errors import ClipwrightError, ErrorCode
+
+        bad_path = tmp_path / f"{case_id}.otio"
+        if content is self._TRUNCATE_SENTINEL:
+            good_path = tmp_path / "source_for_truncation.otio"
+            save_timeline(new_timeline("truncation-source"), str(good_path))
+            full_text = good_path.read_text(encoding="utf-8")
+            bad_path.write_text(full_text[: len(full_text) // 2], encoding="utf-8")
+        else:
+            assert isinstance(content, str)
+            bad_path.write_text(content, encoding="utf-8")
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            load_timeline(str(bad_path))
+
+        assert exc_info.value.code == ErrorCode.OTIO_ERROR
+        # T-10: message must not leak the directory component (CWE-209)
+        assert str(tmp_path) not in exc_info.value.message
+        assert exc_info.value.hint
+
+    def test_non_timeline_schema_raises_otio_error_with_type_name(
+        self, tmp_path: Path
+    ) -> None:
+        """T-6: a well-formed OTIO file whose root object is not a Timeline
+        (a bare Clip) raises ClipwrightError(OTIO_ERROR) and the message
+        names the offending type (existing isinstance-branch contract, L-3)."""
+        import opentimelineio as otio
+
+        from clipwright.errors import ClipwrightError, ErrorCode
+
+        clip_path = tmp_path / "clip.otio"
+        otio.adapters.write_to_file(otio.schema.Clip(name="lone-clip"), str(clip_path))
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            load_timeline(str(clip_path))
+
+        assert exc_info.value.code == ErrorCode.OTIO_ERROR
+        assert "Clip" in exc_info.value.message
+
+    def test_missing_file_raises_file_not_found(self, tmp_path: Path) -> None:
+        """T-7: a path with no file on disk raises
+        ClipwrightError(FILE_NOT_FOUND), distinct from OTIO_ERROR (ADR-LT-1)."""
+        from clipwright.errors import ClipwrightError, ErrorCode
+
+        missing_path = tmp_path / "does_not_exist.otio"
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            load_timeline(str(missing_path))
+
+        assert exc_info.value.code == ErrorCode.FILE_NOT_FOUND
+        # T-10: message must not leak the directory component (CWE-209)
+        assert str(tmp_path) not in exc_info.value.message
+        assert exc_info.value.hint
+
+    def test_unexpected_exception_propagates_unconverted(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """T-8: an exception type outside the enumerated catch list (a bare
+        RuntimeError from the adapter) is not converted to ClipwrightError;
+        it propagates unchanged so the server-layer INTERNAL boundary
+        (ADR-LT-2) classifies it (ADR-LT-1 enumerated-catch contract, not a
+        blanket `except Exception`)."""
+        import opentimelineio as otio
+
+        def _raise_runtime(path: str) -> None:
+            raise RuntimeError("unexpected adapter failure (test)")
+
+        monkeypatch.setattr(otio.adapters, "read_from_file", _raise_runtime)
+
+        with pytest.raises(RuntimeError):
+            load_timeline(str(tmp_path / "whatever.otio"))
+
+    def test_permission_error_raises_otio_error(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """T-9: PermissionError (an OSError subclass) is converted to
+        ClipwrightError(OTIO_ERROR) (ADR-LT-1). Injected via monkeypatch
+        because permission-denied cannot be reliably reproduced with a real
+        file on Windows."""
+        import opentimelineio as otio
+
+        from clipwright.errors import ClipwrightError, ErrorCode
+
+        def _raise_permission(path: str) -> None:
+            raise PermissionError("Permission denied (test)")
+
+        monkeypatch.setattr(otio.adapters, "read_from_file", _raise_permission)
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            load_timeline(str(tmp_path / "denied.otio"))
+
+        assert exc_info.value.code == ErrorCode.OTIO_ERROR
+        assert exc_info.value.hint
+
+
+# ===========================================================================
 # L-5: partial update pattern for set_clipwright_metadata (prevent full key loss)
 # ===========================================================================
 

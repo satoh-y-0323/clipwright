@@ -5,6 +5,34 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.38.4] - 2026-07-20
+
+### Fixed (`clipwright` core v0.7.1)
+
+- Core `load_timeline` now converts a bare `ValueError` raised by malformed
+  OTIO JSON (broken, empty, unknown-schema, or truncated files — the behaviour
+  of OTIO 0.18) into a `ClipwrightError(OTIO_ERROR)` carrying an actionable
+  hint. Previously such input leaked as an uncaught exception and was
+  misreported as `INTERNAL` by the error boundary of the 11 satellite tools
+  that load an existing timeline (speed, text, transition, stabilize, color,
+  noise, loudness, render, bgm, overlay, frames). The satellites need no code
+  change and pick up the fix via `clipwright` core 0.7.1.
+
+### Changed (`clipwright` core v0.7.1)
+
+- `clipwright_read_timeline` / `clipwright_write_timeline` now return
+  `INTERNAL` for their unexpected-exception fallback (was `OTIO_ERROR`),
+  aligning these two tools with the error boundary used by all others.
+- A missing `timeline.otio` under `project_dir` now returns `FILE_NOT_FOUND`
+  with a hint pointing to `clipwright_init_project` (was `OTIO_ERROR`).
+
+### Notes
+
+- Only `clipwright` core is bumped (to 0.7.1); all satellite packages are
+  unchanged. The local malformed-JSON workarounds in `clipwright-reframe` and
+  `clipwright-export` are now redundant and may be removed at their next
+  natural version bump.
+
 ## [0.38.3] - 2026-07-17
 
 ### Security (`clipwright-render` v0.19.1)

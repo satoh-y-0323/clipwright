@@ -399,6 +399,43 @@ class TestInputValidation:
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND
 
+    def test_broken_otio_json_returns_otio_error_not_internal(
+        self, tmp_path: Path
+    ) -> None:
+        """A malformed-but-existing OTIO file must return OTIO_ERROR, not INTERNAL.
+
+        Contract (post core load_timeline fix,
+        architecture-report-20260720-003853.md ADR-LT-1): core's load_timeline
+        converts malformed JSON into ClipwrightError(OTIO_ERROR). Prior to that
+        core fix, the raw ValueError from otio.adapters.read_from_file escapes
+        load_timeline uncaught (render.py's load_timeline call precedes ffmpeg
+        execution, so no ffmpeg binary is required to reach this failure) and is
+        swallowed by render_timeline's bare `except Exception` boundary, which
+        misclassifies it as INTERNAL. This test pins the required end state.
+
+        The error message must not leak the containing directory path (CWE-209).
+        """
+        from clipwright_render.render import render_timeline
+
+        broken_tl = tmp_path / "bad.otio"
+        broken_tl.write_text("{not valid otio json")
+        output = str(tmp_path / "out.mp4")
+
+        result = render_timeline(
+            timeline=str(broken_tl), output=output, options=RenderOptions()
+        )
+
+        assert result["ok"] is False
+        error = result.get("error") or {}
+        assert error.get("code") == ErrorCode.OTIO_ERROR, (
+            f"Expected OTIO_ERROR for malformed OTIO JSON, got: {error!r}"
+        )
+        assert error.get("code") != ErrorCode.INTERNAL
+        message = error.get("message", "")
+        assert str(tmp_path) not in message, (
+            f"error message must not leak directory path, got: {message!r}"
+        )
+
     @pytest.mark.parametrize("ext", [".avi", ".wmv", ".ts", ".txt", ""])
     def test_invalid_extension_raises_invalid_input(
         self, tmp_path: Path, ext: str

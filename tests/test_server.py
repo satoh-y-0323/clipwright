@@ -803,13 +803,18 @@ class TestInspectMediaResolveToolCallCount:
 
 
 class TestTimelineExcMessageNotExposed:
-    """F-06 fix: pin that the except blocks in read_timeline / write_timeline
-    do not include {exc} content (internal paths etc.) in message.
+    """F-06 / ADR-LT-2: pin that the except blocks in read_timeline /
+    write_timeline do not include {exc} content (internal paths etc.) in
+    message.
 
-    After L-3, otio_utils.load_timeline converts to ClipwrightError, so normal
-    OTIO file errors go through the ClipwrightError path. However, even when a
-    non-OTIO exception reaches the except Exception as exc path in server.py,
-    a generic message must be returned without exposing the {exc} content.
+    After L-3 / ADR-LT-1, otio_utils.load_timeline converts recognised
+    failure modes (missing file, malformed/unparseable OTIO, non-Timeline
+    schema) to ClipwrightError, so those go through the ClipwrightError
+    passthrough path (exc.code/exc.message/exc.hint). Any exception outside
+    that enumerated set that still reaches the except Exception fallback in
+    server.py is classified as INTERNAL with a fixed generic message and hint
+    (matching the clipwright_init_project pattern), never exposing {exc}
+    content.
     """
 
     def _setup_project(self, tmp_path: Path, name: str = "test") -> str:
@@ -855,11 +860,12 @@ class TestTimelineExcMessageNotExposed:
     def test_read_timeline_non_otio_exception_message_is_generic(
         self, tmp_path: Path
     ) -> None:
-        """F-06: read_timeline also returns a generic message when a
-        non-OTIO exception occurs (no {exc} content).
+        """F-06 / ADR-LT-2: read_timeline also returns a generic message when
+        an unexpected non-ClipwrightError exception occurs (no {exc} content).
 
-        Pins that the except Exception as exc path in server.py returns a
-        generic message.
+        Pins that the except Exception fallback path in server.py classifies
+        unexpected exceptions as INTERNAL (not OTIO_ERROR), matching the
+        init_project INTERNAL boundary pattern.
         """
         project_dir = self._setup_project(tmp_path)
 
@@ -871,7 +877,7 @@ class TestTimelineExcMessageNotExposed:
         ):
             result = clipwright_read_timeline(project_dir=project_dir)
 
-        _assert_tool_error_result(result, "OTIO_ERROR")
+        _assert_tool_error_result(result, "INTERNAL")
         message = result["error"]["message"]
         # {exc} content must not be in message
         assert sensitive_detail not in message, (
@@ -884,11 +890,12 @@ class TestTimelineExcMessageNotExposed:
     def test_write_timeline_non_otio_exception_message_is_generic(
         self, tmp_path: Path
     ) -> None:
-        """F-06: write_timeline also returns a generic message when a
-        non-OTIO exception occurs (no {exc} content).
+        """F-06 / ADR-LT-2: write_timeline also returns a generic message
+        when an unexpected non-ClipwrightError exception occurs (no {exc}
+        content).
 
-        Pins that the except Exception path in write_timeline returns a
-        generic message.
+        Pins that the except Exception fallback path in write_timeline
+        classifies unexpected exceptions as INTERNAL (not OTIO_ERROR).
         """
         project_dir = self._setup_project(tmp_path)
 
@@ -901,7 +908,7 @@ class TestTimelineExcMessageNotExposed:
                 project_dir=project_dir, operations=[], validate_only=False
             )
 
-        _assert_tool_error_result(result, "OTIO_ERROR")
+        _assert_tool_error_result(result, "INTERNAL")
         message = result["error"]["message"]
         # {exc} content must not be in message
         assert sensitive_detail not in message, (
@@ -914,7 +921,8 @@ class TestTimelineExcMessageNotExposed:
     def test_read_timeline_error_message_is_fixed_generic_string(
         self, tmp_path: Path
     ) -> None:
-        """F-06: read_timeline OTIO error message is a fixed generic string.
+        """F-06 / ADR-LT-2: read_timeline's INTERNAL error message is a fixed
+        generic string.
 
         Message has a fixed format and does not include variable exception detail.
         """
@@ -926,7 +934,7 @@ class TestTimelineExcMessageNotExposed:
         ):
             result = clipwright_read_timeline(project_dir=project_dir)
 
-        _assert_tool_error_result(result, "OTIO_ERROR")
+        _assert_tool_error_result(result, "INTERNAL")
         message = result["error"]["message"]
         hint = result["error"]["hint"]
         # Variable exception detail must not be in message
@@ -937,7 +945,8 @@ class TestTimelineExcMessageNotExposed:
         assert len(hint) > 0, "hint must be non-empty"
 
     def test_write_timeline_error_hint_is_actionable(self, tmp_path: Path) -> None:
-        """F-06: write_timeline OTIO error hint is a fixed string."""
+        """F-06 / ADR-LT-2: write_timeline's INTERNAL error hint is a fixed
+        actionable string."""
         project_dir = self._setup_project(tmp_path)
 
         with patch(
@@ -948,7 +957,7 @@ class TestTimelineExcMessageNotExposed:
                 project_dir=project_dir, operations=[], validate_only=False
             )
 
-        _assert_tool_error_result(result, "OTIO_ERROR")
+        _assert_tool_error_result(result, "INTERNAL")
         hint = result["error"]["hint"]
         message = result["error"]["message"]
         # Raw exception message must not be in message
@@ -956,3 +965,55 @@ class TestTimelineExcMessageNotExposed:
             f"message contains raw exception message: {message!r}"
         )
         assert len(hint) > 0, "hint must be an actionable string"
+
+
+# ===========================================================================
+# ADR-LT-3: uninitialised project_dir pre-check for read_timeline / write_timeline
+# ===========================================================================
+
+
+class TestTimelineUninitialisedProjectDirPreCheck:
+    """ADR-LT-3: read_timeline / write_timeline pre-check that
+    <project_dir>/timeline.otio exists before calling load_timeline, so an
+    uninitialised project_dir returns FILE_NOT_FOUND with a hint that names
+    clipwright_init_project as the concrete next action (rather than a
+    generic OTIO_ERROR from load_timeline failing on a missing file).
+    """
+
+    def test_read_timeline_project_dir_missing_timeline_returns_file_not_found(
+        self, tmp_path: Path
+    ) -> None:
+        """An empty (uninitialised) project_dir passed to read_timeline
+        returns FILE_NOT_FOUND with an init_project hint (ADR-LT-3)."""
+        empty_project_dir = str(tmp_path / "uninitialised")
+        Path(empty_project_dir).mkdir(parents=True)
+
+        result = clipwright_read_timeline(project_dir=empty_project_dir)
+
+        _assert_tool_error_result(result, "FILE_NOT_FOUND")
+        hint = result["error"]["hint"]
+        assert "clipwright_init_project" in hint, (
+            f"hint must point to clipwright_init_project as the next action: {hint!r}"
+        )
+
+    def test_write_timeline_uninitialised_project_returns_file_not_found(
+        self, tmp_path: Path
+    ) -> None:
+        """An empty (uninitialised) project_dir passed to write_timeline
+        returns FILE_NOT_FOUND with an init_project hint (ADR-LT-3)."""
+        empty_project_dir = str(tmp_path / "uninitialised")
+        Path(empty_project_dir).mkdir(parents=True)
+
+        result = clipwright_write_timeline(
+            project_dir=empty_project_dir,
+            operations=[
+                {"op": "add_gap", "track": 0, "duration": {"value": 24.0, "rate": 24.0}}
+            ],
+            validate_only=False,
+        )
+
+        _assert_tool_error_result(result, "FILE_NOT_FOUND")
+        hint = result["error"]["hint"]
+        assert "clipwright_init_project" in hint, (
+            f"hint must point to clipwright_init_project as the next action: {hint!r}"
+        )

@@ -522,6 +522,43 @@ class TestMissingTimeline:
         assert error.get("hint"), "hint must be non-empty"
 
 
+class TestBrokenOtioJson:
+    """A malformed-but-existing OTIO file must surface as OTIO_ERROR, not INTERNAL.
+
+    Contract (post core load_timeline fix, architecture-report-20260720-003853.md
+    ADR-LT-1): core's load_timeline converts malformed JSON into
+    ClipwrightError(OTIO_ERROR). Prior to that core fix, the raw ValueError
+    from otio.adapters.read_from_file escapes load_timeline uncaught and is
+    swallowed by set_speed's bare `except Exception` boundary, which
+    misclassifies it as INTERNAL. This test pins the required end state.
+    """
+
+    def test_set_speed_broken_otio_json_returns_otio_error_not_internal(
+        self, tmp_dir: Path
+    ) -> None:
+        """Malformed OTIO JSON (existing file) must return OTIO_ERROR, not INTERNAL.
+
+        The error message must not leak the containing directory path (CWE-209).
+        """
+        broken = tmp_dir / "bad.otio"
+        broken.write_text("{not valid otio json")
+        output = tmp_dir / "out.otio"
+        opts = SetSpeedOptions(speed=2.0)
+
+        result = set_speed(str(broken), str(output), opts)
+
+        assert result["ok"] is False
+        error = result.get("error") or {}
+        assert error.get("code") == "OTIO_ERROR", (
+            f"Expected OTIO_ERROR for malformed OTIO JSON, got: {error!r}"
+        )
+        assert error.get("code") != "INTERNAL"
+        message = error.get("message", "")
+        assert str(tmp_dir) not in message, (
+            f"error message must not leak directory path, got: {message!r}"
+        )
+
+
 class TestNoVideoTrack:
     """Timeline with no video track (or empty V1) must return UNSUPPORTED_OPERATION."""
 
