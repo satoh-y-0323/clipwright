@@ -245,9 +245,9 @@ def _export_chapters_inner(
       2. output suffix matches the format's allowlist (§3.3, ADR-EX-3)
       3. output parent directory exists
       4. source timeline exists (validate_source_or_basename, FILE_NOT_FOUND)
-      5. load_timeline (FILE_NOT_FOUND / OTIO_ERROR propagate; a bare
-         ValueError from a structurally malformed .otio is converted to
-         OTIO_ERROR here, mirroring timeline_export.py)
+      5. load_timeline (FILE_NOT_FOUND / OTIO_ERROR propagate; errors are
+         converted to ClipwrightError by core load_timeline >= 0.7.1;
+         unexpected exceptions reach the outer boundary unconverted)
 
     Then collect markers, serialize the requested format, write the sidecar,
     and return an ok envelope. Zero matching markers is a success with a

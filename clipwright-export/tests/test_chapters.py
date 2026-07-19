@@ -90,7 +90,8 @@ Verification aspects:
             same start_sec.
   (F) export_chapters — CWE-209 boundary (AC-12)
       (F-1) An uncaught exception raised inside `_export_chapters_inner`
-            (chapters.py:340-351) is converted to a generic INTERNAL error
+            (the `except ClipwrightError` / `except Exception` boundary in
+            `export_chapters`) is converted to a generic INTERNAL error
             whose message/hint never echo the input timeline path. Mirrors
             test_timeline_export.py::TestErrors::test_uncaught_exception_does_not_leak_path
             (confirm-export §5 gap: chapters.py side was previously
@@ -619,8 +620,9 @@ class TestExportChaptersCwe209:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """(F-1) An uncaught exception at the `_export_chapters_inner` ->
-        `export_chapters` boundary (chapters.py:340-351) must not leak the
-        input timeline path in the INTERNAL error's message/hint."""
+        `export_chapters` boundary (the `except Exception` handler in
+        `export_chapters`) must not leak the input timeline path in the
+        INTERNAL error's message/hint."""
         tl = _build_timeline(markers=[(0.0, "A", "scene_boundary")])
         otio_path = tmp_path / "cwe209_source.otio"
         save_timeline(tl, str(otio_path))
