@@ -1,6 +1,6 @@
 [project]
 name = "clipwright-export"
-version = "0.2.2"
+version = "0.2.3"
 description = "MCP tools that export OTIO timelines to NLE exchange formats (EDL/FCPXML) and chapter sidecars (YouTube/ffmetadata)."
 readme = "README.md"
 license = { text = "MIT" }
@@ -9,7 +9,7 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "clipwright>=0.7.0",
+    "clipwright>=0.7.1",
     "mcp[cli]>=1.27.2",
     "opentimelineio>=0.18",
     "otio-cmx3600-adapter>=1.0",

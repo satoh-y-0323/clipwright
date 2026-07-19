@@ -1106,6 +1106,45 @@ class TestErrors:
         assert result.error.code == ErrorCode.OTIO_ERROR
         assert not out.exists()
 
+    def test_load_timeline_unexpected_exception_returns_internal(
+        self,
+        roundtrip_timeline_factory: Any,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Unexpected exceptions from the load step (clipwright.otio_utils.
+        load_timeline, called from _export_timeline_inner Step 4) must reach
+        the outer INTERNAL boundary unconverted, in parity with chapters.py's
+        equivalent load step (test_chapters.py::TestExportChaptersCwe209::
+        test_uncaught_exception_does_not_leak_timeline_path) -- not be
+        reclassified as OTIO_ERROR by a local wrapper around the
+        load_timeline call. The message/hint must not leak the timeline path
+        (CWE-209)."""
+        fixture: RoundtripFixture = roundtrip_timeline_factory(
+            rate=30.0, name="load_internal"
+        )
+        out = tmp_path / "load_internal.edl"
+
+        def _boom(*args: object, **kwargs: object) -> otio.schema.Timeline:
+            raise RuntimeError(f"unexpected failure touching {fixture.otio_path}")
+
+        monkeypatch.setattr("clipwright_export.timeline_export.load_timeline", _boom)
+
+        result = export_timeline(
+            timeline=fixture.otio_path,
+            output=str(out),
+            options=ExportTimelineOptions(format="edl"),
+        )
+
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.code == ErrorCode.INTERNAL
+        assert Path(fixture.otio_path).name not in result.error.message
+        assert Path(fixture.otio_path).name not in result.error.hint
+        assert str(fixture.otio_path) not in result.error.message
+        assert str(fixture.otio_path) not in result.error.hint
+        assert not out.exists()
+
     @pytest.mark.parametrize(
         "fmt,wrong_ext",
         [("edl", ".fcpxml"), ("edl", ".txt"), ("fcpxml", ".edl"), ("fcpxml", ".txt")],

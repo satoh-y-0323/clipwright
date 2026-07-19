@@ -5,6 +5,31 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.38.5] - 2026-07-20
+
+### Changed (`clipwright-export` v0.2.3, `clipwright-reframe` v0.4.1)
+
+- `clipwright_export_timeline` no longer converts unexpected exceptions
+  during timeline loading to `OTIO_ERROR`; they now surface as `INTERNAL`,
+  aligning with `clipwright_export_chapters` and all other tools.
+- `clipwright_reframe` now returns `FILE_NOT_FOUND` (was `INVALID_INPUT`) for
+  a missing timeline file, aligning with the rest of the suite; its hint
+  still notes the `timeline` argument can be omitted.
+- Malformed-OTIO error messages from export/reframe now come from
+  `clipwright` core (basename-only wording) instead of local fixed strings;
+  the `OTIO_ERROR` code is unchanged.
+
+### Removed (`clipwright-export` v0.2.3, `clipwright-reframe` v0.4.1)
+
+- The local malformed-JSON workarounds in `clipwright-export` (timeline
+  export + chapters) and `clipwright-reframe`, as announced in the 0.38.4
+  notes — `clipwright` core >= 0.7.1 performs the conversion canonically.
+
+### Notes
+
+- `clipwright-export` 0.2.3 and `clipwright-reframe` 0.4.1 now require
+  `clipwright>=0.7.1`; core and all other satellite packages are unchanged.
+
 ## [0.38.4] - 2026-07-20
 
 ### Fixed (`clipwright` core v0.7.1)

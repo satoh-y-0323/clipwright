@@ -302,10 +302,15 @@ class TestOutputValidation:
         assert result["ok"] is False
         assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED.value
 
-    def test_nonexistent_timeline_returns_invalid_input(self, tmp_path: Path) -> None:
-        """Specified timeline path that does not exist must return INVALID_INPUT (B-5).
+    def test_nonexistent_timeline_returns_file_not_found(self, tmp_path: Path) -> None:
+        """Specified timeline path that does not exist must return
+        FILE_NOT_FOUND (B-5, ADR-EQ-3): a nonexistent path is a
+        "path does not exist" condition, which errors.py defines as
+        FILE_NOT_FOUND across every tool -- INVALID_INPUT (argument
+        validation failure) was a misuse here.
 
-        D1 specifies: timeline existence check before load.
+        D1 specifies: timeline existence check before load (pre-check
+        retained; only the error code changes).
         """
         media = tmp_path / "video.mp4"
         media.write_bytes(b"dummy")
@@ -323,16 +328,22 @@ class TestOutputValidation:
         assert result["ok"] is False, (
             "Nonexistent timeline must return ok=False, not raise FileNotFoundError."
         )
-        assert result["error"]["code"] == ErrorCode.INVALID_INPUT.value, (
-            f"Expected INVALID_INPUT for nonexistent timeline, "
+        assert result["error"]["code"] == ErrorCode.FILE_NOT_FOUND.value, (
+            f"Expected FILE_NOT_FOUND for nonexistent timeline, "
             f"got: {result['error']['code']}"
+        )
+        assert "the timeline argument" in result["error"]["hint"], (
+            "hint must retain the reframe-specific 'omit the timeline "
+            "argument' next-step guidance even after the code change."
         )
 
     def test_invalid_timeline_file_returns_otio_error(self, tmp_path: Path) -> None:
-        """A timeline path that is not a valid .otio file must return OTIO_ERROR (B-6).
-
-        load_timeline wraps OTIOError as ClipwrightError(OTIO_ERROR).
-        This test verifies the error propagates as an error envelope (ok=False).
+        """A timeline path that is not a valid .otio file must return OTIO_ERROR
+        (B-6, ADR-EQ-2/ADR-EQ-5) -- and only OTIO_ERROR, now that the load
+        step is deterministic (core clipwright.otio_utils.load_timeline
+        converts every OTIOError/ValueError/OSError from a malformed file into
+        ClipwrightError(OTIO_ERROR); reframe.py no longer has a local dead
+        except clause that could divert this to INVALID_INPUT).
         """
         media = tmp_path / "video.mp4"
         media.write_bytes(b"dummy")
@@ -350,10 +361,9 @@ class TestOutputValidation:
                 timeline=str(bad_timeline),
             )
         assert result["ok"] is False
-        assert result["error"]["code"] in (
-            ErrorCode.OTIO_ERROR.value,
-            ErrorCode.INVALID_INPUT.value,
-        ), f"Expected OTIO_ERROR or INVALID_INPUT, got: {result['error']['code']}"
+        assert result["error"]["code"] == ErrorCode.OTIO_ERROR.value, (
+            f"Expected OTIO_ERROR, got: {result['error']['code']}"
+        )
 
     def test_output_outside_media_dir_is_now_allowed(self, tmp_path: Path) -> None:
         """output outside the media directory is now permitted (B-7, updated spec4 #5).

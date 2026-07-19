@@ -751,21 +751,20 @@ class TestExportChaptersErrorOrchestration:
         assert not out.exists()
 
     def test_invalid_otio_file_returns_otio_error(self, tmp_path: Path) -> None:
-        """(G-5) [implementation gap discovered while writing this test, not
-        previously called out in code-review-report-export.md /
-        security-review-report-export.md] A structurally malformed .otio
-        (bad JSON) makes opentimelineio raise a bare ValueError, not
-        otio.exceptions.OTIOError, so load_timeline's own
-        `except otio.exceptions.OTIOError` does not catch it. In
-        timeline_export.py (timeline_export.py:466-479) this is handled by
-        an explicit local `except Exception -> OTIO_ERROR` wrapper around
-        the load_timeline call; chapters.py's `_export_chapters_inner` Step
-        5 used to call load_timeline directly with no equivalent wrapper,
-        so the bare ValueError escaped to export_chapters()'s outer
-        `except Exception -> INTERNAL` boundary instead. A local
-        `except ValueError -> OTIO_ERROR` wrapper was added to fix this
-        (see test-report's "implementation defect candidate" section) and
-        this test now guards against that regression."""
+        """(G-5) A structurally malformed .otio (bad JSON) makes
+        opentimelineio raise a bare ValueError, not otio.exceptions.OTIOError.
+        As of clipwright (core) >= 0.7.1, `clipwright.otio_utils.load_timeline`
+        itself converts OTIOError/ValueError/OSError from a malformed file
+        into `ClipwrightError(OTIO_ERROR)` before returning, so this no
+        longer depends on chapters.py's own local `except ValueError ->
+        OTIO_ERROR` wrapper (Step 5) -- that wrapper is now redundant dead
+        code (core's conversion happens first) and is slated for removal in
+        favour of a plain `load_timeline(timeline)` call, mirroring
+        timeline_export.py (ADR-EQ-1/ADR-EQ-2). Either way the
+        ClipwrightError(OTIO_ERROR) reaches export_chapters()'s outer
+        `except ClipwrightError` boundary and is reported verbatim. This
+        test guards that OTIO_ERROR (not INTERNAL) is what callers observe,
+        independent of which layer performs the conversion."""
         bad = tmp_path / "bad.otio"
         bad.write_text("not a valid otio json", encoding="utf-8")
         out = tmp_path / "out.txt"

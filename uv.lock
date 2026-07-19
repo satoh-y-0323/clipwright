@@ -317,7 +317,7 @@ dev = [
 
 [[package]]
 name = "clipwright-export"
-version = "0.2.2"
+version = "0.2.3"
 source = { editable = "clipwright-export" }
 dependencies = [
     { name = "clipwright" },
@@ -504,7 +504,7 @@ dev = [
 
 [[package]]
 name = "clipwright-reframe"
-version = "0.4.0"
+version = "0.4.1"
 source = { editable = "clipwright-reframe" }
 dependencies = [
     { name = "clipwright" },
