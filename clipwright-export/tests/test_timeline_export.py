@@ -1211,12 +1211,12 @@ class TestErrors:
 
 class TestAbsoluteMediaRefSymlinkRejected:
     """The absolute-reference branch of _absolutize_media_refs
-    (_normalize_ref/_has_symlink_component, timeline_export.py:120-134/
-    252-263) must reject a symlink the same way the relative branch (via
-    check_media_ref) already does — this local re-implementation exists
-    because check_media_ref's absolute branch fails a *missing* absolute
-    reference, which conflicts with ADR-EX-4's best-effort skip requirement,
-    so export.py cannot simply delegate to it.
+    (the _normalize_ref and _has_symlink_component functions) must reject
+    a symlink the same way the relative branch (via check_media_ref)
+    already does — this local re-implementation exists because
+    check_media_ref's absolute branch fails a *missing* absolute reference,
+    which conflicts with ADR-EX-4's best-effort skip requirement, so
+    export.py cannot simply delegate to it.
 
     Verified as a basic Green check: the implementation logic was inspected
     against pathpolicy's leaf-to-root is_symlink() walk (ADR-PP-2) and found

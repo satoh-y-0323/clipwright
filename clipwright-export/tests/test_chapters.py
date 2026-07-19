@@ -759,10 +759,10 @@ class TestExportChaptersErrorOrchestration:
         itself converts OTIOError/ValueError/OSError from a malformed file
         into `ClipwrightError(OTIO_ERROR)` before returning, so this no
         longer depends on chapters.py's own local `except ValueError ->
-        OTIO_ERROR` wrapper (Step 5) -- that wrapper is now redundant dead
-        code (core's conversion happens first) and is slated for removal in
-        favour of a plain `load_timeline(timeline)` call, mirroring
-        timeline_export.py (ADR-EQ-1/ADR-EQ-2). Either way the
+        OTIO_ERROR` wrapper (Step 5) -- that wrapper was redundant dead
+        code (core's conversion happens first) and was removed in favour
+        of a plain `load_timeline(timeline)` call (Step 5,
+        ADR-EQ-1/ADR-EQ-2), mirroring timeline_export.py. Either way the
         ClipwrightError(OTIO_ERROR) reaches export_chapters()'s outer
         `except ClipwrightError` boundary and is reported verbatim. This
         test guards that OTIO_ERROR (not INTERNAL) is what callers observe,
