@@ -93,5 +93,9 @@ The template includes `TODO:` markers. At minimum, implement/verify:
 - [ ] `server.py` annotations: adjust for detect/inspect vs render type
       (render types: `readOnlyHint=False`). If network access: `openWorldHint=True`.
 - [ ] README parameter table, prerequisites (OSS PATH requirement): update.
+- [ ] Path validation: delegates to `clipwright.pathpolicy`
+      (`validate_source_or_basename` / `check_output_not_source`) — never
+      re-implement. Media inputs routed through `inspect_media()` are already
+      transitively covered.
 - [ ] `CONVENTIONS.md` §7 pre-PR self-check list: pass through.
 - [ ] (Optional) `evals/` AI real-task evaluation (CONVENTIONS §6).

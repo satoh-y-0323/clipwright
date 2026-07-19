@@ -13,16 +13,25 @@ Verification points:
   P-2: OTIO media reference is relative posix when media and output share the same dir
   P-3: OTIO media reference is absolute when media is outside the otio_dir
   P-4: output == media is rejected with PATH_NOT_ALLOWED (from check_output_not_source)
+
+Layer-4 propagation test (architecture-report-20260720-082027.md §3 層4,
+ADR-PB-1): reframe's own `timeline` argument only does a raw Path.exists()
+existence pre-check (D1, reframe.py L201) and otherwise delegates to core
+`load_timeline`. This layer proves the protection lives entirely in core
+(reframe.py is not modified for this batch — bump-free per ADR-PB-6).
 """
 
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 import opentimelineio as otio
+import pytest
 from clipwright.errors import ErrorCode
+from clipwright.otio_utils import new_timeline, save_timeline
 from clipwright.schemas import MediaInfo, RationalTimeModel, StreamInfo
 
 from clipwright_reframe.reframe import reframe
@@ -391,4 +400,103 @@ class TestOutputEqualsMediaPathNotAllowed:
             f"Got: {result['error']['code']!r}. "
             f"(INVALID_INPUT indicates _same_path is still used; "
             f"PATH_NOT_ALLOWED indicates check_output_not_source is active.)"
+        )
+
+
+# ===========================================================================
+# Layer 4 (ADR-PB-1): reframe's `timeline` argument must be protected
+# transitively via core load_timeline's symlink guard, without any change
+# to reframe.py. reframe's own D1 pre-check is a raw Path.exists(), which
+# follows symlinks; the guard must come from core load_timeline.
+#
+# Until ADR-PB-1 is implemented in core otio_utils.load_timeline, a
+# symlinked timeline is silently followed (reframe succeeds, ok=True)
+# instead of returning PATH_NOT_ALLOWED. This test is therefore expected
+# to FAIL for the right reason (core protection not yet implemented) —
+# this is the intended Red-phase failure mode for this batch
+# (core implementation is out of scope for this task).
+# ===========================================================================
+
+
+def _probe_symlink_support() -> bool:
+    """Return True when the runtime environment allows symlink creation.
+
+    Executed once at module import (collection) time so pytest.mark.skipif
+    can reference the result. File-local duplication per ADR-PB-4 convention
+    (mirrors clipwright-bgm/tests/test_pathpolicy_bgm.py:50-88).
+    """
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            real = base / "_probe_real.txt"
+            real.write_bytes(b"probe")
+            link = base / "_probe_link.txt"
+            link.symlink_to(real)
+        return True
+    except OSError:
+        return False
+
+
+_SYMLINK_SUPPORTED: bool = _probe_symlink_support()
+_SKIP_SYMLINK_REASON = (
+    "Symlink creation requires elevated privileges on this system (WinError 1314)."
+    " Enable Windows Developer Mode or run as Administrator."
+)
+_skip_no_symlinks = pytest.mark.skipif(
+    not _SYMLINK_SUPPORTED,
+    reason=_SKIP_SYMLINK_REASON,
+)
+
+
+def _try_symlink(link: Path, target: Path) -> None:
+    """Create a symlink; skip the test if the OS refuses (Windows privilege)."""
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip(
+            "Cannot create symlinks on this system (requires elevated privileges)"
+        )
+
+
+class TestTimelineSymlinkRejectedViaCore:
+    """A symlinked `timeline` argument must be rejected with PATH_NOT_ALLOWED,
+    proving that core load_timeline's symlink guard protects reframe even
+    though reframe.py is not modified in this batch.
+    """
+
+    @_skip_no_symlinks
+    def test_timeline_symlink_rejected_via_core(self, tmp_path: Path) -> None:
+        """A timeline path that is a symlink to a real .otio file must be
+        rejected with PATH_NOT_ALLOWED, sourced entirely from core
+        load_timeline (ADR-PB-1) — not from any reframe-local check."""
+        media = tmp_path / "video.mp4"
+        media.write_bytes(b"dummy media")
+
+        real_timeline_path = tmp_path / "real_timeline.otio"
+        tl = new_timeline("video.mp4")
+        save_timeline(tl, str(real_timeline_path))
+
+        symlinked_timeline_path = tmp_path / "timeline_link.otio"
+        _try_symlink(symlinked_timeline_path, real_timeline_path)
+
+        output_path = tmp_path / "out.otio"
+
+        with patch(
+            "clipwright_reframe.reframe.inspect_media",
+            side_effect=lambda p: _make_media_info(str(p)),
+        ):
+            result = reframe(
+                media=str(media),
+                output=str(output_path),
+                options=_default_opts(),
+                timeline=str(symlinked_timeline_path),
+            )
+
+        assert result["ok"] is False, (
+            "A symlinked timeline must be rejected, not silently followed "
+            f"(core load_timeline / ADR-PB-1). Got: {result}"
+        )
+        assert result["error"]["code"] == ErrorCode.PATH_NOT_ALLOWED.value, (
+            "Symlinked timeline must return PATH_NOT_ALLOWED via core "
+            f"load_timeline (ADR-PB-1). Got: {result['error']['code']!r}"
         )

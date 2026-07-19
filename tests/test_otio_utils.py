@@ -1181,6 +1181,139 @@ class TestLoadTimelineRealFileFailures:
 
 
 # ===========================================================================
+# ADR-PB-1: load_timeline symlink rejection (pathpolicy-consistency batch,
+# architecture-report-20260720-082027.md)
+# ===========================================================================
+
+
+def _probe_symlink_support() -> bool:
+    """Return True when the runtime environment allows symlink creation.
+
+    Executed once at module import (collection) time so pytest.mark.skipif
+    can reference the result. Mirrors clipwright-bgm/tests/test_pathpolicy_bgm.py.
+    """
+    import tempfile
+
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            real = base / "_probe_real.txt"
+            real.write_bytes(b"probe")
+            link = base / "_probe_link.txt"
+            link.symlink_to(real)
+        return True
+    except OSError:
+        return False
+
+
+_SYMLINK_SUPPORTED: bool = _probe_symlink_support()
+_SKIP_SYMLINK_REASON = (
+    "Symlink creation requires elevated privileges on this system (WinError 1314)."
+    " Enable Windows Developer Mode or run as Administrator."
+)
+_skip_no_symlinks = pytest.mark.skipif(
+    not _SYMLINK_SUPPORTED,
+    reason=_SKIP_SYMLINK_REASON,
+)
+
+
+def _try_symlink(link: Path, target: Path) -> None:
+    """Create a symlink; skip the test if the OS refuses (Windows privilege)."""
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip(
+            "Cannot create symlinks on this system (requires elevated privileges)"
+        )
+
+
+class TestLoadTimelineSymlinkRejection:
+    """ADR-PB-1: load_timeline rejects a symlinked timeline path (leaf or
+    intermediate directory component) with PATH_NOT_ALLOWED before ever
+    attempting to read the file, and classifies a directory path as
+    FILE_NOT_FOUND rather than OTIO_ERROR. This single core fix protects
+    every caller that passes an unresolved timeline path to load_timeline
+    (5 tool-layer-unguarded satellites plus server's project_dir path),
+    without requiring per-satellite changes (G2 closure).
+
+    Symlink-dependent cases (S-1/S-2) are probe-gated: SKIPPED on runtimes
+    that cannot create symlinks (e.g. Windows without Developer Mode).
+    S-4 involves no symlink and runs unconditionally on every OS.
+    """
+
+    @_skip_no_symlinks
+    def test_leaf_symlink_timeline_raises_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """S-1/S-3: a leaf symlink pointing at a valid .otio file is rejected
+        with PATH_NOT_ALLOWED before the file is read. The message contains
+        neither the tmp_path directory component nor the symlink's real
+        target path (CWE-209), and hint is non-empty."""
+        from clipwright.errors import ClipwrightError, ErrorCode
+
+        real_path = tmp_path / "real.otio"
+        save_timeline(new_timeline("real"), str(real_path))
+        link_path = tmp_path / "link.otio"
+        _try_symlink(link_path, real_path)
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            load_timeline(str(link_path))
+
+        assert exc_info.value.code == ErrorCode.PATH_NOT_ALLOWED
+        assert str(tmp_path) not in exc_info.value.message
+        assert str(real_path) not in exc_info.value.message
+        assert exc_info.value.hint
+
+    @_skip_no_symlinks
+    def test_intermediate_dir_symlink_raises_path_not_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """S-2/S-3: a path whose intermediate directory component is a
+        symlink to a real directory is rejected with PATH_NOT_ALLOWED,
+        mirroring the leaf-symlink guard (ADR-PP-2 walks every path
+        component, not just the leaf). Message leaks neither the tmp_path
+        component nor the real directory path (CWE-209), hint is non-empty."""
+        from clipwright.errors import ClipwrightError, ErrorCode
+
+        real_dir = tmp_path / "real_dir"
+        real_dir.mkdir()
+        real_path = real_dir / "real.otio"
+        save_timeline(new_timeline("real"), str(real_path))
+        link_dir = tmp_path / "link_dir"
+        _try_symlink(link_dir, real_dir)
+        via_link_path = link_dir / "real.otio"
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            load_timeline(str(via_link_path))
+
+        assert exc_info.value.code == ErrorCode.PATH_NOT_ALLOWED
+        assert str(tmp_path) not in exc_info.value.message
+        assert str(real_dir) not in exc_info.value.message
+        assert exc_info.value.hint
+
+    def test_directory_path_raises_file_not_found(self, tmp_path: Path) -> None:
+        """S-4: passing a directory path to load_timeline raises
+        ClipwrightError(FILE_NOT_FOUND), not OTIO_ERROR. This locks the
+        intentional behaviour change from ADR-PB-1: the is_file() check now
+        runs before read_from_file, so a directory is classified the same
+        way satellites already treat a missing timeline (FILE_NOT_FOUND)
+        instead of surfacing the prior IsADirectoryError -> OSError ->
+        OTIO_ERROR path. No symlink is involved, so this runs
+        unconditionally on every OS/environment."""
+        from clipwright.errors import ClipwrightError, ErrorCode
+
+        dir_path = tmp_path / "a_directory.otio"
+        dir_path.mkdir()
+
+        with pytest.raises(ClipwrightError) as exc_info:
+            load_timeline(str(dir_path))
+
+        assert exc_info.value.code == ErrorCode.FILE_NOT_FOUND
+        assert str(tmp_path) not in exc_info.value.message
+        assert exc_info.value.hint
+
+
+# ===========================================================================
 # L-5: partial update pattern for set_clipwright_metadata (prevent full key loss)
 # ===========================================================================
 

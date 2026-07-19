@@ -212,7 +212,7 @@ wheels = [
 
 [[package]]
 name = "clipwright"
-version = "0.7.1"
+version = "0.7.2"
 source = { editable = "." }
 dependencies = [
     { name = "mcp", extra = ["cli"] },
@@ -823,7 +823,7 @@ dev = [
 
 [[package]]
 name = "clipwright-transcribe"
-version = "0.6.0"
+version = "0.6.1"
 source = { editable = "clipwright-transcribe" }
 dependencies = [
     { name = "clipwright" },

@@ -484,6 +484,101 @@ class TestReadTimeline:
 
 
 # ===========================================================================
+# clipwright_read_timeline symlink rejection tests (ADR-PB-1 / ADR-PB-2,
+# architecture-report-20260720-082027.md)
+# ===========================================================================
+
+
+def _probe_symlink_support() -> bool:
+    """Return True when the runtime environment allows symlink creation.
+
+    Executed once at module import (collection) time so pytest.mark.skipif
+    can reference the result. Mirrors clipwright-bgm/tests/test_pathpolicy_bgm.py.
+    """
+    import tempfile
+
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            real = base / "_probe_real.txt"
+            real.write_bytes(b"probe")
+            link = base / "_probe_link.txt"
+            link.symlink_to(real)
+        return True
+    except OSError:
+        return False
+
+
+_SYMLINK_SUPPORTED: bool = _probe_symlink_support()
+_SKIP_SYMLINK_REASON = (
+    "Symlink creation requires elevated privileges on this system (WinError 1314)."
+    " Enable Windows Developer Mode or run as Administrator."
+)
+_skip_no_symlinks = pytest.mark.skipif(
+    not _SYMLINK_SUPPORTED,
+    reason=_SKIP_SYMLINK_REASON,
+)
+
+
+def _try_symlink(link: Path, target: Path) -> None:
+    """Create a symlink; skip the test if the OS refuses (Windows privilege)."""
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip(
+            "Cannot create symlinks on this system (requires elevated privileges)"
+        )
+
+
+class TestReadTimelineSymlinkRejection:
+    """ADR-PB-2 / ADR-PB-1: clipwright_read_timeline rejects a symlinked
+    timeline file instead of silently following it, for both mutually
+    exclusive input shapes."""
+
+    def _setup_project(self, tmp_path: Path, name: str = "test") -> str:
+        """Initialise a test project and return project_dir."""
+        project_dir = str(tmp_path / "proj")
+        clipwright_init_project(project_dir=project_dir, name=name)
+        return project_dir
+
+    @_skip_no_symlinks
+    def test_read_timeline_timeline_path_symlink_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        """ADR-PB-2: a symlink passed via timeline_path is rejected with
+        PATH_NOT_ALLOWED. The pre-fix code calls Path.resolve() before
+        is_file(), which silently strips the symlink component and loads
+        the real target file instead of rejecting it."""
+        from clipwright.otio_utils import new_timeline, save_timeline
+
+        real_path = tmp_path / "real.otio"
+        save_timeline(new_timeline("real"), str(real_path))
+        link_path = tmp_path / "link.otio"
+        _try_symlink(link_path, real_path)
+
+        result = clipwright_read_timeline(timeline_path=str(link_path))
+        _assert_tool_error_result(result, "PATH_NOT_ALLOWED")
+
+    @_skip_no_symlinks
+    def test_read_timeline_project_dir_symlinked_timeline_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        """ADR-PB-1: a project_dir whose timeline.otio has been replaced by
+        a symlink to a real .otio file is rejected with PATH_NOT_ALLOWED.
+        _resolve_project_timeline's is_file() check follows the symlink to
+        a readable file, so the guard must come from load_timeline itself
+        (core fix protects this project_dir path without any server change)."""
+        project_dir = self._setup_project(tmp_path)
+        timeline_otio = Path(project_dir) / "timeline.otio"
+        real_path = tmp_path / "real_target.otio"
+        timeline_otio.replace(real_path)
+        _try_symlink(timeline_otio, real_path)
+
+        result = clipwright_read_timeline(project_dir=project_dir)
+        _assert_tool_error_result(result, "PATH_NOT_ALLOWED")
+
+
+# ===========================================================================
 # clipwright_write_timeline tests
 # ===========================================================================
 

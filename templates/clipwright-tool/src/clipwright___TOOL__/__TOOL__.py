@@ -9,6 +9,8 @@ CONVENTIONS MUST correspondence:
 - M3 separation of detection and application: detect/inspect types don't modify media, just return annotations.
 - M4 external OSS via subprocess: don't import in main, launch __TOOL___cli.py as separate process.
 - M5 non-destructive: read input only, generate output freshly, reject output == input.
+
+Path validation delegates to clipwright.pathpolicy (never re-implement).
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from typing import Any
 
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
+from clipwright.pathpolicy import check_output_not_source, validate_source_or_basename
 
 from clipwright___TOOL__.schemas import __Action__Options
 
@@ -83,21 +86,15 @@ def ___ACTION___inner(
         )
 
     # Reject output == input (non-destructive, M5)
-    if _same_path(output_path, input_path):
-        raise ClipwrightError(
-            code=ErrorCode.INVALID_INPUT,
-            message="Output path is identical to input path.",
-            hint="Change output file path to differ from input.",
-        )
+    check_output_not_source(output_path, [input])
 
     # --- 2. Input existence check (FILE_NOT_FOUND message basename only, no path exposure) ---
 
-    if not input_path.exists():
-        raise ClipwrightError(
-            code=ErrorCode.FILE_NOT_FOUND,
-            message=f"File not found: {input_path.name}",
-            hint="Verify input file path is correct.",
-        )
+    validate_source_or_basename(
+        input,
+        message=f"File not found: {input_path.name}",
+        hint="Verify input file path is correct.",
+    )
 
     # --- 3. Detection/analysis body ---
     #
@@ -138,14 +135,6 @@ def ___ACTION___inner(
         artifacts=artifacts,
         warnings=[],
     )
-
-
-def _same_path(a: Path, b: Path) -> bool:
-    """Check if two paths refer to the same entity (fall back to string comparison on resolve failure)."""
-    try:
-        return a.resolve() == b.resolve()
-    except OSError:  # pragma: no cover
-        return str(a) == str(b)
 
 
 def _run_cli(payload: dict[str, Any]) -> dict[str, Any]:

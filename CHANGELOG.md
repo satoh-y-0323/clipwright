@@ -5,6 +5,46 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.38.6] - 2026-07-20
+
+### Security (`clipwright` core v0.7.2)
+
+- `load_timeline` now rejects timeline paths containing a symlink in any
+  path component (`PATH_NOT_ALLOWED`, basename-only message; ADR-PP-2 /
+  CWE-59), closing the timeline-file symlink gap for the five satellites
+  that load a timeline without a tool-layer guard (`clipwright-reframe`,
+  `clipwright-scene`, `clipwright-stabilize`, `clipwright-noise`,
+  `clipwright-loudness`) and for `clipwright_read_timeline` /
+  `clipwright_write_timeline` via `project_dir`. Satellites need no code
+  change (same pattern as 0.38.4).
+- `clipwright_read_timeline`'s direct `timeline_path` route now checks for
+  symlinks before path resolution (previously `resolve()` silently
+  followed them).
+
+### Security (`clipwright-transcribe` v0.6.1)
+
+- The whisper model path (`options.model_path` / `CLIPWRIGHT_WHISPER_MODEL`)
+  is now validated with the shared pathpolicy guard; symlinked model files
+  are rejected (`PATH_NOT_ALLOWED`) instead of being passed to
+  `whisper-cli`, and a symlinked explicit path fails closed rather than
+  silently falling back. Missing-model behaviour (`DEPENDENCY_MISSING`,
+  fallback order) is unchanged.
+
+### Changed (`clipwright` core v0.7.2)
+
+- Passing a directory as a timeline path now returns `FILE_NOT_FOUND` (was
+  `OTIO_ERROR`), aligning with satellite behaviour.
+
+### Notes
+
+- Tools already guarding timelines at the tool layer (`clipwright-speed`,
+  `clipwright-text`, `clipwright-transition`, `clipwright-bgm`,
+  `clipwright-overlay`, `clipwright-export`, …) are behaviourally
+  unchanged; media inputs across the suite were already covered
+  transitively via `inspect_media`. The new-tool template and conventions
+  docs now wire and document pathpolicy usage. `clipwright-transcribe`
+  keeps its `clipwright>=0.7.0` floor.
+
 ## [0.38.5] - 2026-07-20
 
 ### Changed (`clipwright-export` v0.2.3, `clipwright-reframe` v0.4.1)
