@@ -11,12 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `load_timeline` now rejects timeline paths containing a symlink in any
   path component (`PATH_NOT_ALLOWED`, basename-only message; ADR-PP-2 /
-  CWE-59), closing the timeline-file symlink gap for the five satellites
-  that load a timeline without a tool-layer guard (`clipwright-reframe`,
-  `clipwright-scene`, `clipwright-stabilize`, `clipwright-noise`,
-  `clipwright-loudness`) and for `clipwright_read_timeline` /
-  `clipwright_write_timeline` via `project_dir`. Satellites need no code
-  change (same pattern as 0.38.4).
+  CWE-59), closing the timeline-file symlink gap for the seven satellites
+  that load a timeline without a tool-layer guard (`clipwright-color`,
+  `clipwright-reframe`, `clipwright-scene`, `clipwright-stabilize`,
+  `clipwright-noise`, `clipwright-loudness`, `clipwright-render`) and for
+  `clipwright_read_timeline` / `clipwright_write_timeline` via `project_dir`.
+  Satellites need no code change (same pattern as 0.38.4).
 - `clipwright_read_timeline`'s direct `timeline_path` route now checks for
   symlinks before path resolution (previously `resolve()` silently
   followed them).
