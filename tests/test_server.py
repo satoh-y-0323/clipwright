@@ -542,9 +542,7 @@ class TestReadTimelineSymlinkRejection:
         return project_dir
 
     @_skip_no_symlinks
-    def test_read_timeline_timeline_path_symlink_rejected(
-        self, tmp_path: Path
-    ) -> None:
+    def test_read_timeline_timeline_path_symlink_rejected(self, tmp_path: Path) -> None:
         """ADR-PB-2: a symlink passed via timeline_path is rejected with
         PATH_NOT_ALLOWED. The pre-fix code calls Path.resolve() before
         is_file(), which silently strips the symlink component and loads
