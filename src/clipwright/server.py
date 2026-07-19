@@ -49,6 +49,24 @@ def _inspect_media(path: str) -> MediaInfo:
     return _media.inspect_media(path)
 
 
+def _resolve_project_timeline(project_dir: str) -> str | ToolResult:
+    """Resolve timeline.otio path from project_dir.
+
+    Validates that <project_dir>/timeline.otio exists and is a regular file.
+    Returns the resolved path string on success, or FILE_NOT_FOUND ToolResult
+    on failure.
+    """
+    project_path = Path(project_dir)
+    timeline_otio = project_path / "timeline.otio"
+    if not timeline_otio.is_file():
+        return error_result(
+            ErrorCode.FILE_NOT_FOUND,
+            "timeline.otio not found in project_dir",
+            "Initialise the project with clipwright_init_project, then try again.",
+        )
+    return str(timeline_otio)
+
+
 # ===========================================================================
 # clipwright_init_project
 # ===========================================================================
@@ -248,15 +266,10 @@ def clipwright_read_timeline(
 
     # Resolve the timeline path
     if project_dir is not None:
-        project_path = Path(project_dir)
-        timeline_otio = project_path / "timeline.otio"
-        if not timeline_otio.is_file():
-            return error_result(
-                ErrorCode.FILE_NOT_FOUND,
-                "timeline.otio not found in project_dir",
-                "Initialise the project with clipwright_init_project, then try again.",
-            )
-        resolved_path = str(timeline_otio)
+        project_result = _resolve_project_timeline(project_dir)
+        if isinstance(project_result, ToolResult):
+            return project_result
+        resolved_path = project_result
     else:
         # Direct timeline_path: whitelist .otio extension (path-traversal guard)
         resolved = Path(str(timeline_path)).resolve()
@@ -382,15 +395,10 @@ def clipwright_write_timeline(
 
     data contains the ValidationReport (valid/operation_count/applied_count/errors).
     """
-    project_path = Path(project_dir)
-    timeline_otio = project_path / "timeline.otio"
-    if not timeline_otio.is_file():
-        return error_result(
-            ErrorCode.FILE_NOT_FOUND,
-            "timeline.otio not found in project_dir",
-            "Initialise the project with clipwright_init_project, then try again.",
-        )
-    resolved_path = str(timeline_otio)
+    project_result = _resolve_project_timeline(project_dir)
+    if isinstance(project_result, ToolResult):
+        return project_result
+    resolved_path = project_result
 
     # Load the timeline
     try:

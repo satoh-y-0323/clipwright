@@ -13,9 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   OTIO JSON (broken, empty, unknown-schema, or truncated files — the behaviour
   of OTIO 0.18) into a `ClipwrightError(OTIO_ERROR)` carrying an actionable
   hint. Previously such input leaked as an uncaught exception and was
-  misreported as `INTERNAL` by the error boundary of the 11 satellite tools
+  misreported as `INTERNAL` by the error boundary of the 12 satellite tools
   that load an existing timeline (speed, text, transition, stabilize, color,
-  noise, loudness, render, bgm, overlay, frames). The satellites need no code
+  noise, loudness, render, bgm, overlay, frames, scene). The satellites need no code
   change and pick up the fix via `clipwright` core 0.7.1.
 
 ### Changed (`clipwright` core v0.7.1)
