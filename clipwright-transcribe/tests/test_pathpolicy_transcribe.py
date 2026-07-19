@@ -248,11 +248,9 @@ class TestRegressionGuards:
 #       raise  # PATH_NOT_ALLOWED: propagate, do not fall through to env
 #   return candidate
 #
-# Current impl (transcribe.py L308-339) uses os.path.isfile(candidate),
-# which follows symlinks unconditionally, so these tests are expected to
-# FAIL (candidate accepted / falls through to DEPENDENCY_MISSING) until
-# ADR-PB-3 is implemented. This is the intended Red-phase failure mode
-# for this batch (implementation is out of scope for this task).
+# ADR-PB-3 is implemented in transcribe.py's _resolve_model_path (Wave 1):
+# validate_source_file replaces os.path.isfile, so a symlinked candidate is
+# now rejected with PATH_NOT_ALLOWED instead of being silently accepted.
 # ===========================================================================
 
 

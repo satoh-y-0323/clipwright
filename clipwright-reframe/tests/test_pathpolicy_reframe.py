@@ -409,12 +409,10 @@ class TestOutputEqualsMediaPathNotAllowed:
 # to reframe.py. reframe's own D1 pre-check is a raw Path.exists(), which
 # follows symlinks; the guard must come from core load_timeline.
 #
-# Until ADR-PB-1 is implemented in core otio_utils.load_timeline, a
-# symlinked timeline is silently followed (reframe succeeds, ok=True)
-# instead of returning PATH_NOT_ALLOWED. This test is therefore expected
-# to FAIL for the right reason (core protection not yet implemented) —
-# this is the intended Red-phase failure mode for this batch
-# (core implementation is out of scope for this task).
+# ADR-PB-1 is implemented in core otio_utils.load_timeline (Wave 1), so a
+# symlinked timeline is now rejected with PATH_NOT_ALLOWED. This test pins
+# that the protection is sourced entirely from core (reframe.py is not
+# modified for this batch — bump-free per ADR-PB-6).
 # ===========================================================================
 
 
