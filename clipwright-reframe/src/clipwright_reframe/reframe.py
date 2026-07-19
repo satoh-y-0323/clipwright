@@ -195,30 +195,23 @@ def _reframe_inner(
         target_url_key = media_ref_for_otio(media_path, output_path.parent)
         nle_warnings = conform_timeline_for_nle(tl, {target_url_key: media_info})
     else:
-        # D1: timeline existence check before load (B-5).
-        # FileNotFoundError from load_timeline must not escape as a raw exception.
+        # D1: timeline existence check before load (B-5). Kept as a pre-check
+        # (rather than delegating to core's generic FILE_NOT_FOUND) so the
+        # hint can mention that the timeline argument may be omitted.
         if not Path(timeline).exists():
             raise ClipwrightError(
-                code=ErrorCode.INVALID_INPUT,
+                code=ErrorCode.FILE_NOT_FOUND,
                 message=f"Timeline file not found: {Path(timeline).name}",
                 hint=(
                     "Specify an existing .otio timeline file or omit"
                     " the timeline argument."
                 ),
             )
-        # D1: invalid .otio content must be wrapped as ClipwrightError (B-6).
-        # load_timeline wraps OTIOError, but OTIO may raise ValueError for JSON parse
-        # errors on some adapters; catch it here and convert to OTIO_ERROR.
-        try:
-            tl = load_timeline(timeline)
-        except ClipwrightError:
-            raise
-        except (ValueError, OSError):
-            raise ClipwrightError(
-                code=ErrorCode.OTIO_ERROR,
-                message=f"Failed to load OTIO file: {Path(timeline).name}",
-                hint="Specify a valid .otio timeline file.",
-            ) from None
+        # D1: load failures (malformed JSON, OTIOError) are converted to
+        # ClipwrightError by core load_timeline (clipwright >= 0.7.1);
+        # unexpected exceptions reach the outer INTERNAL boundary (B-6)
+        # unconverted.
+        tl = load_timeline(timeline)
 
     # --- 4. Annotate ReframeDirective ---
 

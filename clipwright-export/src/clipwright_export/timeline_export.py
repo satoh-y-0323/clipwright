@@ -804,20 +804,10 @@ def _export_timeline_inner(
         message=f"Timeline file not found: {inp.name}",
         hint="Verify the timeline path and ensure the file exists.",
     )
-    # load_timeline wraps otio.exceptions.OTIOError as OTIO_ERROR, but a
-    # structurally malformed .otio raises a bare ValueError (JSON parse error)
-    # that escapes it; convert any non-ClipwrightError load failure to
-    # OTIO_ERROR here (path-free message, CWE-209).
-    try:
-        tl = load_timeline(timeline)
-    except ClipwrightError:
-        raise
-    except Exception as exc:
-        raise ClipwrightError(
-            code=ErrorCode.OTIO_ERROR,
-            message="Failed to load the OTIO timeline file.",
-            hint="Specify a valid .otio timeline file.",
-        ) from exc
+    # load failures (missing file, malformed JSON, OTIOError) are converted to
+    # ClipwrightError by core load_timeline (clipwright >= 0.7.1); unexpected
+    # exceptions reach the outer INTERNAL boundary (below) unconverted.
+    tl = load_timeline(timeline)
 
     # --- Step 5: deep copy, then reject non-integer frame rate (ADR-EX-10) ---
     tl_copy: otio.schema.Timeline = tl.deepcopy()

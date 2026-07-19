@@ -288,22 +288,11 @@ def _export_chapters_inner(
         hint="Verify the timeline path and ensure the file exists.",
     )
 
-    # --- Step 5: load timeline. load_timeline wraps otio.exceptions.OTIOError
-    # as OTIO_ERROR, but a structurally malformed .otio (bad JSON) raises a
-    # bare ValueError that escapes it; convert that specific failure to
-    # OTIO_ERROR here (path-free message, CWE-209). Narrower than
-    # timeline_export.py's blanket `except Exception` wrap on purpose: this
-    # module's CWE-209 boundary test monkeypatches load_timeline itself with
-    # a RuntimeError and expects it to reach the outer INTERNAL boundary
-    # unconverted, so only the identified ValueError gap is caught here. ---
-    try:
-        timeline_obj = load_timeline(timeline)
-    except ValueError as exc:
-        raise ClipwrightError(
-            code=ErrorCode.OTIO_ERROR,
-            message="Failed to load the OTIO timeline file.",
-            hint="Specify a valid .otio timeline file.",
-        ) from exc
+    # --- Step 5: load timeline. Load failures (missing file, malformed JSON,
+    # OTIOError) are converted to ClipwrightError by core load_timeline
+    # (clipwright >= 0.7.1); unexpected exceptions reach the outer INTERNAL
+    # boundary (below) unconverted. ---
+    timeline_obj = load_timeline(timeline)
 
     # --- Collect markers -> chapters, then serialize the requested format ---
     chapters, duration_sec = _collect_chapters(timeline_obj, options.marker_kind)
