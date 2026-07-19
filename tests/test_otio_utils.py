@@ -907,6 +907,9 @@ class TestLoadTimelineRaisesClipwrightErrorForNonTimeline:
 
         from clipwright.errors import ClipwrightError, ErrorCode
 
+        # Create a dummy file for validation (ADR-PB-1: validate before read)
+        dummy_file = tmp_path / "dummy.otio"
+        dummy_file.write_text("{}")
         # monkeypatch read_from_file to return a Track instead of a Timeline
         monkeypatch.setattr(
             otio.adapters,
@@ -915,7 +918,7 @@ class TestLoadTimelineRaisesClipwrightErrorForNonTimeline:
         )
 
         with pytest.raises(ClipwrightError) as exc_info:
-            load_timeline(str(tmp_path / "dummy.otio"))
+            load_timeline(str(dummy_file))
 
         assert exc_info.value.code == ErrorCode.OTIO_ERROR, (
             "ClipwrightError(code=OTIO_ERROR) must be raised for non-Timeline result"
@@ -933,6 +936,9 @@ class TestLoadTimelineRaisesClipwrightErrorForNonTimeline:
 
         from clipwright.errors import ClipwrightError
 
+        # Create a dummy file for validation (ADR-PB-1: validate before read)
+        dummy_file = tmp_path / "dummy.otio"
+        dummy_file.write_text("{}")
         monkeypatch.setattr(
             otio.adapters,
             "read_from_file",
@@ -940,7 +946,7 @@ class TestLoadTimelineRaisesClipwrightErrorForNonTimeline:
         )
 
         with pytest.raises(ClipwrightError):
-            load_timeline(str(tmp_path / "dummy.otio"))
+            load_timeline(str(dummy_file))
 
         # ClipwrightError was raised = not AssertionError (implicit confirmation)
 
@@ -953,6 +959,9 @@ class TestLoadTimelineRaisesClipwrightErrorForNonTimeline:
 
         from clipwright.errors import ClipwrightError, ErrorCode
 
+        # Create a dummy file for validation (ADR-PB-1: validate before read)
+        dummy_file = tmp_path / "dummy.otio"
+        dummy_file.write_text("{}")
         monkeypatch.setattr(
             otio.adapters,
             "read_from_file",
@@ -960,7 +969,7 @@ class TestLoadTimelineRaisesClipwrightErrorForNonTimeline:
         )
 
         with pytest.raises(ClipwrightError) as exc_info:
-            load_timeline(str(tmp_path / "dummy.otio"))
+            load_timeline(str(dummy_file))
 
         assert exc_info.value.code == ErrorCode.OTIO_ERROR
 
@@ -986,13 +995,17 @@ class TestLoadTimelineConvertsOTIOException:
 
         from clipwright.errors import ClipwrightError, ErrorCode
 
+        # Create a dummy file for validation (ADR-PB-1: validate before read)
+        bad_file = tmp_path / "bad.otio"
+        bad_file.write_text("{}")
+
         def _raise_otio(path: str) -> None:
             raise otio.exceptions.OTIOError("parser error (test)")
 
         monkeypatch.setattr(otio.adapters, "read_from_file", _raise_otio)
 
         with pytest.raises(ClipwrightError) as exc_info:
-            load_timeline(str(tmp_path / "bad.otio"))
+            load_timeline(str(bad_file))
 
         assert exc_info.value.code == ErrorCode.OTIO_ERROR, (
             "OTIO exception must be converted to ClipwrightError(code=OTIO_ERROR) (L-3)"
@@ -1009,6 +1022,10 @@ class TestLoadTimelineConvertsOTIOException:
 
         from clipwright.errors import ClipwrightError
 
+        # Create a dummy file for validation (ADR-PB-1: validate before read)
+        bad_file = tmp_path / "bad.otio"
+        bad_file.write_text("{}")
+
         def _raise_otio(path: str) -> None:
             raise otio.exceptions.OTIOError("raw OTIO exception (test)")
 
@@ -1016,7 +1033,7 @@ class TestLoadTimelineConvertsOTIOException:
 
         # Confirm OTIOError does not pass through
         try:
-            load_timeline(str(tmp_path / "bad.otio"))
+            load_timeline(str(bad_file))
             pytest.fail("No exception was raised (L-3)")
         except ClipwrightError:
             pass  # ClipwrightError arrived as expected
@@ -1034,13 +1051,17 @@ class TestLoadTimelineConvertsOTIOException:
 
         from clipwright.errors import ClipwrightError
 
+        # Create a dummy file for validation (ADR-PB-1: validate before read)
+        bad_file = tmp_path / "bad.otio"
+        bad_file.write_text("{}")
+
         def _raise_otio(path: str) -> None:
             raise otio.exceptions.OTIOError("hint check error (test)")
 
         monkeypatch.setattr(otio.adapters, "read_from_file", _raise_otio)
 
         with pytest.raises(ClipwrightError) as exc_info:
-            load_timeline(str(tmp_path / "bad.otio"))
+            load_timeline(str(bad_file))
 
         assert exc_info.value.hint, (
             "ClipwrightError must have a hint set (§6.4 error contract) (L-3)"
@@ -1149,13 +1170,17 @@ class TestLoadTimelineRealFileFailures:
         blanket `except Exception`)."""
         import opentimelineio as otio
 
+        # Create a dummy file for validation (ADR-PB-1: validate before read)
+        whatever_file = tmp_path / "whatever.otio"
+        whatever_file.write_text("{}")
+
         def _raise_runtime(path: str) -> None:
             raise RuntimeError("unexpected adapter failure (test)")
 
         monkeypatch.setattr(otio.adapters, "read_from_file", _raise_runtime)
 
         with pytest.raises(RuntimeError):
-            load_timeline(str(tmp_path / "whatever.otio"))
+            load_timeline(str(whatever_file))
 
     def test_permission_error_raises_otio_error(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -1168,13 +1193,17 @@ class TestLoadTimelineRealFileFailures:
 
         from clipwright.errors import ClipwrightError, ErrorCode
 
+        # Create a dummy file for validation (ADR-PB-1: validate before read)
+        denied_file = tmp_path / "denied.otio"
+        denied_file.write_text("{}")
+
         def _raise_permission(path: str) -> None:
             raise PermissionError("Permission denied (test)")
 
         monkeypatch.setattr(otio.adapters, "read_from_file", _raise_permission)
 
         with pytest.raises(ClipwrightError) as exc_info:
-            load_timeline(str(tmp_path / "denied.otio"))
+            load_timeline(str(denied_file))
 
         assert exc_info.value.code == ErrorCode.OTIO_ERROR
         assert exc_info.value.hint

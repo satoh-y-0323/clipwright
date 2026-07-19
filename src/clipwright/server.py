@@ -28,6 +28,7 @@ from clipwright.operations import (
     apply_operations,
 )
 from clipwright.otio_utils import load_timeline, save_timeline, summarize_timeline
+from clipwright.pathpolicy import validate_source_or_basename
 from clipwright.project import init_project as _init_project
 from clipwright.schemas import Artifact, MediaInfo, ToolResult
 
@@ -271,8 +272,20 @@ def clipwright_read_timeline(
             return project_result
         resolved_path = project_result
     else:
-        # Direct timeline_path: whitelist .otio extension (path-traversal guard)
-        resolved = Path(str(timeline_path)).resolve()
+        # Direct timeline_path: validate before resolve (ADR-PB-2)
+        timeline_path_str = str(timeline_path)
+        try:
+            validate_source_or_basename(
+                timeline_path_str,
+                message=(
+                    f"timeline_path does not exist: {Path(timeline_path_str).name}"
+                ),
+                hint="Specify a valid path to an existing .otio file.",
+            )
+        except ClipwrightError as exc:
+            return error_result(exc.code, exc.message, exc.hint)
+        # Whitelist .otio extension (path-traversal guard)
+        resolved = Path(timeline_path_str).resolve()
         if resolved.suffix != ".otio":
             return error_result(
                 ErrorCode.PATH_NOT_ALLOWED,

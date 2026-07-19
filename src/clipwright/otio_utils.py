@@ -16,6 +16,7 @@ from typing import Any
 import opentimelineio as otio
 
 from clipwright.errors import ClipwrightError, ErrorCode
+from clipwright.pathpolicy import validate_source_or_basename
 from clipwright.schemas import (
     MediaRef,
     RationalTimeModel,
@@ -49,6 +50,7 @@ def new_timeline(name: str) -> otio.schema.Timeline:
 def load_timeline(path: str) -> otio.schema.Timeline:
     """Load an OTIO file and return a Timeline.
 
+    Validates the path first (symlink rejection + existence, ADR-PP-2 / CWE-59).
     Converts file-system and OTIO parsing errors into ClipwrightError (L-3).
     Catches FileNotFoundError / (OTIOError, ValueError) / OSError from read_from_file
     and re-raises as ClipwrightError with appropriate error codes.
@@ -56,6 +58,11 @@ def load_timeline(path: str) -> otio.schema.Timeline:
     (contract boundary L-1). Type mismatches (non-Timeline results) are also wrapped
     as OTIO_ERROR. Raw OTIO exceptions must not reach the caller (L-1 / F-07).
     """
+    validate_source_or_basename(
+        path,
+        message=f"Timeline file not found: {Path(path).name}",
+        hint="Verify the timeline path and ensure the file exists.",
+    )
     try:
         result = otio.adapters.read_from_file(path)
     except FileNotFoundError as exc:

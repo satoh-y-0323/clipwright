@@ -36,7 +36,11 @@ from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.media import inspect_media
 from clipwright.nle_interop import conform_timeline_for_nle
 from clipwright.otio_utils import add_clip, add_marker, new_timeline, save_timeline
-from clipwright.pathpolicy import check_output_not_source, media_ref_for_otio
+from clipwright.pathpolicy import (
+    check_output_not_source,
+    media_ref_for_otio,
+    validate_source_file,
+)
 from clipwright.process import resolve_tool, run, safe_subprocess_message
 from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel, ToolResult
 
@@ -309,7 +313,7 @@ def _resolve_model_path(options: TranscribeOptions) -> str:
     """Resolve the whisper model file path (DC-AS-003).
 
     Resolution order: options.model_path -> env CLIPWRIGHT_WHISPER_MODEL.
-    Uses os.path.isfile rather than resolve_tool (the model is not an executable).
+    Validates each candidate with validate_source_file to reject symlinks (ADR-PB-3).
     Raises DEPENDENCY_MISSING when neither candidate exists.
 
     Args:
@@ -319,7 +323,8 @@ def _resolve_model_path(options: TranscribeOptions) -> str:
         Absolute or relative path to an existing model file.
 
     Raises:
-        ClipwrightError: When the model file cannot be found (DEPENDENCY_MISSING).
+        ClipwrightError: When the model file cannot be found (DEPENDENCY_MISSING),
+            or when a candidate is a symlink (PATH_NOT_ALLOWED).
     """
     candidates: list[str] = []
     if options.model_path is not None:
@@ -329,8 +334,13 @@ def _resolve_model_path(options: TranscribeOptions) -> str:
         candidates.append(env_model)
 
     for candidate in candidates:
-        if os.path.isfile(candidate):
-            return candidate
+        try:
+            validate_source_file(candidate)
+        except ClipwrightError as exc:
+            if exc.code == ErrorCode.FILE_NOT_FOUND:
+                continue  # full-path message is discarded here (CWE-209)
+            raise  # PATH_NOT_ALLOWED: basename-only message propagates
+        return candidate
 
     raise ClipwrightError(
         code=ErrorCode.DEPENDENCY_MISSING,

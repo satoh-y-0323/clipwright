@@ -16,7 +16,7 @@ Coverage:
   AC-3 (partial: OTIO words present when word_timestamps=True)
   SEC-02 (error basename-only / from None)
   ADR-K2: -ojf flag, identical command for false/true
-  ADR-K8: version '0.6.0' in words OTIO metadata (drift guard for REL-01)
+  ADR-K8: version '0.6.1' in words OTIO metadata (drift guard for REL-01)
 """
 
 from __future__ import annotations
@@ -363,7 +363,7 @@ class TestWordTimestampsTrueIntegration:
         )
 
     def test_otio_clip_words_metadata_version(self, tmp_path: Path) -> None:
-        """metadata['clipwright']['version'] must be '0.6.0' in OTIO (drift guard REL-01).
+        """metadata['clipwright']['version'] must be '0.6.1' in OTIO (drift guard REL-01).
 
         ADR-K8: version field in clipwright OTIO metadata must match the released
         package version. This drift guard catches a version bump in pyproject.toml
@@ -376,8 +376,8 @@ class TestWordTimestampsTrueIntegration:
         clips = [c for c in v1 if isinstance(c, otio.schema.Clip)]
         assert len(clips) == 1, "Expected exactly one clip on V1 track"
         cw = clips[0].metadata.get("clipwright", {})
-        assert cw.get("version") == "0.6.0", (
-            f"metadata['clipwright']['version'] must be '0.6.0' (drift guard REL-01), "
+        assert cw.get("version") == "0.6.1", (
+            f"metadata['clipwright']['version'] must be '0.6.1' (drift guard REL-01), "
             f"got {cw.get('version')!r}"
         )
 
