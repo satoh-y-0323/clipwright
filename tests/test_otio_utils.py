@@ -1262,7 +1262,7 @@ class TestLoadTimelineSymlinkRejection:
     attempting to read the file, and classifies a directory path as
     FILE_NOT_FOUND rather than OTIO_ERROR. This single core fix protects
     every caller that passes an unresolved timeline path to load_timeline
-    (5 tool-layer-unguarded satellites plus server's project_dir path),
+    (seven tool-layer-unguarded satellites plus server's project_dir path),
     without requiring per-satellite changes (G2 closure).
 
     Symlink-dependent cases (S-1/S-2) are probe-gated: SKIPPED on runtimes

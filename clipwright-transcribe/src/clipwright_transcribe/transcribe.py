@@ -10,8 +10,8 @@ Design decisions:
   (e.g. faster-whisper), replace only this function.
 - The whisper binary name and language auto-detect flag are isolated as module constants
   (spike-whisper confirmed values, replaceable via e2e; DC-AS-003/DC-AM-002).
-- Model resolution uses os.path.isfile rather than resolve_tool (the model is not an
-  executable; DC-AS-003). Resolution order: options.model_path -> env
+- Model resolution validates each candidate with validate_source_file (fail-closed on
+  symlinks, ADR-PB-3; DC-AS-003). Resolution order: options.model_path -> env
   CLIPWRIGHT_WHISPER_MODEL.
 - marker.marked_range uses whisper second values (media coordinates) directly.
   Coordinates match because the clip is full-length with source_range.start_time=0

@@ -15,7 +15,7 @@ Verification points (architecture TR-AD-01/03/04/05/08/09/10 / §8 C-3):
   ① Output validation (extension, parent dir, output==media, same-dir)
   ② Input validation (no audio=UNSUPPORTED_OPERATION, FILE_NOT_FOUND basename,
      DC-AS-004 missing dependency)
-  ③ Model resolution (os.path.isfile, param->env, DC-AS-003)
+  ③ Model resolution (validate_source_file, param->env, ADR-PB-3/DC-AS-003)
   ④ OTIO (full-length 1 clip kind=transcript-source, segment marker on V1,
      DC-AM-101/001)
   ⑤ DC-GP-003 marker name truncation, DC-GP-002 zero segments, DC-AS-005 second

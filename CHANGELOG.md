@@ -44,6 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transitively via `inspect_media`. The new-tool template and conventions
   docs now wire and document pathpolicy usage. `clipwright-transcribe`
   keeps its `clipwright>=0.7.0` floor.
+- The timeline symlink protection delivered by `clipwright` core 0.7.2 is
+  effective only in deployments where the core package is upgraded to 0.7.2
+  or later. Fresh installations resolve the latest core automatically;
+  existing environments should upgrade the `clipwright` package directly
+  (the seven satellites themselves are unchanged in this release).
 
 ## [0.38.5] - 2026-07-20
 
