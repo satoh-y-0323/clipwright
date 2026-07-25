@@ -17,13 +17,15 @@ Design decisions:
   annotation.
 - NLE mirror-sync (ADR-MS-1/2/3): if the input timeline has been conformed for
   an NLE (Resolve_OTIO metadata present, see clipwright.nle_interop), each
-  target V1 clip's linked Audio-track mirror clips (found via
-  find_mirror_clips) receive a matching clipwright LinearTimeWarp -- same
-  time_scalar, strip-then-append like the V1 clip itself -- so the round-trip
-  through an NLE keeps picture and its linked audio mirrors in sync. Mirrors
-  never have their source_range/available_range rewritten and never receive
-  clip-level metadata["clipwright"] (effect-level metadata only, ADR-MS-3).
-  A non-conform timeline yields zero mirrors and behaves exactly as before
+  target V1 clip's linked Audio-track mirror clips (found via a single
+  find_mirror_clips_batch call made once before the per-clip loop, rather
+  than one find_mirror_clips call per clip -- CWE-400 hardening) receive a
+  matching clipwright LinearTimeWarp -- same time_scalar, strip-then-append
+  like the V1 clip itself -- so the round-trip through an NLE keeps picture
+  and its linked audio mirrors in sync. Mirrors never have their
+  source_range/available_range rewritten and never receive clip-level
+  metadata["clipwright"] (effect-level metadata only, ADR-MS-3). A
+  non-conform timeline yields zero mirrors and behaves exactly as before
   (ADR-MS-1 backward-compat pin).
 """
 
@@ -35,7 +37,7 @@ from pathlib import Path
 import opentimelineio as otio
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
-from clipwright.nle_interop import find_mirror_clips
+from clipwright.nle_interop import find_mirror_clips_batch
 from clipwright.otio_utils import (
     get_clipwright_metadata,
     load_timeline,
@@ -84,11 +86,12 @@ def _set_speed_inner(
       4. speed in [0.25, 8.0]
       5. load_timeline (FILE_NOT_FOUND / OTIO_ERROR propagate)
       6. first TrackKind.Video track exists
-      7. clip-only index space; clip_index range check
+      7. select first Video track (raises UNSUPPORTED_OPERATION if none)
       8. build clip-only index space (gaps/transitions excluded)
       9. apply: remove old clipwright warp, append new, set metadata; then
          sync each target clip's linked Audio mirror clips the same way
-         (ADR-MS-1/2, find_mirror_clips -- no-op on a non-conform timeline)
+         (ADR-MS-1/2, find_mirror_clips_batch called once before the loop --
+         no-op on a non-conform timeline)
      10. save_timeline atomically
      11. return ok_result (data["mirrored_audio_clips_updated"], ADR-MS-5)
 
@@ -187,8 +190,15 @@ def _set_speed_inner(
         target_indices = [clip_index]
 
     # --- Step 9: per-target clip: remove old warp, append new, set metadata ---
+    # Mirrors are looked up once for every target clip via find_mirror_clips_batch
+    # (a single Audio-track scan) rather than once per clip via find_mirror_clips,
+    # so the total cost stays O(V1 targets + Audio clips) instead of amplifying to
+    # O(V1 targets x Audio clips) (CWE-400 hardening).
     mirrored_updated = 0
-    for idx in target_indices:
+    mirror_lists = find_mirror_clips_batch(
+        timeline_obj, [clips[i] for i in target_indices]
+    )
+    for idx, mirrors in zip(target_indices, mirror_lists, strict=True):
         clip = clips[idx]
 
         # Remove existing clipwright-authored LinearTimeWarp (ADR-SP-4 predicate).
@@ -223,13 +233,14 @@ def _set_speed_inner(
         )
 
         # NLE mirror-sync (ADR-MS-1/2/3): sync every linked Audio-track mirror
-        # clip so it carries the same speed warp as this V1 clip. A non-conform
-        # timeline yields [] here (no Resolve_OTIO Link Group ID), so this is a
-        # pure no-op in that case (backward-compat pin). Each mirror gets a
+        # clip (already resolved above via find_mirror_clips_batch) so it
+        # carries the same speed warp as this V1 clip. A non-conform timeline
+        # yields [] here (no Resolve_OTIO Link Group ID), so this is a pure
+        # no-op in that case (backward-compat pin). Each mirror gets a
         # freshly-constructed LinearTimeWarp instance (never shared with the V1
         # clip's or another mirror's) and no clip-level metadata (ADR-MS-3):
         # range fields are never touched.
-        for mirror in find_mirror_clips(timeline_obj, clip):
+        for mirror in mirrors:
             mirror.effects[:] = [
                 e for e in mirror.effects if not _is_clipwright_speed_warp(e)
             ]

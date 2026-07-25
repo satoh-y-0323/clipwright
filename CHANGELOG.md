@@ -12,10 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `clipwright_set_speed` now mirrors its `LinearTimeWarp` onto the linked
   audio mirror clips, closing the "speed desync" limitation documented in
   `docs/clipwright-spec6.md` §6. Mirror clips are matched by their
-  DaVinci Resolve `Resolve_OTIO` `Link Group ID` via the new core helper
-  `clipwright.nle_interop.find_mirror_clips`, so an NLE reopening a
-  `speed`-edited, NLE-conformed timeline no longer shows V1 and its audio
-  mirrors out of sync.
+  DaVinci Resolve `Resolve_OTIO` `Link Group ID` via the new core
+  mirror-lookup helpers in `clipwright.nle_interop`
+  (`find_mirror_clips_batch`, with `find_mirror_clips` as its single-clip
+  wrapper), so an NLE reopening a `speed`-edited, NLE-conformed timeline no
+  longer shows V1 and its audio mirrors out of sync.
 - Only effects are written to the mirrors: their `source_range` and
   `ExternalReference.available_range` are untouched. Rendered output is
   unchanged as well — `clipwright-render` never reads the mirrored audio
@@ -38,7 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Notes
 
 - `clipwright-speed` 0.3.0 requires `clipwright>=0.8.0` (it uses the new
-  `find_mirror_clips` helper).
+  `find_mirror_clips_batch` helper, calling it once per `clipwright_set_speed`
+  invocation rather than once per target clip, so lookups stay a single
+  Audio-track scan regardless of how many clips are retimed).
 - `uv.lock` reflects only the nine version bumps.
 - Agents that pin the exact `clipwright_set_speed` summary text will see
   one additional sentence, and only on NLE-conformed timelines.

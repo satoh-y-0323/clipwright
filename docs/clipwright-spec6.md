@@ -289,8 +289,12 @@ written as-is.
 - **`speed` (`LinearTimeWarp`) mirror sync — shipped, no longer a
   limitation.** `clipwright-speed` >= 0.3.0 replicates the `LinearTimeWarp`
   it applies to a V1 clip onto every mirrored audio clip that shares that
-  clip's `Resolve_OTIO` `Link Group ID` (§3.1), found via the core helper
-  `clipwright.nle_interop.find_mirror_clips` (`clipwright` >= 0.8.0). Only
+  clip's `Resolve_OTIO` `Link Group ID` (§3.1), found via the core
+  `clipwright.nle_interop.find_mirror_clips_batch` helper (`clipwright` >=
+  0.8.0), called once per `clipwright_set_speed` invocation across all
+  target clips rather than once per clip, so mirror lookup stays a single
+  Audio-track scan regardless of how many clips are retimed
+  (`find_mirror_clips` remains available as its single-clip wrapper). Only
   effects are written: the mirrors' `source_range` and
   `ExternalReference.available_range` are left untouched, so the A1
   adoption rule (§3.3), which compares `target_url`/`source_range` and not

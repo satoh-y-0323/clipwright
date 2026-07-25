@@ -24,11 +24,15 @@ against double-shifting timecode on repeated saves.
 ``find_mirror_clips`` (ADR-MS-1) is a read-only, never-raise lookup that lets
 other tools (e.g. clipwright-speed's NLE mirror-sync) find a V1 clip's audio
 mirrors by ``Resolve_OTIO`` "Link Group ID" after conform has run.
+``find_mirror_clips_batch`` is the batch form of the same lookup: it scans
+every Audio track exactly once for a whole set of V1 clips, so callers that
+need mirrors for many clips against the same timeline avoid the O(V1 clips) x
+O(Audio clips) cost of calling ``find_mirror_clips`` once per clip (CWE-400).
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import opentimelineio as otio
@@ -183,15 +187,38 @@ def find_mirror_clips(
       * No Audio track carries a Clip with a matching Link Group ID (e.g.
         video-only media, or a bgm-degraded conform where audio mirroring
         was skipped entirely -- ADR-NI-10 rev.2).
-    """
-    resolve_meta = v1_clip.metadata.get(RESOLVE_OTIO_KEY)
-    if not isinstance(resolve_meta, Mapping):
-        return []
-    link_group_id = resolve_meta.get("Link Group ID")
-    if not isinstance(link_group_id, int) or isinstance(link_group_id, bool):
-        return []
 
-    mirrors: list[otio.schema.Clip] = []
+    Thin wrapper over ``find_mirror_clips_batch``: callers that need mirrors
+    for more than one V1 clip against the same timeline should call
+    ``find_mirror_clips_batch`` directly to scan the Audio tracks once
+    instead of once per clip.
+    """
+    return find_mirror_clips_batch(timeline, [v1_clip])[0]
+
+
+def find_mirror_clips_batch(
+    timeline: otio.schema.Timeline,
+    v1_clips: Sequence[otio.schema.Clip],
+) -> list[list[otio.schema.Clip]]:
+    """Batch form of ``find_mirror_clips`` (ADR-MS-1). Read-only, never raises.
+
+    Scans every ``TrackKind.Audio`` track exactly once, building a Link Group
+    ID -> mirror clips (track order, A1..AN) map, then looks up each
+    ``v1_clips`` entry's Link Group ID against that map. This turns what
+    would be ``len(v1_clips)`` independent Audio-track scans (the cost of
+    calling ``find_mirror_clips`` once per clip) into a single Audio-track
+    scan plus O(1) dict lookups per clip -- avoiding the O(V1 clips) x
+    O(Audio clips) amplification (CWE-400 hardening).
+
+    Returns a list aligned 1:1 with ``v1_clips`` (same length, same order).
+    Each element is that clip's mirrors, or ``[]`` under the exact same
+    fail-safe conditions as ``find_mirror_clips`` (no/non-Mapping
+    ``Resolve_OTIO`` metadata, missing/non-``int``/``bool`` Link Group ID, or
+    no Audio Clip carries a matching one). The same guards are applied
+    symmetrically on the Audio side while building the map, so malformed
+    mirror-clip metadata is skipped rather than raising.
+    """
+    mirrors_by_gid: dict[int, list[otio.schema.Clip]] = {}
     for track in timeline.tracks:
         if track.kind != otio.schema.TrackKind.Audio:
             continue
@@ -202,14 +229,23 @@ def find_mirror_clips(
             if not isinstance(item_meta, Mapping):
                 continue
             item_gid = item_meta.get("Link Group ID")
-            if (
-                isinstance(item_gid, int)
-                and not isinstance(item_gid, bool)
-                and item_gid == link_group_id
-            ):
-                mirrors.append(item)
+            if not isinstance(item_gid, int) or isinstance(item_gid, bool):
+                continue
+            mirrors_by_gid.setdefault(item_gid, []).append(item)
 
-    return mirrors
+    results: list[list[otio.schema.Clip]] = []
+    for v1_clip in v1_clips:
+        resolve_meta = v1_clip.metadata.get(RESOLVE_OTIO_KEY)
+        if not isinstance(resolve_meta, Mapping):
+            results.append([])
+            continue
+        link_group_id = resolve_meta.get("Link Group ID")
+        if not isinstance(link_group_id, int) or isinstance(link_group_id, bool):
+            results.append([])
+            continue
+        results.append(list(mirrors_by_gid.get(link_group_id, [])))
+
+    return results
 
 
 # ===========================================================================
