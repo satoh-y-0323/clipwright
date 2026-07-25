@@ -20,6 +20,10 @@ Idempotency: the presence of ``timeline.metadata["Resolve_OTIO"]`` is used as
 the single idempotency marker.  A second call on an already-conformed
 timeline is a pure no-op (returns ``[]`` immediately), which also protects
 against double-shifting timecode on repeated saves.
+
+``find_mirror_clips`` (ADR-MS-1) is a read-only, never-raise lookup that lets
+other tools (e.g. clipwright-speed's NLE mirror-sync) find a V1 clip's audio
+mirrors by ``Resolve_OTIO`` "Link Group ID" after conform has run.
 """
 
 from __future__ import annotations
@@ -150,6 +154,62 @@ def conform_timeline_for_nle(
             )
 
     return warnings
+
+
+def find_mirror_clips(
+    timeline: otio.schema.Timeline,
+    v1_clip: otio.schema.Clip,
+) -> list[otio.schema.Clip]:
+    """Return v1_clip's audio mirrors (ADR-MS-1). Read-only, never raises.
+
+    Reads ``v1_clip.metadata["Resolve_OTIO"]["Link Group ID"]`` (stamped by
+    ``conform_timeline_for_nle``) and returns every Clip on a
+    ``TrackKind.Audio`` track that carries the same Link Group ID, in track
+    order (A1..AN). The V1 clip itself is never included since it lives on
+    the Video track, not an Audio track.
+
+    Callers (e.g. clipwright-speed's NLE mirror-sync) may layer effects onto
+    the returned clips, but this helper itself never mutates the timeline.
+
+    Returns ``[]`` -- never raises -- whenever the lookup cannot be made
+    safely:
+      * ``v1_clip`` carries no ``Resolve_OTIO`` metadata, or it is not a
+        Mapping (non-conform timeline: callers fall back to their
+        pre-existing, non-mirrored behavior).
+      * ``Resolve_OTIO`` has no "Link Group ID" entry.
+      * "Link Group ID" is not an ``int``, or is a ``bool`` (``bool`` is an
+        ``int`` subclass in Python, so it is explicitly excluded to avoid
+        spuriously matching an integer ordinal of 0 or 1).
+      * No Audio track carries a Clip with a matching Link Group ID (e.g.
+        video-only media, or a bgm-degraded conform where audio mirroring
+        was skipped entirely -- ADR-NI-10 rev.2).
+    """
+    resolve_meta = v1_clip.metadata.get(RESOLVE_OTIO_KEY)
+    if not isinstance(resolve_meta, Mapping):
+        return []
+    link_group_id = resolve_meta.get("Link Group ID")
+    if not isinstance(link_group_id, int) or isinstance(link_group_id, bool):
+        return []
+
+    mirrors: list[otio.schema.Clip] = []
+    for track in timeline.tracks:
+        if track.kind != otio.schema.TrackKind.Audio:
+            continue
+        for item in track:
+            if not isinstance(item, otio.schema.Clip):
+                continue
+            item_meta = item.metadata.get(RESOLVE_OTIO_KEY)
+            if not isinstance(item_meta, Mapping):
+                continue
+            item_gid = item_meta.get("Link Group ID")
+            if (
+                isinstance(item_gid, int)
+                and not isinstance(item_gid, bool)
+                and item_gid == link_group_id
+            ):
+                mirrors.append(item)
+
+    return mirrors
 
 
 # ===========================================================================

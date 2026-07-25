@@ -15,6 +15,16 @@ Design decisions:
   render ordering. Sub-range speed is expressed by splitting the region into its
   own clip before calling (ADR-SP-1). speed=1.0 is a valid no-op-at-render
   annotation.
+- NLE mirror-sync (ADR-MS-1/2/3): if the input timeline has been conformed for
+  an NLE (Resolve_OTIO metadata present, see clipwright.nle_interop), each
+  target V1 clip's linked Audio-track mirror clips (found via
+  find_mirror_clips) receive a matching clipwright LinearTimeWarp -- same
+  time_scalar, strip-then-append like the V1 clip itself -- so the round-trip
+  through an NLE keeps picture and its linked audio mirrors in sync. Mirrors
+  never have their source_range/available_range rewritten and never receive
+  clip-level metadata["clipwright"] (effect-level metadata only, ADR-MS-3).
+  A non-conform timeline yields zero mirrors and behaves exactly as before
+  (ADR-MS-1 backward-compat pin).
 """
 
 from __future__ import annotations
@@ -25,6 +35,7 @@ from pathlib import Path
 import opentimelineio as otio
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
+from clipwright.nle_interop import find_mirror_clips
 from clipwright.otio_utils import (
     get_clipwright_metadata,
     load_timeline,
@@ -74,9 +85,12 @@ def _set_speed_inner(
       5. load_timeline (FILE_NOT_FOUND / OTIO_ERROR propagate)
       6. first TrackKind.Video track exists
       7. clip-only index space; clip_index range check
-      8. apply: remove old clipwright warp, append new, set metadata
-      9. save_timeline atomically
-     10. return ok_result
+      8. build clip-only index space (gaps/transitions excluded)
+      9. apply: remove old clipwright warp, append new, set metadata; then
+         sync each target clip's linked Audio mirror clips the same way
+         (ADR-MS-1/2, find_mirror_clips -- no-op on a non-conform timeline)
+     10. save_timeline atomically
+     11. return ok_result (data["mirrored_audio_clips_updated"], ADR-MS-5)
 
     Output may reside in any directory (transform tool: no co-location
     constraint).  check_output_not_source raises PATH_NOT_ALLOWED when
@@ -173,6 +187,7 @@ def _set_speed_inner(
         target_indices = [clip_index]
 
     # --- Step 9: per-target clip: remove old warp, append new, set metadata ---
+    mirrored_updated = 0
     for idx in target_indices:
         clip = clips[idx]
 
@@ -207,6 +222,33 @@ def _set_speed_inner(
             },
         )
 
+        # NLE mirror-sync (ADR-MS-1/2/3): sync every linked Audio-track mirror
+        # clip so it carries the same speed warp as this V1 clip. A non-conform
+        # timeline yields [] here (no Resolve_OTIO Link Group ID), so this is a
+        # pure no-op in that case (backward-compat pin). Each mirror gets a
+        # freshly-constructed LinearTimeWarp instance (never shared with the V1
+        # clip's or another mirror's) and no clip-level metadata (ADR-MS-3):
+        # range fields are never touched.
+        for mirror in find_mirror_clips(timeline_obj, clip):
+            mirror.effects[:] = [
+                e for e in mirror.effects if not _is_clipwright_speed_warp(e)
+            ]
+            mirror_warp = otio.schema.LinearTimeWarp(
+                name="clipwright_speed",
+                time_scalar=speed,
+            )
+            set_clipwright_metadata(
+                mirror_warp,
+                {
+                    "tool": "clipwright-speed",
+                    "version": __version__,
+                    "kind": "speed",
+                    "speed": speed,
+                },
+            )
+            mirror.effects.append(mirror_warp)
+            mirrored_updated += 1
+
     # --- Step 10: save atomically; input file is never written ---
     save_timeline(timeline_obj, output)
 
@@ -218,12 +260,18 @@ def _set_speed_inner(
         f"Output: {out.name}. "
         f"Estimated rendered duration scales by 1/{speed}."
     )
+    if mirrored_updated > 0:
+        summary += (
+            f" Retimed {mirrored_updated} linked audio mirror clip(s) to match "
+            "(NLE sync)."
+        )
     return ok_result(
         summary=summary,
         data={
             "applied_count": applied_count,
             "speed": speed,
             "clip_indices": target_indices,
+            "mirrored_audio_clips_updated": mirrored_updated,
         },
         artifacts=[
             {
@@ -244,12 +292,21 @@ def set_speed(
 
     Non-destructive: does not modify the input timeline file.
     Idempotent: applying twice with the same speed replaces rather than stacks
-    the clipwright warp on each clip.
+    the clipwright warp on each clip (and on each of its Audio mirror clips).
 
     clip_index is the clip-only index space (gaps/transitions excluded from
     indexing), matching render ordering. Sub-range speed is expressed by
     splitting the region into its own clip before calling (ADR-SP-1).
     speed=1.0 is a valid no-op-at-render annotation.
+
+    NLE mirror-sync (ADR-MS-1/2/5): if the input timeline was conformed for an
+    NLE (see clipwright.nle_interop.conform_timeline_for_nle), each target
+    clip's linked Audio-track mirror clips also receive a matching clipwright
+    LinearTimeWarp so picture and its audio mirrors stay in sync after a
+    round-trip through the NLE. ``data["mirrored_audio_clips_updated"]``
+    (int) always reports how many mirror clips were updated (0 for a
+    non-conform timeline); the summary gains a trailing sentence about the
+    sync only when that count is greater than 0.
 
     Args:
         timeline: Input OTIO timeline file path.
