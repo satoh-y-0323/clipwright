@@ -295,9 +295,16 @@ src/clipwright/
   しかサポートしないため）Audio トラックを削除する（既存どおり `warnings`
   に報告される）。`fcpxml` 形式は全 Audio トラックをそのまま出力する。
 
-設計の詳細（座標系の意味論・`Resolve_OTIO` のワイヤ形式・既知の制限 —
-例えば `speed` を適用したタイムラインは *NLE 上の表示でのみ* 音声・映像の
-ズレが生じ得るが `clipwright-render` 自体の出力には影響しない、など）は
+- `clipwright-speed` は整形済みタイムラインの同期を維持する。映像クリップの
+  速度を変更すると、同じ `LinearTimeWarp` がそのクリップにリンクした音声
+  ミラー（`Link Group ID` で照合）にも適用される。これにより `speed` 適用後
+  のタイムラインを NLE で開いても映像と音声が揃って retime される。付与され
+  るのはエフェクトのみで、ミラーの range も `clipwright-render` の出力も変化
+  しない。
+
+設計の詳細（座標系の意味論・`Resolve_OTIO` のワイヤ形式・残る既知の制限 —
+例えば EDL 書き出しは Audio トラックを削除する、FCPXML は
+`global_start_time` を往復できない、など）は
 [docs/clipwright-spec6.md](docs/clipwright-spec6.md) を参照。
 
 ---

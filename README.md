@@ -314,10 +314,16 @@ conforms its output OTIO for DaVinci Resolve — **no options to set**:
   `warnings`) rather than failing outright, since CMX3600 only supports up to
   two audio tracks; `fcpxml` export carries every Audio track unchanged.
 
+- `clipwright-speed` keeps a conformed timeline in sync: retiming a video
+  clip also applies the same `LinearTimeWarp` to that clip's linked audio
+  mirrors (matched by `Link Group ID`), so an NLE reopening a `speed`-edited
+  timeline shows video and audio retimed together. Only effects are added —
+  the mirrors' ranges, and `clipwright-render`'s own output, are unchanged.
+
 See [docs/clipwright-spec6.md](docs/clipwright-spec6.md) for the full design
-(coordinate-system semantics, the `Resolve_OTIO` wire format, and known
-limitations — e.g. `speed`-edited timelines can show an audio/video desync
-*in the NLE view only*, not in `clipwright-render`'s own output).
+(coordinate-system semantics, the `Resolve_OTIO` wire format, and the
+remaining known limitations — e.g. EDL export drops audio tracks, and FCPXML
+does not round-trip `global_start_time`).
 
 ---
 

@@ -13,6 +13,7 @@ Target:
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -365,6 +366,41 @@ class TestCliMain:
         assert kwargs.get("transport") == "stdio" or (
             len(_args) >= 1 and _args[0] == "stdio"
         )
+
+
+# ---------------------------------------------------------------------------
+# ADR-MS-5: mirrored_audio_clips_updated exposed through the real MCP call
+# ---------------------------------------------------------------------------
+
+
+class TestMirroredAudioClipsUpdatedInStructuredOutput:
+    """data.mirrored_audio_clips_updated must always be present (ADR-MS-5).
+
+    Unlike the tests above (which mock clipwright_speed.server.set_speed),
+    this exercises the real (non-mocked) set_speed path through the MCP
+    boundary with real fixture files, so envelope passthrough is verified
+    end-to-end rather than against a hand-built ToolResult template. It
+    fails today because set_speed's envelope never sets this data key.
+    """
+
+    def test_real_call_exposes_mirrored_audio_clips_updated(
+        self, simple_timeline_file: Path, tmp_dir: Path
+    ) -> None:
+        output = tmp_dir / "out.otio"
+        content, structured = asyncio.run(
+            mcp.call_tool(
+                "clipwright_set_speed",
+                {
+                    "timeline": str(simple_timeline_file),
+                    "output": str(output),
+                    "options": {"speed": 2.0},
+                },
+            )
+        )
+        assert structured["ok"] is True
+        data = structured.get("data", {})
+        assert "mirrored_audio_clips_updated" in data
+        assert isinstance(data["mirrored_audio_clips_updated"], int)
 
 
 # ---------------------------------------------------------------------------

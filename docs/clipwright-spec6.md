@@ -216,6 +216,12 @@ non-empty Audio track and decides between two outcomes:
   `sequence` case) is reused directly for stream #0, same as if it didn't
   exist.
 
+Note that a mirrored audio clip is not necessarily effect-free after
+conforming: `clipwright-speed` (>= 0.3.0) adds a `LinearTimeWarp` to the
+mirrors of any clip it retimes (§6). The adoption predicate compares
+`target_url` and `source_range` only, never effects, so such a mirror is
+still adopted on a subsequent conform pass.
+
 **Net effect: all nine conform-wired tools get full audio-layout support** —
 the original design's "reframe is excluded from audio metadata" limitation
 was withdrawn once this adoption path was added; it is not a limitation in
@@ -280,16 +286,27 @@ written as-is.
 
 ## 6. Known limitations
 
-- **`speed` (`LinearTimeWarp`) desync.** Applying `clipwright-speed` after
-  audio-layout expansion changes V1's timing via a `LinearTimeWarp`, but the
-  mirrored audio tracks' clips are not independently retimed to match — an
-  NLE reopening the timeline after a `speed` edit may show V1 and its audio
-  mirrors out of sync. **`clipwright-render`'s own output is unaffected** —
+- **`speed` (`LinearTimeWarp`) mirror sync — shipped, no longer a
+  limitation.** `clipwright-speed` >= 0.3.0 replicates the `LinearTimeWarp`
+  it applies to a V1 clip onto every mirrored audio clip that shares that
+  clip's `Resolve_OTIO` `Link Group ID` (§3.1), found via the core helper
+  `clipwright.nle_interop.find_mirror_clips` (`clipwright` >= 0.8.0). Only
+  effects are written: the mirrors' `source_range` and
+  `ExternalReference.available_range` are left untouched, so the A1
+  adoption rule (§3.3), which compares `target_url`/`source_range` and not
+  effects, keeps matching after a `speed` edit. An NLE reopening a
+  `speed`-edited timeline therefore sees V1 and its audio mirrors retimed
+  together. **`clipwright-render`'s own output is unchanged by this** —
   render only consumes `[0:a]` from the *source media* directly (see below)
   and applies the same `LinearTimeWarp`-derived retiming to both video and
-  audio at materialization time, so a rendered MP4 through a `speed` edit is
-  correct regardless of this NLE-side desync. This is an NLE-side round-trip
-  limitation only.
+  audio at materialization time, so a rendered MP4 through a `speed` edit
+  was, and remains, correct. Timelines that were never conformed for an NLE
+  carry no `Link Group ID`, so no mirrors are found and behaviour is
+  identical to before. Mirror sync is keyed purely on the wire format, so it
+  also applies to a **Resolve-authored** timeline whose `Link Group ID`s
+  clipwright did not stamp; this is intended semantics — the linked audio of
+  a retimed video clip is exactly what should follow the retime, and only an
+  effect is added.
 - **`render` does not consume the mirrored audio tracks.** `render` builds its
   program audio from `[0:a]` of each *source media file* directly (via
   `resolve_kept_ranges`/`resolve_bgm`, which only scan Video- and

@@ -829,3 +829,230 @@ class TestInputContractGuards:
         assert len(timeline.tracks) == 1
         assert timeline.metadata.get(RESOLVE_OTIO_KEY) is None
         assert len(warnings) >= 1
+
+
+# ===========================================================================
+# 13. find_mirror_clips (ADR-MS-1, speed NLE mirror-sync)
+# ===========================================================================
+#
+# ``find_mirror_clips`` does not exist yet: every test in this section
+# imports it locally (not at module scope) so the import failure is
+# contained to these new tests and does not turn into a collection error
+# that would fail all pre-existing tests in this module.
+
+
+class TestFindMirrorClips:
+    """Read-only, never-raise Link Group ID lookup across Audio tracks.
+
+    A V1 Clip's mirrors are every Clip on a ``TrackKind.Audio`` track that
+    shares its ``Resolve_OTIO`` "Link Group ID" (stamped by
+    ``conform_timeline_for_nle``), returned in track order (A1..AN). The V1
+    clip itself is never included (it lives on the Video track). Any input
+    that falls outside a well-formed conformed timeline resolves to ``[]``
+    rather than raising.
+    """
+
+    def test_stereo_single_stream_returns_one_mirror_per_v1_clip(self) -> None:
+        from clipwright.nle_interop import find_mirror_clips
+
+        rate = 25.0
+        clip1 = _clip(
+            "media.mov", start=0, duration=25, rate=rate, available_duration=60
+        )
+        clip2 = _clip(
+            "media.mov", start=30, duration=25, rate=rate, available_duration=60
+        )
+        timeline = _timeline([clip1, clip2])
+        media_info = _media_info(rate=rate, frames=60, channels_per_stream=[2])
+        conform_timeline_for_nle(timeline, {"media.mov": media_info})
+
+        mirrors1 = find_mirror_clips(timeline, clip1)
+        mirrors2 = find_mirror_clips(timeline, clip2)
+
+        assert len(mirrors1) == 1
+        assert mirrors1[0] is timeline.tracks[1][0]
+        assert mirrors1[0].media_reference.target_url == "media.mov"
+        assert clip1 not in mirrors1
+
+        assert len(mirrors2) == 1
+        assert mirrors2[0] is timeline.tracks[1][1]
+        assert clip2 not in mirrors2
+        assert mirrors1[0] is not mirrors2[0]
+
+    def test_two_streams_returns_mirrors_in_a1_a2_track_order(self) -> None:
+        from clipwright.nle_interop import find_mirror_clips
+
+        rate = 25.0
+        clip = _clip("media.mov", start=0, duration=50, rate=rate)
+        timeline = _timeline([clip])
+        media_info = _media_info(rate=rate, frames=50, channels_per_stream=[1, 1])
+        conform_timeline_for_nle(timeline, {"media.mov": media_info})
+
+        mirrors = find_mirror_clips(timeline, clip)
+
+        assert len(mirrors) == 2
+        assert mirrors[0] is timeline.tracks[1][0]
+        assert mirrors[1] is timeline.tracks[2][0]
+
+    def test_clips_around_a_gap_map_to_their_own_mirror_gap_ignored(self) -> None:
+        """Fixture mirrors TestV1MirrorLinkGroupAndGaps' [Clip, Gap, Clip]
+        layout. Matching is verified by source_range value (clip1 and clip2
+        share a target_url but have distinct start times), not by identity,
+        since the mirror Gap in between is a different item kind entirely."""
+        from clipwright.nle_interop import find_mirror_clips
+
+        rate = 25.0
+        clip1 = _clip(
+            "media.mov", start=0, duration=25, rate=rate, available_duration=60
+        )
+        gap = _gap(5, rate)
+        clip2 = _clip(
+            "media.mov", start=30, duration=25, rate=rate, available_duration=60
+        )
+        timeline = _timeline([clip1, gap, clip2])
+        media_info = _media_info(rate=rate, frames=60, channels_per_stream=[1])
+        conform_timeline_for_nle(timeline, {"media.mov": media_info})
+
+        mirrors1 = find_mirror_clips(timeline, clip1)
+        mirrors2 = find_mirror_clips(timeline, clip2)
+
+        assert len(mirrors1) == 1
+        assert not isinstance(mirrors1[0], otio.schema.Gap)
+        assert mirrors1[0].source_range.start_time == clip1.source_range.start_time
+        assert mirrors1[0].source_range.duration == clip1.source_range.duration
+
+        assert len(mirrors2) == 1
+        assert not isinstance(mirrors2[0], otio.schema.Gap)
+        assert mirrors2[0].source_range.start_time == clip2.source_range.start_time
+        assert mirrors2[0].source_range.duration == clip2.source_range.duration
+        assert mirrors1[0] is not mirrors2[0]
+
+    def test_non_conform_timeline_returns_empty_list(self) -> None:
+        """Backward-compat pin (ADR-MS-1): a timeline that was never passed
+        through conform_timeline_for_nle carries no Resolve_OTIO metadata at
+        all, so lookup degrades to [] and callers keep their pre-existing
+        (non-mirrored) behavior unchanged."""
+        from clipwright.nle_interop import find_mirror_clips
+
+        rate = 25.0
+        clip = _clip("media.mov", start=0, duration=50, rate=rate)
+        timeline = _timeline([clip])
+
+        assert find_mirror_clips(timeline, clip) == []
+
+    def test_bgm_degraded_conform_returns_empty_list(self) -> None:
+        """A pre-existing non-mirroring Audio track (e.g. bgm) degenerates
+        conform's audio mirroring to skip+warning (ADR-NI-10 rev.2): the V1
+        clip still gets a Link Group ID stamped, but no Audio track/clip ever
+        carries a matching one, so lookup must return []."""
+        from clipwright.nle_interop import find_mirror_clips
+
+        rate = 25.0
+        v1_clip = _clip("a.mov", start=0, duration=50, rate=rate)
+        bgm_clip = _clip("bgm.mov", start=0, duration=50, rate=rate)
+        timeline = _timeline([v1_clip], extra_audio_tracks=[[bgm_clip]])
+        media_infos = {
+            "a.mov": _media_info(
+                path="a.mov", rate=rate, frames=50, channels_per_stream=[2]
+            ),
+            "bgm.mov": _media_info(
+                path="bgm.mov", rate=rate, frames=50, channels_per_stream=[1]
+            ),
+        }
+        conform_timeline_for_nle(timeline, media_infos)
+
+        assert v1_clip.metadata[RESOLVE_OTIO_KEY] == {"Link Group ID": 1}
+        assert find_mirror_clips(timeline, v1_clip) == []
+
+    def test_adopted_a1_mirror_is_returned(self) -> None:
+        """ADR-NI-10 rev.2 adoption: an existing A1 that item-for-item
+        mirrors V1 is stamped in place (not replaced), and its Link Group ID
+        is applied during adoption -- lookup must find that same object."""
+        from clipwright.nle_interop import find_mirror_clips
+
+        rate = 25.0
+        v1_clip = _clip("a.mov", start=0, duration=50, rate=rate)
+        a1_clip = _clip("a.mov", start=0, duration=50, rate=rate)
+        timeline = _timeline([v1_clip], extra_audio_tracks=[[a1_clip]])
+        media_info = _media_info(rate=rate, frames=50, channels_per_stream=[2])
+        conform_timeline_for_nle(timeline, {"a.mov": media_info})
+
+        mirrors = find_mirror_clips(timeline, v1_clip)
+
+        assert len(mirrors) == 1
+        assert mirrors[0] is a1_clip
+
+    def test_video_only_media_returns_empty_list(self) -> None:
+        """No audio stream at all (channels_per_stream=[]) means conform's
+        audio mirroring never creates any Audio track, so lookup finds
+        nothing to return -- even though the V1 clip itself still gets a
+        Link Group ID stamped."""
+        from clipwright.nle_interop import find_mirror_clips
+
+        rate = 25.0
+        clip = _clip("a.mov", start=0, duration=50, rate=rate)
+        timeline = _timeline([clip])
+        media_info = _media_info(rate=rate, frames=50, channels_per_stream=[])
+        conform_timeline_for_nle(timeline, {"a.mov": media_info})
+
+        assert len(timeline.tracks) == 1
+        assert clip.metadata[RESOLVE_OTIO_KEY] == {"Link Group ID": 1}
+        assert find_mirror_clips(timeline, clip) == []
+
+
+class TestFindMirrorClipsNeverRaises:
+    """Defensive guards for malformed v1_clip metadata (ADR-MS-1 fail-safe
+    list). All of these mutate a clip from an otherwise well-formed
+    conformed timeline after the fact, isolating each guard independently of
+    conform_timeline_for_nle's own (already-tested) stamping behavior."""
+
+    def _build_conformed(self) -> tuple[otio.schema.Timeline, otio.schema.Clip]:
+        rate = 25.0
+        clip = _clip("media.mov", start=0, duration=50, rate=rate)
+        timeline = _timeline([clip])
+        media_info = _media_info(rate=rate, frames=50, channels_per_stream=[2])
+        conform_timeline_for_nle(timeline, {"media.mov": media_info})
+        return timeline, clip
+
+    def test_v1_clip_without_resolve_otio_metadata_returns_empty_list(self) -> None:
+        from clipwright.nle_interop import find_mirror_clips
+
+        timeline, clip = self._build_conformed()
+        del clip.metadata[RESOLVE_OTIO_KEY]
+
+        assert find_mirror_clips(timeline, clip) == []
+
+    def test_v1_clip_resolve_otio_not_a_mapping_returns_empty_list(self) -> None:
+        from clipwright.nle_interop import find_mirror_clips
+
+        timeline, clip = self._build_conformed()
+        clip.metadata[RESOLVE_OTIO_KEY] = "not-a-mapping"
+
+        assert find_mirror_clips(timeline, clip) == []
+
+    def test_v1_clip_missing_link_group_id_returns_empty_list(self) -> None:
+        from clipwright.nle_interop import find_mirror_clips
+
+        timeline, clip = self._build_conformed()
+        clip.metadata[RESOLVE_OTIO_KEY] = {}
+
+        assert find_mirror_clips(timeline, clip) == []
+
+    def test_v1_clip_link_group_id_bool_is_excluded_returns_empty_list(self) -> None:
+        """bool is a subclass of int in Python; ADR-MS-1 requires an explicit
+        `not isinstance(gid, bool)` exclusion so True/False are never treated
+        as a valid Link Group ID (which would spuriously match ordinal 1)."""
+        from clipwright.nle_interop import find_mirror_clips
+
+        timeline, clip = self._build_conformed()
+        clip.metadata[RESOLVE_OTIO_KEY] = {"Link Group ID": True}
+
+        assert find_mirror_clips(timeline, clip) == []
+
+    def test_v1_clip_link_group_id_str_returns_empty_list(self) -> None:
+        from clipwright.nle_interop import find_mirror_clips
+
+        timeline, clip = self._build_conformed()
+        clip.metadata[RESOLVE_OTIO_KEY] = {"Link Group ID": "1"}
+
+        assert find_mirror_clips(timeline, clip) == []
