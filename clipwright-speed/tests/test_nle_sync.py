@@ -8,8 +8,9 @@ conformed, speed-edited timeline keeps V1 and its audio mirrors in sync.
 Behaviors under test:
   - ADR-MS-2: applying speed to a V1 clip also strips+re-appends a matching
     clipwright LinearTimeWarp (same time_scalar) on every linked Audio mirror
-    clip (via core find_mirror_clips / Resolve_OTIO Link Group ID). Mirror
-    source_range/available_range are never rewritten.
+    clip (via core find_mirror_clips_batch, hoisted once before the loop;
+    find_mirror_clips is its single-clip wrapper / Resolve_OTIO Link Group
+    ID). Mirror source_range/available_range are never rewritten.
   - ADR-MS-3: mirror clips never receive clip-level metadata["clipwright"]
     (effect-level metadata only).
   - ADR-MS-5: data["mirrored_audio_clips_updated"] is always present (int,
