@@ -331,15 +331,22 @@ written as-is.
   sequence/record start timecode on **import** (as opposed to OTIO's own
   round-trip) is a Resolve-real-machine verification item, not something
   provable from the adapter alone.
-- **Multi-source, mixed-timecode `sequence` per-clip matching is unverified
-  on real Resolve.** `global_start_time` only ever reflects the *first* V1
-  clip's timecode; clipwright's working assumption is that Resolve matches
-  each subsequent clip against its own `source_range`/`available_range`
-  (which are independently shifted per-source, §1) rather than relying on
-  `global_start_time` for anything beyond the first clip. This is the
-  single highest-value item for a DaVinci Resolve real-machine verification
-  pass (alongside single-source and 8×1ch-audio timelines) before relying on
-  this feature for mixed-source-timecode sequences in production.
+- **Multi-source, mixed-timecode `sequence` matching: smoke-verified on
+  real Resolve with synthetic media; real-footage confirmation pending.**
+  `global_start_time` only ever reflects the *first* V1 clip's timecode;
+  clipwright's working assumption is that Resolve matches each subsequent
+  clip against its own `source_range`/`available_range` (which are
+  independently shifted per-source, §1) rather than relying on
+  `global_start_time` for anything beyond the first clip. At the v0.38.0
+  shipping verification, a multi-source sequence built from two
+  ffmpeg-generated sources with different start timecodes was opened in
+  DaVinci Resolve 21 (free) and played back with no "Media Offline", each
+  clip conforming against its own source (recorded in the shipping note on
+  GitHub Issue #2). Because that test media was synthetic
+  (testsrc + `-timecode`), confirmation with real-world camera/broadcast
+  MXF footage — requested from Issue #2's reporter — remains the
+  outstanding item before relying on mixed-source-timecode sequences in
+  production.
 
 ## 7. Revision of the prior "A1 is empty" assumption
 
