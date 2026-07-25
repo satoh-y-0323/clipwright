@@ -176,11 +176,11 @@ def _make_mirror_clip(
 
 def _build_timeline(*, mirror_has_warp: bool) -> otio.schema.Timeline:
     """Build a 3-track conform()-shaped timeline:
-      V1 (Video): one warped Clip.
-      A1 (Audio): a mirror of the V1 clip (warp presence controlled by
-        ``mirror_has_warp``).
-      A2 (Audio): a genuine kind=="bgm" Clip (present in both variants, to
-        pin real BGM detection is unaffected by the mirror scan).
+    V1 (Video): one warped Clip.
+    A1 (Audio): a mirror of the V1 clip (warp presence controlled by
+      ``mirror_has_warp``).
+    A2 (Audio): a genuine kind=="bgm" Clip (present in both variants, to
+      pin real BGM detection is unaffected by the mirror scan).
     """
     v1_track = otio.schema.Track(kind=otio.schema.TrackKind.Video)
     v1_track.append(

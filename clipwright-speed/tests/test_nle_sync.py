@@ -1,27 +1,17 @@
 """test_nle_sync.py -- Tests for clipwright-speed NLE mirror-sync.
 
-TDD Red phase (architecture-report-20260725-100022.md SS2, ADR-MS-1~5):
-speed._set_speed_inner today only touches the V1 (video) clip -- it strips
-and re-appends a clipwright LinearTimeWarp on the target V1 clip(s) and never
-looks at Audio-track items at all. Every test below documents the *target*
-(post-implementation) contract; each fails today for one of two reasons:
-  - mirror-sync tests: Audio-track mirror clips keep their pre-existing
-    (empty) effects list untouched -- no clipwright LinearTimeWarp is ever
-    found on them, because find_mirror_clips/Step 9 mirror-sync does not
-    exist yet.
-  - envelope tests: result.data has no "mirrored_audio_clips_updated" key at
-    all (Step 11 does not build it yet), so any assertion on that key raises
-    a KeyError-shaped AssertionError.
+Covers the mirror-sync contract shipped in ADR-MS-1~5
+(architecture-report-20260725-100022.md SS2): applying speed to a V1 clip
+also retimes every linked Audio-track mirror clip so an NLE reopening a
+conformed, speed-edited timeline keeps V1 and its audio mirrors in sync.
 
-Target behaviors under test:
+Behaviors under test:
   - ADR-MS-2: applying speed to a V1 clip also strips+re-appends a matching
     clipwright LinearTimeWarp (same time_scalar) on every linked Audio mirror
     clip (via core find_mirror_clips / Resolve_OTIO Link Group ID). Mirror
     source_range/available_range are never rewritten.
   - ADR-MS-3: mirror clips never receive clip-level metadata["clipwright"]
-    (effect-level metadata only) -- this assertion already holds true today
-    (nothing touches mirrors yet), so it is a forward-looking pin, not a Red
-    assertion.
+    (effect-level metadata only).
   - ADR-MS-5: data["mirrored_audio_clips_updated"] is always present (int,
     0 when nothing was mirrored); summary gains a trailing sync sentence
     only when count > 0, and stays byte-identical to the existing 3-sentence
@@ -303,12 +293,10 @@ class TestNonConformRegressionPin:
 class TestAdrMs3NoClipLevelMetadataOnMirror:
     """Mirror clips must never carry clip-level metadata["clipwright"].
 
-    This assertion already holds true today (nothing touches mirrors yet in
-    the current implementation), so unlike the mirror-sync tests above this
-    one is a forward-looking regression pin rather than a Red assertion: it
-    guards the future mirror-sync implementation against accidentally
-    stamping clip-level metadata onto a mirror (ADR-MS-3 explicitly forbids
-    this; only effect-level metadata is allowed).
+    Mirror-sync writes only an effect-level LinearTimeWarp onto a mirror
+    clip (see above); this test pins that it never also stamps clip-level
+    metadata onto the mirror (ADR-MS-3 explicitly forbids this -- only
+    effect-level metadata is allowed).
     """
 
     def test_mirror_clip_has_no_clip_level_clipwright_metadata(

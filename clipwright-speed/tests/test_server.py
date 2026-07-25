@@ -379,8 +379,7 @@ class TestMirroredAudioClipsUpdatedInStructuredOutput:
     Unlike the tests above (which mock clipwright_speed.server.set_speed),
     this exercises the real (non-mocked) set_speed path through the MCP
     boundary with real fixture files, so envelope passthrough is verified
-    end-to-end rather than against a hand-built ToolResult template. It
-    fails today because set_speed's envelope never sets this data key.
+    end-to-end rather than against a hand-built ToolResult template.
     """
 
     def test_real_call_exposes_mirrored_audio_clips_updated(
