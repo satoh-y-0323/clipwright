@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`data.clips` with `index` / `name` / `track` / `start` / `duration` /
   `media`) plus `clips_truncated` / `clips_next_offset` /
   `markers_next_offset`, and echoes back `offset` / `limit` / `marker_kind`.
+  `section` is published as an enum (`"clips"` / `"markers"`) in the MCP
+  `inputSchema`, so agents can read the valid values directly from the
+  tool schema instead of guessing from prose.
 
 ### Changed (`clipwright` core v0.9.0)
 
