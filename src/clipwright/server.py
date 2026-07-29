@@ -11,7 +11,7 @@ Transport defaults to stdio (mcp.run(transport="stdio")).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
@@ -268,7 +268,7 @@ def clipwright_read_timeline(
         ),
     ] = None,
     section: Annotated[
-        str | None,
+        Literal["clips", "markers"] | None,
         Field(
             description=(
                 "Which detail list to page through."
@@ -296,9 +296,10 @@ def clipwright_read_timeline(
         Field(
             description=(
                 "Maximum number of entries returned per list"
-                " (default 50, maximum 500). Lower it for a cheap peek at a"
-                " large timeline. Values above the maximum are clamped and"
-                " reported in warnings."
+                " (default 50, maximum 500). Values above the maximum are clamped"
+                " and reported in warnings. Note: limit controls response size,"
+                " not the cost of reading a large timeline; both clips and markers"
+                " are always fully loaded regardless of limit."
             )
         ),
     ] = 50,
@@ -346,16 +347,7 @@ def clipwright_read_timeline(
     # ===== Input validation (before path resolution, to avoid wasted I/O) =====
 
     # Paging argument validation (ADR-RD-2/RD-3)
-    if section is None and offset != 0:
-        return error_result(
-            ErrorCode.INVALID_INPUT,
-            "offset is only supported together with section",
-            (
-                'Pass section="clips" or section="markers" when paging,'
-                " or omit offset for the overview."
-            ),
-        )
-
+    # Check negative offset first (prior to section-dependency check)
     if offset < 0:
         return error_result(
             ErrorCode.INVALID_INPUT,
@@ -363,6 +355,16 @@ def clipwright_read_timeline(
             (
                 "Pass offset=0 for the first page,"
                 " or the *_next_offset value from the previous response."
+            ),
+        )
+
+    if section is None and offset != 0:
+        return error_result(
+            ErrorCode.INVALID_INPUT,
+            "offset is only supported together with section",
+            (
+                'Pass section="clips" or section="markers" when paging,'
+                " or omit offset for the overview."
             ),
         )
 
@@ -520,7 +522,10 @@ def clipwright_read_timeline(
         clips_next_offset = None
         section_used = "markers"
     else:
-        # Should not reach here (Pydantic validates enum), but be defensive
+        # Defence-in-depth: in-process calls bypass type validation
+        # (decorator returns a plain function; Pydantic checks do not run).
+        # This branch protects against invalid section values even when
+        # the type system is not enforced.
         return error_result(
             ErrorCode.INVALID_INPUT,
             f"section must be 'clips', 'markers', or None, got {section!r}",

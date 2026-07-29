@@ -307,8 +307,9 @@ def summarize_timeline(timeline: otio.schema.Timeline) -> dict[str, Any]:
     """Return statistics, clip list, and full marker list for a Timeline.
 
     §13.5 DC-AM-001 re: always returns all items (no truncation).
-    The threshold-50 truncation is the responsibility of server.read_timeline;
-    this function does not truncate.
+    Pagination is the responsibility of server.read_timeline; this function
+    always converts all clips and markers to dicts. The limit parameter
+    controls response size only, not computation cost within this function.
 
     Return value keys:
       - clip_count: int
@@ -453,7 +454,7 @@ def _clip_to_dict(
         "track": {
             "index": track_index,
             "name": track.name,
-            "kind": track.kind.name if hasattr(track.kind, "name") else str(track.kind),
+            "kind": str(track.kind),
         },
         "start": start_time,
         "duration": duration,
