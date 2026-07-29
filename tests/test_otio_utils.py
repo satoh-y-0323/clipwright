@@ -2158,9 +2158,9 @@ class TestClipsToDictContract:
         expected_keys = {"index", "name", "track", "start", "duration", "media"}
         actual_keys = set(clip_entry.keys())
 
-        assert (
-            actual_keys == expected_keys
-        ), f"Expected keys {expected_keys}, got {actual_keys}"
+        assert actual_keys == expected_keys, (
+            f"Expected keys {expected_keys}, got {actual_keys}"
+        )
 
     def test_track_is_nested_dict_with_index_name_kind(self) -> None:
         """track field is a nested dict {index: int, name: str, kind: str} (ADR-RD-6)."""
@@ -2196,8 +2196,7 @@ class TestClipsToDictContract:
         Gap between clips is not counted. Timeline: [clip0, gap, clip1]
         → clips[1].index == 1 (not 2), because Gap is excluded.
         """
-        from clipwright.schemas import RationalTimeModel, TimeRangeModel
-        from clipwright.schemas import MediaRef
+        from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
 
         tl = new_timeline("index_with_gap")
         track = tl.tracks[0]
@@ -2296,8 +2295,6 @@ class TestClipsToDictContract:
     def test_media_is_none_for_missing_reference(self) -> None:
         """Non-ExternalReference clips (MissingReference, etc) have media=None."""
         import opentimelineio as otio
-
-        from clipwright.schemas import RationalTimeModel
 
         tl = new_timeline("missing_ref")
         track = tl.tracks[0]
@@ -2453,7 +2450,7 @@ class TestMarkerTraversalUnified:
         )
 
         for i, (summary_marker, get_markers_marker) in enumerate(
-            zip(summary["markers"], get_markers_result)
+            zip(summary["markers"], get_markers_result, strict=True)
         ):
             assert summary_marker["name"] == get_markers_marker.name, (
                 f"Marker {i} name mismatch: "
@@ -2596,7 +2593,7 @@ class TestSaveTimelineCompactFormatting:
         save_timeline(tl, path)
 
         content = Path(path).read_text()
-        line_count = len([l for l in content.split("\n") if l.strip()])
+        line_count = len([line for line in content.split("\n") if line.strip()])
 
         assert line_count > 1, (
             "Multiple clips → > 1 line (not collapsed to single line) (AC-10)"
@@ -2632,9 +2629,7 @@ class TestSaveTimelineCompactFormatting:
         assert loaded.tracks[0][0].name == "clip1", "Clip name preserved (AC-11)"
 
         loaded_meta = get_clipwright_metadata(loaded)
-        assert loaded_meta == {"version": "1.0"}, (
-            "Metadata preserved (AC-11)"
-        )
+        assert loaded_meta == {"version": "1.0"}, "Metadata preserved (AC-11)"
 
     def test_compact_size_smaller_than_indented(self, tmp_path: Path) -> None:
         """Compact (indent=0) file size is smaller than indent=4 (AC-12)."""
@@ -2695,9 +2690,7 @@ class TestAtomicWriteTempFileDetection:
 
         # After successful save, the temp file should be cleaned up.
         # Find all .otio files except the destination.
-        leftover_otio_files = [
-            f for f in tmp_path.glob("*.otio") if f != dest_path
-        ]
+        leftover_otio_files = [f for f in tmp_path.glob("*.otio") if f != dest_path]
 
         assert leftover_otio_files == [], (
             f"No temp files should remain; found: {leftover_otio_files} (AC-13)"
@@ -2715,9 +2708,9 @@ class TestAtomicWriteTempFileDetection:
         tl = new_timeline("detect_temp")
         dest_path = tmp_path / "result.otio"
 
-        # Monkeypatch mkstemp to return a predictable temp path that won't
-        # be cleaned up (simulate a crashed atomic write).
-        temp_file_path = None
+        # Save the real mkstemp before monkeypatching to avoid recursion.
+        real_mkstemp = tmpfile_module.mkstemp
+        temp_file_path: str | None = None
 
         def mock_mkstemp(
             dir: str | None = None,
@@ -2725,32 +2718,34 @@ class TestAtomicWriteTempFileDetection:
             prefix: str | None = None,
         ) -> tuple[int, str]:
             nonlocal temp_file_path
-            fd, path = tmpfile_module.mkstemp(dir=dir, suffix=suffix, prefix=prefix)
+            fd, path = real_mkstemp(dir=dir, suffix=suffix, prefix=prefix)
             temp_file_path = path
             return fd, path
 
         monkeypatch.setattr(tmpfile_module, "mkstemp", mock_mkstemp)
 
-        # Also monkeypatch os.replace to fail (simulating crash before cleanup)
-        original_replace = os.replace
-
+        # Monkeypatch os.replace to no-op (simulating crash before cleanup).
+        # The temp file will be left behind since replace doesn't actually execute.
         def mock_replace(src: str, dst: str) -> None:
             # Don't actually replace, just leave the temp file
             pass
 
         monkeypatch.setattr(os, "replace", mock_replace)
 
-        # Now when save_timeline is called, the temp file should be left
-        try:
-            save_timeline(tl, str(dest_path))
-        except Exception:
-            pass  # Ignore exception from failed replace
+        # Save the timeline. With os.replace no-op, temp file should be left behind.
+        save_timeline(tl, str(dest_path))
 
-        # Verify our test pattern would detect it
-        if temp_file_path and Path(temp_file_path).exists():
-            leftover_otio_files = [
-                f for f in tmp_path.glob("*.otio") if f != dest_path
-            ]
-            assert len(leftover_otio_files) > 0, (
-                "Pattern should detect the stranded temp file (AC-13)"
-            )
+        # Verify temp file was actually created (critical precondition for this test).
+        assert temp_file_path is not None, (
+            "mkstemp was not called; test setup is broken (AC-13)"
+        )
+        assert Path(temp_file_path).exists(), (
+            "temp file should be stranded by the no-op replace; it should still exist"
+            " (AC-13)"
+        )
+
+        # Verify our corrected detection pattern can find it.
+        leftover_otio_files = [f for f in tmp_path.glob("*.otio") if f != dest_path]
+        assert len(leftover_otio_files) > 0, (
+            "Pattern must detect the stranded .otio temp file (AC-13)"
+        )

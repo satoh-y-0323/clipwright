@@ -591,9 +591,7 @@ class TestReadTimeline:
         assert data.get("clips_truncated") is True, (
             "clips_truncated=True (page 3 exists)"
         )
-        assert data.get("clips_next_offset") == 100, (
-            "clips_next_offset=100 for page 3"
-        )
+        assert data.get("clips_next_offset") == 100, "clips_next_offset=100 for page 3"
 
         # Page 3: offset=100, limit=50 should return clips 100-119 (20 items)
         result = clipwright_read_timeline(
@@ -680,9 +678,7 @@ class TestReadTimeline:
         # markers must be present
         assert "markers" in data, "data.markers must be present when section='markers'"
         # clips keys must all be absent
-        assert "clips" not in data, (
-            "data.clips must be omitted when section='markers'"
-        )
+        assert "clips" not in data, "data.clips must be omitted when section='markers'"
         assert "clips_truncated" not in data, (
             "data.clips_truncated must be omitted when section='markers'"
         )
@@ -771,9 +767,7 @@ class TestReadTimeline:
         _assert_tool_result(result)
         data = result["data"]
 
-        assert data.get("markers") == [], (
-            "markers must be empty list when no match"
-        )
+        assert data.get("markers") == [], "markers must be empty list when no match"
         assert data.get("markers_truncated") is False, (
             "markers_truncated=False when 0 items"
         )
@@ -796,9 +790,7 @@ class TestReadTimeline:
         assert project_dir not in message, (
             f"message must not contain project path: {message!r}"
         )
-        assert project_dir not in hint, (
-            f"hint must not contain project path: {hint!r}"
-        )
+        assert project_dir not in hint, f"hint must not contain project path: {hint!r}"
         assert "timeline" not in message.lower() or "path" not in message.lower(), (
             "message should not be a full error backtrace"
         )
@@ -828,9 +820,7 @@ class TestReadTimeline:
             )
             _assert_tool_error_result(result, "INVALID_INPUT")
             hint = result["error"]["hint"]
-            assert len(hint) > 0, (
-                f"error.hint must be non-empty (limit={bad_limit})"
-            )
+            assert len(hint) > 0, f"error.hint must be non-empty (limit={bad_limit})"
 
     def test_ac7_offset_past_end_invalid_input(self, tmp_path: Path) -> None:
         """AC-7: offset > 0 かつ offset >= 総件数 は INVALID_INPUT。
@@ -885,9 +875,7 @@ class TestReadTimeline:
         # All clips and markers should be returned
         assert len(data.get("clips", [])) == 20, "all clips must be returned"
         assert len(data.get("markers", [])) == 15, "all markers must be returned"
-        assert data.get("clips_truncated") is False, (
-            "clips_truncated=False when ≤50"
-        )
+        assert data.get("clips_truncated") is False, "clips_truncated=False when ≤50"
         assert data.get("markers_truncated") is False, (
             "markers_truncated=False when ≤50"
         )
@@ -952,7 +940,9 @@ class TestReadTimeline:
             "data.marker_kind should be None when not specified"
         )
 
-    def test_summary_contains_page_position_and_next_steps(self, tmp_path: Path) -> None:
+    def test_summary_contains_page_position_and_next_steps(
+        self, tmp_path: Path
+    ) -> None:
         """New: summary contains current page position and next action."""
         project_dir = self._setup_project(tmp_path)
         self._add_clips(project_dir, 120)

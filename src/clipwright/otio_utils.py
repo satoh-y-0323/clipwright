@@ -100,19 +100,28 @@ def load_timeline(path: str) -> otio.schema.Timeline:
 
 
 def save_timeline(timeline: otio.schema.Timeline, path: str) -> None:
-    """Atomically save a Timeline (temp → os.replace).
+    """Atomically save a Timeline (temp → os.replace) in compact JSON format.
 
     Existing files are not corrupted even if the write is interrupted mid-way.
     A temp file with the .otio extension is created in the same directory,
     then replaced atomically with os.replace once writing completes.
 
     OTIO selects its adapter by file extension, so the temp file must also use .otio.
+
+    The JSON output uses indent=0 (compact multi-line format) for ~58% size
+    reduction relative to default indented OTIO JSON, while preserving
+    line-addressability for debugging and diff (round-trip lossless). Full 1-line
+    format yields only ~11% additional savings at the cost of destroying
+    line-based tooling (grep, windowed reading, line diffs); indent=0 is the
+    practical optimum. This adapter ignores negative indent values, so 0 is the
+    minimum achievable via write_to_file. The indent parameter is not exposed
+    to callers per the clipwright AI-only design (ADR-RD-13).
     """
     dir_name = os.path.dirname(os.path.abspath(path))
     fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".otio")
     try:
         os.close(fd)
-        otio.adapters.write_to_file(timeline, tmp_path)
+        otio.adapters.write_to_file(timeline, tmp_path, indent=0)
         os.replace(tmp_path, path)
     except Exception:
         # Broad catch only to clean up the temp file; always re-raise (NL-2).
@@ -295,7 +304,7 @@ def _marker_matches_kind(marker: otio.schema.Marker, kind: str | None) -> bool:
 
 
 def summarize_timeline(timeline: otio.schema.Timeline) -> dict[str, Any]:
-    """Return statistics and the full marker list for a Timeline.
+    """Return statistics, clip list, and full marker list for a Timeline.
 
     §13.5 DC-AM-001 re: always returns all items (no truncation).
     The threshold-50 truncation is the responsibility of server.read_timeline;
@@ -306,6 +315,8 @@ def summarize_timeline(timeline: otio.schema.Timeline) -> dict[str, Any]:
       - gap_count: int
       - marker_count: int
       - total_duration: RationalTimeModel (§13.5 DC-AM-002 re)
+      - clips: list[dict] with keys (index, name, track, start, duration, media)
+        (ADR-RD-8/11/12; full list, no truncation)
       - markers: list[dict] — [{name, time, kind}] full list
       - warnings: list[str] — non-fatal warnings (e.g. duration failures) (M-4)
 
@@ -313,21 +324,36 @@ def summarize_timeline(timeline: otio.schema.Timeline) -> dict[str, Any]:
       - Maximum of all track lengths (not the sum)
       - rate = rate of the V1 track (kind=Video) if it has clips, otherwise 1000.0
       - Returns RationalTime(0, global rate) when there are no clips
+
+    clips list contract (ADR-RD-8/11/12):
+      - Contains all clips in track order; clip index resets per track.
+      - source_range=None clips included with start/duration=None; warning added.
+      - Ordering: V1 clips → A1 clips → … (no time-based sort).
+      - Invariant: len(clips) == clip_count always holds.
     """
     clip_count = 0
     gap_count = 0
-    markers: list[dict[str, Any]] = []
+    clips: list[dict[str, Any]] = []
     warnings: list[str] = []
 
     # Determine global rate: read rate from the first clip in V1
     global_rate = _resolve_global_rate(timeline)
 
-    # Iterate all tracks to count items and collect markers
+    # Iterate all tracks to count items, collect clips, and compute duration
     track_durations_sec: list[float] = []
-    for track in timeline.tracks:
+    for track_index, track in enumerate(timeline.tracks):
+        clip_index = 0  # Per-track counter, reset for each track
         for item in track:
             if isinstance(item, otio.schema.Clip):
                 clip_count += 1
+                clips.append(_clip_to_dict(item, clip_index, track, track_index))
+                clip_index += 1
+                # Warn if source_range is None (ADR-RD-12)
+                if item.source_range is None:
+                    warnings.append(
+                        f"Clip {clip_index - 1} on track {track_index} "
+                        "has no source_range; start/duration omitted."
+                    )
             elif isinstance(item, otio.schema.Gap):
                 gap_count += 1
 
@@ -337,18 +363,11 @@ def summarize_timeline(timeline: otio.schema.Timeline) -> dict[str, Any]:
         if warn is not None:
             warnings.append(warn)
 
-        # Collect markers attached to the track itself
-        for marker in track.markers:
-            markers.append(_marker_to_dict(marker))
+    # Collect all markers using get_markers (ADR-RD-9: unified traversal order)
+    marker_objects = get_markers(timeline)
+    markers = [_marker_to_dict(m) for m in marker_objects]
 
-    # Collect markers on clips (tracks already processed in the loop above)
-    for track in timeline.tracks:
-        for item in track:
-            if isinstance(item, otio.schema.Clip):
-                for marker in item.markers:
-                    markers.append(_marker_to_dict(marker))
-
-    # marker_count is the total number of markers (track + clip markers)
+    # marker_count is the total number of markers
     marker_count = len(markers)
 
     # total_duration: maximum of all track lengths
@@ -366,6 +385,7 @@ def summarize_timeline(timeline: otio.schema.Timeline) -> dict[str, Any]:
         "gap_count": gap_count,
         "marker_count": marker_count,
         "total_duration": total_duration,
+        "clips": clips,
         "markers": markers,
         "warnings": warnings,
     }
@@ -403,11 +423,52 @@ def _track_duration_sec(track: otio.schema.Track) -> tuple[float, str | None]:
         return 0.0, warn_msg
 
 
+def _clip_to_dict(
+    clip: otio.schema.Clip,
+    index: int,
+    track: otio.schema.Track,
+    track_index: int,
+) -> dict[str, Any]:
+    """Convert a Clip to a dict (6 keys: index, name, track, start, duration, media).
+
+    The index parameter is the clip-only counter within this track (0-indexed,
+    excluding Gaps/Transitions). This space is shared with clipwright-speed's
+    clip_index and clipwright-transition's after_clip_index.
+    """
+    # Extract time values
+    start_time: RationalTimeModel | None = None
+    duration: RationalTimeModel | None = None
+    if clip.source_range is not None:
+        start_time = from_otio_time(clip.source_range.start_time)
+        duration = from_otio_time(clip.source_range.duration)
+
+    # Extract media URL (only for ExternalReference)
+    media_url: str | None = None
+    if isinstance(clip.media_reference, otio.schema.ExternalReference):
+        media_url = clip.media_reference.target_url
+
+    return {
+        "index": index,
+        "name": clip.name,
+        "track": {
+            "index": track_index,
+            "name": track.name,
+            "kind": track.kind.name if hasattr(track.kind, "name") else str(track.kind),
+        },
+        "start": start_time,
+        "duration": duration,
+        "media": media_url,
+    }
+
+
 def _marker_to_dict(marker: otio.schema.Marker) -> dict[str, Any]:
     """Convert a Marker object to a dictionary."""
     time_model = from_otio_time(marker.marked_range.start_time)
     cw_meta = marker.metadata.get("clipwright", {})
-    kind = cw_meta.get("kind", "") if isinstance(cw_meta, dict) else ""
+    # Use Mapping to accept both dict and AnyDictionary (§4.3, OTIO metadata type)
+    kind = (
+        cw_meta.get("kind", "") if isinstance(cw_meta, collections.abc.Mapping) else ""
+    )
     return {
         "name": marker.name,
         "time": time_model,
