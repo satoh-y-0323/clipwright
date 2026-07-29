@@ -41,6 +41,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The output format change ships with core 0.9.0 and therefore propagates
   to all 16 tools, but no satellite code change and no floor bump are
   required (`save_timeline` keeps its signature).
+- Because `section` is typed as an enum, an invalid value is rejected at
+  the schema layer (Pydantic / FastMCP) before the tool body runs, so its
+  response shape differs from the other input errors (`offset`, `limit`
+  and the range checks), which keep returning the usual
+  `{ok: false, error: {code, message, hint}}` envelope. The message that
+  comes back for `section` states the valid values (`"clips"` /
+  `"markers"`), so an agent can still correct the call from it. This is an
+  accepted trade-off of publishing the enum in the tool schema.
 - Credit the reporter of Issue #3 for the measurement that started the
   investigation.
 
