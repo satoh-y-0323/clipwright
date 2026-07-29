@@ -35,8 +35,42 @@ from clipwright.schemas import Artifact, MediaInfo, ToolResult
 # FastMCP instance (name = MCP server name)
 mcp = FastMCP("clipwright")
 
-# Marker truncation threshold (§13.2 DC-AS-004)
-_MARKER_THRESHOLD = 50
+# Pagination defaults (ADR-RD-14)
+_DEFAULT_PAGE_LIMIT = 50
+_MAX_PAGE_LIMIT = 500
+
+
+def _paginate(
+    items: list[dict[str, Any]], offset: int, limit: int
+) -> tuple[list[dict[str, Any]], bool, int | None]:
+    """Return (page, truncated, next_offset) for a detail list.
+
+    Args:
+        items: Full list of items.
+        offset: 0-based start position.
+        limit: Maximum items per page (already validated and clamped).
+
+    Returns:
+        Tuple of (page_items, has_more, next_offset).
+        next_offset is the start position of the next page, or None if at end.
+    """
+    end = offset + limit
+    page = items[offset:end]
+    has_more = end < len(items)
+    next_offset = end if has_more else None
+    return page, has_more, next_offset
+
+
+def _dump_models(entry: dict[str, Any]) -> dict[str, Any]:
+    """Convert Pydantic values inside a detail entry to plain dicts.
+
+    Used for both clip and marker entries to convert RationalTimeModel
+    and other Pydantic objects to plain dicts for JSON serialization.
+    """
+    result: dict[str, Any] = {}
+    for k, v in entry.items():
+        result[k] = v.model_dump() if hasattr(v, "model_dump") else v
+    return result
 
 
 def _inspect_media(path: str) -> MediaInfo:
@@ -233,18 +267,119 @@ def clipwright_read_timeline(
             )
         ),
     ] = None,
+    section: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Which detail list to page through."
+                " Omit for an overview that returns the first page of both"
+                ' clips and markers. Set to "clips" or "markers" to page'
+                " through that one list only (the other list is omitted)."
+                " offset is only accepted together with section."
+            )
+        ),
+    ] = None,
+    offset: Annotated[
+        int,
+        Field(
+            description=(
+                "0-based start position inside the section's list."
+                " Only valid together with section; the overview always"
+                " starts at 0. Pass the clips_next_offset /"
+                " markers_next_offset value from the previous response to"
+                " fetch the next page."
+            )
+        ),
+    ] = 0,
+    limit: Annotated[
+        int,
+        Field(
+            description=(
+                "Maximum number of entries returned per list"
+                " (default 50, maximum 500). Lower it for a cheap peek at a"
+                " large timeline. Values above the maximum are clamped and"
+                " reported in warnings."
+            )
+        ),
+    ] = 50,
+    marker_kind: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Return only markers whose clipwright metadata kind equals"
+                ' this value (e.g. "caption", "scene", "silence").'
+                " Omit to return markers of every kind."
+                " Does not affect clips or marker_count."
+            )
+        ),
+    ] = None,
 ) -> ToolResult:
-    """Load timeline.otio and return a summary.
+    """Load timeline.otio and return a summary with optional pagination.
 
-    Exactly one of project_dir or timeline_path must be specified (mutually exclusive).
-    Providing both or neither is INVALID_INPUT (§13.2 DC-AS-004).
+    **Input contract:**
+    Exactly one of project_dir or timeline_path must be specified (mutually
+    exclusive). Providing both or neither is INVALID_INPUT.
 
-    marker count ≤ 50: returns the list in data.markers.
-    marker count > 50: omits data.markers; returns data.markers_truncated=True and
-    data.marker_count only (§13.2 DC-AS-004 / §13.5 DC-AM-001).
+    **Overview vs. section-specific read:**
+    When section is None (default), an overview is returned showing the first
+    page of both clips and markers (up to `limit` items each). This is the
+    recommended starting point to explore a timeline. Specify section="clips" or
+    section="markers" to page through a single list only (the other is omitted).
 
-    The full list is available from the timeline.otio in artifacts.
+    **Clip index semantics:**
+    Each clip entry includes an index that counts only clips in that track
+    (Gap and Transition items are excluded). The index is not a page position;
+    it identifies the clip's position within its track for use with other tools.
+    To determine current page position, use offset and limit.
+
+    **Pagination with marker_kind filter:**
+    marker_kind filters the markers list in data.markers without affecting
+    marker_count (which remains the total). When using marker_kind, pass the
+    markers_next_offset from the previous response to continue pagination.
+
+    **Paging example:**
+    1. Call with no arguments to get the overview.
+    2. If clips_truncated=True, call again with section="clips" and
+       offset=clips_next_offset.
+    3. Repeat until clips_next_offset is None or clips_truncated=False.
     """
+    # ===== Input validation (before path resolution, to avoid wasted I/O) =====
+
+    # Paging argument validation (ADR-RD-2/RD-3)
+    if section is None and offset != 0:
+        return error_result(
+            ErrorCode.INVALID_INPUT,
+            "offset is only supported together with section",
+            (
+                'Pass section="clips" or section="markers" when paging,'
+                " or omit offset for the overview."
+            ),
+        )
+
+    if offset < 0:
+        return error_result(
+            ErrorCode.INVALID_INPUT,
+            "offset must be zero or greater",
+            (
+                "Pass offset=0 for the first page,"
+                " or the *_next_offset value from the previous response."
+            ),
+        )
+
+    if limit <= 0:
+        return error_result(
+            ErrorCode.INVALID_INPUT,
+            "limit must be greater than zero",
+            "Pass limit between 1 and 500 (default 50).",
+        )
+
+    # Clamp limit to max (ADR-RD-3)
+    warnings_list: list[str] = []
+    effective_limit = limit
+    if limit > _MAX_PAGE_LIMIT:
+        effective_limit = _MAX_PAGE_LIMIT
+        warnings_list.append("limit was clamped to 500 (maximum page size).")
+
     # Mutually exclusive input validation (§13.2 DC-AS-004)
     if project_dir is None and timeline_path is None:
         return error_result(
@@ -313,45 +448,222 @@ def clipwright_read_timeline(
 
     summary_dict = summarize_timeline(timeline)
 
-    # Marker truncation formatting (§13.5 DC-AM-001 re: server's responsibility)
-    marker_count: int = summary_dict["marker_count"]
+    # ===== Pagination processing (ADR-RD-1 through RD-11) =====
+
     total_dur = summary_dict["total_duration"]
+    clip_count: int = summary_dict["clip_count"]
+    gap_count: int = summary_dict["gap_count"]
+    marker_count: int = summary_dict["marker_count"]
+
+    # All clips and markers (untruncated, as dicts from summarize_timeline)
+    all_clips: list[dict[str, Any]] = summary_dict.get("clips", [])
+    all_markers: list[dict[str, Any]] = summary_dict.get("markers", [])
+
+    # Apply marker_kind filter if specified (ADR-RD-10)
+    # Filter the dict-converted markers from summarize_timeline by kind
+    if marker_kind is not None:
+        all_markers = [m for m in all_markers if m.get("kind") == marker_kind]
+
+    # Determine which section to return (ADR-RD-1)
+    # Initialize all variables to satisfy type narrowing
+    clips_page: list[dict[str, Any]] = []
+    clips_truncated: bool | None = None
+    clips_next_offset: int | None = None
+    markers_page: list[dict[str, Any]] = []
+    markers_truncated: bool | None = None
+    markers_next_offset: int | None = None
+    section_used: str | None = None
+
+    if section is None:
+        # Overview: first page of both clips and markers
+        clips_page, clips_truncated, clips_next_offset = _paginate(
+            all_clips, 0, effective_limit
+        )
+        markers_page, markers_truncated, markers_next_offset = _paginate(
+            all_markers, 0, effective_limit
+        )
+        section_used = None
+    elif section == "clips":
+        # Clips section: check offset range before paging (ADR-RD-2)
+        if offset > 0 and offset >= len(all_clips):
+            num_clips = len(all_clips)
+            return error_result(
+                ErrorCode.INVALID_INPUT,
+                f"offset {offset} is past the end of the clips list "
+                f"({num_clips} entries)",
+                f"Pass an offset below {num_clips}, "
+                "or omit offset to start from the beginning.",
+            )
+        clips_page, clips_truncated, clips_next_offset = _paginate(
+            all_clips, offset, effective_limit
+        )
+        markers_page = []
+        markers_truncated = None
+        markers_next_offset = None
+        section_used = "clips"
+    elif section == "markers":
+        # Markers section: check offset range after filtering (ADR-RD-10)
+        if offset > 0 and offset >= len(all_markers):
+            num_markers = len(all_markers)
+            return error_result(
+                ErrorCode.INVALID_INPUT,
+                f"offset {offset} is past the end of the markers list "
+                f"({num_markers} entries)",
+                f"Pass an offset below {num_markers}, "
+                "or omit offset to start from the beginning.",
+            )
+        markers_page, markers_truncated, markers_next_offset = _paginate(
+            all_markers, offset, effective_limit
+        )
+        clips_page = []
+        clips_truncated = None
+        clips_next_offset = None
+        section_used = "markers"
+    else:
+        # Should not reach here (Pydantic validates enum), but be defensive
+        return error_result(
+            ErrorCode.INVALID_INPUT,
+            f"section must be 'clips', 'markers', or None, got {section!r}",
+            "Omit section for an overview, or pass 'clips' or 'markers'.",
+        )
+
+    # Build data dict (ADR-RD-4)
     data: dict[str, Any] = {
-        "clip_count": summary_dict["clip_count"],
-        "gap_count": summary_dict["gap_count"],
+        "clip_count": clip_count,
+        "gap_count": gap_count,
         "marker_count": marker_count,
         "total_duration": (
             total_dur.model_dump() if hasattr(total_dur, "model_dump") else total_dur
         ),
+        "offset": offset,
+        "limit": effective_limit,
+        "marker_kind": marker_kind,
     }
-    if marker_count <= _MARKER_THRESHOLD:
-        # ≤ 50: return the markers list as-is
-        raw_markers: list[dict[str, Any]] = []
-        for m in summary_dict["markers"]:
-            entry: dict[str, Any] = {}
-            for k, v in m.items():
-                entry[k] = v.model_dump() if hasattr(v, "model_dump") else v
-            raw_markers.append(entry)
-        data["markers"] = raw_markers
-        data["markers_truncated"] = False
+
+    # Add clips data (omit if section="markers")
+    if section_used != "markers":
+        data["clips"] = [_dump_models(c) for c in clips_page]
+        data["clips_truncated"] = clips_truncated
+        data["clips_next_offset"] = clips_next_offset
+
+    # Add markers data (omit if section="clips")
+    if section_used != "clips":
+        data["markers"] = [_dump_models(m) for m in markers_page]
+        data["markers_truncated"] = markers_truncated
+        data["markers_next_offset"] = markers_next_offset
+
+    # Build summary text (ADR-RD-4, §3.5)
+    base_summary = (
+        f"Timeline loaded: {timeline.name} "
+        f"(clips={clip_count}, gaps={gap_count}, markers={marker_count}). "
+    )
+    if section_used is None:
+        # Overview: first page of both clips and markers
+        # Check len first, before truncated (to avoid "all 0" descriptions)
+        clips_page_desc = (
+            "no clips"
+            if len(clips_page) == 0
+            else (
+                f"all {len(clips_page)} clips"
+                if not clips_truncated
+                else f"clips 0-{len(clips_page) - 1} of {clip_count}"
+            )
+        )
+        markers_page_desc = (
+            "no markers"
+            if len(markers_page) == 0
+            else (
+                f"all {len(markers_page)} markers"
+                if not markers_truncated
+                else f"markers 0-{len(markers_page) - 1} of {marker_count}"
+            )
+        )
+
+        if len(clips_page) == 0 and len(markers_page) == 0:
+            # Both empty: no pagination advice needed
+            summary_text = (
+                base_summary + f"Showing {clips_page_desc} and {markers_page_desc}."
+            )
+        elif not clips_truncated and not markers_truncated:
+            # Both fit on first page: no pagination advice needed
+            summary_text = (
+                base_summary + f"Showing {clips_page_desc} and {markers_page_desc}."
+            )
+        else:
+            # At least one section is truncated: advise only on truncated sections
+            sections_with_more = []
+            if clips_truncated:
+                sections_with_more.append('section="clips"')
+            if markers_truncated:
+                sections_with_more.append('section="markers"')
+
+            sections_str = " or ".join(sections_with_more)
+            summary_text = (
+                base_summary
+                + f"Showing {clips_page_desc} and {markers_page_desc}; "
+                + f"call again with {sections_str} plus offset to page further."
+            )
+    elif section_used == "clips":
+        # Clips section
+        if len(clips_page) == 0:
+            summary_text = base_summary + "Timeline has no clips."
+        elif clips_truncated:
+            end_clip = offset + len(clips_page) - 1
+            summary_text = (
+                base_summary
+                + f"Showing clips {offset}-{end_clip} of {clip_count}; "
+                + f"pass offset={clips_next_offset} for the next page."
+            )
+        else:
+            end_clip = offset + len(clips_page) - 1
+            summary_text = (
+                base_summary
+                + f"Showing clips {offset}-{end_clip} of {clip_count}; "
+                + "this is the last page."
+            )
     else:
-        # > 50: omit markers; return truncation flag and count only
-        data["markers_truncated"] = True
+        # Markers section
+        if len(markers_page) == 0:
+            summary_text = (
+                base_summary
+                + f"No markers match kind={marker_kind!r} "
+                + f"({marker_count} markers in total)."
+            )
+        elif markers_truncated:
+            end_marker = offset + len(markers_page) - 1
+            num_all = len(all_markers)
+            summary_text = (
+                base_summary
+                + f"Showing markers {offset}-{end_marker} of {num_all} "
+                + f"with kind={marker_kind!r} ({marker_count} markers in total); "
+                + f"pass offset={markers_next_offset} for the next page."
+            )
+        else:
+            end_marker = offset + len(markers_page) - 1
+            num_all = len(all_markers)
+            summary_text = (
+                base_summary
+                + f"Showing markers {offset}-{end_marker} of {num_all} "
+                + f"with kind={marker_kind!r} ({marker_count} markers in total); "
+                + "this is the last page."
+            )
 
     artifacts = [
         Artifact(role="timeline", path=resolved_path, format="otio").model_dump(),
     ]
 
-    # Forward summarize_timeline warnings into the envelope (M-4)
-    summary_warnings: list[str] = summary_dict.get("warnings", [])
+    # Collect all warnings (from summarize_timeline + clamping)
+    all_warnings: list[str] = []
+    if warnings_list:
+        all_warnings.extend(warnings_list)
+    if summary_dict.get("warnings"):
+        all_warnings.extend(summary_dict["warnings"])
 
     return ok_result(
-        f"Timeline loaded: {timeline.name} "
-        f"(clips={data['clip_count']}, gaps={data['gap_count']}"
-        f", markers={marker_count})",
+        summary_text,
         data=data,
         artifacts=artifacts,
-        warnings=summary_warnings if summary_warnings else None,
+        warnings=all_warnings if all_warnings else None,
     )
 
 
