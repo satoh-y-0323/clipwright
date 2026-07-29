@@ -75,6 +75,69 @@ def _assert_tool_error_result(result: Any, expected_code: str) -> None:
     )
 
 
+def _assert_no_path_leak(
+    message: str, hint: str, project_dir: str, tmp_path: Path
+) -> None:
+    """Verify that neither message nor hint leaks filesystem details (CWE-209).
+
+    Each condition is asserted individually (never OR-joined) so that a single
+    regression cannot be masked by another still-passing condition.
+    """
+    assert project_dir not in message, (
+        f"message must not contain the project path: {message!r}"
+    )
+    assert project_dir not in hint, f"hint must not contain the project path: {hint!r}"
+    assert str(tmp_path) not in message, (
+        f"message must not contain the temp root path: {message!r}"
+    )
+    assert str(tmp_path) not in hint, (
+        f"hint must not contain the temp root path: {hint!r}"
+    )
+    assert "timeline.otio" not in message, (
+        f"message must not contain the timeline file name: {message!r}"
+    )
+    assert "timeline.otio" not in hint, (
+        f"hint must not contain the timeline file name: {hint!r}"
+    )
+
+
+def _collect_schema_string_choices(node: Any) -> set[str]:
+    """Recursively collect string values constrained by ``enum`` / ``const``.
+
+    Walks the whole JSON Schema fragment so the assertion does not depend on
+    where Pydantic decides to place the constraint (e.g. directly on the
+    property, inside ``anyOf``, or expanded into ``const`` alternatives).
+    """
+    found: set[str] = set()
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "enum" and isinstance(value, list):
+                found.update(v for v in value if isinstance(v, str))
+            elif key == "const" and isinstance(value, str):
+                found.add(value)
+            else:
+                found |= _collect_schema_string_choices(value)
+    elif isinstance(node, list):
+        for item in node:
+            found |= _collect_schema_string_choices(item)
+    return found
+
+
+def _collect_schema_types(node: Any) -> set[str]:
+    """Recursively collect every ``type`` keyword value in a schema fragment."""
+    found: set[str] = set()
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "type" and isinstance(value, str):
+                found.add(value)
+            else:
+                found |= _collect_schema_types(value)
+    elif isinstance(node, list):
+        for item in node:
+            found |= _collect_schema_types(item)
+    return found
+
+
 # ===========================================================================
 # MCP annotations tests (§7 table / README adopted package notation)
 # ===========================================================================
@@ -517,6 +580,25 @@ class TestReadTimeline:
         )
         assert result.get("ok"), f"precondition: add_clip setup failed: {result}"
 
+    def _add_markers(self, project_dir: str, count: int) -> None:
+        """Helper: add N markers to a timeline via write_timeline."""
+        ops = [
+            {
+                "op": "add_marker",
+                "track": 0,
+                "marked_range": {
+                    "start_time": {"value": float(i), "rate": 30.0},
+                    "duration": {"value": 1.0, "rate": 30.0},
+                },
+                "name": f"marker_{i:03d}",
+            }
+            for i in range(count)
+        ]
+        result = clipwright_write_timeline(
+            project_dir=project_dir, operations=ops, validate_only=False
+        )
+        assert result.get("ok"), f"precondition: add_marker setup failed: {result}"
+
     def test_ac1_clips_structure_basic_three_clips(self, tmp_path: Path) -> None:
         """AC-1: clip 3 本の timeline で data.clips が 3 件返り、
         各要素が index / name / track / start / duration / media を持つ。"""
@@ -791,12 +873,24 @@ class TestReadTimeline:
             f"message must not contain project path: {message!r}"
         )
         assert project_dir not in hint, f"hint must not contain project path: {hint!r}"
-        assert "timeline" not in message.lower() or "path" not in message.lower(), (
-            "message should not be a full error backtrace"
+        # SR-R-001: individual AND assertions (the previous single OR-joined
+        # assertion could never fail on its own).
+        assert str(tmp_path) not in message, (
+            f"message must not contain the temp root path: {message!r}"
+        )
+        assert str(tmp_path) not in hint, (
+            f"hint must not contain the temp root path: {hint!r}"
+        )
+        assert "timeline.otio" not in message, (
+            f"message must not contain the timeline file name: {message!r}"
+        )
+        assert "timeline.otio" not in hint, (
+            f"hint must not contain the timeline file name: {hint!r}"
         )
 
     def test_ac7_negative_offset_invalid_input(self, tmp_path: Path) -> None:
-        """AC-7: offset < 0 は INVALID_INPUT。"""
+        """AC-7: offset < 0 は INVALID_INPUT。
+        SR-R-001: message / hint にパスが混入しないことも固定する（CWE-209）。"""
         project_dir = self._setup_project(tmp_path)
 
         result = clipwright_read_timeline(
@@ -806,10 +900,13 @@ class TestReadTimeline:
         )
         _assert_tool_error_result(result, "INVALID_INPUT")
         hint = result["error"]["hint"]
+        message = result["error"]["message"]
         assert len(hint) > 0, "error.hint must be non-empty"
+        _assert_no_path_leak(message, hint, project_dir, tmp_path)
 
     def test_ac7_zero_or_negative_limit_invalid_input(self, tmp_path: Path) -> None:
-        """AC-7: limit <= 0 は INVALID_INPUT。"""
+        """AC-7: limit <= 0 は INVALID_INPUT。
+        SR-R-001: message / hint にパスが混入しないことも固定する（CWE-209）。"""
         project_dir = self._setup_project(tmp_path)
 
         for bad_limit in [0, -1, -100]:
@@ -820,7 +917,9 @@ class TestReadTimeline:
             )
             _assert_tool_error_result(result, "INVALID_INPUT")
             hint = result["error"]["hint"]
+            message = result["error"]["message"]
             assert len(hint) > 0, f"error.hint must be non-empty (limit={bad_limit})"
+            _assert_no_path_leak(message, hint, project_dir, tmp_path)
 
     def test_ac7_offset_past_end_invalid_input(self, tmp_path: Path) -> None:
         """AC-7: offset > 0 かつ offset >= 総件数 は INVALID_INPUT。
@@ -959,6 +1058,242 @@ class TestReadTimeline:
         assert "offset" in summary.lower() or "50" in summary, (
             f"summary should hint at pagination/next offset: {summary!r}"
         )
+
+    # --- CR-R-003 / SR-V-001: invalid section value response contract ---
+
+    def test_invalid_section_value_returns_invalid_input_envelope(
+        self, tmp_path: Path
+    ) -> None:
+        """A misspelled section value is rejected by the function body itself.
+
+        Measured contract (regression guard for the defence-in-depth `else`
+        branch): the decorated tool is a plain function, so a direct call is
+        not validated by Pydantic and the value reaches the body, which returns
+        the INVALID_INPUT envelope. Adding Literal to the signature must not
+        remove this behaviour.
+        """
+        project_dir = self._setup_project(tmp_path)
+
+        result = clipwright_read_timeline(project_dir=project_dir, section="clip")
+
+        _assert_tool_error_result(result, "INVALID_INPUT")
+        message = result["error"]["message"]
+        hint = result["error"]["hint"]
+        assert len(hint) > 0, "error.hint must be non-empty"
+        assert "section" in message, (
+            f"message must name the offending parameter: {message!r}"
+        )
+        _assert_no_path_leak(message, hint, project_dir, tmp_path)
+
+    def test_valid_section_values_still_succeed(self, tmp_path: Path) -> None:
+        """Both accepted section values keep working once the enum is added."""
+        project_dir = self._setup_project(tmp_path)
+        self._add_clips(project_dir, 3)
+        self._add_markers(project_dir, 2)
+
+        clips_result = clipwright_read_timeline(
+            project_dir=project_dir, section="clips"
+        )
+        _assert_tool_result(clips_result)
+        assert len(clips_result["data"]["clips"]) == 3, (
+            "section='clips' must still return every clip"
+        )
+
+        markers_result = clipwright_read_timeline(
+            project_dir=project_dir, section="markers"
+        )
+        _assert_tool_result(markers_result)
+        assert len(markers_result["data"]["markers"]) == 2, (
+            "section='markers' must still return every marker"
+        )
+
+    # --- CR-T-001: untested summary branches ---
+
+    def test_overview_summary_when_no_clips_and_no_markers(
+        self, tmp_path: Path
+    ) -> None:
+        """Overview of an empty timeline describes both lists as empty.
+
+        Measured summary:
+        "Timeline loaded: test (clips=0, gaps=0, markers=0).
+         Showing no clips and no markers."
+        """
+        project_dir = self._setup_project(tmp_path)
+
+        result = clipwright_read_timeline(project_dir=project_dir)
+        _assert_tool_result(result)
+        summary = result["summary"]
+        data = result["data"]
+
+        assert data["clip_count"] == 0, "precondition: timeline must have no clips"
+        assert data["marker_count"] == 0, "precondition: timeline must have no markers"
+        assert "Showing no clips and no markers." in summary, (
+            f"summary must describe both lists as empty: {summary!r}"
+        )
+        assert "call again" not in summary, (
+            f"empty overview must not advise further paging: {summary!r}"
+        )
+
+    def test_overview_summary_when_both_clips_and_markers_truncated(
+        self, tmp_path: Path
+    ) -> None:
+        """Overview advises paging on both lists when both are truncated.
+
+        Measured summary (60 clips + 60 markers, default limit 50):
+        "Timeline loaded: test (clips=60, gaps=0, markers=60).
+         Showing clips 0-49 of 60 and markers 0-49 of 60; call again with
+         section=\"clips\" or section=\"markers\" plus offset to page further."
+        """
+        project_dir = self._setup_project(tmp_path)
+        self._add_clips(project_dir, 60)
+        self._add_markers(project_dir, 60)
+
+        result = clipwright_read_timeline(project_dir=project_dir)
+        _assert_tool_result(result)
+        summary = result["summary"]
+        data = result["data"]
+
+        assert data["clips_truncated"] is True, "precondition: clips must be truncated"
+        assert data["markers_truncated"] is True, (
+            "precondition: markers must be truncated"
+        )
+        assert "Showing clips 0-49 of 60 and markers 0-49 of 60" in summary, (
+            f"summary must report both page positions: {summary!r}"
+        )
+        assert 'section="clips"' in summary, (
+            f"summary must offer the clips section: {summary!r}"
+        )
+        assert 'section="markers"' in summary, (
+            f"summary must offer the markers section: {summary!r}"
+        )
+        assert 'section="clips" or section="markers"' in summary, (
+            f"both sections must be joined with ' or ': {summary!r}"
+        )
+
+    def test_section_clips_summary_when_timeline_has_no_clips(
+        self, tmp_path: Path
+    ) -> None:
+        """section='clips' on a clip-less timeline reports the empty branch.
+
+        Measured summary:
+        "Timeline loaded: test (clips=0, gaps=0, markers=0).
+         Timeline has no clips."
+        """
+        project_dir = self._setup_project(tmp_path)
+
+        result = clipwright_read_timeline(project_dir=project_dir, section="clips")
+        _assert_tool_result(result)
+        summary = result["summary"]
+        data = result["data"]
+
+        assert data["clips"] == [], "precondition: the clips page must be empty"
+        assert "Timeline has no clips." in summary, (
+            f"summary must report the empty-clips branch: {summary!r}"
+        )
+
+    # --- CR-E-004: validation order for compound violations ---
+
+    def test_negative_offset_without_section_reports_offset_rule_first(
+        self, tmp_path: Path
+    ) -> None:
+        """offset<0 must be reported before the 'offset needs section' rule.
+
+        With section omitted AND offset negative, both rules are violated.
+        The negative-offset rule is the more fundamental one, so it must win;
+        otherwise the caller has to make an extra round trip.
+        """
+        project_dir = self._setup_project(tmp_path)
+
+        result = clipwright_read_timeline(project_dir=project_dir, offset=-1)
+
+        _assert_tool_error_result(result, "INVALID_INPUT")
+        message = result["error"]["message"]
+        hint = result["error"]["hint"]
+        assert message == "offset must be zero or greater", (
+            f"the negative-offset rule must be evaluated first, got {message!r}"
+        )
+        assert len(hint) > 0, "error.hint must be non-empty"
+        _assert_no_path_leak(message, hint, project_dir, tmp_path)
+
+    def test_positive_offset_without_section_reports_section_rule(
+        self, tmp_path: Path
+    ) -> None:
+        """A non-negative offset without section keeps the section-required rule.
+
+        Guards against the reordering above swallowing the original message.
+        """
+        project_dir = self._setup_project(tmp_path)
+
+        result = clipwright_read_timeline(project_dir=project_dir, offset=10)
+
+        _assert_tool_error_result(result, "INVALID_INPUT")
+        message = result["error"]["message"]
+        hint = result["error"]["hint"]
+        assert message == "offset is only supported together with section", (
+            f"positive offset without section must keep its own rule, got {message!r}"
+        )
+        assert len(hint) > 0, "error.hint must be non-empty"
+        _assert_no_path_leak(message, hint, project_dir, tmp_path)
+
+
+# ===========================================================================
+# clipwright_read_timeline inputSchema tests (CR-R-003 / SR-V-001, ADR-RD-2)
+# ===========================================================================
+
+
+class TestReadTimelineInputSchema:
+    """Pin the generated MCP inputSchema of clipwright_read_timeline.
+
+    ADR-RD-2 requires section to be Literal["clips", "markers"] | None so the
+    allowed values are visible to the calling agent through the schema itself.
+    Real stdio MCP measurement (test-report-e2e-mcp-stdio.md item 5) showed the
+    enum missing, which is the regression these tests lock down.
+    """
+
+    def _property_schema(self, name: str) -> dict[str, Any]:
+        tool = mcp._tool_manager.get_tool("clipwright_read_timeline")  # type: ignore[attr-defined]
+        assert tool is not None, "clipwright_read_timeline must be registered in mcp"
+        params = tool.parameters
+        assert isinstance(params, dict), (
+            f"parameters must be a dict, got {type(params)}"
+        )
+        properties = params.get("properties")
+        assert isinstance(properties, dict), (
+            f"inputSchema.properties must be a dict, got {properties!r}"
+        )
+        prop = properties.get(name)
+        assert isinstance(prop, dict), (
+            f"inputSchema.properties.{name} must be a dict, got {prop!r}"
+        )
+        return prop
+
+    def test_section_property_exposes_clips_and_markers_enum(self) -> None:
+        """section must constrain its string values to exactly clips/markers."""
+        section_schema = self._property_schema("section")
+
+        choices = _collect_schema_string_choices(section_schema)
+
+        assert choices == {"clips", "markers"}, (
+            "section must expose exactly the allowed values through an enum/const "
+            f"constraint, got {sorted(choices)} from {section_schema!r}"
+        )
+
+    def test_section_property_still_accepts_null(self) -> None:
+        """Omitting section (null) must remain valid alongside the enum."""
+        section_schema = self._property_schema("section")
+
+        assert section_schema.get("default") is None, (
+            f"section default must stay null, got {section_schema!r}"
+        )
+        assert "null" in _collect_schema_types(section_schema), (
+            f"section must still accept null: {section_schema!r}"
+        )
+
+    def test_marker_kind_property_has_no_enum(self) -> None:
+        """marker_kind stays a free-form string (ADR-RD-2 scopes enum to section)."""
+        assert _collect_schema_string_choices(self._property_schema("marker_kind")) == (
+            set()
+        ), "marker_kind must remain an unconstrained string"
 
 
 # ===========================================================================

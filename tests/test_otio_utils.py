@@ -2190,6 +2190,35 @@ class TestClipsToDictContract:
         assert track_dict["name"] == "V1", "V1 track name is 'V1'"
         assert track_dict["kind"] == "Video", "V1 track kind is Video"
 
+    def test_track_kind_is_audio_for_audio_track(self) -> None:
+        """A1 track yields track.kind == "Audio" (CR-Q-005 value guard).
+
+        Pins the exact string emitted for an Audio track so that simplifying
+        the ``hasattr(track.kind, "name")`` branch in otio_utils cannot
+        silently change the value. The Video counterpart is pinned by
+        test_track_is_nested_dict_with_index_name_kind.
+        """
+        from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
+
+        tl = new_timeline("audio_track_kind")
+        audio_track = tl.tracks[1]  # A1 (index=1)
+
+        add_clip(
+            audio_track,
+            MediaRef(target_url="/audio.wav"),
+            TimeRangeModel(
+                start_time=RationalTimeModel(value=0.0, rate=30.0),
+                duration=RationalTimeModel(value=30.0, rate=30.0),
+            ),
+        )
+
+        summary = summarize_timeline(tl)
+        track_dict = summary["clips"][0]["track"]
+
+        assert track_dict["index"] == 1, "A1 track has flat index 1 (ADR-RD-6)"
+        assert track_dict["name"] == "A1", "A1 track name is 'A1'"
+        assert track_dict["kind"] == "Audio", "A1 track kind is Audio"
+
     def test_clip_index_is_track_scoped_not_page_scoped(self) -> None:
         """Clip index is count within that track only, not page offset (ADR-RD-5).
 
@@ -2348,6 +2377,15 @@ class TestClipsToDictContract:
         )
         warning = summary["warnings"][0]
         assert "no source_range" in warning.lower(), "Warning mentions source_range"
+
+        # CWE-209 (SR-R-001): the warning must stay free of caller-supplied
+        # identifiers. Asserted individually so neither can regress unnoticed.
+        assert "no_range_clip" not in warning, (
+            "Warning must not expose the clip name (CWE-209)"
+        )
+        assert "/test.mp4" not in warning, (
+            "Warning must not expose the media target_url (CWE-209)"
+        )
 
     def test_clips_and_clip_count_match(self) -> None:
         """len(clips) == clip_count (new + existing keys consistent)."""
@@ -2668,33 +2706,18 @@ class TestSaveTimelineCompactFormatting:
 
 
 # ===========================================================================
-# E-16: Fix test_atomic_write_no_temp_file_left to detect .otio temp files
+# E-16: Prove the .otio leftover-detection pattern is not a vacuous assertion
 # ===========================================================================
 
 
 class TestAtomicWriteTempFileDetection:
-    """Regression fix for test_atomic_write_no_temp_file_left.
+    """Positive proof that the leftover-detection pattern really detects leftovers.
 
-    Original test used glob("*.tmp") which never matches save_timeline's
-    tempfile.mkstemp(suffix=".otio"). Update to detect .otio temp files
-    that would be left behind if atomic write fails."""
-
-    def test_atomic_write_no_temp_otio_file_left(self, tmp_path: Path) -> None:
-        """No .otio temp file remains after successful atomic write (AC-13).
-
-        Correct pattern to detect leftover .otio files created by mkstemp.
-        Excludes the final destination file."""
-        tl = new_timeline("atomic_check")
-        dest_path = tmp_path / "result.otio"
-        save_timeline(tl, str(dest_path))
-
-        # After successful save, the temp file should be cleaned up.
-        # Find all .otio files except the destination.
-        leftover_otio_files = [f for f in tmp_path.glob("*.otio") if f != dest_path]
-
-        assert leftover_otio_files == [], (
-            f"No temp files should remain; found: {leftover_otio_files} (AC-13)"
-        )
+    The happy-path assertion (no stranded .otio file after a successful
+    save_timeline) lives in TestLoadSaveTimeline. This class covers the
+    complementary direction: a temp file is intentionally stranded via
+    monkeypatch so that the glob("*.otio") minus destination pattern is
+    shown to actually flag it, instead of passing vacuously."""
 
     def test_atomic_write_pattern_detects_real_leftover(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
