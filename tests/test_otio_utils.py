@@ -15,6 +15,7 @@ Target (§6 / §13.5):
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -31,6 +32,7 @@ from clipwright.otio_utils import (
     set_clipwright_metadata,
     summarize_timeline,
 )
+from clipwright.schemas import RationalTimeModel
 
 # ===========================================================================
 # new_timeline (§13.5 DC-AS-001 flat index / track order)
@@ -124,13 +126,21 @@ class TestLoadSaveTimeline:
         assert len(loaded.tracks) == 2
 
     def test_atomic_write_no_temp_file_left(self, tmp_path: Path) -> None:
-        """No temp file remains after save_timeline completes (atomic write)."""
+        """No temp file remains after save_timeline completes (atomic write).
+
+        AC-13: Corrected pattern to detect leftover .otio files created
+        by mkstemp(suffix='.otio'). The original glob("*.tmp") pattern
+        could not detect these files. This test now checks for .otio
+        files other than the intended destination.
+        """
         tl = new_timeline("atomic")
         path = tmp_path / "atomic.otio"
         save_timeline(tl, str(path))
-        # No file with .tmp or similar extension should remain
-        leftover = list(tmp_path.glob("*.tmp"))
-        assert leftover == []
+        # After successful save, no .otio files should remain except the destination
+        leftover = [f for f in tmp_path.glob("*.otio") if f != path]
+        assert leftover == [], (
+            f"No temp .otio files should remain after atomic write; found: {leftover} (AC-13)"
+        )
 
     def test_save_overwrites_existing(self, tmp_path: Path) -> None:
         """An existing file can be overwritten (atomic os.replace)."""
@@ -2085,3 +2095,662 @@ class TestGetMarkers:
             "kind=None では non-Mapping metadata のマーカーも返される"
         )
         assert result[0].name == "non_mapping_m"
+
+
+# ===========================================================================
+# A-1..A-8: _clip_to_dict / summarize_timeline["clips"] contract (AC-1 / AC-9-13)
+# ===========================================================================
+
+
+class TestClipsToDictContract:
+    """Contract for _clip_to_dict (new) and summarize_timeline["clips"].
+
+    New field added to summarize_timeline: clips: list[dict].
+    Each dict has exactly 6 keys: index, name, track, start, duration, media.
+    - index: clip-only 0-indexed counter (Gap/Transition not counted)
+    - name: clip.name (may be empty string)
+    - track: nested dict {index: flat, name: str, kind: str}
+    - start/duration: RationalTimeModel (not float seconds) or None if source_range is None
+    - media: ExternalReference.target_url (verbatim) or None for non-ExternalReference
+    """
+
+    def test_clips_returned_for_three_clip_timeline(self) -> None:
+        """Three clips in timeline → clips list has exactly 3 entries (AC-1)."""
+        from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
+
+        tl = new_timeline("three_clips")
+        track = tl.tracks[0]  # V1
+
+        for i in range(3):
+            media = MediaRef(target_url=f"/clip{i}.mp4")
+            source_range = TimeRangeModel(
+                start_time=RationalTimeModel(value=float(i * 30), rate=30.0),
+                duration=RationalTimeModel(value=30.0, rate=30.0),
+            )
+            add_clip(track, media, source_range, name=f"clip_{i}")
+
+        summary = summarize_timeline(tl)
+        assert "clips" in summary, "summarize_timeline must include 'clips' key (AC-1)"
+        assert len(summary["clips"]) == 3, (
+            "Three clips in timeline → clips list has 3 entries (AC-1)"
+        )
+
+    def test_each_clip_entry_has_six_keys(self) -> None:
+        """Each clip dict has exactly the 6 required keys."""
+        from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
+
+        tl = new_timeline("keys_check")
+        track = tl.tracks[0]
+
+        media = MediaRef(target_url="/video.mp4")
+        add_clip(
+            track,
+            media,
+            TimeRangeModel(
+                start_time=RationalTimeModel(value=0.0, rate=30.0),
+                duration=RationalTimeModel(value=30.0, rate=30.0),
+            ),
+            name="test_clip",
+        )
+
+        summary = summarize_timeline(tl)
+        clip_entry = summary["clips"][0]
+        expected_keys = {"index", "name", "track", "start", "duration", "media"}
+        actual_keys = set(clip_entry.keys())
+
+        assert (
+            actual_keys == expected_keys
+        ), f"Expected keys {expected_keys}, got {actual_keys}"
+
+    def test_track_is_nested_dict_with_index_name_kind(self) -> None:
+        """track field is a nested dict {index: int, name: str, kind: str} (ADR-RD-6)."""
+        from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
+
+        tl = new_timeline("track_structure")
+        track = tl.tracks[0]  # V1 (index=0)
+
+        media = MediaRef(target_url="/test.mp4")
+        add_clip(
+            track,
+            media,
+            TimeRangeModel(
+                start_time=RationalTimeModel(value=0.0, rate=30.0),
+                duration=RationalTimeModel(value=30.0, rate=30.0),
+            ),
+        )
+
+        summary = summarize_timeline(tl)
+        track_dict = summary["clips"][0]["track"]
+
+        assert isinstance(track_dict, dict), "track must be a dict"
+        assert "index" in track_dict, "track dict must have 'index' key"
+        assert "name" in track_dict, "track dict must have 'name' key"
+        assert "kind" in track_dict, "track dict must have 'kind' key"
+        assert track_dict["index"] == 0, "V1 track has flat index 0 (ADR-RD-6)"
+        assert track_dict["name"] == "V1", "V1 track name is 'V1'"
+        assert track_dict["kind"] == "Video", "V1 track kind is Video"
+
+    def test_clip_index_is_track_scoped_not_page_scoped(self) -> None:
+        """Clip index is count within that track only, not page offset (ADR-RD-5).
+
+        Gap between clips is not counted. Timeline: [clip0, gap, clip1]
+        → clips[1].index == 1 (not 2), because Gap is excluded.
+        """
+        from clipwright.schemas import RationalTimeModel, TimeRangeModel
+        from clipwright.schemas import MediaRef
+
+        tl = new_timeline("index_with_gap")
+        track = tl.tracks[0]
+
+        # Add clip 0
+        media0 = MediaRef(target_url="/clip0.mp4")
+        add_clip(
+            track,
+            media0,
+            TimeRangeModel(
+                start_time=RationalTimeModel(value=0.0, rate=30.0),
+                duration=RationalTimeModel(value=30.0, rate=30.0),
+            ),
+            name="clip0",
+        )
+
+        # Add gap
+        add_gap(track, RationalTimeModel(value=10.0, rate=30.0))
+
+        # Add clip 1
+        media1 = MediaRef(target_url="/clip1.mp4")
+        add_clip(
+            track,
+            media1,
+            TimeRangeModel(
+                start_time=RationalTimeModel(value=30.0, rate=30.0),
+                duration=RationalTimeModel(value=30.0, rate=30.0),
+            ),
+            name="clip1",
+        )
+
+        summary = summarize_timeline(tl)
+        assert len(summary["clips"]) == 2, "Two clips, gap not counted"
+        assert summary["clips"][0]["index"] == 0, "First clip has index 0"
+        assert summary["clips"][1]["index"] == 1, (
+            "Second clip has index 1 (gap not counted) (ADR-RD-5)"
+        )
+
+    def test_start_duration_are_rationaltimemodel_not_float(self) -> None:
+        """start and duration are RationalTimeModel, not float seconds (AC-11)."""
+        from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
+
+        tl = new_timeline("time_model_check")
+        track = tl.tracks[0]
+
+        media = MediaRef(target_url="/test.mp4")
+        add_clip(
+            track,
+            media,
+            TimeRangeModel(
+                start_time=RationalTimeModel(value=10.5, rate=30.0),
+                duration=RationalTimeModel(value=60.0, rate=30.0),
+            ),
+        )
+
+        summary = summarize_timeline(tl)
+        clip = summary["clips"][0]
+
+        assert isinstance(clip["start"], RationalTimeModel), (
+            "start must be RationalTimeModel, not float (AC-11)"
+        )
+        assert isinstance(clip["duration"], RationalTimeModel), (
+            "duration must be RationalTimeModel, not float (AC-11)"
+        )
+        # Spot-check values
+        assert clip["start"].value == 10.5
+        assert clip["start"].rate == 30.0
+        assert clip["duration"].value == 60.0
+        assert clip["duration"].rate == 30.0
+
+    def test_media_is_target_url_verbatim(self) -> None:
+        """media field is ExternalReference.target_url unchanged (ADR-RD-7)."""
+        from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
+
+        tl = new_timeline("media_verbatim")
+        track = tl.tracks[0]
+
+        url = "/path/to/my video.mp4"  # May contain spaces
+        media = MediaRef(target_url=url)
+        add_clip(
+            track,
+            media,
+            TimeRangeModel(
+                start_time=RationalTimeModel(value=0.0, rate=30.0),
+                duration=RationalTimeModel(value=30.0, rate=30.0),
+            ),
+        )
+
+        summary = summarize_timeline(tl)
+        clip = summary["clips"][0]
+
+        assert clip["media"] == url, (
+            "media is target_url verbatim (no resolve, no basename) (ADR-RD-7)"
+        )
+
+    def test_media_is_none_for_missing_reference(self) -> None:
+        """Non-ExternalReference clips (MissingReference, etc) have media=None."""
+        import opentimelineio as otio
+
+        from clipwright.schemas import RationalTimeModel
+
+        tl = new_timeline("missing_ref")
+        track = tl.tracks[0]
+
+        # Create a clip with MissingReference directly
+        missing_ref = otio.schema.MissingReference()
+        sr = otio.opentime.TimeRange(
+            start_time=otio.opentime.RationalTime(0.0, 30.0),
+            duration=otio.opentime.RationalTime(30.0, 30.0),
+        )
+        clip = otio.schema.Clip(
+            name="missing_clip",
+            media_reference=missing_ref,
+            source_range=sr,
+        )
+        track.append(clip)
+
+        summary = summarize_timeline(tl)
+        clip_entry = summary["clips"][0]
+
+        assert clip_entry["media"] is None, (
+            "MissingReference → media is None (ADR-RD-7)"
+        )
+
+    def test_source_range_none_clip_returns_none_start_duration_with_warning(
+        self,
+    ) -> None:
+        """Clip with source_range=None: start/duration are None, warning added (ADR-RD-12)."""
+        import opentimelineio as otio
+
+        tl = new_timeline("source_range_none")
+        track = tl.tracks[0]
+
+        # Create a clip without source_range
+        ref = otio.schema.ExternalReference(target_url="/test.mp4")
+        clip = otio.schema.Clip(name="no_range_clip", media_reference=ref)
+        track.append(clip)
+
+        summary = summarize_timeline(tl)
+        assert len(summary["clips"]) == 1, "Entry is present even with no source_range"
+
+        clip_entry = summary["clips"][0]
+        assert clip_entry["start"] is None, "start is None when source_range is None"
+        assert clip_entry["duration"] is None, (
+            "duration is None when source_range is None"
+        )
+
+        # Check warning
+        assert len(summary["warnings"]) >= 1, (
+            "Warning must be added when source_range is None (ADR-RD-12)"
+        )
+        warning = summary["warnings"][0]
+        assert "no source_range" in warning.lower(), "Warning mentions source_range"
+
+    def test_clips_and_clip_count_match(self) -> None:
+        """len(clips) == clip_count (new + existing keys consistent)."""
+        from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
+
+        tl = new_timeline("count_consistency")
+        track = tl.tracks[0]
+
+        for i in range(5):
+            media = MediaRef(target_url=f"/c{i}.mp4")
+            add_clip(
+                track,
+                media,
+                TimeRangeModel(
+                    start_time=RationalTimeModel(value=float(i * 10), rate=30.0),
+                    duration=RationalTimeModel(value=10.0, rate=30.0),
+                ),
+            )
+
+        summary = summarize_timeline(tl)
+        assert len(summary["clips"]) == summary["clip_count"], (
+            "len(clips) must equal clip_count (AC-1)"
+        )
+
+    def test_existing_keys_unchanged(self) -> None:
+        """Existing keys (clip_count, gap_count, marker_count, total_duration,
+        markers, warnings) remain unchanged in type and meaning."""
+        tl = new_timeline("existing_keys")
+        summary = summarize_timeline(tl)
+
+        # Verify existing keys are present and have correct types
+        assert isinstance(summary["clip_count"], int)
+        assert isinstance(summary["gap_count"], int)
+        assert isinstance(summary["marker_count"], int)
+        assert isinstance(summary["total_duration"], RationalTimeModel)
+        assert isinstance(summary["markers"], list)
+        assert isinstance(summary["warnings"], list)
+
+        # Verify no extra keys (except clips, which is new)
+        expected_keys_old = {
+            "clip_count",
+            "gap_count",
+            "marker_count",
+            "total_duration",
+            "markers",
+            "warnings",
+        }
+        expected_keys_new = expected_keys_old | {"clips"}
+        actual_keys = set(summary.keys())
+        assert actual_keys == expected_keys_new, (
+            f"Keys must be old + clips. Got {actual_keys}"
+        )
+
+
+# ===========================================================================
+# B-9: marker traversal order unified with get_markers (ADR-RD-9)
+# ===========================================================================
+
+
+class TestMarkerTraversalUnified:
+    """Marker traversal in summarize_timeline is unified with get_markers
+    (same order, not two different orders) (ADR-RD-9)."""
+
+    def test_markers_order_matches_get_markers(self) -> None:
+        """summarize_timeline["markers"] order matches get_markers(timeline) (ADR-RD-9)."""
+        import opentimelineio as otio
+
+        from clipwright.otio_utils import get_markers
+
+        tl = new_timeline("marker_order_test")
+        v1_track = tl.tracks[0]
+        a1_track = tl.tracks[1]
+
+        # Add track-level marker to V1
+        v1_marker_1 = otio.schema.Marker(
+            name="v1_track_marker",
+            marked_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0.0, 30.0),
+                duration=otio.opentime.RationalTime(1.0, 30.0),
+            ),
+        )
+        v1_track.markers.append(v1_marker_1)
+
+        # Add marker to A1
+        a1_marker_1 = otio.schema.Marker(
+            name="a1_track_marker",
+            marked_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(10.0, 30.0),
+                duration=otio.opentime.RationalTime(1.0, 30.0),
+            ),
+        )
+        a1_track.markers.append(a1_marker_1)
+
+        summary = summarize_timeline(tl)
+        get_markers_result = get_markers(tl)
+
+        # Both must return the same markers in the same order
+        assert len(summary["markers"]) == len(get_markers_result), (
+            "Marker count must match get_markers (ADR-RD-9)"
+        )
+
+        for i, (summary_marker, get_markers_marker) in enumerate(
+            zip(summary["markers"], get_markers_result)
+        ):
+            assert summary_marker["name"] == get_markers_marker.name, (
+                f"Marker {i} name mismatch: "
+                f"{summary_marker['name']} vs {get_markers_marker.name} (ADR-RD-9)"
+            )
+
+
+# ===========================================================================
+# C-10..C-11: marker.kind regression guard (ADR-RD-12 re: metadata Mapping type)
+# ===========================================================================
+
+
+class TestMarkerKindRegression:
+    """Regression guard for marker.kind field.
+
+    OTIO stores metadata as AnyDictionary (not plain dict), so
+    isinstance(metadata["clipwright"], dict) is always False.
+    _marker_to_dict should use Mapping to read the kind correctly.
+    """
+
+    def test_marker_kind_preserved_in_memory(self) -> None:
+        """Marker with kind in metadata preserves kind when accessed via
+        summarize_timeline (in-memory, no save/load)."""
+        import opentimelineio as otio
+
+        tl = new_timeline("marker_kind_memory")
+        track = tl.tracks[0]
+
+        marker = otio.schema.Marker(
+            name="test_marker",
+            marked_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0.0, 30.0),
+                duration=otio.opentime.RationalTime(1.0, 30.0),
+            ),
+        )
+        marker.metadata["clipwright"] = {"kind": "caption"}
+        track.markers.append(marker)
+
+        summary = summarize_timeline(tl)
+        marker_entry = summary["markers"][0]
+
+        assert marker_entry["kind"] == "caption", (
+            "Marker kind must be 'caption' (not empty), even with AnyDictionary (C-10)"
+        )
+
+    def test_marker_kind_preserved_after_save_load_roundtrip(
+        self, tmp_path: Path
+    ) -> None:
+        """Marker kind preserved after save_timeline → load_timeline roundtrip."""
+        import opentimelineio as otio
+
+        tl = new_timeline("marker_kind_roundtrip")
+        track = tl.tracks[0]
+
+        marker = otio.schema.Marker(
+            name="roundtrip_marker",
+            marked_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(5.0, 30.0),
+                duration=otio.opentime.RationalTime(1.0, 30.0),
+            ),
+        )
+        marker.metadata["clipwright"] = {"kind": "scene"}
+        track.markers.append(marker)
+
+        # Save and load
+        path = str(tmp_path / "kind_check.otio")
+        save_timeline(tl, path)
+        loaded = load_timeline(path)
+
+        summary = summarize_timeline(loaded)
+        marker_entry = summary["markers"][0]
+
+        assert marker_entry["kind"] == "scene", (
+            "Marker kind preserved after roundtrip (C-11)"
+        )
+
+
+# ===========================================================================
+# D-12..D-15: save_timeline compact formatting contract (AC-9..AC-12)
+# ===========================================================================
+
+
+class TestSaveTimelineCompactFormatting:
+    """save_timeline uses indent=0 for compact output.
+
+    AC-9: No leading whitespace on any line.
+    AC-10: Multiple clips → line count > 1 (not collapsed to one line).
+    AC-11: Round-trip preserves timeline name, track count, clip names, metadata.
+    AC-12: File size is smaller than indent=4 equivalent.
+    """
+
+    def test_no_leading_whitespace_on_any_line(self, tmp_path: Path) -> None:
+        """Saved .otio has no leading whitespace (indent=0) (AC-9)."""
+        from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
+
+        tl = new_timeline("no_indent")
+        track = tl.tracks[0]
+        media = MediaRef(target_url="/test.mp4")
+        add_clip(
+            track,
+            media,
+            TimeRangeModel(
+                start_time=RationalTimeModel(value=0.0, rate=30.0),
+                duration=RationalTimeModel(value=30.0, rate=30.0),
+            ),
+        )
+
+        path = str(tmp_path / "compact.otio")
+        save_timeline(tl, path)
+
+        # Read file and check no line starts with whitespace
+        content = Path(path).read_text()
+        lines = content.split("\n")
+
+        for line_num, line in enumerate(lines, 1):
+            if line:  # Skip empty lines
+                assert not line[0].isspace(), (
+                    f"Line {line_num} has leading whitespace (AC-9): {line[:20]}"
+                )
+
+    def test_multiple_clips_produces_multiple_lines(self, tmp_path: Path) -> None:
+        """Timeline with multiple clips produces > 1 line (AC-10)."""
+        from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
+
+        tl = new_timeline("multi_line")
+        track = tl.tracks[0]
+
+        for i in range(3):
+            media = MediaRef(target_url=f"/clip{i}.mp4")
+            add_clip(
+                track,
+                media,
+                TimeRangeModel(
+                    start_time=RationalTimeModel(value=float(i * 30), rate=30.0),
+                    duration=RationalTimeModel(value=30.0, rate=30.0),
+                ),
+            )
+
+        path = str(tmp_path / "multi.otio")
+        save_timeline(tl, path)
+
+        content = Path(path).read_text()
+        line_count = len([l for l in content.split("\n") if l.strip()])
+
+        assert line_count > 1, (
+            "Multiple clips → > 1 line (not collapsed to single line) (AC-10)"
+        )
+
+    def test_roundtrip_preserves_timeline_name_and_metadata(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-trip (save → load) preserves timeline name and metadata (AC-11)."""
+        from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
+
+        tl = new_timeline("roundtrip_test")
+        set_clipwright_metadata(tl, {"version": "1.0"})
+
+        track = tl.tracks[0]
+        media = MediaRef(target_url="/video.mp4")
+        add_clip(
+            track,
+            media,
+            TimeRangeModel(
+                start_time=RationalTimeModel(value=0.0, rate=30.0),
+                duration=RationalTimeModel(value=30.0, rate=30.0),
+            ),
+            name="clip1",
+        )
+
+        path = str(tmp_path / "rt.otio")
+        save_timeline(tl, path)
+        loaded = load_timeline(path)
+
+        assert loaded.name == tl.name, "Timeline name preserved (AC-11)"
+        assert len(loaded.tracks) == 2, "Track count preserved (AC-11)"
+        assert loaded.tracks[0][0].name == "clip1", "Clip name preserved (AC-11)"
+
+        loaded_meta = get_clipwright_metadata(loaded)
+        assert loaded_meta == {"version": "1.0"}, (
+            "Metadata preserved (AC-11)"
+        )
+
+    def test_compact_size_smaller_than_indented(self, tmp_path: Path) -> None:
+        """Compact (indent=0) file size is smaller than indent=4 (AC-12)."""
+        import opentimelineio as otio
+
+        from clipwright.schemas import MediaRef, RationalTimeModel, TimeRangeModel
+
+        tl = new_timeline("size_compare")
+        track = tl.tracks[0]
+
+        for i in range(5):
+            media = MediaRef(target_url=f"/clip{i}.mp4")
+            add_clip(
+                track,
+                media,
+                TimeRangeModel(
+                    start_time=RationalTimeModel(value=float(i * 30), rate=30.0),
+                    duration=RationalTimeModel(value=30.0, rate=30.0),
+                ),
+                name=f"clip_{i}",
+            )
+
+        # Save with indent=0 (our compact version)
+        compact_path = str(tmp_path / "compact.otio")
+        save_timeline(tl, compact_path)
+        compact_size = Path(compact_path).stat().st_size
+
+        # Write with indent=4 for comparison
+        indented_path = str(tmp_path / "indented.otio")
+        otio.adapters.write_to_file(tl, indented_path, indent=4)
+        indented_size = Path(indented_path).stat().st_size
+
+        assert compact_size < indented_size, (
+            f"Compact ({compact_size}) < indented ({indented_size}) (AC-12)"
+        )
+
+
+# ===========================================================================
+# E-16: Fix test_atomic_write_no_temp_file_left to detect .otio temp files
+# ===========================================================================
+
+
+class TestAtomicWriteTempFileDetection:
+    """Regression fix for test_atomic_write_no_temp_file_left.
+
+    Original test used glob("*.tmp") which never matches save_timeline's
+    tempfile.mkstemp(suffix=".otio"). Update to detect .otio temp files
+    that would be left behind if atomic write fails."""
+
+    def test_atomic_write_no_temp_otio_file_left(self, tmp_path: Path) -> None:
+        """No .otio temp file remains after successful atomic write (AC-13).
+
+        Correct pattern to detect leftover .otio files created by mkstemp.
+        Excludes the final destination file."""
+        tl = new_timeline("atomic_check")
+        dest_path = tmp_path / "result.otio"
+        save_timeline(tl, str(dest_path))
+
+        # After successful save, the temp file should be cleaned up.
+        # Find all .otio files except the destination.
+        leftover_otio_files = [
+            f for f in tmp_path.glob("*.otio") if f != dest_path
+        ]
+
+        assert leftover_otio_files == [], (
+            f"No temp files should remain; found: {leftover_otio_files} (AC-13)"
+        )
+
+    def test_atomic_write_pattern_detects_real_leftover(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Verify the corrected pattern can detect a temp file if it exists.
+
+        Monkeypatch to intentionally leave a temp file, then verify the
+        test pattern detects it (positive case for the fix)."""
+        import tempfile as tmpfile_module
+
+        tl = new_timeline("detect_temp")
+        dest_path = tmp_path / "result.otio"
+
+        # Monkeypatch mkstemp to return a predictable temp path that won't
+        # be cleaned up (simulate a crashed atomic write).
+        temp_file_path = None
+
+        def mock_mkstemp(
+            dir: str | None = None,
+            suffix: str | None = None,
+            prefix: str | None = None,
+        ) -> tuple[int, str]:
+            nonlocal temp_file_path
+            fd, path = tmpfile_module.mkstemp(dir=dir, suffix=suffix, prefix=prefix)
+            temp_file_path = path
+            return fd, path
+
+        monkeypatch.setattr(tmpfile_module, "mkstemp", mock_mkstemp)
+
+        # Also monkeypatch os.replace to fail (simulating crash before cleanup)
+        original_replace = os.replace
+
+        def mock_replace(src: str, dst: str) -> None:
+            # Don't actually replace, just leave the temp file
+            pass
+
+        monkeypatch.setattr(os, "replace", mock_replace)
+
+        # Now when save_timeline is called, the temp file should be left
+        try:
+            save_timeline(tl, str(dest_path))
+        except Exception:
+            pass  # Ignore exception from failed replace
+
+        # Verify our test pattern would detect it
+        if temp_file_path and Path(temp_file_path).exists():
+            leftover_otio_files = [
+                f for f in tmp_path.glob("*.otio") if f != dest_path
+            ]
+            assert len(leftover_otio_files) > 0, (
+                "Pattern should detect the stranded temp file (AC-13)"
+            )

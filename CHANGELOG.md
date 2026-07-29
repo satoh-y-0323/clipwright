@@ -5,6 +5,42 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.40.0] - 2026-07-29
+
+### Added (`clipwright` core v0.9.0)
+
+- `clipwright_read_timeline` gains `section` / `offset` / `limit` /
+  `marker_kind` parameters and now returns the clip list
+  (`data.clips` with `index` / `name` / `track` / `start` / `duration` /
+  `media`) plus `clips_truncated` / `clips_next_offset` /
+  `markers_next_offset`, and echoes back `offset` / `limit` / `marker_kind`.
+
+### Changed (`clipwright` core v0.9.0)
+
+- Markers are no longer dropped above 50 entries — the tool returns the
+  first page instead of omitting the `data.markers` key, and `*_truncated`
+  now means "there are more entries after this page".
+- `save_timeline` always writes with `indent=0` (roughly 58% smaller on
+  real dogfood timelines, lossless round-trip, line structure and
+  therefore grep / windowed reads preserved; `indent` is deliberately not
+  exposed as a parameter because clipwright is an AI-only tool suite).
+
+### Fixed (`clipwright` core v0.9.0)
+
+- `data.markers[].kind` was always an empty string because
+  `_marker_to_dict` tested the OTIO metadata container with
+  `isinstance(..., dict)`; OTIO stores it as `AnyDictionary`, so the check
+  never matched. It now uses `collections.abc.Mapping`, consistent with
+  `_marker_matches_kind`.
+
+### Notes
+
+- The output format change ships with core 0.9.0 and therefore propagates
+  to all 16 tools, but no satellite code change and no floor bump are
+  required (`save_timeline` keeps its signature).
+- Credit the reporter of Issue #3 for the measurement that started the
+  investigation.
+
 ## [0.39.0] - 2026-07-25
 
 ### Fixed (`clipwright-speed` v0.3.0, `clipwright` core v0.8.0)

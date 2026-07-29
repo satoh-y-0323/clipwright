@@ -408,10 +408,12 @@ class TestReadTimeline:
         )
 
     def test_markers_above_threshold_returns_truncated(self, tmp_path: Path) -> None:
-        """Success path: when marker count > 50, data.markers is omitted and
-        markers_truncated=true is returned (§13.5 DC-AM-001).
+        """AC-4: when marker count > 50, data.markers returns the first page
+        (not omitted), markers_truncated=True, and markers_next_offset points
+        to the next page start.
 
-        Adds 51 markers via write_timeline before calling read_timeline.
+        The 'omit data.markers when > 50' behavior (old contract) is replaced
+        by 'return first page with pagination keys' (new contract).
         """
         project_dir = self._setup_project(tmp_path)
         # Add 51 markers
@@ -430,24 +432,34 @@ class TestReadTimeline:
         write_result = clipwright_write_timeline(
             project_dir=project_dir, operations=ops, validate_only=False
         )
-        # Skip if precondition setup failed
-        if write_result.get("ok") is not True:
-            pytest.skip(f"write_timeline precondition setup failed: {write_result}")
+        # Precondition must succeed or test itself is invalid
+        assert write_result.get("ok"), (
+            f"write_timeline precondition setup failed: {write_result}"
+        )
 
         result = clipwright_read_timeline(project_dir=project_dir)
         _assert_tool_result(result)
         data = result["data"]
+        # AC-4: markers key must exist even when count > 50
+        assert "markers" in data, (
+            "data.markers key is required (new contract: first page returned)"
+        )
+        # AC-4: markers list contains the first 50 items
+        assert isinstance(data["markers"], list), "data.markers must be list"
+        assert len(data["markers"]) == 50, (
+            f"data.markers must have 50 items (first page), got {len(data['markers'])}"
+        )
+        # AC-4: markers_truncated=True when more items exist beyond this page
         assert data.get("markers_truncated") is True, (
-            "data.markers_truncated=True is required when marker count > 50"
+            "data.markers_truncated=True when marker count > limit (50)"
         )
-        assert "marker_count" in data, (
-            "data.marker_count is required when marker count > 50"
+        # AC-4: markers_next_offset points to the next page
+        assert data.get("markers_next_offset") == 50, (
+            "data.markers_next_offset must be 50 (start of next page)"
         )
+        # AC-8: marker_count is always the total (not page size)
         assert data["marker_count"] == 51, (
-            f"marker_count must be 51 (actual: {data.get('marker_count')})"
-        )
-        assert "markers" not in data or data.get("markers") is None, (
-            "data.markers must be omitted or None when marker count > 50"
+            f"marker_count must be 51 (total, not page size): {data.get('marker_count')}"
         )
 
     def test_markers_exactly_at_threshold_returns_list(self, tmp_path: Path) -> None:
@@ -468,8 +480,9 @@ class TestReadTimeline:
         write_result = clipwright_write_timeline(
             project_dir=project_dir, operations=ops, validate_only=False
         )
-        if write_result.get("ok") is not True:
-            pytest.skip(f"write_timeline precondition setup failed: {write_result}")
+        assert write_result.get("ok"), (
+            f"write_timeline precondition setup failed: {write_result}"
+        )
 
         result = clipwright_read_timeline(project_dir=project_dir)
         _assert_tool_result(result)
@@ -480,6 +493,481 @@ class TestReadTimeline:
         assert isinstance(data["markers"], list), "data.markers must be list"
         assert not data.get("markers_truncated", False), (
             "markers_truncated must be False or unset when marker count = 50"
+        )
+
+    # --- AC-1~AC-8: Paging contract tests ---
+
+    def _add_clips(self, project_dir: str, count: int) -> None:
+        """Helper: add N clips to a timeline via write_timeline."""
+        ops = [
+            {
+                "op": "add_clip",
+                "track": 0,
+                "media": {"target_url": f"file:///tmp/clip_{i:03d}.mp4"},
+                "source_range": {
+                    "start_time": {"value": 0.0, "rate": 30.0},
+                    "duration": {"value": 10.0, "rate": 30.0},
+                },
+                "name": f"clip_{i:03d}",
+            }
+            for i in range(count)
+        ]
+        result = clipwright_write_timeline(
+            project_dir=project_dir, operations=ops, validate_only=False
+        )
+        assert result.get("ok"), f"precondition: add_clip setup failed: {result}"
+
+    def test_ac1_clips_structure_basic_three_clips(self, tmp_path: Path) -> None:
+        """AC-1: clip 3 本の timeline で data.clips が 3 件返り、
+        各要素が index / name / track / start / duration / media を持つ。"""
+        project_dir = self._setup_project(tmp_path)
+        self._add_clips(project_dir, 3)
+
+        result = clipwright_read_timeline(project_dir=project_dir)
+        _assert_tool_result(result)
+        data = result["data"]
+
+        assert "clips" in data, "data.clips key is required"
+        assert isinstance(data["clips"], list), "data.clips must be list"
+        assert len(data["clips"]) == 3, (
+            f"data.clips must have 3 items, got {len(data['clips'])}"
+        )
+
+        # Check all 6 required keys in each entry
+        required_keys = {"index", "name", "track", "start", "duration", "media"}
+        for i, clip in enumerate(data["clips"]):
+            missing = required_keys - set(clip.keys())
+            assert not missing, (
+                f"clip[{i}] missing keys {missing}. Has: {set(clip.keys())}"
+            )
+
+    def test_ac2_clips_first_page_default_args(self, tmp_path: Path) -> None:
+        """AC-2: clip 120 本・既定引数で clips が先頭 50 件、
+        clips_truncated=True、clips_next_offset=50。"""
+        project_dir = self._setup_project(tmp_path)
+        self._add_clips(project_dir, 120)
+
+        result = clipwright_read_timeline(project_dir=project_dir)
+        _assert_tool_result(result)
+        data = result["data"]
+
+        assert isinstance(data.get("clips"), list), "data.clips must be list"
+        assert len(data["clips"]) == 50, (
+            f"first page must have 50 items (limit default), got {len(data['clips'])}"
+        )
+        assert data.get("clips_truncated") is True, (
+            "clips_truncated must be True when more items exist"
+        )
+        assert data.get("clips_next_offset") == 50, (
+            "clips_next_offset must point to next page start (50)"
+        )
+
+    def test_ac3_clips_paging_offset_and_last_page(self, tmp_path: Path) -> None:
+        """AC-3: section='clips', offset=50, limit=50 で 51～100 件目。
+        末尾ページでは clips_next_offset=None、clips_truncated=False。"""
+        project_dir = self._setup_project(tmp_path)
+        self._add_clips(project_dir, 120)
+
+        # Page 2: offset=50, limit=50 should return clips 50-99
+        result = clipwright_read_timeline(
+            project_dir=project_dir,
+            section="clips",
+            offset=50,
+            limit=50,
+        )
+        _assert_tool_result(result)
+        data = result["data"]
+
+        assert len(data["clips"]) == 50, (
+            f"page 2 must have 50 items, got {len(data['clips'])}"
+        )
+        # Items should be from the 51st to 100th (index 50-99)
+        assert data["clips"][0]["name"] == "clip_050", (
+            "first item in page 2 should be clip_050"
+        )
+        assert data["clips"][49]["name"] == "clip_099", (
+            "last item in page 2 should be clip_099"
+        )
+        assert data.get("clips_truncated") is True, (
+            "clips_truncated=True (page 3 exists)"
+        )
+        assert data.get("clips_next_offset") == 100, (
+            "clips_next_offset=100 for page 3"
+        )
+
+        # Page 3: offset=100, limit=50 should return clips 100-119 (20 items)
+        result = clipwright_read_timeline(
+            project_dir=project_dir,
+            section="clips",
+            offset=100,
+            limit=50,
+        )
+        _assert_tool_result(result)
+        data = result["data"]
+
+        assert len(data["clips"]) == 20, (
+            f"page 3 (last) must have 20 items, got {len(data['clips'])}"
+        )
+        assert data.get("clips_truncated") is False, (
+            "clips_truncated=False on last page"
+        )
+        assert data.get("clips_next_offset") is None, (
+            "clips_next_offset=None on last page"
+        )
+
+    def test_ac5_section_clips_omits_markers(self, tmp_path: Path) -> None:
+        """AC-5: section='clips' 指定時は markers / markers_truncated /
+        markers_next_offset キーをまとめて不在にする。"""
+        project_dir = self._setup_project(tmp_path)
+        self._add_clips(project_dir, 3)
+        # Also add a marker for this check
+        ops_marker = [
+            {
+                "op": "add_marker",
+                "track": 0,
+                "marked_range": {
+                    "start_time": {"value": 0.0, "rate": 30.0},
+                    "duration": {"value": 1.0, "rate": 30.0},
+                },
+                "name": "test_marker",
+            }
+        ]
+        clipwright_write_timeline(
+            project_dir=project_dir, operations=ops_marker, validate_only=False
+        )
+
+        result = clipwright_read_timeline(project_dir=project_dir, section="clips")
+        _assert_tool_result(result)
+        data = result["data"]
+
+        # clips must be present
+        assert "clips" in data, "data.clips must be present when section='clips'"
+        # markers keys must all be absent
+        assert "markers" not in data, (
+            "data.markers must be omitted when section='clips'"
+        )
+        assert "markers_truncated" not in data, (
+            "data.markers_truncated must be omitted when section='clips'"
+        )
+        assert "markers_next_offset" not in data, (
+            "data.markers_next_offset must be omitted when section='clips'"
+        )
+
+    def test_ac5_section_markers_omits_clips(self, tmp_path: Path) -> None:
+        """AC-5: section='markers' 指定時は clips / clips_truncated /
+        clips_next_offset キーをまとめて不在にする。"""
+        project_dir = self._setup_project(tmp_path)
+        self._add_clips(project_dir, 3)
+        ops_marker = [
+            {
+                "op": "add_marker",
+                "track": 0,
+                "marked_range": {
+                    "start_time": {"value": 0.0, "rate": 30.0},
+                    "duration": {"value": 1.0, "rate": 30.0},
+                },
+                "name": "test_marker",
+            }
+        ]
+        clipwright_write_timeline(
+            project_dir=project_dir, operations=ops_marker, validate_only=False
+        )
+
+        result = clipwright_read_timeline(project_dir=project_dir, section="markers")
+        _assert_tool_result(result)
+        data = result["data"]
+
+        # markers must be present
+        assert "markers" in data, "data.markers must be present when section='markers'"
+        # clips keys must all be absent
+        assert "clips" not in data, (
+            "data.clips must be omitted when section='markers'"
+        )
+        assert "clips_truncated" not in data, (
+            "data.clips_truncated must be omitted when section='markers'"
+        )
+        assert "clips_next_offset" not in data, (
+            "data.clips_next_offset must be omitted when section='markers'"
+        )
+
+    def test_ac6_marker_kind_filters_results(self, tmp_path: Path) -> None:
+        """AC-6: marker_kind='caption' で該当 kind のマーカーのみに絞られる。
+        data.marker_count はフィルタ前の総数のまま（ADR-RD-10）。"""
+        project_dir = self._setup_project(tmp_path)
+        # Add markers with different kinds via write_timeline
+        # (we use add_marker op which doesn't support kind; fall back to direct OTIO)
+        from clipwright.otio_utils import load_timeline, save_timeline
+
+        timeline_path = str(Path(project_dir) / "timeline.otio")
+        timeline = load_timeline(timeline_path)
+
+        # Manually add markers with kind metadata
+        import opentimelineio as otio
+
+        if timeline.video_tracks():
+            v_track = timeline.video_tracks()[0]
+            for i in range(10):
+                kind = "caption" if i < 3 else "scene"
+                marker = otio.schema.Marker(
+                    name=f"marker_{i:02d}",
+                    marked_range=otio.opentime.TimeRange(
+                        start_time=otio.opentime.RationalTime(float(i), 30.0),
+                        duration=otio.opentime.RationalTime(1.0, 30.0),
+                    ),
+                )
+                marker.metadata["clipwright"] = {"kind": kind}
+                v_track.markers.append(marker)
+
+        save_timeline(timeline, timeline_path)
+
+        # Query by kind
+        result = clipwright_read_timeline(
+            project_dir=project_dir,
+            section="markers",
+            marker_kind="caption",
+        )
+        _assert_tool_result(result)
+        data = result["data"]
+
+        # Only caption markers should be in the list
+        assert len(data.get("markers", [])) == 3, (
+            f"filtered markers must have 3 items (caption kind), got {len(data.get('markers', []))}"
+        )
+        # But marker_count stays at total
+        assert data.get("marker_count") == 10, (
+            f"marker_count must be total (10, unfiltered), got {data.get('marker_count')}"
+        )
+        # summary should mention the filter
+        summary = result.get("summary", "")
+        assert "caption" in summary.lower() or "kind=" in summary.lower(), (
+            "summary must mention the marker_kind filter"
+        )
+
+    def test_ac6_marker_kind_zero_hits_returns_empty(self, tmp_path: Path) -> None:
+        """AC-6: marker_kind で 0 件ヒット時は ok=True で空リスト。
+        エラーにはならない。"""
+        project_dir = self._setup_project(tmp_path)
+        ops_marker = [
+            {
+                "op": "add_marker",
+                "track": 0,
+                "marked_range": {
+                    "start_time": {"value": 0.0, "rate": 30.0},
+                    "duration": {"value": 1.0, "rate": 30.0},
+                },
+                "name": "test_marker",
+            }
+        ]
+        clipwright_write_timeline(
+            project_dir=project_dir, operations=ops_marker, validate_only=False
+        )
+
+        # Query for a kind that doesn't exist
+        result = clipwright_read_timeline(
+            project_dir=project_dir,
+            section="markers",
+            marker_kind="nonexistent_kind",
+        )
+        _assert_tool_result(result)
+        data = result["data"]
+
+        assert data.get("markers") == [], (
+            "markers must be empty list when no match"
+        )
+        assert data.get("markers_truncated") is False, (
+            "markers_truncated=False when 0 items"
+        )
+        assert data.get("markers_next_offset") is None, (
+            "markers_next_offset=None when 0 items"
+        )
+
+    def test_ac7_offset_with_no_section_invalid_input(self, tmp_path: Path) -> None:
+        """AC-7: section=None かつ offset != 0 は INVALID_INPUT。
+        error.hint が非空。error.message にパスが含まれない（CWE-209）。"""
+        project_dir = self._setup_project(tmp_path)
+
+        result = clipwright_read_timeline(project_dir=project_dir, offset=10)
+        _assert_tool_error_result(result, "INVALID_INPUT")
+        hint = result["error"]["hint"]
+        message = result["error"]["message"]
+
+        assert len(hint) > 0, "error.hint must be non-empty"
+        # Check no path in message/hint
+        assert project_dir not in message, (
+            f"message must not contain project path: {message!r}"
+        )
+        assert project_dir not in hint, (
+            f"hint must not contain project path: {hint!r}"
+        )
+        assert "timeline" not in message.lower() or "path" not in message.lower(), (
+            "message should not be a full error backtrace"
+        )
+
+    def test_ac7_negative_offset_invalid_input(self, tmp_path: Path) -> None:
+        """AC-7: offset < 0 は INVALID_INPUT。"""
+        project_dir = self._setup_project(tmp_path)
+
+        result = clipwright_read_timeline(
+            project_dir=project_dir,
+            section="clips",
+            offset=-1,
+        )
+        _assert_tool_error_result(result, "INVALID_INPUT")
+        hint = result["error"]["hint"]
+        assert len(hint) > 0, "error.hint must be non-empty"
+
+    def test_ac7_zero_or_negative_limit_invalid_input(self, tmp_path: Path) -> None:
+        """AC-7: limit <= 0 は INVALID_INPUT。"""
+        project_dir = self._setup_project(tmp_path)
+
+        for bad_limit in [0, -1, -100]:
+            result = clipwright_read_timeline(
+                project_dir=project_dir,
+                section="clips",
+                limit=bad_limit,
+            )
+            _assert_tool_error_result(result, "INVALID_INPUT")
+            hint = result["error"]["hint"]
+            assert len(hint) > 0, (
+                f"error.hint must be non-empty (limit={bad_limit})"
+            )
+
+    def test_ac7_offset_past_end_invalid_input(self, tmp_path: Path) -> None:
+        """AC-7: offset > 0 かつ offset >= 総件数 は INVALID_INPUT。
+        総件数は section により異なる。"""
+        project_dir = self._setup_project(tmp_path)
+        self._add_clips(project_dir, 10)
+
+        # Try offset=10 (past end of 10 clips)
+        result = clipwright_read_timeline(
+            project_dir=project_dir,
+            section="clips",
+            offset=10,  # 0-9 have 10 items, so offset 10 is past end
+        )
+        _assert_tool_error_result(result, "INVALID_INPUT")
+        hint = result["error"]["hint"]
+        message = result["error"]["message"]
+
+        assert len(hint) > 0, "error.hint must be non-empty"
+        # Hint should be actionable (e.g., mention valid range)
+        # Message should not contain path
+        assert project_dir not in message, (
+            f"message must not contain project path: {message!r}"
+        )
+
+    def test_ac8_small_timeline_full_return_no_truncation(self, tmp_path: Path) -> None:
+        """AC-8: marker/clip 50 件以下で従来どおり全件返却。
+        markers_truncated=False。既存キー不変（clip_count など）。"""
+        project_dir = self._setup_project(tmp_path)
+        self._add_clips(project_dir, 20)
+
+        # Add 15 markers (below 50)
+        ops_marker = [
+            {
+                "op": "add_marker",
+                "track": 0,
+                "marked_range": {
+                    "start_time": {"value": float(i), "rate": 30.0},
+                    "duration": {"value": 1.0, "rate": 30.0},
+                },
+                "name": f"marker_{i:02d}",
+            }
+            for i in range(15)
+        ]
+        clipwright_write_timeline(
+            project_dir=project_dir, operations=ops_marker, validate_only=False
+        )
+
+        result = clipwright_read_timeline(project_dir=project_dir)
+        _assert_tool_result(result)
+        data = result["data"]
+
+        # All clips and markers should be returned
+        assert len(data.get("clips", [])) == 20, "all clips must be returned"
+        assert len(data.get("markers", [])) == 15, "all markers must be returned"
+        assert data.get("clips_truncated") is False, (
+            "clips_truncated=False when ≤50"
+        )
+        assert data.get("markers_truncated") is False, (
+            "markers_truncated=False when ≤50"
+        )
+        assert data.get("clips_next_offset") is None, (
+            "clips_next_offset=None when not truncated"
+        )
+        assert data.get("markers_next_offset") is None, (
+            "markers_next_offset=None when not truncated"
+        )
+        # Existing keys must be present
+        assert "clip_count" in data, "clip_count must be present (existing key)"
+        assert data["clip_count"] == 20, "clip_count must be accurate"
+        assert "marker_count" in data, "marker_count must be present"
+        assert data["marker_count"] == 15, "marker_count must be accurate"
+        assert "gap_count" in data, "gap_count must be present"
+        assert "total_duration" in data, "total_duration must be present"
+
+    def test_limit_clamp_to_500_with_warning(self, tmp_path: Path) -> None:
+        """Limit > 500 は clamp + warning。data.limit は実効値をエコー。"""
+        project_dir = self._setup_project(tmp_path)
+        self._add_clips(project_dir, 600)
+
+        result = clipwright_read_timeline(
+            project_dir=project_dir,
+            section="clips",
+            limit=10000,  # Way over the max
+        )
+        _assert_tool_result(result)
+        data = result["data"]
+        warnings = result.get("warnings", [])
+
+        # Should clamp to 500, not error
+        assert len(data.get("clips", [])) == 500, (
+            f"clips should be clamped to 500 items, got {len(data.get('clips', []))}"
+        )
+        assert data.get("limit") == 500, (
+            f"data.limit should echo the clamped value (500), got {data.get('limit')}"
+        )
+        # Should have a warning about clamping
+        assert any("clamp" in w.lower() for w in warnings), (
+            f"warnings should mention clamping. Got: {warnings}"
+        )
+
+    def test_data_echoes_back_offset_limit_marker_kind(self, tmp_path: Path) -> None:
+        """New: data echoes offset, limit, marker_kind for reflection."""
+        project_dir = self._setup_project(tmp_path)
+        self._add_clips(project_dir, 100)
+
+        result = clipwright_read_timeline(
+            project_dir=project_dir,
+            section="clips",
+            offset=25,
+            limit=30,
+        )
+        _assert_tool_result(result)
+        data = result["data"]
+
+        assert data.get("offset") == 25, "data.offset should echo input"
+        assert data.get("limit") == 30, "data.limit should echo input"
+        # marker_kind not specified, should be None
+        assert data.get("marker_kind") is None, (
+            "data.marker_kind should be None when not specified"
+        )
+
+    def test_summary_contains_page_position_and_next_steps(self, tmp_path: Path) -> None:
+        """New: summary contains current page position and next action."""
+        project_dir = self._setup_project(tmp_path)
+        self._add_clips(project_dir, 120)
+
+        result = clipwright_read_timeline(project_dir=project_dir)
+        _assert_tool_result(result)
+        summary = result.get("summary", "")
+
+        # Should mention pagination and item counts
+        assert "120" in summary or "120 clips" in summary, (
+            f"summary should mention total clip count (120): {summary!r}"
+        )
+        # Should mention next action when truncated
+        assert "offset" in summary.lower() or "50" in summary, (
+            f"summary should hint at pagination/next offset: {summary!r}"
         )
 
 
