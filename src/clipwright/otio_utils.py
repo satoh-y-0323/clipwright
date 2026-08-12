@@ -299,7 +299,9 @@ def _marker_matches_kind(marker: otio.schema.Marker, kind: str | None) -> bool:
 
 
 # ===========================================================================
-# Timeline summary (§13.5 DC-AM-001 re: return all items, no truncation)
+# Timeline summary (ADR-RD-16): clips/markers are paginated with window args.
+# With default args, all items returned with no truncation (§13.5 DC-AM-001).
+# Counts, duration, warnings always computed over full timeline (INV-4).
 # ===========================================================================
 
 
@@ -351,7 +353,7 @@ def summarize_timeline(
       - rate = rate of the V1 track (kind=Video) if it has clips, otherwise 1000.0
       - Returns RationalTime(0, global rate) when there are no clips
 
-    clips list contract (ADR-RD-8/11/12):
+    clips list contract (ADR-RD-5/8/12/16):
       - Contains windowed clips in track order; clip index is per-track absolute
         (not reset by window offset; ADR-RD-5).
       - source_range=None clips included with start/duration=None; warning always

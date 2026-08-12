@@ -2018,20 +2018,31 @@ class TestReadTimelineLazyCost:
     def test_t2_2_clips_section_zero_markers_converted(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """T2-2: section='clips' does not convert any markers."""
+        """T2-2: section='clips' does not convert any markers.
+
+        SR-NEW: uses the same call-recording spy pattern as T2-1/T2-3
+        (patch-time bound original + counter), asserted after the call,
+        instead of a raise-on-call stub. The raise-on-call stub's failure
+        used to be swallowed by the ADR-RD-17 (b) `except Exception` ->
+        INTERNAL boundary guard, so a regression showed up only as the
+        generic `_assert_tool_result` "ok must be True" message with no
+        indication that `_marker_to_dict` was the culprit.
+        """
         project_dir = self._setup_project(tmp_path)
         self._add_clips(project_dir, 10)
         self._add_markers(project_dir, 5)
 
         import clipwright.otio_utils
 
-        def stub_marker_to_dict(*args: Any, **kwargs: Any) -> Any:
-            raise AssertionError(
-                "_marker_to_dict should not be called when section='clips'"
-            )
+        original_marker_to_dict = clipwright.otio_utils._marker_to_dict
+        call_count = [0]
+
+        def spy_marker_to_dict(*args: Any, **kwargs: Any) -> Any:
+            call_count[0] += 1
+            return original_marker_to_dict(*args, **kwargs)
 
         monkeypatch.setattr(
-            clipwright.otio_utils, "_marker_to_dict", stub_marker_to_dict
+            clipwright.otio_utils, "_marker_to_dict", spy_marker_to_dict
         )
 
         result = clipwright_read_timeline(
@@ -2040,23 +2051,36 @@ class TestReadTimelineLazyCost:
 
         _assert_tool_result(result)
         assert "clips" in result["data"]
+        assert call_count[0] == 0, (
+            "_marker_to_dict must not be called when section='clips', "
+            f"was called {call_count[0]} times"
+        )
 
     def test_t2_2_markers_section_zero_clips_converted(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """T2-2: section='markers' does not convert any clips."""
+        """T2-2: section='markers' does not convert any clips.
+
+        SR-NEW: uses the same call-recording spy pattern as T2-1/T2-3
+        (patch-time bound original + counter), asserted after the call,
+        instead of a raise-on-call stub. See the sibling clips-section
+        test above for why the raise-on-call form under-diagnosed a
+        regression through the ADR-RD-17 (b) boundary guard.
+        """
         project_dir = self._setup_project(tmp_path)
         self._add_clips(project_dir, 10)
         self._add_markers(project_dir, 5)
 
         import clipwright.otio_utils
 
-        def stub_clip_to_dict(*args: Any, **kwargs: Any) -> Any:
-            raise AssertionError(
-                "_clip_to_dict should not be called when section='markers'"
-            )
+        original_clip_to_dict = clipwright.otio_utils._clip_to_dict
+        call_count = [0]
 
-        monkeypatch.setattr(clipwright.otio_utils, "_clip_to_dict", stub_clip_to_dict)
+        def spy_clip_to_dict(*args: Any, **kwargs: Any) -> Any:
+            call_count[0] += 1
+            return original_clip_to_dict(*args, **kwargs)
+
+        monkeypatch.setattr(clipwright.otio_utils, "_clip_to_dict", spy_clip_to_dict)
 
         result = clipwright_read_timeline(
             project_dir=project_dir, section="markers", limit=50
@@ -2064,6 +2088,10 @@ class TestReadTimelineLazyCost:
 
         _assert_tool_result(result)
         assert "markers" in result["data"]
+        assert call_count[0] == 0, (
+            "_clip_to_dict must not be called when section='markers', "
+            f"was called {call_count[0]} times"
+        )
 
     def test_t2_3_overview_call_counts_match_window_size(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2273,14 +2301,23 @@ class TestReadTimelineLazyCost:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """T2-8 (ADR-RD-17): summarize_timeline exception returns INTERNAL
-        without path leaks (CWE-209)."""
+        without path leaks (CWE-209).
+
+        CR-NEW: also asserts the injected exception message itself never
+        leaks into message/hint, so a regression from `except Exception:`
+        to `except Exception as exc:` that mixes str(exc) into the
+        envelope (ADR-RD-17 (a)/(b) CWE-209) fails this test directly,
+        even though it contains no filesystem path.
+        """
         project_dir = self._setup_project(tmp_path)
         self._add_clips(project_dir, 10)
 
         import clipwright.otio_utils
 
+        injected_message = "Simulated summarize_timeline failure"
+
         def broken_summarize(*args: Any, **kwargs: Any) -> Any:
-            raise RuntimeError("Simulated summarize_timeline failure")
+            raise RuntimeError(injected_message)
 
         monkeypatch.setattr(
             clipwright.otio_utils, "summarize_timeline", broken_summarize
@@ -2294,3 +2331,11 @@ class TestReadTimelineLazyCost:
         hint = error["hint"]
 
         _assert_no_path_leak(message, hint, project_dir, tmp_path)
+        # CR-NEW: individually asserted (never OR-joined) so a single
+        # regression cannot be masked by the other still-passing condition.
+        assert injected_message not in message, (
+            f"error.message must not leak the injected exception text: {message!r}"
+        )
+        assert injected_message not in hint, (
+            f"error.hint must not leak the injected exception text: {hint!r}"
+        )
