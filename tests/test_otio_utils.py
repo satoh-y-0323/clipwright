@@ -2774,6 +2774,8 @@ class TestAtomicWriteTempFileDetection:
         assert len(leftover_otio_files) > 0, (
             "Pattern must detect the stranded .otio temp file (AC-13)"
         )
+
+
 # ===========================================================================
 # Window contract tests for summarize_timeline (ADR-RD-16)
 # ===========================================================================
@@ -2955,16 +2957,17 @@ class TestSummarizeTimelineWindow:
 
         call_counts: dict[str, int] = {"clip_to_dict": 0, "marker_to_dict": 0}
 
+        # Capture the original reference before monkeypatching, so the spy
+        # forwards to the real implementation instead of recursing into itself.
+        import clipwright.otio_utils as otio_utils
+
+        original_clip_to_dict = otio_utils._clip_to_dict
+
         def spy_clip_to_dict(*args: object, **kwargs: object) -> object:
             call_counts["clip_to_dict"] += 1
-            # Forward to real implementation
-            from clipwright.otio_utils import _clip_to_dict
+            return original_clip_to_dict(*args, **kwargs)
 
-            return _clip_to_dict(*args, **kwargs)
-
-        monkeypatch.setattr(
-            "clipwright.otio_utils._clip_to_dict", spy_clip_to_dict
-        )
+        monkeypatch.setattr("clipwright.otio_utils._clip_to_dict", spy_clip_to_dict)
 
         # Test various window sizes
         for limit in [1, 2, 5, 10]:
@@ -2985,9 +2988,7 @@ class TestSummarizeTimelineWindow:
         def exception_stub(*args: object, **kwargs: object) -> object:
             raise AssertionError("_marker_to_dict should not be called")
 
-        monkeypatch.setattr(
-            "clipwright.otio_utils._marker_to_dict", exception_stub
-        )
+        monkeypatch.setattr("clipwright.otio_utils._marker_to_dict", exception_stub)
 
         # Call with markers_limit=0 should not call _marker_to_dict
         summary = summarize_timeline(tl, markers_limit=0)
@@ -3038,12 +3039,16 @@ class TestSummarizeTimelineWindow:
         assert full_summary["clips"][0]["index"] == 0  # V1's first clip
         assert full_summary["clips"][1]["index"] == 1  # V1's second clip
         assert full_summary["clips"][2]["index"] == 2  # V1's third clip
-        assert full_summary["clips"][3]["index"] == 0  # A1's first clip (resets per-track)
+        assert (
+            full_summary["clips"][3]["index"] == 0
+        )  # A1's first clip (resets per-track)
         assert full_summary["clips"][4]["index"] == 1  # A1's second clip
 
         # Window starting at offset 1 should not reset A1's indices
         window_summary = summarize_timeline(tl, clips_offset=1, clips_limit=2)
-        assert window_summary["clips"][0]["index"] == 1  # V1's second clip (not reset to 0)
+        assert (
+            window_summary["clips"][0]["index"] == 1
+        )  # V1's second clip (not reset to 0)
         assert window_summary["clips"][1]["index"] == 2  # V1's third clip
 
     def test_t1_6_counts_and_warnings_window_independent(self) -> None:
@@ -3059,7 +3064,9 @@ class TestSummarizeTimelineWindow:
         for offset, limit in [(0, 1), (1, 2), (3, 1)]:
             summary = summarize_timeline(tl, clips_offset=offset, clips_limit=limit)
             assert summary["clip_count"] == full_summary["clip_count"] == clip_count
-            assert summary["marker_count"] == full_summary["marker_count"] == marker_count
+            assert (
+                summary["marker_count"] == full_summary["marker_count"] == marker_count
+            )
             assert summary["total_duration"] == full_summary["total_duration"]
             assert summary["warnings"] == full_summary["warnings"]
 
@@ -3067,7 +3074,9 @@ class TestSummarizeTimelineWindow:
         """T1-7: markers_matched_count semantics (INV-3, ADR-RD-10)."""
         from clipwright.otio_utils import get_markers, summarize_timeline
 
-        tl, _, marker_count, caption_count = self._make_multi_track_timeline_with_markers()
+        tl, _, marker_count, caption_count = (
+            self._make_multi_track_timeline_with_markers()
+        )
 
         # Test 1: marker_kind=None -> markers_matched_count == marker_count
         summary_all = summarize_timeline(tl, marker_kind=None)
@@ -3076,7 +3085,11 @@ class TestSummarizeTimelineWindow:
         # Test 2: marker_kind="caption" -> markers_matched_count == get_markers(tl, "caption")
         summary_caption = summarize_timeline(tl, marker_kind="caption")
         caption_from_func = len(get_markers(tl, "caption"))
-        assert summary_caption["markers_matched_count"] == caption_from_func == caption_count
+        assert (
+            summary_caption["markers_matched_count"]
+            == caption_from_func
+            == caption_count
+        )
 
         # Test 3: marker_count is still pre-filter total
         assert summary_caption["marker_count"] == marker_count
@@ -3150,12 +3163,8 @@ class TestSummarizeTimelineWindow:
             return _marker_to_dict(*args, **kwargs)
 
         # Patch both functions (but we expect 0 calls)
-        monkeypatch.setattr(
-            "clipwright.otio_utils._clip_to_dict", spy_clip_to_dict
-        )
-        monkeypatch.setattr(
-            "clipwright.otio_utils._marker_to_dict", spy_marker_to_dict
-        )
+        monkeypatch.setattr("clipwright.otio_utils._clip_to_dict", spy_clip_to_dict)
+        monkeypatch.setattr("clipwright.otio_utils._marker_to_dict", spy_marker_to_dict)
 
         # Test limit=0 (empty window, no calls)
         call_counts = {"clip": 0, "marker": 0}

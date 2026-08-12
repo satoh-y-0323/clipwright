@@ -1925,7 +1925,6 @@ class TestTimelineUninitialisedProjectDirPreCheck:
         )
 
 
-
 # ===========================================================================
 # ADR-RD-16: lazy conversion cost contract for summarize_timeline
 # ===========================================================================
@@ -2003,9 +2002,7 @@ class TestReadTimelineLazyCost:
             call_count[0] += 1
             return original_clip_to_dict(*args, **kwargs)
 
-        monkeypatch.setattr(
-            clipwright.otio_utils, "_clip_to_dict", spy_clip_to_dict
-        )
+        monkeypatch.setattr(clipwright.otio_utils, "_clip_to_dict", spy_clip_to_dict)
 
         result = clipwright_read_timeline(
             project_dir=project_dir, section="clips", limit=1
@@ -2013,9 +2010,7 @@ class TestReadTimelineLazyCost:
 
         _assert_tool_result(result)
         data = result["data"]
-        assert len(data["clips"]) == 1, (
-            f"expected 1 clip, got {len(data['clips'])}"
-        )
+        assert len(data["clips"]) == 1, f"expected 1 clip, got {len(data['clips'])}"
         assert call_count[0] == 1, (
             f"_clip_to_dict must be called 1 time, not {call_count[0]}"
         )
@@ -2061,9 +2056,7 @@ class TestReadTimelineLazyCost:
                 "_clip_to_dict should not be called when section='markers'"
             )
 
-        monkeypatch.setattr(
-            clipwright.otio_utils, "_clip_to_dict", stub_clip_to_dict
-        )
+        monkeypatch.setattr(clipwright.otio_utils, "_clip_to_dict", stub_clip_to_dict)
 
         result = clipwright_read_timeline(
             project_dir=project_dir, section="markers", limit=50
@@ -2096,9 +2089,7 @@ class TestReadTimelineLazyCost:
             marker_call_count[0] += 1
             return original_marker_to_dict(*args, **kwargs)
 
-        monkeypatch.setattr(
-            clipwright.otio_utils, "_clip_to_dict", spy_clip_to_dict
-        )
+        monkeypatch.setattr(clipwright.otio_utils, "_clip_to_dict", spy_clip_to_dict)
         monkeypatch.setattr(
             clipwright.otio_utils, "_marker_to_dict", spy_marker_to_dict
         )
@@ -2188,9 +2179,7 @@ class TestReadTimelineLazyCost:
             clip_call_count[0] += 1
             return original_clip_to_dict(*args, **kwargs)
 
-        monkeypatch.setattr(
-            clipwright.otio_utils, "_clip_to_dict", spy_clip_to_dict
-        )
+        monkeypatch.setattr(clipwright.otio_utils, "_clip_to_dict", spy_clip_to_dict)
 
         result = clipwright_read_timeline(
             project_dir=project_dir,
@@ -2201,9 +2190,7 @@ class TestReadTimelineLazyCost:
         _assert_tool_error_result(result, "INVALID_INPUT")
         assert clip_call_count[0] == 0
 
-    def test_t2_6_pagination_parity_clips_section(
-        self, tmp_path: Path
-    ) -> None:
+    def test_t2_6_pagination_parity_clips_section(self, tmp_path: Path) -> None:
         """T2-6: Pagination metadata matches v0.40.0."""
         project_dir = self._setup_project(tmp_path)
         self._add_clips(project_dir, 60)
@@ -2269,9 +2256,7 @@ class TestReadTimelineLazyCost:
         assert data1.get("markers_truncated") is True
         assert data1.get("markers_next_offset") == 20
 
-    def test_t2_7_limit_clamp_501_to_500_with_warning(
-        self, tmp_path: Path
-    ) -> None:
+    def test_t2_7_limit_clamp_501_to_500_with_warning(self, tmp_path: Path) -> None:
         """T2-7: limit=501 is clamped to 500 with warning."""
         project_dir = self._setup_project(tmp_path)
         self._add_clips(project_dir, 600)

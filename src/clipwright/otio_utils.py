@@ -303,23 +303,48 @@ def _marker_matches_kind(marker: otio.schema.Marker, kind: str | None) -> bool:
 # ===========================================================================
 
 
-def summarize_timeline(timeline: otio.schema.Timeline) -> dict[str, Any]:
-    """Return statistics, clip list, and full marker list for a Timeline.
+def summarize_timeline(
+    timeline: otio.schema.Timeline,
+    *,
+    clips_offset: int = 0,
+    clips_limit: int | None = None,
+    markers_offset: int = 0,
+    markers_limit: int | None = None,
+    marker_kind: str | None = None,
+) -> dict[str, Any]:
+    """Return statistics, clips, and markers for a Timeline with optional windowing.
 
-    §13.5 DC-AM-001 re: always returns all items (no truncation).
-    Pagination is the responsibility of server.read_timeline; this function
-    always converts all clips and markers to dicts. The limit parameter
-    controls response size only, not computation cost within this function.
+    Window arguments (clips_offset, clips_limit, markers_offset, markers_limit,
+    marker_kind) bound both response size and per-entry conversion work (ADR-RD-16).
+    Only the requested window of clips and markers is converted to dicts.
 
-    Return value keys:
-      - clip_count: int
-      - gap_count: int
-      - marker_count: int
-      - total_duration: RationalTimeModel (§13.5 DC-AM-002 re)
-      - clips: list[dict] with keys (index, name, track, start, duration, media)
-        (ADR-RD-8/11/12; full list, no truncation)
-      - markers: list[dict] — [{name, time, kind}] full list
-      - warnings: list[str] — non-fatal warnings (e.g. duration failures) (M-4)
+    The .otio file itself is still parsed in full on every call (§4.1 ADR-RD-16),
+    so reading a very large timeline always costs one full parse.
+
+    Counts (clip_count, gap_count, marker_count), total_duration, and warnings
+    are always computed from the entire timeline and do not depend on window
+    arguments (P-2, INV-4).
+
+    Return value keys (8 total):
+      - clip_count: int — total clips in timeline (window-independent)
+      - gap_count: int — total gaps in timeline (window-independent)
+      - marker_count: int — markers before kind filter (window-independent)
+      - markers_matched_count: int — markers after kind filter (new, INV-3)
+      - total_duration: RationalTimeModel — max track length (independent)
+      - clips: list[dict] — windowed clips (index, name, track, start, duration,
+        media)
+      - markers: list[dict] — windowed markers after kind filter (name, time,
+        kind)
+      - warnings: list[str] — from entire timeline (window-independent)
+
+    Window arguments:
+      - clips_offset, clips_limit: control which clips are converted and returned
+        (clips_limit=None means no limit; clips_limit=0 means empty window)
+      - markers_offset, markers_limit: control markers returned after kind filter
+      - marker_kind: filter by metadata["clipwright"]["kind"] before windowing
+        (None means accept all kinds; "" means markers with empty kind only)
+
+    Default behavior (all window args omitted) matches v0.40.0 completely (INV-1).
 
     total_duration computation rules (§13.5 DC-AM-002 re):
       - Maximum of all track lengths (not the sum)
@@ -327,11 +352,21 @@ def summarize_timeline(timeline: otio.schema.Timeline) -> dict[str, Any]:
       - Returns RationalTime(0, global rate) when there are no clips
 
     clips list contract (ADR-RD-8/11/12):
-      - Contains all clips in track order; clip index resets per track.
-      - source_range=None clips included with start/duration=None; warning added.
-      - Ordering: V1 clips → A1 clips → … (no time-based sort).
-      - Invariant: len(clips) == clip_count always holds.
+      - Contains windowed clips in track order; clip index is per-track absolute
+        (not reset by window offset; ADR-RD-5).
+      - source_range=None clips included with start/duration=None; warning always
+        added even if clip is outside window (P-2).
+      - Ordering: V1 clips → A1 clips → … (no time-based sort; ADR-RD-8).
+      - Invariant with default window args: len(clips) == clip_count.
     """
+    # Validate window arguments (fail-loud; fixed message, no values exposed, CWE-209)
+    if clips_offset < 0 or markers_offset < 0:
+        raise ValueError("summarize_timeline offsets must be zero or greater")
+    if (clips_limit is not None and clips_limit < 0) or (
+        markers_limit is not None and markers_limit < 0
+    ):
+        raise ValueError("summarize_timeline limits must be zero or greater, or None")
+
     clip_count = 0
     gap_count = 0
     clips: list[dict[str, Any]] = []
@@ -340,16 +375,27 @@ def summarize_timeline(timeline: otio.schema.Timeline) -> dict[str, Any]:
     # Determine global rate: read rate from the first clip in V1
     global_rate = _resolve_global_rate(timeline)
 
-    # Iterate all tracks to count items, collect clips, and compute duration
+    # Precompute window end for clips (§4.1)
+    clips_window_end = None if clips_limit is None else clips_offset + clips_limit
+
+    # Iterate all tracks to count items, collect windowed clips, compute duration
     track_durations_sec: list[float] = []
     for track_index, track in enumerate(timeline.tracks):
-        clip_index = 0  # Per-track counter, reset for each track
+        # Per-track counter, absolute value (never reset by window; INV-6)
+        clip_index = 0
         for item in track:
             if isinstance(item, otio.schema.Clip):
+                # Global scan position before incrementing (§4.1)
+                scan_pos = clip_count
                 clip_count += 1
-                clips.append(_clip_to_dict(item, clip_index, track, track_index))
+                # Apply window: convert if within [clips_offset, clips_window_end)
+                if clips_offset <= scan_pos and (
+                    clips_window_end is None or scan_pos < clips_window_end
+                ):
+                    clips.append(_clip_to_dict(item, clip_index, track, track_index))
                 clip_index += 1
-                # Warn if source_range is None (ADR-RD-12)
+                # Warn if source_range is None (ADR-RD-12, §4.1 R-4: warnings
+                # always added, even if clip is outside window)
                 if item.source_range is None:
                     warnings.append(
                         f"Clip {clip_index - 1} on track {track_index} "
@@ -364,12 +410,23 @@ def summarize_timeline(timeline: otio.schema.Timeline) -> dict[str, Any]:
         if warn is not None:
             warnings.append(warn)
 
-    # Collect all markers using get_markers (ADR-RD-9: unified traversal order)
+    # Collect all markers using get_markers once (ADR-RD-9, §4.2)
     marker_objects = get_markers(timeline)
-    markers = [_marker_to_dict(m) for m in marker_objects]
+    marker_count = len(marker_objects)  # Pre-filter total (ADR-RD-10, INV-3)
 
-    # marker_count is the total number of markers
-    marker_count = len(markers)
+    # Apply kind filter with order preservation (§4.2 R-3, INV-3)
+    if marker_kind is None:
+        matched = marker_objects
+    else:
+        matched = [m for m in marker_objects if _marker_matches_kind(m, marker_kind)]
+    markers_matched_count = len(matched)
+
+    # Apply window to filtered markers and convert to dicts
+    if markers_limit is None:
+        marker_window = matched[markers_offset:]
+    else:
+        marker_window = matched[markers_offset : markers_offset + markers_limit]
+    markers = [_marker_to_dict(m) for m in marker_window]
 
     # total_duration: maximum of all track lengths
     max_sec = max(track_durations_sec) if track_durations_sec else 0.0
@@ -385,6 +442,7 @@ def summarize_timeline(timeline: otio.schema.Timeline) -> dict[str, Any]:
         "clip_count": clip_count,
         "gap_count": gap_count,
         "marker_count": marker_count,
+        "markers_matched_count": markers_matched_count,
         "total_duration": total_duration,
         "clips": clips,
         "markers": markers,
