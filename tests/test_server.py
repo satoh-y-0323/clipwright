@@ -1923,3 +1923,393 @@ class TestTimelineUninitialisedProjectDirPreCheck:
         assert "clipwright_init_project" in hint, (
             f"hint must point to clipwright_init_project as the next action: {hint!r}"
         )
+
+
+
+# ===========================================================================
+# ADR-RD-16: lazy conversion cost contract for summarize_timeline
+# ===========================================================================
+
+
+class TestReadTimelineLazyCost:
+    """ADR-RD-16: verify that summarize_timeline only converts clips/markers
+    in the requested window, not discarding unwanted items after conversion.
+
+    Uses monkeypatch to spy on _clip_to_dict and _marker_to_dict calls to
+    ensure the conversion work is proportional to the returned data size,
+    not the timeline size (P-1: per-item cost is skipped for window-external
+    entries).
+    """
+
+    def _setup_project(self, tmp_path: Path, name: str = "test") -> str:
+        """Initialise a test project and return project_dir."""
+        project_dir = str(tmp_path / "proj")
+        clipwright_init_project(project_dir=project_dir, name=name)
+        return project_dir
+
+    def _add_clips(self, project_dir: str, count: int) -> None:
+        """Helper: add N clips to a timeline via write_timeline."""
+        ops = [
+            {
+                "op": "add_clip",
+                "track": 0,
+                "media": {"target_url": f"file:///tmp/clip_{i:03d}.mp4"},
+                "source_range": {
+                    "start_time": {"value": 0.0, "rate": 30.0},
+                    "duration": {"value": 10.0, "rate": 30.0},
+                },
+                "name": f"clip_{i:03d}",
+            }
+            for i in range(count)
+        ]
+        result = clipwright_write_timeline(
+            project_dir=project_dir, operations=ops, validate_only=False
+        )
+        assert result.get("ok"), f"precondition: add_clip setup failed: {result}"
+
+    def _add_markers(self, project_dir: str, count: int) -> None:
+        """Helper: add N markers to a timeline via write_timeline."""
+        ops = [
+            {
+                "op": "add_marker",
+                "track": 0,
+                "marked_range": {
+                    "start_time": {"value": float(i), "rate": 30.0},
+                    "duration": {"value": 1.0, "rate": 30.0},
+                },
+                "name": f"marker_{i:03d}",
+            }
+            for i in range(count)
+        ]
+        result = clipwright_write_timeline(
+            project_dir=project_dir, operations=ops, validate_only=False
+        )
+        assert result.get("ok"), f"precondition: add_marker setup failed: {result}"
+
+    def test_t2_1_clips_limit_1_converts_one_clip_only(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """T2-1: section='clips', limit=1 with 60 clips results in
+        _clip_to_dict called exactly 1 time, not 60."""
+        project_dir = self._setup_project(tmp_path)
+        self._add_clips(project_dir, 60)
+
+        import clipwright.otio_utils
+
+        original_clip_to_dict = clipwright.otio_utils._clip_to_dict
+        call_count = [0]
+
+        def spy_clip_to_dict(*args: Any, **kwargs: Any) -> Any:
+            call_count[0] += 1
+            return original_clip_to_dict(*args, **kwargs)
+
+        monkeypatch.setattr(
+            clipwright.otio_utils, "_clip_to_dict", spy_clip_to_dict
+        )
+
+        result = clipwright_read_timeline(
+            project_dir=project_dir, section="clips", limit=1
+        )
+
+        _assert_tool_result(result)
+        data = result["data"]
+        assert len(data["clips"]) == 1, (
+            f"expected 1 clip, got {len(data['clips'])}"
+        )
+        assert call_count[0] == 1, (
+            f"_clip_to_dict must be called 1 time, not {call_count[0]}"
+        )
+
+    def test_t2_2_clips_section_zero_markers_converted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """T2-2: section='clips' does not convert any markers."""
+        project_dir = self._setup_project(tmp_path)
+        self._add_clips(project_dir, 10)
+        self._add_markers(project_dir, 5)
+
+        import clipwright.otio_utils
+
+        def stub_marker_to_dict(*args: Any, **kwargs: Any) -> Any:
+            raise AssertionError(
+                "_marker_to_dict should not be called when section='clips'"
+            )
+
+        monkeypatch.setattr(
+            clipwright.otio_utils, "_marker_to_dict", stub_marker_to_dict
+        )
+
+        result = clipwright_read_timeline(
+            project_dir=project_dir, section="clips", limit=50
+        )
+
+        _assert_tool_result(result)
+        assert "clips" in result["data"]
+
+    def test_t2_2_markers_section_zero_clips_converted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """T2-2: section='markers' does not convert any clips."""
+        project_dir = self._setup_project(tmp_path)
+        self._add_clips(project_dir, 10)
+        self._add_markers(project_dir, 5)
+
+        import clipwright.otio_utils
+
+        def stub_clip_to_dict(*args: Any, **kwargs: Any) -> Any:
+            raise AssertionError(
+                "_clip_to_dict should not be called when section='markers'"
+            )
+
+        monkeypatch.setattr(
+            clipwright.otio_utils, "_clip_to_dict", stub_clip_to_dict
+        )
+
+        result = clipwright_read_timeline(
+            project_dir=project_dir, section="markers", limit=50
+        )
+
+        _assert_tool_result(result)
+        assert "markers" in result["data"]
+
+    def test_t2_3_overview_call_counts_match_window_size(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """T2-3: section=None (overview) calls conversion functions
+        a number of times equal to min(limit, total_count)."""
+        project_dir = self._setup_project(tmp_path)
+        self._add_clips(project_dir, 25)
+        self._add_markers(project_dir, 20)
+
+        import clipwright.otio_utils
+
+        original_clip_to_dict = clipwright.otio_utils._clip_to_dict
+        original_marker_to_dict = clipwright.otio_utils._marker_to_dict
+        clip_call_count = [0]
+        marker_call_count = [0]
+
+        def spy_clip_to_dict(*args: Any, **kwargs: Any) -> Any:
+            clip_call_count[0] += 1
+            return original_clip_to_dict(*args, **kwargs)
+
+        def spy_marker_to_dict(*args: Any, **kwargs: Any) -> Any:
+            marker_call_count[0] += 1
+            return original_marker_to_dict(*args, **kwargs)
+
+        monkeypatch.setattr(
+            clipwright.otio_utils, "_clip_to_dict", spy_clip_to_dict
+        )
+        monkeypatch.setattr(
+            clipwright.otio_utils, "_marker_to_dict", spy_marker_to_dict
+        )
+
+        result = clipwright_read_timeline(
+            project_dir=project_dir, section=None, limit=10
+        )
+
+        _assert_tool_result(result)
+        data = result["data"]
+        expected_clip_count = min(10, 25)
+        expected_marker_count = min(10, 20)
+
+        assert len(data["clips"]) == expected_clip_count
+        assert len(data["markers"]) == expected_marker_count
+        assert clip_call_count[0] == expected_clip_count
+        assert marker_call_count[0] == expected_marker_count
+
+    def test_t2_4_marker_kind_filter_call_count_matches_results(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """T2-4: _marker_to_dict is called once per matching marker
+        in the window, not per total matching marker."""
+        project_dir = self._setup_project(tmp_path)
+        self._add_clips(project_dir, 10)
+
+        ops = []
+        for i in range(20):
+            ops.append(
+                {
+                    "op": "add_marker",
+                    "track": 0,
+                    "marked_range": {
+                        "start_time": {"value": float(i), "rate": 30.0},
+                        "duration": {"value": 1.0, "rate": 30.0},
+                    },
+                    "name": f"marker_{i:03d}",
+                    "metadata": {
+                        "clipwright": {"kind": "caption" if i % 2 == 0 else "cue"}
+                    },
+                }
+            )
+        result = clipwright_write_timeline(
+            project_dir=project_dir, operations=ops, validate_only=False
+        )
+        assert result.get("ok")
+
+        import clipwright.otio_utils
+
+        original_marker_to_dict = clipwright.otio_utils._marker_to_dict
+        marker_call_count = [0]
+
+        def spy_marker_to_dict(*args: Any, **kwargs: Any) -> Any:
+            marker_call_count[0] += 1
+            return original_marker_to_dict(*args, **kwargs)
+
+        monkeypatch.setattr(
+            clipwright.otio_utils, "_marker_to_dict", spy_marker_to_dict
+        )
+
+        result = clipwright_read_timeline(
+            project_dir=project_dir,
+            section="markers",
+            limit=5,
+            marker_kind="caption",
+        )
+
+        _assert_tool_result(result)
+        data = result["data"]
+        returned_count = len(data["markers"])
+
+        assert marker_call_count[0] == returned_count
+
+    def test_t2_5_offset_past_end_returns_invalid_input_no_conversion(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """T2-5: Offset past end returns INVALID_INPUT with no conversion."""
+        project_dir = self._setup_project(tmp_path)
+        self._add_clips(project_dir, 30)
+
+        import clipwright.otio_utils
+
+        original_clip_to_dict = clipwright.otio_utils._clip_to_dict
+        clip_call_count = [0]
+
+        def spy_clip_to_dict(*args: Any, **kwargs: Any) -> Any:
+            clip_call_count[0] += 1
+            return original_clip_to_dict(*args, **kwargs)
+
+        monkeypatch.setattr(
+            clipwright.otio_utils, "_clip_to_dict", spy_clip_to_dict
+        )
+
+        result = clipwright_read_timeline(
+            project_dir=project_dir,
+            section="clips",
+            offset=100,
+        )
+
+        _assert_tool_error_result(result, "INVALID_INPUT")
+        assert clip_call_count[0] == 0
+
+    def test_t2_6_pagination_parity_clips_section(
+        self, tmp_path: Path
+    ) -> None:
+        """T2-6: Pagination metadata matches v0.40.0."""
+        project_dir = self._setup_project(tmp_path)
+        self._add_clips(project_dir, 60)
+
+        result1 = clipwright_read_timeline(
+            project_dir=project_dir, section="clips", limit=50
+        )
+        _assert_tool_result(result1)
+        data1 = result1["data"]
+
+        assert len(data1["clips"]) == 50
+        assert data1.get("clips_truncated") is True
+        assert data1.get("clips_next_offset") == 50
+
+        result2 = clipwright_read_timeline(
+            project_dir=project_dir, section="clips", offset=50, limit=50
+        )
+        _assert_tool_result(result2)
+        data2 = result2["data"]
+
+        assert len(data2["clips"]) == 10
+        assert data2.get("clips_truncated") is False
+        assert data2.get("clips_next_offset") is None
+
+    def test_t2_6_pagination_parity_markers_with_kind_filter(
+        self, tmp_path: Path
+    ) -> None:
+        """T2-6 extended: marker_kind filtering works with pagination."""
+        project_dir = self._setup_project(tmp_path)
+        self._add_clips(project_dir, 10)
+
+        ops = []
+        for i in range(60):
+            ops.append(
+                {
+                    "op": "add_marker",
+                    "track": 0,
+                    "marked_range": {
+                        "start_time": {"value": float(i), "rate": 30.0},
+                        "duration": {"value": 1.0, "rate": 30.0},
+                    },
+                    "name": f"marker_{i:03d}",
+                    "metadata": {
+                        "clipwright": {"kind": "caption" if i % 2 == 0 else "cue"}
+                    },
+                }
+            )
+        result = clipwright_write_timeline(
+            project_dir=project_dir, operations=ops, validate_only=False
+        )
+        assert result.get("ok")
+
+        result1 = clipwright_read_timeline(
+            project_dir=project_dir,
+            section="markers",
+            limit=20,
+            marker_kind="caption",
+        )
+        _assert_tool_result(result1)
+        data1 = result1["data"]
+
+        assert len(data1["markers"]) == 20
+        assert data1.get("markers_truncated") is True
+        assert data1.get("markers_next_offset") == 20
+
+    def test_t2_7_limit_clamp_501_to_500_with_warning(
+        self, tmp_path: Path
+    ) -> None:
+        """T2-7: limit=501 is clamped to 500 with warning."""
+        project_dir = self._setup_project(tmp_path)
+        self._add_clips(project_dir, 600)
+
+        result = clipwright_read_timeline(
+            project_dir=project_dir, section="clips", limit=501
+        )
+
+        _assert_tool_result(result)
+        data = result["data"]
+        warnings = result["warnings"]
+
+        assert len(data["clips"]) == 500
+        clamp_warning = [w for w in warnings if "limit" in w.lower() and "500" in w]
+        assert len(clamp_warning) > 0
+
+    def test_t2_8_summarize_exception_returns_internal_envelope_no_path_leak(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """T2-8 (ADR-RD-17): summarize_timeline exception returns INTERNAL
+        without path leaks (CWE-209)."""
+        project_dir = self._setup_project(tmp_path)
+        self._add_clips(project_dir, 10)
+
+        import clipwright.otio_utils
+
+        def broken_summarize(*args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("Simulated summarize_timeline failure")
+
+        monkeypatch.setattr(
+            clipwright.otio_utils, "summarize_timeline", broken_summarize
+        )
+
+        result = clipwright_read_timeline(project_dir=project_dir)
+
+        _assert_tool_error_result(result, "INTERNAL")
+        error = result["error"]
+        message = error["message"]
+        hint = error["hint"]
+
+        _assert_no_path_leak(message, hint, project_dir, tmp_path)

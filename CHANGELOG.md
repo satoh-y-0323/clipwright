@@ -5,6 +5,44 @@ All notable changes to `clipwright` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.41.0] - 2026-08-13
+
+### Security (`clipwright` core v0.10.0)
+
+- `clipwright_read_timeline`'s `offset` / `limit` now bound the conversion
+  work as well as the response size. `summarize_timeline` converts only the
+  clips and markers of the requested window into dicts and Pydantic models,
+  instead of converting every entry of the timeline and then discarding the
+  ones outside the page. This shrinks the uncontrolled-resource-consumption
+  surface (CWE-400 class) when reading a large, externally supplied `.otio`.
+
+### Changed (`clipwright` core v0.10.0)
+
+- The documented meaning of `limit` changed from "bounds the response size
+  only" to "bounds the response size and the per-entry conversion work —
+  only the requested window is converted". The `.otio` file itself is still
+  parsed in full on every call. The `limit` description in the MCP
+  `inputSchema` and the tool docstring were updated accordingly.
+- Boundary behaviour of `marker_kind=""` (empty string) changed: markers
+  that carry no `kind` in their `clipwright` metadata no longer match it.
+  The filter predicate is now the same one `get_markers` uses, instead of
+  comparing the already-converted dict field whose default was an empty
+  string. Queries with a non-empty `marker_kind` are unaffected.
+- Unexpected exceptions raised from `summarize_timeline` are now returned as
+  an `INTERNAL` error envelope instead of propagating out of the tool.
+
+### Notes
+
+- This change skips the conversion of out-of-window entries; it is not an
+  early exit from the timeline scan. The counts (`clip_count` / `gap_count`
+  / `marker_count`), `total_duration` and `warnings` are still computed over
+  the whole timeline and therefore do not vary between pages.
+- Deserialising the `.otio` file (one full parse per call) is out of scope
+  for this change and remains. Reading a very large timeline always costs
+  that one full parse, whatever `limit` is set to.
+- No satellite package needs a code change or a `clipwright>=` floor bump:
+  no satellite package references `summarize_timeline` (verified).
+
 ## [0.40.0] - 2026-07-29
 
 ### Added (`clipwright` core v0.9.0)

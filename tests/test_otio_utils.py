@@ -2412,7 +2412,8 @@ class TestClipsToDictContract:
 
     def test_existing_keys_unchanged(self) -> None:
         """Existing keys (clip_count, gap_count, marker_count, total_duration,
-        markers, warnings) remain unchanged in type and meaning."""
+        markers, warnings) plus new keys (clips, markers_matched_count) remain
+        unchanged in type and meaning."""
         tl = new_timeline("existing_keys")
         summary = summarize_timeline(tl)
 
@@ -2423,8 +2424,9 @@ class TestClipsToDictContract:
         assert isinstance(summary["total_duration"], RationalTimeModel)
         assert isinstance(summary["markers"], list)
         assert isinstance(summary["warnings"], list)
+        assert isinstance(summary["markers_matched_count"], int)
 
-        # Verify no extra keys (except clips, which is new)
+        # Verify key set: old keys + clips + markers_matched_count
         expected_keys_old = {
             "clip_count",
             "gap_count",
@@ -2433,10 +2435,10 @@ class TestClipsToDictContract:
             "markers",
             "warnings",
         }
-        expected_keys_new = expected_keys_old | {"clips"}
+        expected_keys_new = expected_keys_old | {"clips", "markers_matched_count"}
         actual_keys = set(summary.keys())
         assert actual_keys == expected_keys_new, (
-            f"Keys must be old + clips. Got {actual_keys}"
+            f"Keys must be old + clips + markers_matched_count. Got {actual_keys}"
         )
 
 
@@ -2772,3 +2774,433 @@ class TestAtomicWriteTempFileDetection:
         assert len(leftover_otio_files) > 0, (
             "Pattern must detect the stranded .otio temp file (AC-13)"
         )
+# ===========================================================================
+# Window contract tests for summarize_timeline (ADR-RD-16)
+# ===========================================================================
+
+
+class TestSummarizeTimelineWindow:
+    """Window contract tests for summarize_timeline window arguments
+    (clips_offset, clips_limit, markers_offset, markers_limit, marker_kind).
+
+    Tests validate invariants INV-1 through INV-6 and properties P-1, P-2
+    (ADR-RD-16, §4.4, §9.2).
+    """
+
+    def _make_multi_track_timeline_with_markers(
+        self,
+    ) -> tuple[object, int, int, int]:
+        """Create a timeline with multiple tracks, gaps, and mixed markers.
+
+        Returns: (timeline, clip_count, marker_count, marker_with_caption_count)
+        - V1: 3 clips + 1 gap
+        - A1: 2 clips + 1 gap
+        - Markers: 2x caption, 1x normal, 1x no metadata, 1x kind=""
+        """
+        import opentimelineio as otio
+
+        from clipwright.otio_utils import new_timeline
+
+        tl = new_timeline("window_test")
+        v1_track = tl.tracks[0]
+        a1_track = tl.tracks[1]
+
+        # V1: clip 0, gap, clip 1, clip 2
+        media_ref_v1_0 = otio.schema.ExternalReference(target_url="file:///v1_0.mov")
+        clip_v1_0 = otio.schema.Clip(
+            name="V1_clip_0",
+            media_reference=media_ref_v1_0,
+            source_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0.0, 30.0),
+                duration=otio.opentime.RationalTime(10.0, 30.0),
+            ),
+        )
+        v1_track.append(clip_v1_0)
+
+        gap_v1 = otio.schema.Gap(
+            source_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0.0, 30.0),
+                duration=otio.opentime.RationalTime(5.0, 30.0),
+            )
+        )
+        v1_track.append(gap_v1)
+
+        media_ref_v1_1 = otio.schema.ExternalReference(target_url="file:///v1_1.mov")
+        clip_v1_1 = otio.schema.Clip(
+            name="V1_clip_1",
+            media_reference=media_ref_v1_1,
+            source_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0.0, 30.0),
+                duration=otio.opentime.RationalTime(10.0, 30.0),
+            ),
+        )
+        v1_track.append(clip_v1_1)
+
+        media_ref_v1_2 = otio.schema.ExternalReference(target_url="file:///v1_2.mov")
+        clip_v1_2 = otio.schema.Clip(
+            name="V1_clip_2",
+            media_reference=media_ref_v1_2,
+            source_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0.0, 30.0),
+                duration=otio.opentime.RationalTime(10.0, 30.0),
+            ),
+        )
+        v1_track.append(clip_v1_2)
+
+        # A1: clip 0, clip 1, gap
+        media_ref_a1_0 = otio.schema.ExternalReference(target_url="file:///a1_0.wav")
+        clip_a1_0 = otio.schema.Clip(
+            name="A1_clip_0",
+            media_reference=media_ref_a1_0,
+            source_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0.0, 48.0),
+                duration=otio.opentime.RationalTime(10.0, 48.0),
+            ),
+        )
+        a1_track.append(clip_a1_0)
+
+        media_ref_a1_1 = otio.schema.ExternalReference(target_url="file:///a1_1.wav")
+        clip_a1_1 = otio.schema.Clip(
+            name="A1_clip_1",
+            media_reference=media_ref_a1_1,
+            source_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0.0, 48.0),
+                duration=otio.opentime.RationalTime(10.0, 48.0),
+            ),
+        )
+        a1_track.append(clip_a1_1)
+
+        gap_a1 = otio.schema.Gap(
+            source_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0.0, 48.0),
+                duration=otio.opentime.RationalTime(5.0, 48.0),
+            )
+        )
+        a1_track.append(gap_a1)
+
+        # Markers: 2x caption, 1x normal, 1x no metadata, 1x kind=""
+        marker_caption_1 = otio.schema.Marker(
+            name="caption_1",
+            marked_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0.0, 30.0),
+                duration=otio.opentime.RationalTime(1.0, 30.0),
+            ),
+        )
+        marker_caption_1.metadata["clipwright"] = {"kind": "caption"}
+        v1_track.markers.append(marker_caption_1)
+
+        marker_caption_2 = otio.schema.Marker(
+            name="caption_2",
+            marked_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(10.0, 30.0),
+                duration=otio.opentime.RationalTime(1.0, 30.0),
+            ),
+        )
+        marker_caption_2.metadata["clipwright"] = {"kind": "caption"}
+        v1_track.markers.append(marker_caption_2)
+
+        marker_normal = otio.schema.Marker(
+            name="normal_1",
+            marked_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(20.0, 30.0),
+                duration=otio.opentime.RationalTime(1.0, 30.0),
+            ),
+        )
+        marker_normal.metadata["clipwright"] = {"kind": "normal"}
+        a1_track.markers.append(marker_normal)
+
+        # No metadata marker
+        marker_no_meta = otio.schema.Marker(
+            name="no_meta",
+            marked_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(5.0, 48.0),
+                duration=otio.opentime.RationalTime(1.0, 48.0),
+            ),
+        )
+        a1_track.markers.append(marker_no_meta)
+
+        # kind="" marker (explicitly set)
+        marker_empty_kind = otio.schema.Marker(
+            name="empty_kind",
+            marked_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(15.0, 48.0),
+                duration=otio.opentime.RationalTime(1.0, 48.0),
+            ),
+        )
+        marker_empty_kind.metadata["clipwright"] = {"kind": ""}
+        a1_track.markers.append(marker_empty_kind)
+
+        # Total: 5 clips, 2 gaps, 5 markers (2 caption + 1 normal + 1 no-meta + 1 empty-kind)
+        return tl, 5, 5, 2  # clip_count=5, marker_count=5, marker_with_caption_count=2
+
+    def test_t1_1_default_args_returns_all_items(self) -> None:
+        """T1-1: Default args return all items (INV-1)."""
+        from clipwright.otio_utils import summarize_timeline
+
+        tl, clip_count, marker_count, _ = self._make_multi_track_timeline_with_markers()
+
+        summary = summarize_timeline(tl)
+        assert len(summary["clips"]) == clip_count
+        assert len(summary["markers"]) == marker_count
+        assert summary["clip_count"] == clip_count
+        assert summary["marker_count"] == marker_count
+
+    def test_t1_2_window_size_matches_call_count(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """T1-2: Window size matches _clip_to_dict call count (INV-5, P-1)."""
+        from clipwright.otio_utils import summarize_timeline
+
+        tl, clip_count, _, _ = self._make_multi_track_timeline_with_markers()
+
+        call_counts: dict[str, int] = {"clip_to_dict": 0, "marker_to_dict": 0}
+
+        def spy_clip_to_dict(*args: object, **kwargs: object) -> object:
+            call_counts["clip_to_dict"] += 1
+            # Forward to real implementation
+            from clipwright.otio_utils import _clip_to_dict
+
+            return _clip_to_dict(*args, **kwargs)
+
+        monkeypatch.setattr(
+            "clipwright.otio_utils._clip_to_dict", spy_clip_to_dict
+        )
+
+        # Test various window sizes
+        for limit in [1, 2, 5, 10]:
+            call_counts["clip_to_dict"] = 0
+            summary = summarize_timeline(tl, clips_limit=limit)
+            expected_call_count = min(limit, clip_count)
+            assert call_counts["clip_to_dict"] == expected_call_count
+            assert len(summary["clips"]) == expected_call_count
+
+    def test_t1_3_reverse_list_no_conversion_when_excluded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """T1-3: Reverse list (markers) has 0 conversion when excluded (INV-5)."""
+        from clipwright.otio_utils import summarize_timeline
+
+        tl, _, _, _ = self._make_multi_track_timeline_with_markers()
+
+        def exception_stub(*args: object, **kwargs: object) -> object:
+            raise AssertionError("_marker_to_dict should not be called")
+
+        monkeypatch.setattr(
+            "clipwright.otio_utils._marker_to_dict", exception_stub
+        )
+
+        # Call with markers_limit=0 should not call _marker_to_dict
+        summary = summarize_timeline(tl, markers_limit=0)
+        assert len(summary["markers"]) == 0
+
+    def test_t1_4_window_slice_parity_multi_track(self) -> None:
+        """T1-4: Window == full slice parity across track boundaries (INV-2)."""
+        from clipwright.otio_utils import summarize_timeline
+
+        tl, clip_count, _, _ = self._make_multi_track_timeline_with_markers()
+
+        # Get full summary
+        full_summary = summarize_timeline(tl)
+
+        # Test various window combinations, including cross-track boundaries
+        test_cases = [
+            (0, 1),  # First clip only
+            (0, 2),  # First two clips
+            (1, 2),  # Clips 1-2 (crosses V1/A1 boundary)
+            (2, 2),  # Clips 2-3
+            (3, 2),  # Clips 3-4 (in A1)
+            (4, 1),  # Last clip only
+            (0, 10),  # Beyond total (should clamp)
+            (4, 10),  # From end (should clamp)
+        ]
+
+        for offset, limit in test_cases:
+            summary = summarize_timeline(tl, clips_offset=offset, clips_limit=limit)
+            expected_clips = full_summary["clips"][offset : offset + limit]
+            assert summary["clips"] == expected_clips, (
+                f"Parity failed for (offset={offset}, limit={limit})"
+            )
+
+    def test_t1_5_clip_index_absolute_value(self) -> None:
+        """T1-5: clip.index is absolute per-track value, not reset by window (INV-6)."""
+        from clipwright.otio_utils import summarize_timeline
+
+        tl, _, _, _ = self._make_multi_track_timeline_with_markers()
+
+        # Get full summary to see indices
+        full_summary = summarize_timeline(tl)
+
+        # V1 has: clip(index=0), gap, clip(index=1), clip(index=2) -> 3 clips
+        # A1 has: clip(index=0), clip(index=1), gap -> 2 clips
+        # Global order: V1[0], V1[1], V1[2], A1[0], A1[1]
+
+        # Index should match global position in first clip of a track
+        assert full_summary["clips"][0]["index"] == 0  # V1's first clip
+        assert full_summary["clips"][1]["index"] == 1  # V1's second clip
+        assert full_summary["clips"][2]["index"] == 2  # V1's third clip
+        assert full_summary["clips"][3]["index"] == 0  # A1's first clip (resets per-track)
+        assert full_summary["clips"][4]["index"] == 1  # A1's second clip
+
+        # Window starting at offset 1 should not reset A1's indices
+        window_summary = summarize_timeline(tl, clips_offset=1, clips_limit=2)
+        assert window_summary["clips"][0]["index"] == 1  # V1's second clip (not reset to 0)
+        assert window_summary["clips"][1]["index"] == 2  # V1's third clip
+
+    def test_t1_6_counts_and_warnings_window_independent(self) -> None:
+        """T1-6: clip_count, duration, warnings are window-independent (INV-4, P-2)."""
+        from clipwright.otio_utils import summarize_timeline
+
+        tl, clip_count, marker_count, _ = self._make_multi_track_timeline_with_markers()
+
+        # Get full summary
+        full_summary = summarize_timeline(tl)
+
+        # Test with various windows
+        for offset, limit in [(0, 1), (1, 2), (3, 1)]:
+            summary = summarize_timeline(tl, clips_offset=offset, clips_limit=limit)
+            assert summary["clip_count"] == full_summary["clip_count"] == clip_count
+            assert summary["marker_count"] == full_summary["marker_count"] == marker_count
+            assert summary["total_duration"] == full_summary["total_duration"]
+            assert summary["warnings"] == full_summary["warnings"]
+
+    def test_t1_7_markers_matched_count_semantics(self) -> None:
+        """T1-7: markers_matched_count semantics (INV-3, ADR-RD-10)."""
+        from clipwright.otio_utils import get_markers, summarize_timeline
+
+        tl, _, marker_count, caption_count = self._make_multi_track_timeline_with_markers()
+
+        # Test 1: marker_kind=None -> markers_matched_count == marker_count
+        summary_all = summarize_timeline(tl, marker_kind=None)
+        assert summary_all["markers_matched_count"] == marker_count
+
+        # Test 2: marker_kind="caption" -> markers_matched_count == get_markers(tl, "caption")
+        summary_caption = summarize_timeline(tl, marker_kind="caption")
+        caption_from_func = len(get_markers(tl, "caption"))
+        assert summary_caption["markers_matched_count"] == caption_from_func == caption_count
+
+        # Test 3: marker_count is still pre-filter total
+        assert summary_caption["marker_count"] == marker_count
+
+    def test_t1_8_kind_filter_slice_parity(self) -> None:
+        """T1-8: kind-filtered window matches get_markers slice (INV-3)."""
+        from clipwright.otio_utils import get_markers, summarize_timeline
+
+        tl, _, _, _ = self._make_multi_track_timeline_with_markers()
+
+        # Get all caption markers via get_markers
+        caption_markers = get_markers(tl, "caption")
+
+        # Test window into caption markers
+        for offset, limit in [(0, 1), (1, 1), (0, 10)]:
+            summary = summarize_timeline(
+                tl, markers_offset=offset, markers_limit=limit, marker_kind="caption"
+            )
+            expected_markers = caption_markers[offset : offset + limit]
+            assert len(summary["markers"]) == len(expected_markers)
+            for i, (actual_dict, expected_marker) in enumerate(
+                zip(summary["markers"], expected_markers, strict=False)
+            ):
+                assert actual_dict["name"] == expected_marker.name, (
+                    f"Marker {i} name mismatch"
+                )
+
+    def test_t1_9_marker_kind_empty_string_semantics(self) -> None:
+        """T1-9: marker_kind='' new semantics (§6.3, ADR-RD-16)."""
+        from clipwright.otio_utils import get_markers, summarize_timeline
+
+        tl, _, _, _ = self._make_multi_track_timeline_with_markers()
+
+        # Query for marker_kind=""
+        # Should match markers with kind="" explicitly set, not markers without metadata
+        summary = summarize_timeline(tl, marker_kind="")
+        matched_count = summary["markers_matched_count"]
+
+        # Use get_markers to verify
+        expected = get_markers(tl, "")
+        assert matched_count == len(expected)
+
+        # The empty_kind marker should match, but no_meta should not
+        # empty_kind marker name should be in results
+        marker_names = {m["name"] for m in summary["markers"]}
+        assert "empty_kind" in marker_names
+
+        # no_meta marker should not match empty string
+        assert "no_meta" not in marker_names
+
+    def test_t1_10_limit_zero_and_offset_past_end(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """T1-10: limit=0 is empty window, offset past end is empty list (no exception)."""
+        from clipwright.otio_utils import summarize_timeline
+
+        tl, clip_count, marker_count, _ = self._make_multi_track_timeline_with_markers()
+
+        call_counts: dict[str, int] = {"clip": 0, "marker": 0}
+
+        def spy_clip_to_dict(*args: object, **kwargs: object) -> object:
+            call_counts["clip"] += 1
+            from clipwright.otio_utils import _clip_to_dict
+
+            return _clip_to_dict(*args, **kwargs)
+
+        def spy_marker_to_dict(*args: object, **kwargs: object) -> object:
+            call_counts["marker"] += 1
+            from clipwright.otio_utils import _marker_to_dict
+
+            return _marker_to_dict(*args, **kwargs)
+
+        # Patch both functions (but we expect 0 calls)
+        monkeypatch.setattr(
+            "clipwright.otio_utils._clip_to_dict", spy_clip_to_dict
+        )
+        monkeypatch.setattr(
+            "clipwright.otio_utils._marker_to_dict", spy_marker_to_dict
+        )
+
+        # Test limit=0 (empty window, no calls)
+        call_counts = {"clip": 0, "marker": 0}
+        summary = summarize_timeline(tl, clips_limit=0, markers_limit=0)
+        assert summary["clips"] == []
+        assert summary["markers"] == []
+        assert call_counts["clip"] == 0
+        assert call_counts["marker"] == 0
+
+        # Test offset past end (empty list, no exception)
+        call_counts = {"clip": 0, "marker": 0}
+        summary = summarize_timeline(
+            tl, clips_offset=clip_count + 10, markers_offset=marker_count + 10
+        )
+        assert summary["clips"] == []
+        assert summary["markers"] == []
+        assert call_counts["clip"] == 0
+        assert call_counts["marker"] == 0
+
+    def test_t1_11_negative_offset_limit_raises_valueerror(self) -> None:
+        """T1-11: Negative offset/limit raises ValueError with fixed message (no values)."""
+        from clipwright.otio_utils import summarize_timeline
+
+        tl, _, _, _ = self._make_multi_track_timeline_with_markers()
+
+        # Test negative clips_offset
+        with pytest.raises(ValueError) as exc_info:
+            summarize_timeline(tl, clips_offset=-1)
+        assert "offset" in str(exc_info.value).lower()
+        assert "-1" not in str(exc_info.value)
+
+        # Test negative clips_limit
+        with pytest.raises(ValueError) as exc_info:
+            summarize_timeline(tl, clips_limit=-1)
+        assert "limit" in str(exc_info.value).lower()
+        assert "-1" not in str(exc_info.value)
+
+        # Test negative markers_offset
+        with pytest.raises(ValueError) as exc_info:
+            summarize_timeline(tl, markers_offset=-1)
+        assert "offset" in str(exc_info.value).lower()
+        assert "-1" not in str(exc_info.value)
+
+        # Test negative markers_limit
+        with pytest.raises(ValueError) as exc_info:
+            summarize_timeline(tl, markers_limit=-1)
+        assert "limit" in str(exc_info.value).lower()
+        assert "-1" not in str(exc_info.value)
