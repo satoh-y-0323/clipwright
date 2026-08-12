@@ -2127,9 +2127,7 @@ class TestReadTimelineLazyCost:
                         "duration": {"value": 1.0, "rate": 30.0},
                     },
                     "name": f"marker_{i:03d}",
-                    "metadata": {
-                        "clipwright": {"kind": "caption" if i % 2 == 0 else "cue"}
-                    },
+                    "metadata": {"kind": "caption" if i % 2 == 0 else "cue"},
                 }
             )
         result = clipwright_write_timeline(
@@ -2233,9 +2231,7 @@ class TestReadTimelineLazyCost:
                         "duration": {"value": 1.0, "rate": 30.0},
                     },
                     "name": f"marker_{i:03d}",
-                    "metadata": {
-                        "clipwright": {"kind": "caption" if i % 2 == 0 else "cue"}
-                    },
+                    "metadata": {"kind": "caption" if i % 2 == 0 else "cue"},
                 }
             )
         result = clipwright_write_timeline(

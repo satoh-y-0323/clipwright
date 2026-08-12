@@ -18,6 +18,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field, TypeAdapter, ValidationError
 
 import clipwright.media as _media
+import clipwright.otio_utils as _otio_utils
 from clipwright.envelope import error_result, ok_result
 from clipwright.errors import ClipwrightError, ErrorCode
 from clipwright.operations import (
@@ -27,7 +28,7 @@ from clipwright.operations import (
     Operation,
     apply_operations,
 )
-from clipwright.otio_utils import load_timeline, save_timeline, summarize_timeline
+from clipwright.otio_utils import load_timeline, save_timeline
 from clipwright.pathpolicy import validate_source_or_basename
 from clipwright.project import init_project as _init_project
 from clipwright.schemas import Artifact, MediaInfo, ToolResult
@@ -40,25 +41,25 @@ _DEFAULT_PAGE_LIMIT = 50
 _MAX_PAGE_LIMIT = 500
 
 
-def _paginate(
-    items: list[dict[str, Any]], offset: int, limit: int
-) -> tuple[list[dict[str, Any]], bool, int | None]:
-    """Return (page, truncated, next_offset) for a detail list.
+def _page_info(total: int, offset: int, limit: int) -> tuple[bool, int | None]:
+    """Return (has_more, next_offset) for a page taken from *total* items.
+
+    The page itself is produced by summarize_timeline's window arguments
+    (ADR-RD-16); this helper only derives the pagination metadata and never
+    slices a list.
 
     Args:
-        items: Full list of items.
-        offset: 0-based start position.
+        total: Number of items the page is taken from (window-independent).
+        offset: 0-based start position of the page.
         limit: Maximum items per page (already validated and clamped).
 
     Returns:
-        Tuple of (page_items, has_more, next_offset).
+        Tuple of (has_more, next_offset).
         next_offset is the start position of the next page, or None if at end.
     """
     end = offset + limit
-    page = items[offset:end]
-    has_more = end < len(items)
-    next_offset = end if has_more else None
-    return page, has_more, next_offset
+    has_more = end < total
+    return has_more, (end if has_more else None)
 
 
 def _dump_models(entry: dict[str, Any]) -> dict[str, Any]:
@@ -297,9 +298,10 @@ def clipwright_read_timeline(
             description=(
                 "Maximum number of entries returned per list"
                 " (default 50, maximum 500). Values above the maximum are clamped"
-                " and reported in warnings. Note: limit controls response size,"
-                " not the cost of reading a large timeline; both clips and markers"
-                " are always fully loaded regardless of limit."
+                " and reported in warnings. limit also bounds the conversion work:"
+                " only the requested window of clips and markers is converted."
+                " The .otio file itself is still parsed in full on every call, so"
+                " reading a very large timeline always costs one full parse."
             )
         ),
     ] = 50,
@@ -337,6 +339,11 @@ def clipwright_read_timeline(
     marker_kind filters the markers list in data.markers without affecting
     marker_count (which remains the total). When using marker_kind, pass the
     markers_next_offset from the previous response to continue pagination.
+
+    **Cost of paging:**
+    offset and limit bound both the response size and the per-entry conversion
+    work — only the requested window is converted. The .otio file is still
+    parsed in full on every call.
 
     **Paging example:**
     1. Call with no arguments to get the overview.
@@ -448,47 +455,85 @@ def clipwright_read_timeline(
             "Please report with reproduction steps.",
         )
 
-    summary_dict = summarize_timeline(timeline)
+    # ===== Window arguments for summarize_timeline (ADR-RD-16 §5.2) =====
+    # Decided before the single summarize_timeline call so that the scan runs
+    # exactly once and only the requested window is converted to dicts.
+    # marker_kind is passed in every branch (§5.2 note): the sections that do
+    # not return markers already request markers_limit=0.
+    if section is None:
+        clips_window_offset, clips_window_limit = 0, effective_limit
+        markers_window_offset, markers_window_limit = 0, effective_limit
+    elif section == "clips":
+        clips_window_offset, clips_window_limit = offset, effective_limit
+        markers_window_offset, markers_window_limit = 0, 0
+    elif section == "markers":
+        clips_window_offset, clips_window_limit = 0, 0
+        markers_window_offset, markers_window_limit = offset, effective_limit
+    else:
+        # Defence-in-depth: in-process calls bypass type validation
+        # (decorator returns a plain function; Pydantic checks do not run).
+        # This branch protects against invalid section values even when
+        # the type system is not enforced. Evaluated before summarize_timeline
+        # so an invalid value never triggers a timeline scan (ADR-RD-16 §5.2).
+        return error_result(
+            ErrorCode.INVALID_INPUT,
+            f"section must be 'clips', 'markers', or None, got {section!r}",
+            "Omit section for an overview, or pass 'clips' or 'markers'.",
+        )
 
-    # ===== Pagination processing (ADR-RD-1 through RD-11) =====
+    # Boundary guard (ADR-RD-17 (b)): FastMCP would otherwise expose str(exc)
+    # of an uncaught exception in the MCP response (CWE-209).
+    # Called through the module attribute so the window contract stays
+    # patchable in tests (same rationale as _inspect_media).
+    try:
+        summary_dict = _otio_utils.summarize_timeline(
+            timeline,
+            clips_offset=clips_window_offset,
+            clips_limit=clips_window_limit,
+            markers_offset=markers_window_offset,
+            markers_limit=markers_window_limit,
+            marker_kind=marker_kind,
+        )
+    except ClipwrightError as exc:
+        return error_result(exc.code, exc.message, exc.hint)
+    except Exception:
+        return error_result(
+            ErrorCode.INTERNAL,
+            "An unexpected error occurred",
+            "Please report with reproduction steps.",
+        )
+
+    # ===== Pagination processing (ADR-RD-1 through RD-10, RD-16) =====
 
     total_dur = summary_dict["total_duration"]
     clip_count: int = summary_dict["clip_count"]
     gap_count: int = summary_dict["gap_count"]
     marker_count: int = summary_dict["marker_count"]
+    # Markers remaining after the kind filter; internal only (not in data).
+    markers_matched_count: int = summary_dict["markers_matched_count"]
 
-    # All clips and markers (untruncated, as dicts from summarize_timeline)
-    all_clips: list[dict[str, Any]] = summary_dict.get("clips", [])
-    all_markers: list[dict[str, Any]] = summary_dict.get("markers", [])
+    # Requested windows, already filtered and converted by summarize_timeline
+    clips_page: list[dict[str, Any]] = summary_dict.get("clips", [])
+    markers_page: list[dict[str, Any]] = summary_dict.get("markers", [])
 
-    # Apply marker_kind filter if specified (ADR-RD-10)
-    # Filter the dict-converted markers from summarize_timeline by kind
-    if marker_kind is not None:
-        all_markers = [m for m in all_markers if m.get("kind") == marker_kind]
-
-    # Determine which section to return (ADR-RD-1)
-    # Initialize all variables to satisfy type narrowing
-    clips_page: list[dict[str, Any]] = []
+    # Page metadata is derived from the window-independent totals (ADR-RD-16
+    # §5.2: clips use clip_count, markers use the post-filter count).
     clips_truncated: bool | None = None
     clips_next_offset: int | None = None
-    markers_page: list[dict[str, Any]] = []
     markers_truncated: bool | None = None
     markers_next_offset: int | None = None
-    section_used: str | None = None
+    section_used: str | None = section
 
     if section is None:
         # Overview: first page of both clips and markers
-        clips_page, clips_truncated, clips_next_offset = _paginate(
-            all_clips, 0, effective_limit
+        clips_truncated, clips_next_offset = _page_info(clip_count, 0, effective_limit)
+        markers_truncated, markers_next_offset = _page_info(
+            markers_matched_count, 0, effective_limit
         )
-        markers_page, markers_truncated, markers_next_offset = _paginate(
-            all_markers, 0, effective_limit
-        )
-        section_used = None
     elif section == "clips":
-        # Clips section: check offset range before paging (ADR-RD-2)
-        if offset > 0 and offset >= len(all_clips):
-            num_clips = len(all_clips)
+        # Clips section: check offset range against the total clip count (ADR-RD-2)
+        if offset > 0 and offset >= clip_count:
+            num_clips = clip_count
             return error_result(
                 ErrorCode.INVALID_INPUT,
                 f"offset {offset} is past the end of the clips list "
@@ -496,17 +541,13 @@ def clipwright_read_timeline(
                 f"Pass an offset below {num_clips}, "
                 "or omit offset to start from the beginning.",
             )
-        clips_page, clips_truncated, clips_next_offset = _paginate(
-            all_clips, offset, effective_limit
+        clips_truncated, clips_next_offset = _page_info(
+            clip_count, offset, effective_limit
         )
-        markers_page = []
-        markers_truncated = None
-        markers_next_offset = None
-        section_used = "clips"
-    elif section == "markers":
+    else:
         # Markers section: check offset range after filtering (ADR-RD-10)
-        if offset > 0 and offset >= len(all_markers):
-            num_markers = len(all_markers)
+        if offset > 0 and offset >= markers_matched_count:
+            num_markers = markers_matched_count
             return error_result(
                 ErrorCode.INVALID_INPUT,
                 f"offset {offset} is past the end of the markers list "
@@ -514,22 +555,8 @@ def clipwright_read_timeline(
                 f"Pass an offset below {num_markers}, "
                 "or omit offset to start from the beginning.",
             )
-        markers_page, markers_truncated, markers_next_offset = _paginate(
-            all_markers, offset, effective_limit
-        )
-        clips_page = []
-        clips_truncated = None
-        clips_next_offset = None
-        section_used = "markers"
-    else:
-        # Defence-in-depth: in-process calls bypass type validation
-        # (decorator returns a plain function; Pydantic checks do not run).
-        # This branch protects against invalid section values even when
-        # the type system is not enforced.
-        return error_result(
-            ErrorCode.INVALID_INPUT,
-            f"section must be 'clips', 'markers', or None, got {section!r}",
-            "Omit section for an overview, or pass 'clips' or 'markers'.",
+        markers_truncated, markers_next_offset = _page_info(
+            markers_matched_count, offset, effective_limit
         )
 
     # Build data dict (ADR-RD-4)
@@ -636,7 +663,7 @@ def clipwright_read_timeline(
             )
         elif markers_truncated:
             end_marker = offset + len(markers_page) - 1
-            num_all = len(all_markers)
+            num_all = markers_matched_count
             summary_text = (
                 base_summary
                 + f"Showing markers {offset}-{end_marker} of {num_all} "
@@ -645,7 +672,7 @@ def clipwright_read_timeline(
             )
         else:
             end_marker = offset + len(markers_page) - 1
-            num_all = len(all_markers)
+            num_all = markers_matched_count
             summary_text = (
                 base_summary
                 + f"Showing markers {offset}-{end_marker} of {num_all} "
